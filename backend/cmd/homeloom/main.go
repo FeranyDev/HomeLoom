@@ -11,9 +11,12 @@ import (
 
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/config"
+	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	"github.com/feranydev/homeloom/backend/internal/persistence/sqlite"
 	"github.com/feranydev/homeloom/backend/internal/platform/httpapi"
+	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
+	"github.com/feranydev/homeloom/backend/internal/runtime/providermanager"
 	"github.com/feranydev/homeloom/backend/internal/runtime/targetmanager"
 )
 
@@ -35,12 +38,40 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
-	provider := virtual.NewProvider()
-	if err := provider.Initialize(ctx); err != nil {
-		logger.Error("provider initialization failed", "provider_id", provider.Manifest().ID, "error", err)
+	providerConfigs, err := store.ListProviders(ctx)
+	if err != nil {
+		logger.Error("provider configuration load failed", "error", err)
 		os.Exit(1)
 	}
-	service := application.NewDeviceService(provider)
+	factory := providersdk.NewFactory()
+	if err := factory.Register("virtual", func(config providerconfig.Config) (providersdk.Provider, error) {
+		return virtual.NewProviderWithIdentity(config.ID, config.Name), nil
+	}); err != nil {
+		logger.Error("provider factory registration failed", "error", err)
+		os.Exit(1)
+	}
+	providerInstances := make([]providersdk.Provider, 0, len(providerConfigs))
+	for _, providerConfig := range providerConfigs {
+		if !providerConfig.Enabled {
+			continue
+		}
+		instance, createErr := factory.Create(providerConfig)
+		if createErr != nil {
+			logger.Error("provider creation failed", "provider_id", providerConfig.ID, "error", createErr)
+			continue
+		}
+		providerInstances = append(providerInstances, instance)
+	}
+	providerManager, err := providermanager.New(providerInstances...)
+	if err != nil {
+		logger.Error("provider manager creation failed", "error", err)
+		os.Exit(1)
+	}
+	if err := providerManager.Initialize(ctx); err != nil {
+		logger.Error("provider initialization failed", "error", err)
+		os.Exit(1)
+	}
+	service := application.NewDeviceService(providerManager)
 	defer service.Close()
 	targetConfigs, err := store.ListTargets(ctx)
 	if err != nil {

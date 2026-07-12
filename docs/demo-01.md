@@ -23,6 +23,8 @@
 - Target 独立有界队列和慢消费者隔离；
 - Core/Target 队列及命令 Prometheus 指标；
 - Provider 边界深拷贝快照，避免异步共享可变 slice；
+- Provider SDK 与多 Provider 聚合管理、设备归属路由；
+- SQLite Provider 配置、默认种子和类型 Factory；
 - 项目级 Go/npm 缓存；
 - Go 测试、ESLint 和前端生产构建。
 

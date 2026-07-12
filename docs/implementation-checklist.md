@@ -147,20 +147,20 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 - [ ] 定义可选 `CommandExecutor`；
 - [x] 定义可选 `EventSubscriber`；
 - [ ] 定义 Provider 健康状态；
-- [ ] 定义初始化、启动、停止和关闭顺序；
+- [x] 定义初始化、启动、停止和关闭顺序；
 - [ ] 定义上下文取消语义；
 - [ ] 定义重连和退避接口。
 
 ### 3.2 Provider Manager
 
-- [ ] 从 SQLite 加载 Provider 配置；
+- [x] 从 SQLite 加载 Provider 配置；
 - [ ] 动态创建 Provider；
 - [ ] 动态启用和停用；
 - [ ] 单 Provider 热重载；
 - [ ] 单 Provider 失败隔离；
-- [ ] 保存最近错误；
+- [x] 保存最近错误；
 - [ ] 保存连接和重连状态；
-- [ ] 提供 Provider 列表 API；
+- [x] 提供 Provider 列表 API；
 - [ ] 提供 Provider CRUD API；
 - [ ] 前端 Provider 管理页面；
 - [ ] 凭据字段脱敏；

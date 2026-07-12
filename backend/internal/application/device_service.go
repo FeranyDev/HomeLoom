@@ -2,7 +2,6 @@ package application
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,8 +17,8 @@ import (
 )
 
 var (
-	ErrDeviceNotFound      = errors.New("device not found")
-	ErrPropertyUnsupported = errors.New("property unsupported")
+	ErrDeviceNotFound      = providersdk.ErrDeviceNotFound
+	ErrPropertyUnsupported = providersdk.ErrPropertyUnsupported
 )
 
 type DeviceService struct {
@@ -70,12 +69,6 @@ type DeviceMetrics struct {
 	CommandsTimedOut    uint64 `json:"commandsTimedOut"`
 }
 
-type ProviderInfo struct {
-	Manifest     providersdk.Manifest     `json:"manifest"`
-	Capabilities providersdk.Capabilities `json:"capabilities"`
-	Status       string                   `json:"status"`
-}
-
 func NewDeviceService(provider providersdk.Provider) *DeviceService {
 	discoverer, _ := provider.(providersdk.Discoverer)
 	writer, _ := provider.(providersdk.PropertyWriter)
@@ -114,8 +107,11 @@ func (s *DeviceService) States(deviceID string) []domainstate.StateValue {
 	return s.states.Device(deviceID)
 }
 
-func (s *DeviceService) ProviderInfo() ProviderInfo {
-	return ProviderInfo{Manifest: s.provider.Manifest(), Capabilities: s.provider.Capabilities(), Status: "running"}
+func (s *DeviceService) ProviderInfos() []providersdk.RuntimeInfo {
+	if inspector, ok := s.provider.(providersdk.Inspector); ok {
+		return inspector.ProviderInfos()
+	}
+	return []providersdk.RuntimeInfo{{Manifest: s.provider.Manifest(), Capabilities: s.provider.Capabilities(), Status: "running"}}
 }
 
 func (s *DeviceService) Metrics() DeviceMetrics {

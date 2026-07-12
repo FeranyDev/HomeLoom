@@ -96,7 +96,7 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		return c.JSON(http.StatusOK, map[string]any{"data": items})
 	})
 	e.GET("/api/v1/providers", func(c echo.Context) error {
-		return c.JSON(http.StatusOK, map[string]any{"data": []application.ProviderInfo{devices.ProviderInfo()}})
+		return c.JSON(http.StatusOK, map[string]any{"data": devices.ProviderInfos()})
 	})
 	e.GET("/api/v1/devices/:id/states", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"data": devices.States(c.Param("id"))})

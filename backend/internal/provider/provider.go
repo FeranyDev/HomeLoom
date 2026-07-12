@@ -2,8 +2,14 @@ package provider
 
 import (
 	"context"
+	"errors"
 
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
+)
+
+var (
+	ErrDeviceNotFound      = errors.New("device not found")
+	ErrPropertyUnsupported = errors.New("property unsupported")
 )
 
 type Manifest struct {
@@ -45,4 +51,15 @@ type PropertyWriter interface {
 
 type EventSubscriber interface {
 	Subscribe(func(device.Device)) func()
+}
+
+type RuntimeInfo struct {
+	Manifest     Manifest     `json:"manifest"`
+	Capabilities Capabilities `json:"capabilities"`
+	Status       string       `json:"status"`
+	Error        string       `json:"error,omitempty"`
+}
+
+type Inspector interface {
+	ProviderInfos() []RuntimeInfo
 }

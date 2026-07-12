@@ -6,12 +6,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 )
 
 type Provider struct {
+	id        string
+	name      string
 	mu        sync.RWMutex
 	devices   map[string]device.Device
 	nextID    uint64
@@ -24,7 +25,7 @@ var _ providersdk.PropertyWriter = (*Provider)(nil)
 var _ providersdk.EventSubscriber = (*Provider)(nil)
 
 func (p *Provider) Manifest() providersdk.Manifest {
-	return providersdk.Manifest{ID: "virtual-main", Type: "virtual", Name: "Virtual Provider", Version: "0.1.0"}
+	return providersdk.Manifest{ID: p.id, Type: "virtual", Name: p.name, Version: "0.1.0"}
 }
 
 func (p *Provider) Capabilities() providersdk.Capabilities {
@@ -39,18 +40,22 @@ func (p *Provider) DiscoverDevices(ctx context.Context) ([]device.Device, error)
 func (p *Provider) WriteProperty(ctx context.Context, request providersdk.PropertyWriteRequest) (device.Device, error) {
 	if request.EndpointID != "main" || request.CapabilityID != "switch" || request.PropertyID != "power" ||
 		request.Value.Type != device.ValueTypeBool || request.Value.Bool == nil {
-		return device.Device{}, application.ErrPropertyUnsupported
+		return device.Device{}, providersdk.ErrPropertyUnsupported
 	}
 	return p.SetPower(ctx, request.DeviceID, *request.Value.Bool)
 }
 
 func NewProvider() *Provider {
+	return NewProviderWithIdentity("virtual-main", "Virtual Provider")
+}
+
+func NewProviderWithIdentity(id, name string) *Provider {
 	now := time.Now().UTC()
 	off := false
 	temperature := 23.6
-	return &Provider{devices: map[string]device.Device{
+	return &Provider{id: id, name: name, devices: map[string]device.Device{
 		"virtual-switch-1": {
-			ID: "virtual-switch-1", ProviderID: "virtual-main", Name: "客厅开关",
+			ID: "virtual-switch-1", ProviderID: id, Name: "客厅开关",
 			Type: device.TypeSwitch, Online: true, State: device.State{Power: &off}, LastUpdateAt: now,
 			Endpoints: []device.Endpoint{{
 				ID: "main", Name: "主端点", Type: "switch",
@@ -61,7 +66,7 @@ func NewProvider() *Provider {
 			}},
 		},
 		"virtual-temperature-1": {
-			ID: "virtual-temperature-1", ProviderID: "virtual-main", Name: "客厅温度",
+			ID: "virtual-temperature-1", ProviderID: id, Name: "客厅温度",
 			Type: device.TypeTemperatureSensor, Online: true,
 			State: device.State{Temperature: &temperature}, LastUpdateAt: now,
 			Endpoints: []device.Endpoint{{
@@ -92,11 +97,11 @@ func (p *Provider) SetPower(_ context.Context, id string, power bool) (device.De
 	item, ok := p.devices[id]
 	if !ok {
 		p.mu.Unlock()
-		return device.Device{}, application.ErrDeviceNotFound
+		return device.Device{}, providersdk.ErrDeviceNotFound
 	}
 	if item.Type != device.TypeSwitch {
 		p.mu.Unlock()
-		return device.Device{}, application.ErrPropertyUnsupported
+		return device.Device{}, providersdk.ErrPropertyUnsupported
 	}
 	item.State.Power = &power
 	item.SetProperty("main", "switch", "power", device.BoolValue(power))

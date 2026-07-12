@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	"github.com/feranydev/homeloom/backend/internal/domain/target"
 )
 
@@ -21,6 +22,33 @@ func TestRuntimeStateTableIsRemoved(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatal("property_states should not exist")
+	}
+}
+
+func TestProviderSeedCRUD(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "homeloom.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	items, err := store.ListProviders(ctx)
+	if err != nil || len(items) != 1 || items[0].ID != "virtual-main" || !items[0].Enabled {
+		t.Fatalf("seed providers = %#v, %v", items, err)
+	}
+	item := providerconfig.Config{ID: "virtual-second", Type: "virtual", Name: "Second", Config: []byte(`{"room":"test"}`)}
+	if err := store.SaveProvider(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+	items, err = store.ListProviders(ctx)
+	if err != nil || len(items) != 2 || string(items[1].Config) != `{"room":"test"}` {
+		t.Fatalf("providers = %#v, %v", items, err)
+	}
+	if err := store.DeleteProvider(ctx, item.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteProvider(ctx, item.ID); err == nil {
+		t.Fatal("missing provider delete was accepted")
 	}
 }
 
