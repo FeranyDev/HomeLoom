@@ -1,0 +1,167 @@
+package httpapi
+
+import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/feranydev/homeloom/backend/internal/application"
+	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
+	"github.com/labstack/echo/v4"
+)
+
+func newTestServer() *Server {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	targets := application.NewTargetService([]application.TargetRegistration{{
+		Info: application.TargetInfo{ID: "apple-main", Type: "apple-hap", Name: "Main", Enabled: true, Status: "running"},
+		QR:   []byte("png-data"),
+	}}, nil)
+	return NewServer(":0", application.NewDeviceService(virtual.NewProvider()), targets, logger)
+}
+
+func TestListTargetsAndPairingQR(t *testing.T) {
+	server := newTestServer()
+	listRequest := httptest.NewRequest(http.MethodGet, "/api/v1/targets", nil)
+	listResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(listResponse, listRequest)
+	if listResponse.Code != http.StatusOK || !bytes.Contains(listResponse.Body.Bytes(), []byte(`"id":"apple-main"`)) {
+		t.Fatalf("target response = %d %s", listResponse.Code, listResponse.Body.String())
+	}
+
+	qrRequest := httptest.NewRequest(http.MethodGet, "/api/v1/targets/apple-main/pairing-qr", nil)
+	qrResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(qrResponse, qrRequest)
+	if qrResponse.Code != http.StatusOK || qrResponse.Header().Get(echo.HeaderContentType) != "image/png" {
+		t.Fatalf("QR response = %d %q", qrResponse.Code, qrResponse.Header().Get(echo.HeaderContentType))
+	}
+	if qrResponse.Body.String() != "png-data" {
+		t.Fatalf("QR body = %q", qrResponse.Body.String())
+	}
+}
+
+func TestListDevices(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/devices", nil)
+	response := httptest.NewRecorder()
+	newTestServer().Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	var body struct {
+		Data []json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.Data) != 2 {
+		t.Fatalf("device count = %d, want 2", len(body.Data))
+	}
+}
+
+func TestDeviceStatesIncludeProvenance(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/devices/virtual-switch-1/states", nil)
+	response := httptest.NewRecorder()
+	newTestServer().Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	for _, expected := range []string{`"propertyId":"power"`, `"providerId":"virtual-main"`, `"quality":"reported"`, `"version":1`} {
+		if !bytes.Contains(response.Body.Bytes(), []byte(expected)) {
+			t.Fatalf("state response missing %s: %s", expected, response.Body.String())
+		}
+	}
+}
+
+func TestSetPower(t *testing.T) {
+	server := newTestServer()
+	request := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/devices/virtual-switch-1/properties/power",
+		bytes.NewBufferString(`{"value":true}`),
+	)
+	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	if !bytes.Contains(response.Body.Bytes(), []byte(`"power":true`)) {
+		t.Fatalf("response does not contain updated power: %s", response.Body.String())
+	}
+}
+
+func TestSetPowerRejectsInvalidValue(t *testing.T) {
+	request := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/devices/virtual-switch-1/properties/power",
+		bytes.NewBufferString(`{"value":"yes"}`),
+	)
+	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response := httptest.NewRecorder()
+	newTestServer().Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+}
+
+func TestSetPowerReturnsDomainErrors(t *testing.T) {
+	cases := []struct {
+		path   string
+		status int
+	}{
+		{"/api/v1/devices/missing/properties/power", http.StatusNotFound},
+		{"/api/v1/devices/virtual-temperature-1/properties/power", http.StatusUnprocessableEntity},
+	}
+	for _, item := range cases {
+		request := httptest.NewRequest(http.MethodPut, item.path, bytes.NewBufferString(`{"value":true}`))
+		request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		response := httptest.NewRecorder()
+		newTestServer().Handler().ServeHTTP(response, request)
+		if response.Code != item.status {
+			t.Fatalf("%s status = %d, want %d", item.path, response.Code, item.status)
+		}
+	}
+}
+
+func TestMissingPairingQRReturnsNotFound(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/targets/missing/pairing-qr", nil)
+	response := httptest.NewRecorder()
+	newTestServer().Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d", response.Code)
+	}
+}
+
+func TestCommandEndpoints(t *testing.T) {
+	server := newTestServer()
+	write := httptest.NewRequest(http.MethodPut, "/api/v1/devices/virtual-switch-1/properties/power", bytes.NewBufferString(`{"value":true}`))
+	write.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	writeResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(writeResponse, write)
+	var body struct {
+		Command struct {
+			ID string `json:"id"`
+		} `json:"command"`
+	}
+	if err := json.Unmarshal(writeResponse.Body.Bytes(), &body); err != nil || body.Command.ID == "" {
+		t.Fatalf("command response = %s, %v", writeResponse.Body.String(), err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/commands/"+body.Command.ID, nil)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	missing := httptest.NewRequest(http.MethodGet, "/api/v1/commands/missing", nil)
+	missingResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(missingResponse, missing)
+	if missingResponse.Code != http.StatusNotFound {
+		t.Fatalf("missing status = %d", missingResponse.Code)
+	}
+}

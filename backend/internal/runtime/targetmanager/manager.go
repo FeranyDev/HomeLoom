@@ -1,0 +1,148 @@
+package targetmanager
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sync"
+	"time"
+
+	"github.com/feranydev/homeloom/backend/internal/application"
+	"github.com/feranydev/homeloom/backend/internal/domain/target"
+	"github.com/feranydev/homeloom/backend/internal/targets/homekit"
+)
+
+type runningTarget struct {
+	cancel context.CancelFunc
+	done   chan error
+}
+
+type Manager struct {
+	root     context.Context
+	devices  *application.DeviceService
+	logger   *slog.Logger
+	mu       sync.Mutex
+	running  map[string]runningTarget
+	onStatus func(string, string)
+}
+
+func New(root context.Context, devices *application.DeviceService, logger *slog.Logger) *Manager {
+	return &Manager{root: root, devices: devices, logger: logger, running: make(map[string]runningTarget)}
+}
+
+func (m *Manager) SetStatusHandler(handler func(string, string)) {
+	m.mu.Lock()
+	m.onStatus = handler
+	m.mu.Unlock()
+}
+
+func (m *Manager) Apply(ctx context.Context, config target.Config) (application.TargetRegistration, error) {
+	if !config.Enabled {
+		if err := m.stop(ctx, config.ID); err != nil {
+			return application.TargetRegistration{}, err
+		}
+		return application.TargetRegistration{Info: infoFromConfig(config, "disabled")}, nil
+	}
+	if config.Type != "apple-hap" {
+		return application.TargetRegistration{}, fmt.Errorf("target type %q is not implemented", config.Type)
+	}
+
+	next, err := homekit.New(ctx, homekit.Config{
+		ID: config.ID, Name: config.Name, Address: config.Address, Pin: config.Pin,
+		SetupID: config.SetupID, StorePath: config.StorePath, DeviceIDs: config.DeviceIDs,
+	}, m.devices, m.logger)
+	if err != nil {
+		return application.TargetRegistration{}, err
+	}
+	if err := m.stop(ctx, config.ID); err != nil {
+		return application.TargetRegistration{}, err
+	}
+
+	runCtx, cancel := context.WithCancel(m.root)
+	done := make(chan error, 1)
+	m.mu.Lock()
+	m.running[config.ID] = runningTarget{cancel: cancel, done: done}
+	m.mu.Unlock()
+	go func() {
+		err := next.Start(runCtx)
+		done <- err
+		close(done)
+		if runCtx.Err() == nil && err != nil {
+			m.logger.Error("target runtime exited", "target_id", config.ID, "error", err)
+			m.setStatus(config.ID, "error")
+		}
+	}()
+
+	select {
+	case startErr := <-done:
+		m.mu.Lock()
+		delete(m.running, config.ID)
+		m.mu.Unlock()
+		if startErr == nil {
+			startErr = errors.New("target stopped during startup")
+		}
+		return application.TargetRegistration{}, startErr
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	pairing := next.PairingInfo()
+	info := infoFromConfig(config, "running")
+	info.PairingCode, info.SetupURI = pairing.Code, pairing.SetupURI
+	return application.TargetRegistration{Info: info, QR: pairing.QR}, nil
+}
+
+func (m *Manager) Remove(ctx context.Context, id string) error { return m.stop(ctx, id) }
+
+func (m *Manager) Close(ctx context.Context) error {
+	m.mu.Lock()
+	ids := make([]string, 0, len(m.running))
+	for id := range m.running {
+		ids = append(ids, id)
+	}
+	m.mu.Unlock()
+	for _, id := range ids {
+		if err := m.stop(ctx, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *Manager) stop(ctx context.Context, id string) error {
+	m.mu.Lock()
+	running, ok := m.running[id]
+	if ok {
+		delete(m.running, id)
+	}
+	m.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	running.cancel()
+	select {
+	case <-running.done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("stop target %q: %w", id, ctx.Err())
+	case <-time.After(5 * time.Second):
+		return fmt.Errorf("stop target %q: timeout", id)
+	}
+}
+
+func (m *Manager) setStatus(id, status string) {
+	m.mu.Lock()
+	handler := m.onStatus
+	m.mu.Unlock()
+	if handler != nil {
+		handler(id, status)
+	}
+}
+
+func infoFromConfig(config target.Config, status string) application.TargetInfo {
+	return application.TargetInfo{
+		ID: config.ID, Type: config.Type, Name: config.Name, Enabled: config.Enabled,
+		Status: status, Address: config.Address, SetupID: config.SetupID,
+		DeviceIDs: append([]string{}, config.DeviceIDs...),
+	}
+}

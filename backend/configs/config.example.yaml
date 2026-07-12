@@ -1,0 +1,5 @@
+server:
+  address: ":8090"
+
+storage:
+  database: "./data/homeloom.db"

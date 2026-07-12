@@ -1,0 +1,17 @@
+.DS_Store
+.idea/
+.vscode/
+
+backend/bin/
+backend/data/
+backend/coverage.out
+backend/.cache/
+.cache/
+
+frontend/node_modules/
+frontend/dist/
+frontend/.env.local
+frontend/.npm-cache/
+frontend/*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
