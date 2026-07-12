@@ -58,6 +58,26 @@ func (d *Dispatcher) Publish(event Event) error {
 	}
 }
 
+func (d *Dispatcher) Pending() int {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	total := 0
+	for _, queue := range d.shards {
+		total += len(queue)
+	}
+	return total
+}
+
+func (d *Dispatcher) Capacity() int {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	total := 0
+	for _, queue := range d.shards {
+		total += cap(queue)
+	}
+	return total
+}
+
 func (d *Dispatcher) Close(ctx context.Context) error {
 	d.mu.Lock()
 	if !d.closed {

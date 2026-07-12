@@ -32,3 +32,21 @@ func TestTypedValues(t *testing.T) {
 		t.Fatalf("NumberValue() = %#v", number)
 	}
 }
+
+func TestCloneDoesNotShareMutableState(t *testing.T) {
+	original := Device{State: State{Power: BoolValue(true).Bool}, Endpoints: []Endpoint{{
+		ID: "main", Capabilities: []Capability{{ID: "switch", Properties: []Property{{
+			Definition: PropertyDefinition{ID: "power", Enum: []string{"on"}}, Value: BoolValue(true),
+		}}}},
+	}}}
+	clone := original.Clone()
+	clone.SetProperty("main", "switch", "power", BoolValue(false))
+	clone.Endpoints[0].Capabilities[0].Properties[0].Definition.Enum[0] = "changed"
+	property, _ := original.Property("main", "switch", "power")
+	if property.Value.Bool == nil || !*property.Value.Bool {
+		t.Fatal("clone changed original value")
+	}
+	if property.Definition.Enum[0] != "on" {
+		t.Fatal("clone shared enum storage")
+	}
+}

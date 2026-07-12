@@ -42,26 +42,27 @@ func (t *Tracker) Rejected(id string, err error) {
 	t.transition(id, domaincommand.StatusRejected, err.Error())
 }
 
-func (t *Tracker) Confirm(deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) {
+func (t *Tracker) Confirm(deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	key := pendingKey(deviceID, endpointID, capabilityID, propertyID)
 	id, ok := t.pending[key]
 	if !ok {
-		return
+		return false
 	}
 	command := t.commands[id]
 	if !valuesEqual(command.Expected, value) {
-		return
+		return false
 	}
 	command.Status = domaincommand.StatusConfirmed
 	command.UpdatedAt = time.Now().UTC()
 	t.commands[id] = command
 	delete(t.pending, key)
+	return true
 }
 
 func (t *Tracker) Get(id string) (domaincommand.Command, bool) {
-	t.expire()
+	t.Expire(time.Now().UTC())
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	command, ok := t.commands[id]
@@ -69,7 +70,7 @@ func (t *Tracker) Get(id string) (domaincommand.Command, bool) {
 }
 
 func (t *Tracker) List() []domaincommand.Command {
-	t.expire()
+	t.Expire(time.Now().UTC())
 	t.mu.RLock()
 	result := make([]domaincommand.Command, 0, len(t.commands))
 	for _, command := range t.commands {
@@ -94,10 +95,10 @@ func (t *Tracker) transition(id string, status domaincommand.Status, message str
 	}
 }
 
-func (t *Tracker) expire() {
-	now := time.Now().UTC()
+func (t *Tracker) Expire(now time.Time) []domaincommand.Command {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	expired := make([]domaincommand.Command, 0)
 	for id, command := range t.commands {
 		if terminal(command.Status) || now.Before(command.Deadline) {
 			continue
@@ -105,7 +106,9 @@ func (t *Tracker) expire() {
 		command.Status, command.UpdatedAt = domaincommand.StatusTimeout, now
 		t.commands[id] = command
 		delete(t.pending, pendingKey(command.DeviceID, command.EndpointID, command.CapabilityID, command.PropertyID))
+		expired = append(expired, command)
 	}
+	return expired
 }
 
 func terminal(status domaincommand.Status) bool {

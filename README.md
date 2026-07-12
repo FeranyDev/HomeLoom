@@ -85,3 +85,12 @@ GET /api/v1/commands/:id
 ```
 
 设备写入先进入命令状态机。Provider 接受写入后状态为 `accepted`，只有设备后续上报与期望值一致时才变为 `confirmed`；未确认命令会进入 `timeout`。
+
+运行指标：
+
+```text
+GET /api/v1/diagnostics
+GET /metrics
+```
+
+包含 Core 事件接收/处理/丢弃、队列深度、慢 Target 丢弃、stale 状态、命令开始/确认/拒绝/超时计数。每个 Target 使用独立的 64 条有界队列，慢 Target 不会阻塞设备事件 shard。

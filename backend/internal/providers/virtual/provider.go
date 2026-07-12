@@ -81,7 +81,7 @@ func (p *Provider) List(context.Context) ([]device.Device, error) {
 
 	result := make([]device.Device, 0, len(p.devices))
 	for _, item := range p.devices {
-		result = append(result, item)
+		result = append(result, item.Clone())
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result, nil
@@ -109,9 +109,9 @@ func (p *Provider) SetPower(_ context.Context, id string, power bool) (device.De
 	p.mu.Unlock()
 
 	for _, listener := range listeners {
-		listener(item)
+		listener(item.Clone())
 	}
-	return item, nil
+	return item.Clone(), nil
 }
 
 func (p *Provider) Subscribe(handler func(device.Device)) func() {

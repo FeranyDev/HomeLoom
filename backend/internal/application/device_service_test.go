@@ -2,6 +2,7 @@ package application_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,6 +37,36 @@ func TestDeviceServiceRoutesProviderEvents(t *testing.T) {
 	states := service.States("virtual-switch-1")
 	if len(states) != 1 || states[0].Version != 2 {
 		t.Fatalf("States() = %#v", states)
+	}
+}
+
+func TestSlowSubscriberDoesNotBlockCoreDispatcher(t *testing.T) {
+	service := application.NewDeviceService(virtual.NewProvider())
+	blocked := make(chan struct{})
+	started := make(chan struct{})
+	var once sync.Once
+	unsubscribe := service.Subscribe(func(device.Device) { once.Do(func() { close(started) }); <-blocked })
+	for index := 0; index < 100; index++ {
+		if _, err := service.SetPower(context.Background(), "virtual-switch-1", index%2 == 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	<-started
+	deadline := time.Now().Add(time.Second)
+	for service.Metrics().EventsProcessed < 100 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	metrics := service.Metrics()
+	if metrics.EventsProcessed != 100 {
+		t.Fatalf("processed = %d", metrics.EventsProcessed)
+	}
+	if metrics.TargetEventsDropped == 0 {
+		t.Fatal("slow subscriber queue never reported dropped events")
+	}
+	close(blocked)
+	unsubscribe()
+	if err := service.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

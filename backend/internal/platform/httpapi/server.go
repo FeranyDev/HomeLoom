@@ -3,8 +3,10 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
@@ -65,6 +67,26 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 	})
 	e.GET("/ready", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ready"})
+	})
+	e.GET("/api/v1/diagnostics", func(c echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]any{"data": devices.Metrics()})
+	})
+	e.GET("/metrics", func(c echo.Context) error {
+		metrics := devices.Metrics()
+		var output strings.Builder
+		writeMetric := func(name string, value any) { fmt.Fprintf(&output, "homeloom_%s %v\n", name, value) }
+		writeMetric("events_received_total", metrics.EventsReceived)
+		writeMetric("events_processed_total", metrics.EventsProcessed)
+		writeMetric("events_dropped_total", metrics.EventsDropped)
+		writeMetric("event_queue_pending", metrics.EventQueuePending)
+		writeMetric("event_queue_capacity", metrics.EventQueueCapacity)
+		writeMetric("target_events_dropped_total", metrics.TargetEventsDropped)
+		writeMetric("states_marked_stale_total", metrics.StatesMarkedStale)
+		writeMetric("commands_started_total", metrics.CommandsStarted)
+		writeMetric("commands_confirmed_total", metrics.CommandsConfirmed)
+		writeMetric("commands_rejected_total", metrics.CommandsRejected)
+		writeMetric("commands_timed_out_total", metrics.CommandsTimedOut)
+		return c.String(http.StatusOK, output.String())
 	})
 	e.GET("/api/v1/devices", func(c echo.Context) error {
 		items, err := devices.List(c.Request().Context())

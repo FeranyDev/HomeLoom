@@ -20,6 +20,9 @@
 - 状态来源、质量、sequence、version 和时间诊断 API；
 - 命令 queued/sent/accepted/confirmed/rejected/timeout 状态机；
 - Provider 真实状态回报确认命令；
+- Target 独立有界队列和慢消费者隔离；
+- Core/Target 队列及命令 Prometheus 指标；
+- Provider 边界深拷贝快照，避免异步共享可变 slice；
 - 项目级 Go/npm 缓存；
 - Go 测试、ESLint 和前端生产构建。
 

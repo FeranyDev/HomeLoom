@@ -71,6 +71,21 @@ func TestListProviders(t *testing.T) {
 	}
 }
 
+func TestDiagnosticsAndPrometheusMetrics(t *testing.T) {
+	server := newTestServer()
+	for _, path := range []string{"/api/v1/diagnostics", "/metrics"} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s status = %d", path, response.Code)
+		}
+		if !bytes.Contains(response.Body.Bytes(), []byte("event")) {
+			t.Fatalf("%s body = %s", path, response.Body.String())
+		}
+	}
+}
+
 func TestDeviceStatesIncludeProvenance(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/devices/virtual-switch-1/states", nil)
 	response := httptest.NewRecorder()

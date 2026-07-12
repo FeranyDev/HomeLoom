@@ -140,3 +140,49 @@ func (d *Device) SetProperty(endpointID, capabilityID, propertyID string, value 
 	}
 	return false
 }
+
+func (d Device) Clone() Device {
+	clone := d
+	if d.State.Power != nil {
+		value := *d.State.Power
+		clone.State.Power = &value
+	}
+	if d.State.Temperature != nil {
+		value := *d.State.Temperature
+		clone.State.Temperature = &value
+	}
+	clone.Endpoints = make([]Endpoint, len(d.Endpoints))
+	for endpointIndex, endpoint := range d.Endpoints {
+		clone.Endpoints[endpointIndex] = endpoint
+		clone.Endpoints[endpointIndex].Capabilities = make([]Capability, len(endpoint.Capabilities))
+		for capabilityIndex, capability := range endpoint.Capabilities {
+			cloneCapability := capability
+			cloneCapability.Properties = make([]Property, len(capability.Properties))
+			for propertyIndex, property := range capability.Properties {
+				cloneProperty := property
+				cloneProperty.Definition.Enum = append([]string(nil), property.Definition.Enum...)
+				if property.Value.Bool != nil {
+					value := *property.Value.Bool
+					cloneProperty.Value.Bool = &value
+				}
+				if property.Value.Number != nil {
+					value := *property.Value.Number
+					cloneProperty.Value.Number = &value
+				}
+				if property.Value.String != nil {
+					value := *property.Value.String
+					cloneProperty.Value.String = &value
+				}
+				cloneCapability.Properties[propertyIndex] = cloneProperty
+			}
+			cloneCapability.Commands = make([]CommandDefinition, len(capability.Commands))
+			for commandIndex, command := range capability.Commands {
+				cloneCapability.Commands[commandIndex] = command
+				cloneCapability.Commands[commandIndex].Parameters = append([]CommandParameter(nil), command.Parameters...)
+			}
+			cloneCapability.Events = append([]EventDefinition(nil), capability.Events...)
+			clone.Endpoints[endpointIndex].Capabilities[capabilityIndex] = cloneCapability
+		}
+	}
+	return clone
+}

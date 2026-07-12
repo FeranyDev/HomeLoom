@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	commandtracker "github.com/feranydev/homeloom/backend/internal/command"
@@ -32,9 +33,41 @@ type DeviceService struct {
 	unsubscribe func()
 	mu          sync.RWMutex
 	nextID      uint64
-	listeners   map[uint64]func(device.Device)
+	listeners   map[uint64]*deviceSubscription
 	staleCancel context.CancelFunc
 	staleDone   chan struct{}
+	metrics     deviceMetrics
+}
+
+type deviceSubscription struct {
+	queue chan device.Device
+	done  chan struct{}
+}
+
+type deviceMetrics struct {
+	eventsReceived      atomic.Uint64
+	eventsProcessed     atomic.Uint64
+	eventsDropped       atomic.Uint64
+	targetEventsDropped atomic.Uint64
+	statesMarkedStale   atomic.Uint64
+	commandsStarted     atomic.Uint64
+	commandsConfirmed   atomic.Uint64
+	commandsRejected    atomic.Uint64
+	commandsTimedOut    atomic.Uint64
+}
+
+type DeviceMetrics struct {
+	EventsReceived      uint64 `json:"eventsReceived"`
+	EventsProcessed     uint64 `json:"eventsProcessed"`
+	EventsDropped       uint64 `json:"eventsDropped"`
+	EventQueuePending   int    `json:"eventQueuePending"`
+	EventQueueCapacity  int    `json:"eventQueueCapacity"`
+	TargetEventsDropped uint64 `json:"targetEventsDropped"`
+	StatesMarkedStale   uint64 `json:"statesMarkedStale"`
+	CommandsStarted     uint64 `json:"commandsStarted"`
+	CommandsConfirmed   uint64 `json:"commandsConfirmed"`
+	CommandsRejected    uint64 `json:"commandsRejected"`
+	CommandsTimedOut    uint64 `json:"commandsTimedOut"`
 }
 
 type ProviderInfo struct {
@@ -54,7 +87,7 @@ func NewDeviceService(provider providersdk.Provider) *DeviceService {
 		provider: provider, discoverer: discoverer, writer: writer,
 		registry: registry.NewDeviceRegistry(items),
 		states:   statestore.NewStore(), commands: commandtracker.NewTracker(5 * time.Second),
-		listeners: make(map[uint64]func(device.Device)),
+		listeners: make(map[uint64]*deviceSubscription),
 	}
 	for _, item := range items {
 		service.applySnapshot(item)
@@ -65,7 +98,10 @@ func NewDeviceService(provider providersdk.Provider) *DeviceService {
 	go service.runStaleScanner(staleCtx)
 	if subscriber, ok := provider.(providersdk.EventSubscriber); ok {
 		service.unsubscribe = subscriber.Subscribe(func(item device.Device) {
-			_ = service.dispatcher.Publish(eventbus.Event{DeviceID: item.ID, Payload: item})
+			service.metrics.eventsReceived.Add(1)
+			if err := service.dispatcher.Publish(eventbus.Event{DeviceID: item.ID, Payload: item}); err != nil {
+				service.metrics.eventsDropped.Add(1)
+			}
 		})
 	} else {
 		service.unsubscribe = func() {}
@@ -80,6 +116,16 @@ func (s *DeviceService) States(deviceID string) []domainstate.StateValue {
 
 func (s *DeviceService) ProviderInfo() ProviderInfo {
 	return ProviderInfo{Manifest: s.provider.Manifest(), Capabilities: s.provider.Capabilities(), Status: "running"}
+}
+
+func (s *DeviceService) Metrics() DeviceMetrics {
+	return DeviceMetrics{
+		EventsReceived: s.metrics.eventsReceived.Load(), EventsProcessed: s.metrics.eventsProcessed.Load(),
+		EventsDropped: s.metrics.eventsDropped.Load(), EventQueuePending: s.dispatcher.Pending(), EventQueueCapacity: s.dispatcher.Capacity(),
+		TargetEventsDropped: s.metrics.targetEventsDropped.Load(), StatesMarkedStale: s.metrics.statesMarkedStale.Load(),
+		CommandsStarted: s.metrics.commandsStarted.Load(), CommandsConfirmed: s.metrics.commandsConfirmed.Load(),
+		CommandsRejected: s.metrics.commandsRejected.Load(), CommandsTimedOut: s.metrics.commandsTimedOut.Load(),
+	}
 }
 
 func (s *DeviceService) List(ctx context.Context) ([]device.Device, error) {
@@ -101,10 +147,12 @@ func (s *DeviceService) ExecutePower(ctx context.Context, id string, power bool)
 
 func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) (device.Device, domaincommand.Command, error) {
 	command := s.commands.Begin(deviceID, endpointID, capabilityID, propertyID, value)
+	s.metrics.commandsStarted.Add(1)
 	s.commands.Sent(command.ID)
 	if s.writer == nil {
 		err := ErrPropertyUnsupported
 		s.commands.Rejected(command.ID, err)
+		s.metrics.commandsRejected.Add(1)
 		current, _ := s.commands.Get(command.ID)
 		return device.Device{}, current, err
 	}
@@ -113,6 +161,7 @@ func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointI
 	})
 	if err != nil {
 		s.commands.Rejected(command.ID, err)
+		s.metrics.commandsRejected.Add(1)
 		current, _ := s.commands.Get(command.ID)
 		return device.Device{}, current, err
 	}
@@ -129,13 +178,22 @@ func (s *DeviceService) Subscribe(handler func(device.Device)) func() {
 	s.mu.Lock()
 	s.nextID++
 	id := s.nextID
-	s.listeners[id] = handler
+	subscription := &deviceSubscription{queue: make(chan device.Device, 64), done: make(chan struct{})}
+	s.listeners[id] = subscription
 	s.mu.Unlock()
-	return func() { s.mu.Lock(); delete(s.listeners, id); s.mu.Unlock() }
+	go func() {
+		defer close(subscription.done)
+		for item := range subscription.queue {
+			handler(item)
+		}
+	}()
+	var once sync.Once
+	return func() { once.Do(func() { s.removeSubscription(id) }) }
 }
 
 func (s *DeviceService) Close() error {
 	s.unsubscribe()
+	s.closeSubscriptions()
 	s.staleCancel()
 	<-s.staleDone
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -151,24 +209,27 @@ func (s *DeviceService) handleEvent(event eventbus.Event) {
 	if !ok {
 		return
 	}
+	s.metrics.eventsProcessed.Add(1)
 	s.registry.Upsert(item)
 	s.applySnapshot(item)
 	for _, endpoint := range item.Endpoints {
 		for _, capability := range endpoint.Capabilities {
 			for _, property := range capability.Properties {
-				s.commands.Confirm(item.ID, endpoint.ID, capability.ID, property.Definition.ID, property.Value)
+				if s.commands.Confirm(item.ID, endpoint.ID, capability.ID, property.Definition.ID, property.Value) {
+					s.metrics.commandsConfirmed.Add(1)
+				}
 			}
 		}
 	}
 	s.mu.RLock()
-	listeners := make([]func(device.Device), 0, len(s.listeners))
-	for _, listener := range s.listeners {
-		listeners = append(listeners, listener)
+	for _, subscription := range s.listeners {
+		select {
+		case subscription.queue <- item:
+		default:
+			s.metrics.targetEventsDropped.Add(1)
+		}
 	}
 	s.mu.RUnlock()
-	for _, listener := range listeners {
-		listener(item)
-	}
 }
 
 func (s *DeviceService) applySnapshot(item device.Device) {
@@ -211,9 +272,39 @@ func (s *DeviceService) runStaleScanner(ctx context.Context) {
 	for {
 		select {
 		case now := <-ticker.C:
-			s.states.MarkStale(now.UTC())
+			stale := s.states.MarkStale(now.UTC())
+			s.metrics.statesMarkedStale.Add(uint64(len(stale)))
+			expired := s.commands.Expire(now.UTC())
+			s.metrics.commandsTimedOut.Add(uint64(len(expired)))
 		case <-ctx.Done():
 			return
 		}
+	}
+}
+
+func (s *DeviceService) removeSubscription(id uint64) {
+	s.mu.Lock()
+	subscription, ok := s.listeners[id]
+	if ok {
+		delete(s.listeners, id)
+		close(subscription.queue)
+	}
+	s.mu.Unlock()
+	if ok {
+		<-subscription.done
+	}
+}
+
+func (s *DeviceService) closeSubscriptions() {
+	s.mu.Lock()
+	subscriptions := make([]*deviceSubscription, 0, len(s.listeners))
+	for id, subscription := range s.listeners {
+		delete(s.listeners, id)
+		close(subscription.queue)
+		subscriptions = append(subscriptions, subscription)
+	}
+	s.mu.Unlock()
+	for _, subscription := range subscriptions {
+		<-subscription.done
 	}
 }
