@@ -165,3 +165,28 @@ func TestCommandEndpoints(t *testing.T) {
 		t.Fatalf("missing status = %d", missingResponse.Code)
 	}
 }
+
+func TestGenericPropertyWrite(t *testing.T) {
+	request := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/devices/virtual-switch-1/endpoints/main/capabilities/switch/properties/power",
+		bytes.NewBufferString(`{"type":"bool","bool":true}`),
+	)
+	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response := httptest.NewRecorder()
+	newTestServer().Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"propertyId":"power"`)) {
+		t.Fatalf("response = %d %s", response.Code, response.Body.String())
+	}
+	unsupported := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/devices/virtual-switch-1/endpoints/main/capabilities/switch/properties/unknown",
+		bytes.NewBufferString(`{"type":"bool","bool":true}`),
+	)
+	unsupported.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	unsupportedResponse := httptest.NewRecorder()
+	newTestServer().Handler().ServeHTTP(unsupportedResponse, unsupported)
+	if unsupportedResponse.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d", unsupportedResponse.Code)
+	}
+}

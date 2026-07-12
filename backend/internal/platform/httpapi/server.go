@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/feranydev/homeloom/backend/internal/application"
+	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	domaintarget "github.com/feranydev/homeloom/backend/internal/domain/target"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -115,6 +116,26 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		}
 		if errors.Is(err, application.ErrPropertyUnsupported) {
 			return echo.NewHTTPError(http.StatusUnprocessableEntity, "power is not supported")
+		}
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to update device").SetInternal(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": item, "command": command})
+	})
+	e.PUT("/api/v1/devices/:id/endpoints/:endpoint/capabilities/:capability/properties/:property", func(c echo.Context) error {
+		var value device.PropertyValue
+		if err := c.Bind(&value); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid property value")
+		}
+		item, command, err := devices.ExecuteProperty(
+			c.Request().Context(), c.Param("id"), c.Param("endpoint"),
+			c.Param("capability"), c.Param("property"), value,
+		)
+		if errors.Is(err, application.ErrDeviceNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "device not found")
+		}
+		if errors.Is(err, application.ErrPropertyUnsupported) {
+			return echo.NewHTTPError(http.StatusUnprocessableEntity, "property is not supported")
 		}
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "failed to update device").SetInternal(err)

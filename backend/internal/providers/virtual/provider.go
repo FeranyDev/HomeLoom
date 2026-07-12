@@ -25,11 +25,25 @@ func NewProvider() *Provider {
 		"virtual-switch-1": {
 			ID: "virtual-switch-1", ProviderID: "virtual-main", Name: "客厅开关",
 			Type: device.TypeSwitch, Online: true, State: device.State{Power: &off}, LastUpdateAt: now,
+			Endpoints: []device.Endpoint{{
+				ID: "main", Name: "主端点", Type: "switch",
+				Capabilities: []device.Capability{{ID: "switch", Type: "switch", Properties: []device.Property{{
+					Definition: device.PropertyDefinition{ID: "power", Name: "开关", Type: device.ValueTypeBool, Readable: true, Writable: true, Notifiable: true},
+					Value:      device.BoolValue(false),
+				}}}},
+			}},
 		},
 		"virtual-temperature-1": {
 			ID: "virtual-temperature-1", ProviderID: "virtual-main", Name: "客厅温度",
 			Type: device.TypeTemperatureSensor, Online: true,
 			State: device.State{Temperature: &temperature}, LastUpdateAt: now,
+			Endpoints: []device.Endpoint{{
+				ID: "main", Name: "主端点", Type: "sensor",
+				Capabilities: []device.Capability{{ID: "temperature", Type: "temperature-sensor", Properties: []device.Property{{
+					Definition: device.PropertyDefinition{ID: "current-temperature", Name: "当前温度", Type: device.ValueTypeNumber, Unit: "celsius", Readable: true, Notifiable: true},
+					Value:      device.NumberValue(temperature),
+				}}}},
+			}},
 		},
 	}, listeners: make(map[uint64]func(device.Device))}
 }
@@ -58,6 +72,7 @@ func (p *Provider) SetPower(_ context.Context, id string, power bool) (device.De
 		return device.Device{}, application.ErrPropertyUnsupported
 	}
 	item.State.Power = &power
+	item.SetProperty("main", "switch", "power", device.BoolValue(power))
 	item.LastUpdateAt = time.Now().UTC()
 	p.devices[id] = item
 	listeners := make([]func(device.Device), 0, len(p.listeners))

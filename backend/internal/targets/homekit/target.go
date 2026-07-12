@@ -67,8 +67,8 @@ func New(ctx context.Context, config Config, devices *application.DeviceService,
 		switch item.Type {
 		case device.TypeSwitch:
 			a := accessory.NewSwitch(info)
-			if item.State.Power != nil {
-				a.Switch.On.SetValue(*item.State.Power)
+			if property, ok := item.Property("main", "switch", "power"); ok && property.Value.Bool != nil {
+				a.Switch.On.SetValue(*property.Value.Bool)
 			}
 			deviceID := item.ID
 			a.Switch.On.OnValueRemoteUpdate(func(value bool) {
@@ -80,8 +80,8 @@ func New(ctx context.Context, config Config, devices *application.DeviceService,
 			accessories = append(accessories, a.A)
 		case device.TypeTemperatureSensor:
 			a := accessory.NewTemperatureSensor(info)
-			if item.State.Temperature != nil {
-				a.TempSensor.CurrentTemperature.SetValue(*item.State.Temperature)
+			if property, ok := item.Property("main", "temperature", "current-temperature"); ok && property.Value.Number != nil {
+				a.TempSensor.CurrentTemperature.SetValue(*property.Value.Number)
 			}
 			accessories = append(accessories, a.A)
 		}
@@ -112,8 +112,9 @@ func New(ctx context.Context, config Config, devices *application.DeviceService,
 		pairing: PairingInfo{Code: formatPin(config.Pin), SetupURI: setupURI, QR: qr, Devices: append([]string(nil), config.DeviceIDs...)},
 	}
 	target.cancelSubscription = devices.Subscribe(func(item device.Device) {
-		if characteristic, ok := switches[item.ID]; ok && item.State.Power != nil {
-			characteristic.SetValue(*item.State.Power)
+		property, propertyExists := item.Property("main", "switch", "power")
+		if characteristic, ok := switches[item.ID]; ok && propertyExists && property.Value.Bool != nil {
+			characteristic.SetValue(*property.Value.Bool)
 		}
 	})
 	return target, nil

@@ -33,8 +33,10 @@ func BoolValue(value bool) Value      { return Value{Kind: KindBool, Bool: &valu
 func NumberValue(value float64) Value { return Value{Kind: KindNumber, Number: &value} }
 
 type Key struct {
-	DeviceID   string `json:"deviceId"`
-	PropertyID string `json:"propertyId"`
+	DeviceID     string `json:"deviceId"`
+	EndpointID   string `json:"endpointId"`
+	CapabilityID string `json:"capabilityId"`
+	PropertyID   string `json:"propertyId"`
 }
 
 type StateValue struct {

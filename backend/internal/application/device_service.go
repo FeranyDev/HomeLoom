@@ -75,9 +75,19 @@ func (s *DeviceService) SetPower(ctx context.Context, id string, power bool) (de
 }
 
 func (s *DeviceService) ExecutePower(ctx context.Context, id string, power bool) (device.Device, domaincommand.Command, error) {
-	command := s.commands.BeginBool(id, "power", power)
+	return s.ExecuteProperty(ctx, id, "main", "switch", "power", device.BoolValue(power))
+}
+
+func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) (device.Device, domaincommand.Command, error) {
+	command := s.commands.Begin(deviceID, endpointID, capabilityID, propertyID, value)
 	s.commands.Sent(command.ID)
-	item, err := s.provider.SetPower(ctx, id, power)
+	if endpointID != "main" || capabilityID != "switch" || propertyID != "power" || value.Type != device.ValueTypeBool || value.Bool == nil {
+		err := ErrPropertyUnsupported
+		s.commands.Rejected(command.ID, err)
+		current, _ := s.commands.Get(command.ID)
+		return device.Device{}, current, err
+	}
+	item, err := s.provider.SetPower(ctx, deviceID, *value.Bool)
 	if err != nil {
 		s.commands.Rejected(command.ID, err)
 		current, _ := s.commands.Get(command.ID)
@@ -115,8 +125,12 @@ func (s *DeviceService) handleEvent(event eventbus.Event) {
 	}
 	s.registry.Upsert(item)
 	s.applySnapshot(item)
-	if item.State.Power != nil {
-		s.commands.ConfirmBool(item.ID, "power", *item.State.Power)
+	for _, endpoint := range item.Endpoints {
+		for _, capability := range endpoint.Capabilities {
+			for _, property := range capability.Properties {
+				s.commands.Confirm(item.ID, endpoint.ID, capability.ID, property.Definition.ID, property.Value)
+			}
+		}
 	}
 	s.mu.RLock()
 	listeners := make([]func(device.Device), 0, len(s.listeners))
@@ -131,20 +145,30 @@ func (s *DeviceService) handleEvent(event eventbus.Event) {
 
 func (s *DeviceService) applySnapshot(item device.Device) {
 	receivedAt := time.Now().UTC()
-	base := domainstate.StateValue{
-		ProviderID: item.ProviderID, Source: domainstate.SourceReported,
-		ObservedAt: item.LastUpdateAt, ReceivedAt: receivedAt, Quality: domainstate.QualityReported,
-	}
-	if item.State.Power != nil {
-		value := base
-		value.Key = domainstate.Key{DeviceID: item.ID, PropertyID: "power"}
-		value.Value = domainstate.BoolValue(*item.State.Power)
-		s.states.Apply(value)
-	}
-	if item.State.Temperature != nil {
-		value := base
-		value.Key = domainstate.Key{DeviceID: item.ID, PropertyID: "temperature"}
-		value.Value = domainstate.NumberValue(*item.State.Temperature)
-		s.states.Apply(value)
+	for _, endpoint := range item.Endpoints {
+		for _, capability := range endpoint.Capabilities {
+			for _, property := range capability.Properties {
+				value := domainstate.StateValue{
+					Key:        domainstate.Key{DeviceID: item.ID, EndpointID: endpoint.ID, CapabilityID: capability.ID, PropertyID: property.Definition.ID},
+					ProviderID: item.ProviderID, Source: domainstate.SourceReported,
+					ObservedAt: item.LastUpdateAt, ReceivedAt: receivedAt, Quality: domainstate.QualityReported,
+				}
+				switch property.Value.Type {
+				case device.ValueTypeBool:
+					if property.Value.Bool == nil {
+						continue
+					}
+					value.Value = domainstate.BoolValue(*property.Value.Bool)
+				case device.ValueTypeNumber:
+					if property.Value.Number == nil {
+						continue
+					}
+					value.Value = domainstate.NumberValue(*property.Value.Number)
+				default:
+					continue
+				}
+				s.states.Apply(value)
+			}
+		}
 	}
 }

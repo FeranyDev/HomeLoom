@@ -6,19 +6,20 @@ import (
 	"time"
 
 	domaincommand "github.com/feranydev/homeloom/backend/internal/domain/command"
+	"github.com/feranydev/homeloom/backend/internal/domain/device"
 )
 
 func TestCommandConfirmsOnlyMatchingState(t *testing.T) {
 	tracker := NewTracker(time.Second)
-	command := tracker.BeginBool("switch", "power", true)
+	command := tracker.Begin("switch", "main", "switch", "power", device.BoolValue(true))
 	tracker.Sent(command.ID)
 	tracker.Accepted(command.ID)
-	tracker.ConfirmBool("switch", "power", false)
+	tracker.Confirm("switch", "main", "switch", "power", device.BoolValue(false))
 	current, _ := tracker.Get(command.ID)
 	if current.Status != domaincommand.StatusAccepted {
 		t.Fatalf("status = %s", current.Status)
 	}
-	tracker.ConfirmBool("switch", "power", true)
+	tracker.Confirm("switch", "main", "switch", "power", device.BoolValue(true))
 	current, _ = tracker.Get(command.ID)
 	if current.Status != domaincommand.StatusConfirmed {
 		t.Fatalf("status = %s", current.Status)
@@ -27,15 +28,30 @@ func TestCommandConfirmsOnlyMatchingState(t *testing.T) {
 
 func TestCommandRejectAndTimeout(t *testing.T) {
 	tracker := NewTracker(-time.Millisecond)
-	rejected := tracker.BeginBool("a", "power", true)
+	rejected := tracker.Begin("a", "main", "switch", "power", device.BoolValue(true))
 	tracker.Rejected(rejected.ID, errors.New("offline"))
 	current, _ := tracker.Get(rejected.ID)
 	if current.Status != domaincommand.StatusRejected || current.Error != "offline" {
 		t.Fatalf("rejected = %#v", current)
 	}
-	timedOut := tracker.BeginBool("b", "power", true)
+	timedOut := tracker.Begin("b", "main", "switch", "power", device.BoolValue(true))
 	current, _ = tracker.Get(timedOut.ID)
 	if current.Status != domaincommand.StatusTimeout {
 		t.Fatalf("timeout = %#v", current)
+	}
+}
+
+func TestCommandConfirmsTypedNumber(t *testing.T) {
+	tracker := NewTracker(time.Second)
+	command := tracker.Begin("sensor", "main", "temperature", "target", device.NumberValue(21.5))
+	tracker.Accepted(command.ID)
+	tracker.Confirm("sensor", "main", "temperature", "target", device.NumberValue(21.5))
+	current, _ := tracker.Get(command.ID)
+	if current.Status != domaincommand.StatusConfirmed {
+		t.Fatalf("status = %s", current.Status)
+	}
+	text := "auto"
+	if valuesEqual(device.PropertyValue{Type: device.ValueTypeString, String: &text}, device.PropertyValue{Type: device.ValueTypeEnum, String: &text}) {
+		t.Fatal("values with different types compared equal")
 	}
 }

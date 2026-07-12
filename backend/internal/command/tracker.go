@@ -8,6 +8,7 @@ import (
 	"time"
 
 	domaincommand "github.com/feranydev/homeloom/backend/internal/domain/command"
+	"github.com/feranydev/homeloom/backend/internal/domain/device"
 )
 
 type Tracker struct {
@@ -21,15 +22,16 @@ func NewTracker(timeout time.Duration) *Tracker {
 	return &Tracker{timeout: timeout, commands: make(map[string]domaincommand.Command), pending: make(map[string]string)}
 }
 
-func (t *Tracker) BeginBool(deviceID, propertyID string, value bool) domaincommand.Command {
+func (t *Tracker) Begin(deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) domaincommand.Command {
 	now := time.Now().UTC()
 	command := domaincommand.Command{
-		ID: commandID(), DeviceID: deviceID, PropertyID: propertyID, BoolValue: &value,
+		ID: commandID(), DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID,
+		PropertyID: propertyID, Expected: value,
 		Status: domaincommand.StatusQueued, CreatedAt: now, UpdatedAt: now, Deadline: now.Add(t.timeout),
 	}
 	t.mu.Lock()
 	t.commands[command.ID] = command
-	t.pending[pendingKey(deviceID, propertyID)] = command.ID
+	t.pending[pendingKey(deviceID, endpointID, capabilityID, propertyID)] = command.ID
 	t.mu.Unlock()
 	return command
 }
@@ -40,16 +42,16 @@ func (t *Tracker) Rejected(id string, err error) {
 	t.transition(id, domaincommand.StatusRejected, err.Error())
 }
 
-func (t *Tracker) ConfirmBool(deviceID, propertyID string, value bool) {
+func (t *Tracker) Confirm(deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	key := pendingKey(deviceID, propertyID)
+	key := pendingKey(deviceID, endpointID, capabilityID, propertyID)
 	id, ok := t.pending[key]
 	if !ok {
 		return
 	}
 	command := t.commands[id]
-	if command.BoolValue == nil || *command.BoolValue != value {
+	if !valuesEqual(command.Expected, value) {
 		return
 	}
 	command.Status = domaincommand.StatusConfirmed
@@ -88,7 +90,7 @@ func (t *Tracker) transition(id string, status domaincommand.Status, message str
 	command.Status, command.Error, command.UpdatedAt = status, message, time.Now().UTC()
 	t.commands[id] = command
 	if terminal(status) {
-		delete(t.pending, pendingKey(command.DeviceID, command.PropertyID))
+		delete(t.pending, pendingKey(command.DeviceID, command.EndpointID, command.CapabilityID, command.PropertyID))
 	}
 }
 
@@ -102,7 +104,7 @@ func (t *Tracker) expire() {
 		}
 		command.Status, command.UpdatedAt = domaincommand.StatusTimeout, now
 		t.commands[id] = command
-		delete(t.pending, pendingKey(command.DeviceID, command.PropertyID))
+		delete(t.pending, pendingKey(command.DeviceID, command.EndpointID, command.CapabilityID, command.PropertyID))
 	}
 }
 
@@ -110,7 +112,25 @@ func terminal(status domaincommand.Status) bool {
 	return status == domaincommand.StatusConfirmed || status == domaincommand.StatusRejected || status == domaincommand.StatusTimeout
 }
 
-func pendingKey(deviceID, propertyID string) string { return deviceID + "\x00" + propertyID }
+func pendingKey(deviceID, endpointID, capabilityID, propertyID string) string {
+	return deviceID + "\x00" + endpointID + "\x00" + capabilityID + "\x00" + propertyID
+}
+
+func valuesEqual(left, right device.PropertyValue) bool {
+	if left.Type != right.Type {
+		return false
+	}
+	switch left.Type {
+	case device.ValueTypeBool:
+		return left.Bool != nil && right.Bool != nil && *left.Bool == *right.Bool
+	case device.ValueTypeNumber:
+		return left.Number != nil && right.Number != nil && *left.Number == *right.Number
+	case device.ValueTypeString, device.ValueTypeEnum:
+		return left.String != nil && right.String != nil && *left.String == *right.String
+	default:
+		return false
+	}
+}
 
 func commandID() string {
 	bytes := make([]byte, 8)
