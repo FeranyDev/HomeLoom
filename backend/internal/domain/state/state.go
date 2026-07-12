@@ -46,6 +46,7 @@ type StateValue struct {
 	Source           Source    `json:"source"`
 	ObservedAt       time.Time `json:"observedAt"`
 	ReceivedAt       time.Time `json:"receivedAt"`
+	ExpiresAt        time.Time `json:"expiresAt,omitempty"`
 	Sequence         uint64    `json:"sequence"`
 	Version          uint64    `json:"version"`
 	Quality          Quality   `json:"quality"`

@@ -33,6 +33,8 @@ type DeviceService struct {
 	mu          sync.RWMutex
 	nextID      uint64
 	listeners   map[uint64]func(device.Device)
+	staleCancel context.CancelFunc
+	staleDone   chan struct{}
 }
 
 type ProviderInfo struct {
@@ -58,6 +60,9 @@ func NewDeviceService(provider providersdk.Provider) *DeviceService {
 		service.applySnapshot(item)
 	}
 	service.dispatcher = eventbus.NewDispatcher(8, 128, service.handleEvent)
+	staleCtx, staleCancel := context.WithCancel(context.Background())
+	service.staleCancel, service.staleDone = staleCancel, make(chan struct{})
+	go service.runStaleScanner(staleCtx)
 	if subscriber, ok := provider.(providersdk.EventSubscriber); ok {
 		service.unsubscribe = subscriber.Subscribe(func(item device.Device) {
 			_ = service.dispatcher.Publish(eventbus.Event{DeviceID: item.ID, Payload: item})
@@ -69,6 +74,7 @@ func NewDeviceService(provider providersdk.Provider) *DeviceService {
 }
 
 func (s *DeviceService) States(deviceID string) []domainstate.StateValue {
+	s.states.MarkStale(time.Now().UTC())
 	return s.states.Device(deviceID)
 }
 
@@ -130,6 +136,8 @@ func (s *DeviceService) Subscribe(handler func(device.Device)) func() {
 
 func (s *DeviceService) Close() error {
 	s.unsubscribe()
+	s.staleCancel()
+	<-s.staleDone
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := s.dispatcher.Close(ctx); err != nil {
@@ -173,6 +181,9 @@ func (s *DeviceService) applySnapshot(item device.Device) {
 					ProviderID: item.ProviderID, Source: domainstate.SourceReported,
 					ObservedAt: item.LastUpdateAt, ReceivedAt: receivedAt, Quality: domainstate.QualityReported,
 				}
+				if property.Definition.StaleAfterSeconds > 0 {
+					value.ExpiresAt = receivedAt.Add(time.Duration(property.Definition.StaleAfterSeconds) * time.Second)
+				}
 				switch property.Value.Type {
 				case device.ValueTypeBool:
 					if property.Value.Bool == nil {
@@ -189,6 +200,20 @@ func (s *DeviceService) applySnapshot(item device.Device) {
 				}
 				s.states.Apply(value)
 			}
+		}
+	}
+}
+
+func (s *DeviceService) runStaleScanner(ctx context.Context) {
+	defer close(s.staleDone)
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case now := <-ticker.C:
+			s.states.MarkStale(now.UTC())
+		case <-ctx.Done():
+			return
 		}
 	}
 }

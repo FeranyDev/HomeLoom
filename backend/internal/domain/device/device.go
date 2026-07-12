@@ -30,17 +30,18 @@ func NumberValue(value float64) PropertyValue {
 }
 
 type PropertyDefinition struct {
-	ID         string    `json:"id"`
-	Name       string    `json:"name"`
-	Type       ValueType `json:"type"`
-	Unit       string    `json:"unit,omitempty"`
-	Readable   bool      `json:"readable"`
-	Writable   bool      `json:"writable"`
-	Notifiable bool      `json:"notifiable"`
-	Min        *float64  `json:"min,omitempty"`
-	Max        *float64  `json:"max,omitempty"`
-	Step       *float64  `json:"step,omitempty"`
-	Enum       []string  `json:"enum,omitempty"`
+	ID                string    `json:"id"`
+	Name              string    `json:"name"`
+	Type              ValueType `json:"type"`
+	Unit              string    `json:"unit,omitempty"`
+	Readable          bool      `json:"readable"`
+	Writable          bool      `json:"writable"`
+	Notifiable        bool      `json:"notifiable"`
+	Min               *float64  `json:"min,omitempty"`
+	Max               *float64  `json:"max,omitempty"`
+	Step              *float64  `json:"step,omitempty"`
+	Enum              []string  `json:"enum,omitempty"`
+	StaleAfterSeconds int       `json:"staleAfterSeconds,omitempty"`
 }
 
 type Property struct {

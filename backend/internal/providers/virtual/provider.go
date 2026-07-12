@@ -55,7 +55,7 @@ func NewProvider() *Provider {
 			Endpoints: []device.Endpoint{{
 				ID: "main", Name: "主端点", Type: "switch",
 				Capabilities: []device.Capability{{ID: "switch", Type: "switch", Properties: []device.Property{{
-					Definition: device.PropertyDefinition{ID: "power", Name: "开关", Type: device.ValueTypeBool, Readable: true, Writable: true, Notifiable: true},
+					Definition: device.PropertyDefinition{ID: "power", Name: "开关", Type: device.ValueTypeBool, Readable: true, Writable: true, Notifiable: true, StaleAfterSeconds: 15},
 					Value:      device.BoolValue(false),
 				}}}},
 			}},
@@ -67,7 +67,7 @@ func NewProvider() *Provider {
 			Endpoints: []device.Endpoint{{
 				ID: "main", Name: "主端点", Type: "sensor",
 				Capabilities: []device.Capability{{ID: "temperature", Type: "temperature-sensor", Properties: []device.Property{{
-					Definition: device.PropertyDefinition{ID: "current-temperature", Name: "当前温度", Type: device.ValueTypeNumber, Unit: "celsius", Readable: true, Notifiable: true},
+					Definition: device.PropertyDefinition{ID: "current-temperature", Name: "当前温度", Type: device.ValueTypeNumber, Unit: "celsius", Readable: true, Notifiable: true, StaleAfterSeconds: 30},
 					Value:      device.NumberValue(temperature),
 				}}}},
 			}},

@@ -3,6 +3,7 @@ package state
 import (
 	"sort"
 	"sync"
+	"time"
 
 	domainstate "github.com/feranydev/homeloom/backend/internal/domain/state"
 )
@@ -39,6 +40,22 @@ func (s *Store) Device(deviceID string) []domainstate.StateValue {
 	s.mu.RUnlock()
 	sort.Slice(result, func(i, j int) bool { return result[i].Key.PropertyID < result[j].Key.PropertyID })
 	return result
+}
+
+func (s *Store) MarkStale(now time.Time) []domainstate.StateValue {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	changed := make([]domainstate.StateValue, 0)
+	for key, value := range s.values {
+		if value.ExpiresAt.IsZero() || now.Before(value.ExpiresAt) || value.Quality == domainstate.QualityStale {
+			continue
+		}
+		value.Quality = domainstate.QualityStale
+		value.Version++
+		s.values[key] = value
+		changed = append(changed, value)
+	}
+	return changed
 }
 
 func preferIncoming(current, incoming domainstate.StateValue) bool {

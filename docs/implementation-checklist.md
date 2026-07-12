@@ -234,8 +234,8 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 
 ### 5.2 待完善
 
-- [ ] stale TTL；
-- [ ] 定时 stale 扫描；
+- [x] stale TTL；
+- [x] 定时 stale 扫描；
 - [ ] unknown 初始状态；
 - [ ] Provider 离线批量标记 stale；
 - [ ] 乐观状态；

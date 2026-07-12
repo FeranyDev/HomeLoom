@@ -62,3 +62,23 @@ func TestApplyRejectsOlderObservedTime(t *testing.T) {
 		t.Fatal("older observed state was accepted")
 	}
 }
+
+func TestMarkStaleExpiresOnceAndIncrementsVersion(t *testing.T) {
+	store := NewStore()
+	now := time.Now().UTC()
+	key := domainstate.Key{DeviceID: "device", EndpointID: "main", CapabilityID: "switch", PropertyID: "power"}
+	store.Apply(domainstate.StateValue{
+		Key: key, Value: domainstate.BoolValue(true), ProviderID: "provider",
+		ObservedAt: now, ReceivedAt: now, ExpiresAt: now.Add(time.Second), Quality: domainstate.QualityReported,
+	})
+	if changed := store.MarkStale(now.Add(500 * time.Millisecond)); len(changed) != 0 {
+		t.Fatalf("early stale changes = %#v", changed)
+	}
+	changed := store.MarkStale(now.Add(time.Second))
+	if len(changed) != 1 || changed[0].Quality != domainstate.QualityStale || changed[0].Version != 2 {
+		t.Fatalf("stale changes = %#v", changed)
+	}
+	if changed := store.MarkStale(now.Add(2 * time.Second)); len(changed) != 0 {
+		t.Fatalf("duplicate stale changes = %#v", changed)
+	}
+}
