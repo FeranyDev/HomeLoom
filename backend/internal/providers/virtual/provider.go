@@ -8,6 +8,7 @@ import (
 
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
+	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 )
 
 type Provider struct {
@@ -15,6 +16,32 @@ type Provider struct {
 	devices   map[string]device.Device
 	nextID    uint64
 	listeners map[uint64]func(device.Device)
+}
+
+var _ providersdk.Provider = (*Provider)(nil)
+var _ providersdk.Discoverer = (*Provider)(nil)
+var _ providersdk.PropertyWriter = (*Provider)(nil)
+var _ providersdk.EventSubscriber = (*Provider)(nil)
+
+func (p *Provider) Manifest() providersdk.Manifest {
+	return providersdk.Manifest{ID: "virtual-main", Type: "virtual", Name: "Virtual Provider", Version: "0.1.0"}
+}
+
+func (p *Provider) Capabilities() providersdk.Capabilities {
+	return providersdk.Capabilities{Discovery: true, PropertyRead: true, PropertyWrite: true, Events: true}
+}
+
+func (p *Provider) Initialize(context.Context) error { return nil }
+func (p *Provider) Close(context.Context) error      { return nil }
+
+func (p *Provider) DiscoverDevices(ctx context.Context) ([]device.Device, error) { return p.List(ctx) }
+
+func (p *Provider) WriteProperty(ctx context.Context, request providersdk.PropertyWriteRequest) (device.Device, error) {
+	if request.EndpointID != "main" || request.CapabilityID != "switch" || request.PropertyID != "power" ||
+		request.Value.Type != device.ValueTypeBool || request.Value.Bool == nil {
+		return device.Device{}, application.ErrPropertyUnsupported
+	}
+	return p.SetPower(ctx, request.DeviceID, *request.Value.Bool)
 }
 
 func NewProvider() *Provider {

@@ -36,6 +36,10 @@ func main() {
 	}
 	defer store.Close()
 	provider := virtual.NewProvider()
+	if err := provider.Initialize(ctx); err != nil {
+		logger.Error("provider initialization failed", "provider_id", provider.Manifest().ID, "error", err)
+		os.Exit(1)
+	}
 	service := application.NewDeviceService(provider)
 	defer service.Close()
 	targetConfigs, err := store.ListTargets(ctx)

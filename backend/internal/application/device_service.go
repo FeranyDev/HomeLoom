@@ -11,6 +11,7 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	domainstate "github.com/feranydev/homeloom/backend/internal/domain/state"
 	"github.com/feranydev/homeloom/backend/internal/eventbus"
+	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	"github.com/feranydev/homeloom/backend/internal/registry"
 	statestore "github.com/feranydev/homeloom/backend/internal/state"
 )
@@ -20,17 +21,10 @@ var (
 	ErrPropertyUnsupported = errors.New("property unsupported")
 )
 
-type DeviceProvider interface {
-	List(context.Context) ([]device.Device, error)
-	SetPower(context.Context, string, bool) (device.Device, error)
-}
-
-type DeviceSubscriber interface {
-	Subscribe(func(device.Device)) func()
-}
-
 type DeviceService struct {
-	provider    DeviceProvider
+	provider    providersdk.Provider
+	discoverer  providersdk.Discoverer
+	writer      providersdk.PropertyWriter
 	registry    *registry.DeviceRegistry
 	dispatcher  *eventbus.Dispatcher
 	states      *statestore.Store
@@ -41,18 +35,30 @@ type DeviceService struct {
 	listeners   map[uint64]func(device.Device)
 }
 
-func NewDeviceService(provider DeviceProvider) *DeviceService {
-	items, _ := provider.List(context.Background())
+type ProviderInfo struct {
+	Manifest     providersdk.Manifest     `json:"manifest"`
+	Capabilities providersdk.Capabilities `json:"capabilities"`
+	Status       string                   `json:"status"`
+}
+
+func NewDeviceService(provider providersdk.Provider) *DeviceService {
+	discoverer, _ := provider.(providersdk.Discoverer)
+	writer, _ := provider.(providersdk.PropertyWriter)
+	items := make([]device.Device, 0)
+	if discoverer != nil {
+		items, _ = discoverer.DiscoverDevices(context.Background())
+	}
 	service := &DeviceService{
-		provider: provider, registry: registry.NewDeviceRegistry(items),
-		states: statestore.NewStore(), commands: commandtracker.NewTracker(5 * time.Second),
+		provider: provider, discoverer: discoverer, writer: writer,
+		registry: registry.NewDeviceRegistry(items),
+		states:   statestore.NewStore(), commands: commandtracker.NewTracker(5 * time.Second),
 		listeners: make(map[uint64]func(device.Device)),
 	}
 	for _, item := range items {
 		service.applySnapshot(item)
 	}
 	service.dispatcher = eventbus.NewDispatcher(8, 128, service.handleEvent)
-	if subscriber, ok := provider.(DeviceSubscriber); ok {
+	if subscriber, ok := provider.(providersdk.EventSubscriber); ok {
 		service.unsubscribe = subscriber.Subscribe(func(item device.Device) {
 			_ = service.dispatcher.Publish(eventbus.Event{DeviceID: item.ID, Payload: item})
 		})
@@ -66,12 +72,21 @@ func (s *DeviceService) States(deviceID string) []domainstate.StateValue {
 	return s.states.Device(deviceID)
 }
 
+func (s *DeviceService) ProviderInfo() ProviderInfo {
+	return ProviderInfo{Manifest: s.provider.Manifest(), Capabilities: s.provider.Capabilities(), Status: "running"}
+}
+
 func (s *DeviceService) List(ctx context.Context) ([]device.Device, error) {
 	return s.registry.List(), nil
 }
 
 func (s *DeviceService) SetPower(ctx context.Context, id string, power bool) (device.Device, error) {
-	return s.provider.SetPower(ctx, id, power)
+	if s.writer == nil {
+		return device.Device{}, ErrPropertyUnsupported
+	}
+	return s.writer.WriteProperty(ctx, providersdk.PropertyWriteRequest{
+		DeviceID: id, EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Value: device.BoolValue(power),
+	})
 }
 
 func (s *DeviceService) ExecutePower(ctx context.Context, id string, power bool) (device.Device, domaincommand.Command, error) {
@@ -81,13 +96,15 @@ func (s *DeviceService) ExecutePower(ctx context.Context, id string, power bool)
 func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) (device.Device, domaincommand.Command, error) {
 	command := s.commands.Begin(deviceID, endpointID, capabilityID, propertyID, value)
 	s.commands.Sent(command.ID)
-	if endpointID != "main" || capabilityID != "switch" || propertyID != "power" || value.Type != device.ValueTypeBool || value.Bool == nil {
+	if s.writer == nil {
 		err := ErrPropertyUnsupported
 		s.commands.Rejected(command.ID, err)
 		current, _ := s.commands.Get(command.ID)
 		return device.Device{}, current, err
 	}
-	item, err := s.provider.SetPower(ctx, deviceID, *value.Bool)
+	item, err := s.writer.WriteProperty(ctx, providersdk.PropertyWriteRequest{
+		DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID, PropertyID: propertyID, Value: value,
+	})
 	if err != nil {
 		s.commands.Rejected(command.ID, err)
 		current, _ := s.commands.Get(command.ID)
@@ -115,7 +132,10 @@ func (s *DeviceService) Close() error {
 	s.unsubscribe()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return s.dispatcher.Close(ctx)
+	if err := s.dispatcher.Close(ctx); err != nil {
+		return err
+	}
+	return s.provider.Close(ctx)
 }
 
 func (s *DeviceService) handleEvent(event eventbus.Event) {

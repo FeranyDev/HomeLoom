@@ -45,6 +45,18 @@ func TestNewProviderStartsWithFreshRuntimeState(t *testing.T) {
 	}
 }
 
+func TestProviderManifestAndCapabilities(t *testing.T) {
+	provider := NewProvider()
+	manifest := provider.Manifest()
+	capabilities := provider.Capabilities()
+	if manifest.ID != "virtual-main" || manifest.Type != "virtual" || manifest.Version == "" {
+		t.Fatalf("manifest = %#v", manifest)
+	}
+	if !capabilities.Discovery || !capabilities.PropertyWrite || !capabilities.Events {
+		t.Fatalf("capabilities = %#v", capabilities)
+	}
+}
+
 func TestSetPowerErrors(t *testing.T) {
 	provider := NewProvider()
 	if _, err := provider.SetPower(context.Background(), "missing", true); !errors.Is(err, application.ErrDeviceNotFound) {

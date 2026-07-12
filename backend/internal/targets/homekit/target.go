@@ -72,7 +72,7 @@ func New(ctx context.Context, config Config, devices *application.DeviceService,
 			}
 			deviceID := item.ID
 			a.Switch.On.OnValueRemoteUpdate(func(value bool) {
-				if _, updateErr := devices.SetPower(context.Background(), deviceID, value); updateErr != nil {
+				if _, _, updateErr := devices.ExecutePower(context.Background(), deviceID, value); updateErr != nil {
 					logger.Error("HomeKit command failed", "device_id", deviceID, "error", updateErr)
 				}
 			})

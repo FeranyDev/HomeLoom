@@ -137,15 +137,15 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 
 ### 3.1 Provider 接口
 
-- [ ] 定义基础 `Provider` 生命周期接口；
-- [ ] 定义 Provider Manifest；
-- [ ] 定义 Provider 类型和版本；
-- [ ] 定义能力声明；
-- [ ] 定义可选 `Discoverer`；
+- [x] 定义基础 `Provider` 生命周期接口；
+- [x] 定义 Provider Manifest；
+- [x] 定义 Provider 类型和版本；
+- [x] 定义能力声明；
+- [x] 定义可选 `Discoverer`；
 - [ ] 定义可选 `PropertyReader`；
-- [ ] 定义可选 `PropertyWriter`；
+- [x] 定义可选 `PropertyWriter`；
 - [ ] 定义可选 `CommandExecutor`；
-- [ ] 定义可选 `EventSubscriber`；
+- [x] 定义可选 `EventSubscriber`；
 - [ ] 定义 Provider 健康状态；
 - [ ] 定义初始化、启动、停止和关闭顺序；
 - [ ] 定义上下文取消语义；

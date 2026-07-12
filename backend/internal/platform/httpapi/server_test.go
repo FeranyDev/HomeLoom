@@ -62,6 +62,15 @@ func TestListDevices(t *testing.T) {
 	}
 }
 
+func TestListProviders(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/providers", nil)
+	response := httptest.NewRecorder()
+	newTestServer().Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"id":"virtual-main"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"propertyWrite":true`)) {
+		t.Fatalf("provider response = %d %s", response.Code, response.Body.String())
+	}
+}
+
 func TestDeviceStatesIncludeProvenance(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/devices/virtual-switch-1/states", nil)
 	response := httptest.NewRecorder()
