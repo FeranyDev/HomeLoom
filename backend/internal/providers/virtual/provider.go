@@ -3,6 +3,7 @@ package virtual
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -53,9 +54,15 @@ func NewProviderWithIdentity(id, name string) *Provider {
 	now := time.Now().UTC()
 	off := false
 	temperature := 23.6
+	prefix := "virtual"
+	if id != "virtual-main" {
+		prefix = strings.TrimSuffix(id, "-")
+	}
+	switchID := prefix + "-switch-1"
+	temperatureID := prefix + "-temperature-1"
 	return &Provider{id: id, name: name, devices: map[string]device.Device{
-		"virtual-switch-1": {
-			ID: "virtual-switch-1", ProviderID: id, Name: "客厅开关",
+		switchID: {
+			ID: switchID, ProviderID: id, Name: "客厅开关",
 			Type: device.TypeSwitch, Online: true, State: device.State{Power: &off}, LastUpdateAt: now,
 			Endpoints: []device.Endpoint{{
 				ID: "main", Name: "主端点", Type: "switch",
@@ -65,8 +72,8 @@ func NewProviderWithIdentity(id, name string) *Provider {
 				}}}},
 			}},
 		},
-		"virtual-temperature-1": {
-			ID: "virtual-temperature-1", ProviderID: id, Name: "客厅温度",
+		temperatureID: {
+			ID: temperatureID, ProviderID: id, Name: "客厅温度",
 			Type: device.TypeTemperatureSensor, Online: true,
 			State: device.State{Temperature: &temperature}, LastUpdateAt: now,
 			Endpoints: []device.Endpoint{{

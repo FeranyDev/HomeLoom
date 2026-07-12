@@ -3,6 +3,7 @@ package providermanager_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
@@ -64,5 +65,45 @@ func TestManagerRejectsDuplicateProviderAndUnknownDevice(t *testing.T) {
 	manager.DiscoverDevices(context.Background())
 	if _, err := manager.WriteProperty(context.Background(), providersdk.PropertyWriteRequest{DeviceID: "missing"}); err != providersdk.ErrDeviceNotFound {
 		t.Fatalf("unknown device error = %v", err)
+	}
+}
+
+func TestManagerHotAppliesAndRemovesProvider(t *testing.T) {
+	ctx := context.Background()
+	manager, _ := providermanager.New()
+	if err := manager.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	events := make(chan device.Device, 4)
+	unsubscribe := manager.Subscribe(func(item device.Device) { events <- item })
+	defer unsubscribe()
+	if err := manager.Apply(ctx, virtual.NewProviderWithIdentity("virtual-lab", "Lab")); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		select {
+		case item := <-events:
+			if !item.Online || item.ProviderID != "virtual-lab" {
+				t.Fatalf("apply event = %#v", item)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("missing apply event")
+		}
+	}
+	if err := manager.Remove(ctx, "virtual-lab"); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		select {
+		case item := <-events:
+			if item.Online {
+				t.Fatalf("remove event still online = %#v", item)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("missing offline event")
+		}
+	}
+	if len(manager.ProviderInfos()) != 0 {
+		t.Fatal("provider still registered")
 	}
 }

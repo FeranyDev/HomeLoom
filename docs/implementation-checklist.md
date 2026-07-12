@@ -146,7 +146,7 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 - [x] 定义可选 `PropertyWriter`；
 - [ ] 定义可选 `CommandExecutor`；
 - [x] 定义可选 `EventSubscriber`；
-- [ ] 定义 Provider 健康状态；
+- [x] 定义 Provider 健康状态；
 - [x] 定义初始化、启动、停止和关闭顺序；
 - [ ] 定义上下文取消语义；
 - [ ] 定义重连和退避接口。
@@ -154,21 +154,21 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 ### 3.2 Provider Manager
 
 - [x] 从 SQLite 加载 Provider 配置；
-- [ ] 动态创建 Provider；
-- [ ] 动态启用和停用；
-- [ ] 单 Provider 热重载；
+- [x] 动态创建 Provider；
+- [x] 动态启用和停用；
+- [x] 单 Provider 热重载；
 - [ ] 单 Provider 失败隔离；
 - [x] 保存最近错误；
 - [ ] 保存连接和重连状态；
 - [x] 提供 Provider 列表 API；
-- [ ] 提供 Provider CRUD API；
-- [ ] 前端 Provider 管理页面；
+- [x] 提供 Provider CRUD API；
+- [x] 前端 Provider 管理页面；
 - [ ] 凭据字段脱敏；
-- [ ] Provider Manager 单元测试。
+- [x] Provider Manager 单元测试。
 
 ### 3.3 Virtual Provider 重构
 
-- [ ] 使用正式 Provider SDK；
+- [x] 使用正式 Provider SDK；
 - [ ] 支持配置虚拟设备；
 - [ ] 支持动态新增和删除虚拟设备；
 - [ ] 支持模拟离线；
@@ -176,7 +176,7 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 - [ ] 支持模拟拒绝命令；
 - [ ] 支持模拟乱序和重复事件；
 - [ ] 支持测试用 sequence；
-- [ ] 保持实时状态仅存内存。
+- [x] 保持实时状态仅存内存。
 
 退出条件：Virtual Provider 完整使用 SDK，核心不依赖其具体实现。
 
@@ -489,7 +489,7 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 
 - [ ] Router 和独立页面路由；
 - [ ] 系统状态页；
-- [ ] Provider 管理页；
+- [x] Provider 管理页；
 - [ ] 设备列表筛选；
 - [ ] 设备详情页；
 - [ ] Capability 树；

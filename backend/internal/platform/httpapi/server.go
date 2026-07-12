@@ -10,6 +10,7 @@ import (
 
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
+	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	domaintarget "github.com/feranydev/homeloom/backend/internal/domain/target"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -46,7 +47,7 @@ func (r targetRequest) domain(id string) domaintarget.Config {
 	}
 }
 
-func NewServer(address string, devices *application.DeviceService, targets *application.TargetService, logger *slog.Logger) *Server {
+func NewServer(address string, devices *application.DeviceService, targets *application.TargetService, logger *slog.Logger, providerServices ...*application.ProviderService) *Server {
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
@@ -95,8 +96,43 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		}
 		return c.JSON(http.StatusOK, map[string]any{"data": items})
 	})
+	var providers *application.ProviderService
+	if len(providerServices) > 0 {
+		providers = providerServices[0]
+	}
 	e.GET("/api/v1/providers", func(c echo.Context) error {
+		if providers != nil {
+			return c.JSON(http.StatusOK, map[string]any{"data": providers.List()})
+		}
 		return c.JSON(http.StatusOK, map[string]any{"data": devices.ProviderInfos()})
+	})
+	saveProvider := func(c echo.Context, id string) error {
+		if providers == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "provider management is unavailable")
+		}
+		var request providerconfig.Config
+		if err := c.Bind(&request); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid provider configuration")
+		}
+		if id != "" {
+			request.ID = id
+		}
+		info, err := providers.Save(c.Request().Context(), request)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": info})
+	}
+	e.POST("/api/v1/providers", func(c echo.Context) error { return saveProvider(c, "") })
+	e.PUT("/api/v1/providers/:id", func(c echo.Context) error { return saveProvider(c, c.Param("id")) })
+	e.DELETE("/api/v1/providers/:id", func(c echo.Context) error {
+		if providers == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "provider management is unavailable")
+		}
+		if err := providers.Delete(c.Request().Context(), c.Param("id")); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		return c.NoContent(http.StatusNoContent)
 	})
 	e.GET("/api/v1/devices/:id/states", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"data": devices.States(c.Param("id"))})

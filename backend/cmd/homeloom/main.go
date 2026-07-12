@@ -73,6 +73,7 @@ func main() {
 	}
 	service := application.NewDeviceService(providerManager)
 	defer service.Close()
+	providerService := application.NewProviderService(providerConfigs, store, factory, providerManager)
 	targetConfigs, err := store.ListTargets(ctx)
 	if err != nil {
 		logger.Error("target configuration load failed", "error", err)
@@ -96,7 +97,7 @@ func main() {
 	targetService := application.NewTargetService(registrations, store)
 	targetService.SetRuntime(manager)
 	manager.SetStatusHandler(targetService.SetStatus)
-	server := httpapi.NewServer(settings.Server.Address, service, targetService, logger)
+	server := httpapi.NewServer(settings.Server.Address, service, targetService, logger, providerService)
 
 	go func() {
 		if err := server.Start(); err != nil {

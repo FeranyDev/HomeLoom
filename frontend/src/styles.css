@@ -60,6 +60,14 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .device-card footer { margin-top: 34px; color: #9b9c96; font-size: 12px; }
 .error-banner, .empty-state { padding: 22px; border: 1px solid #d3b8a9; background: #f4e6df; color: #744b38; }
 .target-list { display: grid; gap: 18px; }
+.provider-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+.provider-grid .config-note { grid-column: 1 / -1; }
+.provider-card { min-height: 270px; padding: 28px; border: 1px solid #d2d0c7; background: rgba(250, 249, 245, .72); }
+.provider-card h2 { margin: 0; font-size: 27px; }
+.provider-card .target-id { margin-top: 34px; }
+.capability-list { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 28px; }
+.capability-list span { padding: 5px 8px; background: #e4e5dd; color: #6b7067; font: 11px ui-monospace, monospace; }
+.inline-error { color: #944f3f; font-size: 13px; }
 .config-note { display: grid; grid-template-columns: 120px 1fr; gap: 8px 20px; padding: 20px 26px; border: 1px dashed #bfc1b8; color: #757970; }
 .config-note strong { color: #3e433c; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
 .config-note p { grid-column: 2; margin: 0; font-size: 13px; }
@@ -91,7 +99,8 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .form-grid label { display: grid; gap: 7px; color: #73776f; font-size: 12px; }
 .form-grid .wide { grid-column: 1 / -1; }
-.form-grid input, .form-grid select { width: 100%; padding: 11px; border: 1px solid #c9c8c0; background: #fbfaf6; color: #343831; font: inherit; }
+.form-grid input, .form-grid select, .form-grid textarea { width: 100%; padding: 11px; border: 1px solid #c9c8c0; background: #fbfaf6; color: #343831; font: inherit; }
+.form-grid textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
 .enable-row { display: flex; gap: 9px; margin: 22px 0; font-size: 14px; }
 .target-form fieldset { display: grid; gap: 8px; margin: 0; padding: 18px; border: 1px solid #cfcec6; }
 .target-form fieldset legend { padding: 0 7px; font-weight: 600; }
@@ -109,6 +118,7 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
   .summary { width: 100%; height: auto; margin-top: 42px; padding: 20px; border-radius: 3px; }
   .summary span { font-size: 32px; }
   .device-grid { grid-template-columns: 1fr; }
+	.provider-grid { grid-template-columns: 1fr; }
   .device-card { min-height: 290px; }
 	.target-card { grid-template-columns: 1fr; }
 	.pairing-panel { border-top: 1px solid #d2d0c7; border-left: 0; }
