@@ -112,3 +112,5 @@ docker compose up -d mosquitto
 ```
 
 `deploy/mosquitto.conf` 为本机/可信局域网 Demo 开启匿名访问，不应直接用于公网或生产环境；生产部署应配置账户、ACL 和 TLS。
+
+自动化测试使用测试专用的最小 MQTT 5 TCP Broker，在同一端口执行关闭和重启，验证 Paho 自动重连、重新订阅、设备不重复创建以及恢复后的命令发布。该测试不依赖本机 Docker 或外部 Broker。

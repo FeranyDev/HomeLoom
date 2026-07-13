@@ -30,16 +30,17 @@ type mqttTransport interface {
 type transportFactory func(Config, *url.URL, *tls.Config, transportHandlers) mqttTransport
 
 type pahoTransport struct {
-	config    Config
-	brokerURL *url.URL
-	tlsConfig *tls.Config
-	handlers  transportHandlers
-	mu        sync.RWMutex
-	manager   *autopaho.ConnectionManager
+	config           Config
+	brokerURL        *url.URL
+	tlsConfig        *tls.Config
+	handlers         transportHandlers
+	reconnectBackoff autopaho.Backoff
+	mu               sync.RWMutex
+	manager          *autopaho.ConnectionManager
 }
 
 func newPahoTransport(config Config, brokerURL *url.URL, tlsConfig *tls.Config, handlers transportHandlers) mqttTransport {
-	return &pahoTransport{config: config, brokerURL: brokerURL, tlsConfig: tlsConfig, handlers: handlers}
+	return &pahoTransport{config: config, brokerURL: brokerURL, tlsConfig: tlsConfig, handlers: handlers, reconnectBackoff: autopaho.DefaultExponentialBackoff()}
 }
 
 func (t *pahoTransport) Start(lifecycle, initialContext context.Context, timeout time.Duration) error {
@@ -51,7 +52,7 @@ func (t *pahoTransport) Start(lifecycle, initialContext context.Context, timeout
 		KeepAlive:                     uint16(t.config.KeepAliveSeconds),
 		CleanStartOnInitialConnection: false,
 		SessionExpiryInterval:         t.config.SessionExpirySeconds,
-		ReconnectBackoff:              autopaho.DefaultExponentialBackoff(),
+		ReconnectBackoff:              t.reconnectBackoff,
 		ConnectTimeout:                timeout,
 		Queue:                         memory.New(),
 		ConnectUsername:               t.config.Username,
