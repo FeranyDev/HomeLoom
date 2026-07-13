@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/application"
@@ -33,9 +35,89 @@ type Server struct {
 	audit    *application.AuditService
 	exports  *application.ExportService
 	profiles *application.ProfileService
+	auth     *application.AuthService
+	logins   *loginLimiter
 }
 
 const apiVersionHeader = "HomeLoom-API-Version"
+
+const (
+	sessionCookieName = "homeloom_session"
+	csrfCookieName    = "homeloom_csrf"
+	csrfHeaderName    = "X-CSRF-Token"
+	authSessionKey    = "homeloom.auth.session"
+)
+
+type authRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type loginAttempt struct {
+	failures    int
+	windowStart time.Time
+	lockedUntil time.Time
+}
+
+type loginLimiter struct {
+	mu       sync.Mutex
+	attempts map[string]loginAttempt
+	now      func() time.Time
+}
+
+func newLoginLimiter() *loginLimiter {
+	return &loginLimiter{attempts: make(map[string]loginAttempt), now: time.Now}
+}
+
+func (l *loginLimiter) allowed(key string) (bool, time.Duration) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+	attempt := l.attempts[key]
+	if now.Before(attempt.lockedUntil) {
+		return false, attempt.lockedUntil.Sub(now)
+	}
+	if attempt.windowStart.IsZero() || now.Sub(attempt.windowStart) >= 5*time.Minute {
+		delete(l.attempts, key)
+	}
+	return true, 0
+}
+
+func (l *loginLimiter) failed(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+	if len(l.attempts) >= 1024 {
+		for currentKey, current := range l.attempts {
+			if (!current.lockedUntil.IsZero() && !now.Before(current.lockedUntil)) || now.Sub(current.windowStart) >= 5*time.Minute {
+				delete(l.attempts, currentKey)
+			}
+		}
+	}
+	attempt := l.attempts[key]
+	if attempt.windowStart.IsZero() || now.Sub(attempt.windowStart) >= 5*time.Minute {
+		attempt = loginAttempt{windowStart: now}
+	}
+	attempt.failures++
+	if attempt.failures >= 5 {
+		attempt.lockedUntil = now.Add(5 * time.Minute)
+	}
+	l.attempts[key] = attempt
+	if len(l.attempts) > 2048 {
+		for currentKey := range l.attempts {
+			if currentKey != key {
+				delete(l.attempts, currentKey)
+				break
+			}
+		}
+	}
+}
+
+func (l *loginLimiter) succeeded(key string) {
+	l.mu.Lock()
+	delete(l.attempts, key)
+	l.mu.Unlock()
+}
 
 type errorResponse struct {
 	Code      string            `json:"code"`
@@ -128,7 +210,7 @@ func (r targetRequest) domain(id string) domaintarget.Config {
 
 func NewServer(address string, devices *application.DeviceService, targets *application.TargetService, logger *slog.Logger, providerServices ...*application.ProviderService) *Server {
 	e := echo.New()
-	server := &Server{address: address, echo: e}
+	server := &Server{address: address, echo: e, logins: newLoginLimiter()}
 	e.HideBanner = true
 	e.HidePort = true
 	e.HTTPErrorHandler = func(err error, c echo.Context) {
@@ -186,6 +268,32 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 	}))
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
+			if server.auth == nil || !requiresAuthentication(c.Request()) {
+				return next(c)
+			}
+			cookie, err := c.Cookie(sessionCookieName)
+			if err != nil || cookie.Value == "" {
+				return echo.NewHTTPError(http.StatusUnauthorized, "administrator login required")
+			}
+			session, err := server.auth.Authenticate(c.Request().Context(), cookie.Value)
+			if err != nil {
+				if errors.Is(err, application.ErrInvalidSession) {
+					clearAuthCookies(c)
+					return echo.NewHTTPError(http.StatusUnauthorized, "administrator login required")
+				}
+				return echo.NewHTTPError(http.StatusServiceUnavailable, "authentication is unavailable").SetInternal(err)
+			}
+			if auditMethod(c.Request().Method) {
+				if err := server.auth.VerifyCSRF(session, c.Request().Header.Get(csrfHeaderName)); err != nil {
+					return echo.NewHTTPError(http.StatusForbidden, "invalid CSRF token")
+				}
+			}
+			c.Set(authSessionKey, session)
+			return next(c)
+		}
+	})
+	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
 			err := next(c)
 			if server.audit == nil || !auditMethod(c.Request().Method) || !strings.HasPrefix(c.Request().URL.Path, "/api/v1/") || c.Path() == "/api/v1/mapping/preview" {
 				return err
@@ -211,8 +319,12 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 			if route == "" {
 				route = c.Request().URL.Path
 			}
+			actor := "local-api"
+			if session, ok := c.Get(authSessionKey).(application.AuthSession); ok {
+				actor = session.Username
+			}
 			event := domainaudit.Event{
-				CorrelationID: application.CorrelationID(c.Request().Context()), Actor: "local-api",
+				CorrelationID: application.CorrelationID(c.Request().Context()), Actor: actor,
 				Action: action, ResourceType: resourceType, ResourceID: resourceID,
 				Method: c.Request().Method, Route: route, Status: status, Outcome: outcome,
 			}
@@ -241,6 +353,74 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 	})
 	e.GET("/api/v1/system/version", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"data": buildinfo.Current()})
+	})
+	e.GET("/api/v1/auth/status", func(c echo.Context) error {
+		if server.auth == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "authentication is unavailable")
+		}
+		token := authCookieValue(c)
+		status, err := server.auth.Status(c.Request().Context(), token)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "authentication is unavailable").SetInternal(err)
+		}
+		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+		if token != "" && !status.Authenticated {
+			clearAuthCookies(c)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": status})
+	})
+	e.POST("/api/v1/auth/setup", func(c echo.Context) error {
+		if server.auth == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "authentication is unavailable")
+		}
+		var input authRequest
+		if err := c.Bind(&input); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid administrator credentials")
+		}
+		session, err := server.auth.Setup(c.Request().Context(), input.Username, input.Password)
+		if errors.Is(err, application.ErrAdminAlreadyInitialized) {
+			return echo.NewHTTPError(http.StatusConflict, err.Error())
+		}
+		if err != nil {
+			return err
+		}
+		setAuthCookies(c, session)
+		return c.JSON(http.StatusCreated, map[string]any{"data": application.AuthStatus{Initialized: true, Authenticated: true, Username: session.Username}})
+	})
+	e.POST("/api/v1/auth/login", func(c echo.Context) error {
+		if server.auth == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "authentication is unavailable")
+		}
+		key := directClientIP(c.Request())
+		if allowed, retryAfter := server.logins.allowed(key); !allowed {
+			c.Response().Header().Set("Retry-After", strconv.Itoa(max(1, int(retryAfter.Seconds()))))
+			return echo.NewHTTPError(http.StatusTooManyRequests, "too many login attempts; try again later")
+		}
+		var input authRequest
+		if err := c.Bind(&input); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid administrator credentials")
+		}
+		session, err := server.auth.Login(c.Request().Context(), input.Username, input.Password)
+		if errors.Is(err, application.ErrInvalidCredentials) {
+			server.logins.failed(key)
+			return echo.NewHTTPError(http.StatusUnauthorized, "invalid username or password")
+		}
+		if err != nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "authentication is unavailable").SetInternal(err)
+		}
+		server.logins.succeeded(key)
+		setAuthCookies(c, session)
+		return c.JSON(http.StatusOK, map[string]any{"data": application.AuthStatus{Initialized: true, Authenticated: true, Username: session.Username}})
+	})
+	e.POST("/api/v1/auth/logout", func(c echo.Context) error {
+		if server.auth == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "authentication is unavailable")
+		}
+		if err := server.auth.Logout(c.Request().Context(), authCookieValue(c)); err != nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "authentication is unavailable").SetInternal(err)
+		}
+		clearAuthCookies(c)
+		return c.NoContent(http.StatusNoContent)
 	})
 	e.GET("/api/v1/device-models", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"data": device.ModelContracts()})
@@ -1071,6 +1251,62 @@ func (s *Server) SetAuditService(audit *application.AuditService) { s.audit = au
 func (s *Server) SetExportService(exports *application.ExportService) { s.exports = exports }
 
 func (s *Server) SetProfileService(profiles *application.ProfileService) { s.profiles = profiles }
+
+func (s *Server) SetAuthService(auth *application.AuthService) { s.auth = auth }
+
+func requiresAuthentication(request *http.Request) bool {
+	path := request.URL.Path
+	if path == "/metrics" {
+		return true
+	}
+	if !strings.HasPrefix(path, "/api/v1/") {
+		return false
+	}
+	switch path {
+	case "/api/v1/system/version", "/api/v1/auth/status", "/api/v1/auth/setup", "/api/v1/auth/login":
+		return false
+	default:
+		return true
+	}
+}
+
+func directClientIP(request *http.Request) string {
+	host, _, err := net.SplitHostPort(request.RemoteAddr)
+	if err == nil && host != "" {
+		return host
+	}
+	if request.RemoteAddr != "" {
+		return request.RemoteAddr
+	}
+	return "unknown"
+}
+
+func authCookieValue(c echo.Context) string {
+	cookie, err := c.Cookie(sessionCookieName)
+	if err != nil {
+		return ""
+	}
+	return cookie.Value
+}
+
+func setAuthCookies(c echo.Context, session application.AuthSession) {
+	secure := secureCookieRequest(c.Request())
+	maxAge := max(1, int(time.Until(session.ExpiresAt).Seconds()))
+	c.SetCookie(&http.Cookie{Name: sessionCookieName, Value: session.Token, Path: "/", MaxAge: maxAge, Expires: session.ExpiresAt, HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode})
+	c.SetCookie(&http.Cookie{Name: csrfCookieName, Value: session.CSRFToken, Path: "/", MaxAge: maxAge, Expires: session.ExpiresAt, Secure: secure, SameSite: http.SameSiteStrictMode})
+	c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+}
+
+func clearAuthCookies(c echo.Context) {
+	secure := secureCookieRequest(c.Request())
+	expired := time.Unix(1, 0).UTC()
+	c.SetCookie(&http.Cookie{Name: sessionCookieName, Path: "/", MaxAge: -1, Expires: expired, HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode})
+	c.SetCookie(&http.Cookie{Name: csrfCookieName, Path: "/", MaxAge: -1, Expires: expired, Secure: secure, SameSite: http.SameSiteStrictMode})
+}
+
+func secureCookieRequest(request *http.Request) bool {
+	return request.TLS != nil || strings.EqualFold(strings.TrimSpace(request.Header.Get("X-Forwarded-Proto")), "https")
+}
 
 func profileHTTPError(err error) error {
 	if errors.Is(err, application.ErrProfileNotFound) {

@@ -24,4 +24,15 @@ describe('API client', () => {
 		expect(error).toMatchObject({ status: 502, code: 'unknown_error', requestId: '' })
 		expect((error as Error).message).toBe('请求失败 (502)')
 	})
+
+	it('adds same-origin credentials and the CSRF cookie to mutations', async () => {
+		document.cookie = 'homeloom_csrf=csrf-token; Path=/'
+		const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+		vi.stubGlobal('fetch', fetchMock)
+		await requestJSON<void>('/api/v1/test', { method: 'POST' })
+		const init = fetchMock.mock.calls[0][1] as RequestInit
+		expect(init.credentials).toBe('same-origin')
+		expect(new Headers(init.headers).get('X-CSRF-Token')).toBe('csrf-token')
+		document.cookie = 'homeloom_csrf=; Max-Age=0; Path=/'
+	})
 })

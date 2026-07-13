@@ -34,6 +34,17 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .live-indicator.is-live { border-color: #b4c6b4; color: #52705a; }
 .runtime-meta { display: flex; align-items: center; gap: 7px; }
 .version-badge { color: #898d85; font: 10px ui-monospace, monospace; }
+.top-nav .logout-button { padding: 5px 8px; border: 1px solid #c6c7bf; border-radius: 0; color: #72766f; font-size: 11px; }
+.auth-shell { display: grid; min-height: 100vh; place-items: center; padding: 40px 20px; }
+.auth-card { width: min(520px, 100%); padding: clamp(30px, 6vw, 62px); border: 1px solid #c9c7be; background: rgba(250, 249, 245, .78); box-shadow: 0 24px 70px rgba(46, 50, 43, .08); }
+.auth-card h1 { margin: 0; font-size: clamp(42px, 8vw, 70px); line-height: 1; letter-spacing: -.05em; }
+.auth-card > p:not(.eyebrow) { margin: 24px 0; color: #71756e; line-height: 1.7; }
+.auth-card form { display: grid; gap: 15px; margin-top: 30px; }
+.auth-card label { display: grid; gap: 7px; color: #6e736a; font-size: 12px; }
+.auth-card input { width: 100%; padding: 13px 14px; border: 1px solid #c6c5bd; background: #fbfaf6; color: #343831; font: inherit; }
+.auth-card button { justify-self: start; padding: 11px 18px; border: 0; background: #343931; color: #fff; cursor: pointer; }
+.auth-card button:disabled { opacity: .55; cursor: wait; }
+.auth-card small { display: block; margin-top: 22px; color: #90938c; line-height: 1.6; }
 .hero { display: flex; justify-content: space-between; align-items: end; padding: 0 0 72px; border-bottom: 1px solid #c9c7be; }
 .eyebrow { margin: 0 0 18px; color: #73786d; font-size: 12px; font-weight: 600; letter-spacing: .18em; }
 .hero h1 { margin: 0; max-width: 700px; font-size: clamp(54px, 8vw, 104px); line-height: .98; letter-spacing: -.055em; font-weight: 600; }

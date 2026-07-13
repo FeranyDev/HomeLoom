@@ -4,12 +4,26 @@ export class ApiError extends Error {
   constructor(message: string, public readonly status: number, public readonly fields: Record<string, string> = {}, public readonly code = 'unknown_error', public readonly requestId = '') { super(message); this.name = 'ApiError' }
 }
 
+function cookieValue(name: string): string {
+  if (typeof document === 'undefined') return ''
+  const prefix = `${encodeURIComponent(name)}=`
+  const item = document.cookie.split(';').map((value) => value.trim()).find((value) => value.startsWith(prefix))
+  return item ? decodeURIComponent(item.slice(prefix.length)) : ''
+}
+
 export async function requestJSON<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
   if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
-  const response = await fetch(path, { ...init, headers })
+	const method = (init.method ?? 'GET').toUpperCase()
+	if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && !headers.has('X-CSRF-Token')) {
+		const csrfToken = cookieValue('homeloom_csrf')
+		if (csrfToken) headers.set('X-CSRF-Token', csrfToken)
+	}
+  const response = await fetch(path, { credentials: 'same-origin', ...init, headers })
   if (!response.ok) {
     const body = await response.json().catch(() => null) as ApiErrorBody | null
+		if (response.status === 401 && !path.startsWith('/api/v1/auth/') && typeof window !== 'undefined') window.dispatchEvent(new Event('homeloom:unauthorized'))
+		if (response.status === 403 && body?.message === 'invalid CSRF token' && typeof window !== 'undefined') window.dispatchEvent(new Event('homeloom:unauthorized'))
     throw new ApiError(body?.message || `请求失败 (${response.status})`, response.status, body?.fields, body?.code, body?.requestId)
   }
   if (response.status === 204) return undefined as T

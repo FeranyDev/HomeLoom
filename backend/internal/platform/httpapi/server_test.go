@@ -64,6 +64,122 @@ func newTestServer() *Server {
 	return newTestServerWithProvider(virtual.NewProvider())
 }
 
+func TestManagementAuthenticationLifecycleAndCSRF(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "auth-api.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	server := newTestServer()
+	server.SetAuthService(application.NewAuthService(store))
+
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/devices", nil))
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("protected response = %d %s", response.Code, response.Body.String())
+	}
+	for _, publicPath := range []string{"/health", "/ready", "/api/versions", "/api/v1/system/version"} {
+		response = httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, publicPath, nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("public %s = %d %s", publicPath, response.Code, response.Body.String())
+		}
+	}
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("protected metrics = %d %s", response.Code, response.Body.String())
+	}
+
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/auth/status", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"initialized":false`) {
+		t.Fatalf("initial status = %d %s", response.Code, response.Body.String())
+	}
+
+	response = httptest.NewRecorder()
+	setup := httptest.NewRequest(http.MethodPost, "/api/v1/auth/setup", bytes.NewBufferString(`{"username":"admin","password":"a-long-password"}`))
+	setup.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	server.Handler().ServeHTTP(response, setup)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("setup = %d %s", response.Code, response.Body.String())
+	}
+	var sessionCookie, csrfCookie *http.Cookie
+	for _, cookie := range response.Result().Cookies() {
+		switch cookie.Name {
+		case sessionCookieName:
+			sessionCookie = cookie
+		case csrfCookieName:
+			csrfCookie = cookie
+		}
+	}
+	if sessionCookie == nil || !sessionCookie.HttpOnly || sessionCookie.Path != "/" || csrfCookie == nil || csrfCookie.HttpOnly || csrfCookie.Path != "/" {
+		t.Fatalf("auth cookies = %#v", response.Result().Cookies())
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/devices", nil)
+	request.AddCookie(sessionCookie)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("authenticated read = %d %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	request.AddCookie(sessionCookie)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("logout without csrf = %d %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	request.AddCookie(sessionCookie)
+	request.Header.Set(csrfHeaderName, csrfCookie.Value)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("logout = %d %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/devices", nil)
+	request.AddCookie(sessionCookie)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("read after logout = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestLoginLimiterLocksAfterFiveFailures(t *testing.T) {
+	limiter := newLoginLimiter()
+	now := time.Date(2026, 7, 13, 10, 0, 0, 0, time.UTC)
+	limiter.now = func() time.Time { return now }
+	for range 5 {
+		if allowed, _ := limiter.allowed("client"); !allowed {
+			t.Fatal("client locked too early")
+		}
+		limiter.failed("client")
+	}
+	if allowed, retry := limiter.allowed("client"); allowed || retry != 5*time.Minute {
+		t.Fatalf("allowed = %v, retry = %v", allowed, retry)
+	}
+	now = now.Add(5 * time.Minute)
+	if allowed, _ := limiter.allowed("client"); !allowed {
+		t.Fatal("client remained locked")
+	}
+}
+
+func TestDirectClientIPDoesNotTrustForwardedFor(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
+	request.RemoteAddr = "192.0.2.10:4567"
+	request.Header.Set("X-Forwarded-For", "203.0.113.20")
+	if got := directClientIP(request); got != "192.0.2.10" {
+		t.Fatalf("direct client ip = %q", got)
+	}
+}
+
 func newTestServerWithProvider(provider providersdk.Provider) *Server {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	targets := application.NewTargetService([]application.TargetRegistration{{

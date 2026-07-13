@@ -181,6 +181,7 @@ func main() {
 	targetService.SetRuntime(manager)
 	manager.SetStatusHandler(targetService.SetStatus)
 	server := httpapi.NewServer(settings.Server.Address, service, targetService, logger, providerService)
+	server.SetAuthService(application.NewAuthService(store))
 	server.SetSettingsService(settingsService)
 	auditService := application.NewAuditService(store)
 	server.SetAuditService(auditService)

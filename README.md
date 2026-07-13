@@ -33,7 +33,7 @@ docs/      项目计划与设计文档
 ```
 
 打开 `http://localhost:5173`。开发服务器会将 `/api`、`/health` 和 `/ready` 代理到 `http://localhost:8090`。
-管理 API 默认只监听 `127.0.0.1:8090`。需要局域网访问时必须显式设置 `HOMELOOM_HTTP_ADDRESS=0.0.0.0:8090`，并使用防火墙或反向代理限制访问来源。
+管理 API 默认只监听 `127.0.0.1:8090`。首次打开前端需要创建唯一管理员，之后所有管理接口、指标和 HomeKit 配对二维码都受数据库 Session 与 CSRF 保护。需要局域网访问时必须显式设置 `HOMELOOM_HTTP_ADDRESS=0.0.0.0:8090`；仍建议通过防火墙或 HTTPS 反向代理限制访问来源。
 
 HomeKit Bridge 同时监听 `51826`，配对码为 `001-02-003`。HAP 身份和配对信息保存在 `backend/data/hap/`，该目录不会提交到版本库。
 

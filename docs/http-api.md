@@ -8,6 +8,14 @@
 }
 ```
 
+## 管理认证
+
+首次运行时，前端通过 `POST /api/v1/auth/setup` 创建数据库中唯一的管理员。密码要求 12–128 个字符，只保存 bcrypt 哈希。之后使用 `POST /api/v1/auth/login` 登录；Session 的随机令牌只通过 `HttpOnly`、`SameSite=Strict` Cookie 传递，数据库只保存令牌的 SHA-256 哈希，会话有效期为 24 小时且重启后仍有效。HTTPS 直连或反向代理通过 `X-Forwarded-Proto: https` 明确原始协议时，Cookie 会附带 `Secure`。
+
+`/health`、`/ready`、`/api/versions`、`/api/v1/system/version` 和认证初始化入口保持公开。其余 v1 管理接口、`/metrics` 和 HomeKit 配对二维码均要求登录。所有 `POST`、`PUT`、`PATCH`、`DELETE` 请求还必须把 `homeloom_csrf` Cookie 的值放入 `X-CSRF-Token` 请求头；前端 API Client 会自动完成此操作。
+
+同一直连客户端在五分钟窗口内连续登录失败 5 次后会锁定 5 分钟。限速不读取 `X-Forwarded-For`，避免在尚未配置可信代理时被伪造来源绕过。认证响应禁止缓存，退出会立即从 SQLite 删除 Session。
+
 ## 错误响应
 
 所有由 HTTP API 返回的错误使用同一结构：

@@ -5,9 +5,12 @@ info:
   description: HomeLoom management API. Runtime device values are ephemeral; configuration is stored in SQLite.
 servers:
   - url: http://127.0.0.1:8090
+security:
+  - sessionCookie: []
 paths:
   /api/versions:
     get:
+      security: []
       operationId: listApiVersions
       responses:
         "200":
@@ -27,20 +30,55 @@ paths:
                       deprecated: { type: array, items: { type: string } }
   /health:
     get:
+      security: []
       operationId: health
       responses:
         "200": { description: Process is alive, content: { application/json: { schema: { $ref: "#/components/schemas/Status" } } } }
   /ready:
     get:
+      security: []
       operationId: ready
       responses:
         "200": { description: Required dependencies are available, content: { application/json: { schema: { $ref: "#/components/schemas/Readiness" } } } }
         "503": { description: A required dependency is unavailable, content: { application/json: { schema: { $ref: "#/components/schemas/Readiness" } } } }
   /api/v1/system/version:
     get:
+      security: []
       operationId: getVersion
       responses:
         "200": { description: Build information, content: { application/json: { schema: { $ref: "#/components/schemas/VersionResponse" } } } }
+  /api/v1/auth/status:
+    get:
+      security: []
+      operationId: getAuthenticationStatus
+      responses:
+        "200": { description: Administrator initialization and current session status, content: { application/json: { schema: { $ref: "#/components/schemas/AuthStatusResponse" } } } }
+  /api/v1/auth/setup:
+    post:
+      security: []
+      operationId: setupAdministrator
+      description: Creates the one administrator account when the database is uninitialized and starts a session.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AuthRequest" } } } }
+      responses:
+        "201": { description: Administrator created and session cookies set, content: { application/json: { schema: { $ref: "#/components/schemas/AuthStatusResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { description: Administrator already initialized }
+  /api/v1/auth/login:
+    post:
+      security: []
+      operationId: loginAdministrator
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AuthRequest" } } } }
+      responses:
+        "200": { description: Session cookies set, content: { application/json: { schema: { $ref: "#/components/schemas/AuthStatusResponse" } } } }
+        "401": { description: Invalid username or password }
+        "429": { description: Client temporarily locked after repeated failures }
+  /api/v1/auth/logout:
+    post:
+      operationId: logoutAdministrator
+      description: Revokes the database session. Requires the X-CSRF-Token header.
+      responses:
+        "204": { description: Session revoked and cookies cleared }
+        "403": { description: Invalid CSRF token }
   /api/v1/device-models:
     get:
       operationId: listDeviceModelContracts
@@ -334,6 +372,11 @@ paths:
       operationId: getCommand
       responses: { "200": { description: Command lifecycle, content: { application/json: { schema: { $ref: "#/components/schemas/ObjectResponse" } } } }, "404": { $ref: "#/components/responses/NotFound" } }
 components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: homeloom_session
   parameters:
     DeviceId: { name: deviceId, in: path, required: true, schema: { type: string } }
     EndpointId: { name: endpointId, in: path, required: true, schema: { type: string } }
@@ -345,6 +388,23 @@ components:
     Unprocessable: { description: Unsupported device operation, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
     Unavailable: { description: Provider unavailable, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   schemas:
+    AuthRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string, minLength: 3, maxLength: 64 }
+        password: { type: string, format: password, minLength: 12, maxLength: 128 }
+    AuthStatusResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [initialized, authenticated]
+          properties:
+            initialized: { type: boolean }
+            authenticated: { type: boolean }
+            username: { type: string }
     Status:
       type: object
       required: [status]

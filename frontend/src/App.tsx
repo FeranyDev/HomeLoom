@@ -21,8 +21,37 @@ import type { Provider, ProviderInput } from './types/provider'
 import type { AuditEvent, DeviceCommand, Diagnostics, RuntimeSettings, SystemVersion } from './types/diagnostics'
 import { usePageRoute } from './routing'
 import { confirmProviderDeletion, confirmTargetDeletion } from './confirmations'
+import { getAuthStatus, login, logout, setupAdministrator, type AuthStatus } from './api/auth'
+import { AuthScreen } from './components/AuthScreen'
 
 export function App() {
+	const [auth, setAuth] = useState<AuthStatus | null>(null)
+	const [authError, setAuthError] = useState<string | null>(null)
+
+	const refreshAuth = useCallback(async (signal?: AbortSignal) => {
+		try {
+			setAuth(await getAuthStatus(signal))
+			setAuthError(null)
+		} catch (cause) {
+			if (cause instanceof DOMException && cause.name === 'AbortError') return
+			setAuthError(cause instanceof Error ? cause.message : '无法连接后端')
+		}
+	}, [])
+
+	useEffect(() => {
+		const controller = new AbortController()
+		void refreshAuth(controller.signal)
+		const unauthorized = () => setAuth((current) => ({ initialized: current?.initialized ?? true, authenticated: false }))
+		window.addEventListener('homeloom:unauthorized', unauthorized)
+		return () => { controller.abort(); window.removeEventListener('homeloom:unauthorized', unauthorized) }
+	}, [refreshAuth])
+
+	if (auth === null) return <main className="auth-shell"><section className="auth-card"><p className="eyebrow">HOMELOOM · ADMIN</p><h1>正在连接。</h1>{authError && <><p className="inline-error" role="alert">{authError}</p><button onClick={() => void refreshAuth()}>重试</button></>}</section></main>
+	if (!auth.authenticated) return <AuthScreen initialized={auth.initialized} onSubmit={async (username, password) => setAuth(auth.initialized ? await login(username, password) : await setupAdministrator(username, password))} />
+	return <Dashboard username={auth.username ?? 'admin'} onLogout={async () => { await logout(); setAuth({ initialized: true, authenticated: false }) }} />
+}
+
+function Dashboard({ username, onLogout }: { username: string, onLogout: () => Promise<void> }) {
   const [devices, setDevices] = useState<Device[]>([])
 	const [targets, setTargets] = useState<Target[]>([])
 	const [providers, setProviders] = useState<Provider[]>([])
@@ -145,7 +174,7 @@ export function App() {
 	      <button aria-current={page === 'mapping' ? 'page' : undefined} className={page === 'mapping' ? 'is-active' : ''} onClick={() => setPage('mapping')}>映射</button>
 	      <button aria-current={page === 'system' ? 'page' : undefined} className={page === 'system' ? 'is-active' : ''} onClick={() => setPage('system')}>系统</button>
 	    </div>
-	    <span className="runtime-meta"><span className="version-badge" title={version ? `${version.commit} · ${version.buildTime}` : '版本读取中'}>{version?.version ?? '…'}</span><span aria-live="polite" className={`live-indicator ${live ? 'is-live' : ''}`}>{live ? '实时' : '重连中'}</span></span>
+	    <span className="runtime-meta"><span className="version-badge" title={version ? `${version.commit} · ${version.buildTime}` : '版本读取中'}>{version?.version ?? '…'}</span><span aria-live="polite" className={`live-indicator ${live ? 'is-live' : ''}`}>{live ? '实时' : '重连中'}</span><button className="logout-button" title={`当前管理员：${username}`} onClick={() => void onLogout().catch((cause) => notify('error', cause instanceof Error ? cause.message : '退出失败'))}>退出</button></span>
 	  </nav>
       <header className="hero">
         <div>
