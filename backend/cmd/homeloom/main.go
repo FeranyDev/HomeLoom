@@ -127,6 +127,11 @@ func main() {
 		os.Exit(1)
 	}
 	providerService := application.NewProviderService(providerConfigs, store, factory, providerManager)
+	profileService, err := application.NewProfileService(ctx, store)
+	if err != nil {
+		logger.Error("mapping profile load failed", "error", err)
+		os.Exit(1)
+	}
 	targetConfigs, err := store.ListTargets(ctx)
 	if err != nil {
 		logger.Error("target configuration load failed", "error", err)
@@ -154,7 +159,8 @@ func main() {
 	server.SetSettingsService(settingsService)
 	auditService := application.NewAuditService(store)
 	server.SetAuditService(auditService)
-	server.SetExportService(application.NewExportService(service, providerService, targetService, settingsService, auditService))
+	server.SetProfileService(profileService)
+	server.SetExportService(application.NewExportService(service, providerService, targetService, settingsService, auditService, profileService))
 
 	go func() {
 		if err := server.Start(); err != nil {

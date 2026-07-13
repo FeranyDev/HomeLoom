@@ -41,14 +41,20 @@ devices=$(curl -fsS "$BASE_URL/api/v1/devices")
 config_export=$(curl -fsS "$BASE_URL/api/v1/system/config-export")
 diagnostic_bundle=$(curl -fsS "$BASE_URL/api/v1/system/diagnostic-bundle")
 mapping_preview=$(curl -fsS -H 'Content-Type: application/json' -d '{"profile":{"schemaVersion":1,"id":"smoke-map","version":1,"kind":"capability","inputType":"number","outputType":"number","transforms":[{"type":"scale","factor":1.8,"offset":32}]},"direction":"forward","value":{"type":"number","number":20}}' "$BASE_URL/api/v1/mapping/preview")
+mapping_profiles=$(curl -fsS "$BASE_URL/api/v1/mapping/profiles")
+curl -fsS -H 'Content-Type: application/json' -d '{"schemaVersion":1,"id":"smoke-invert","version":1,"kind":"provider","inputType":"bool","outputType":"bool","transforms":[{"type":"invert"}]}' "$BASE_URL/api/v1/mapping/profiles" >/dev/null
+stored_mapping_preview=$(curl -fsS -H 'Content-Type: application/json' -d '{"profileId":"smoke-invert","direction":"forward","value":{"type":"bool","bool":true}}' "$BASE_URL/api/v1/mapping/preview")
 case "$health" in *'"status":"ok"'*) ;; *) echo "unexpected health response: $health" >&2; exit 1;; esac
 case "$version" in *'"version"'*) ;; *) echo "unexpected version response: $version" >&2; exit 1;; esac
 case "$devices" in *'"schemaVersion":1'*) ;; *) echo "unexpected devices response: $devices" >&2; exit 1;; esac
-case "$config_export" in *'"formatVersion":1'*'"providers"'*'"targets"'*) ;; *) echo "unexpected config export: $config_export" >&2; exit 1;; esac
+case "$config_export" in *'"formatVersion":1'*'"providers"'*'"targets"'*'"profiles"'*) ;; *) echo "unexpected config export: $config_export" >&2; exit 1;; esac
 case "$diagnostic_bundle" in *'"formatVersion":1'*) ;; *) echo "unexpected diagnostic bundle version: $diagnostic_bundle" >&2; exit 1;; esac
 case "$diagnostic_bundle" in *'"configuration"'*) ;; *) echo "diagnostic bundle has no configuration: $diagnostic_bundle" >&2; exit 1;; esac
 case "$diagnostic_bundle" in *'"metrics"'*) ;; *) echo "diagnostic bundle has no metrics: $diagnostic_bundle" >&2; exit 1;; esac
 case "$mapping_preview" in *'"profileId":"smoke-map"'*'"number":68'*) ;; *) echo "unexpected mapping preview: $mapping_preview" >&2; exit 1;; esac
+case "$mapping_profiles" in *'"builtin-active-low"'*'"builtIn":true'*) ;; *) echo "unexpected built-in profiles: $mapping_profiles" >&2; exit 1;; esac
+case "$stored_mapping_preview" in *'"profileId":"smoke-invert"'*'"bool":false'*) ;; *) echo "unexpected stored mapping preview: $stored_mapping_preview" >&2; exit 1;; esac
+curl -fsS -X DELETE "$BASE_URL/api/v1/mapping/profiles/smoke-invert" >/dev/null
 
 kill -TERM "$PID"
 wait "$PID"

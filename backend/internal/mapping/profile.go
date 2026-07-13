@@ -53,6 +53,7 @@ type Transform struct {
 }
 
 type PreviewRequest struct {
+	ProfileID string                `json:"profileId,omitempty"`
 	Profile   Profile               `json:"profile"`
 	Direction Direction             `json:"direction"`
 	Value     *device.PropertyValue `json:"value"`

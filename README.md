@@ -145,6 +145,15 @@ GET /api/v1/system/diagnostic-bundle
 
 两者都使用独立的脱敏模型并禁止浏览器缓存：Provider 凭据替换为占位符，桥 PIN、Setup URI 和本地身份存储路径不会进入文件。
 
+映射页可以管理 SQLite 中的用户 Profile，并直接预览内置或已保存版本。Profile CRUD、批量导入和删除在数据库提交后立即更新应用层快照，不需要重启：
+
+```text
+GET/POST /api/v1/mapping/profiles
+POST     /api/v1/mapping/profiles/import
+GET      /api/v1/mapping/profiles/export
+POST     /api/v1/mapping/preview
+```
+
 Provider 由 Provider Manager 聚合管理。Core 只依赖标准 Provider SDK；Manager 负责初始化、发现、事件转发以及 `Device ID → Provider ID` 写入路由，为后续同时运行 MQTT、米家和其他 Provider 保留统一边界。
 
 Provider 配置保存在 SQLite `providers` 表，启动时由 Provider Factory 按 `type` 构造实例。Migration 会创建默认启用的 `virtual-main`；YAML 不包含 Provider 配置。

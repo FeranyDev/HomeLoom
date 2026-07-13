@@ -32,6 +32,7 @@ type Server struct {
 	settings *application.SettingsService
 	audit    *application.AuditService
 	exports  *application.ExportService
+	profiles *application.ProfileService
 }
 
 const apiVersionHeader = "HomeLoom-API-Version"
@@ -263,6 +264,16 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		if err := c.Bind(&input); err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, "invalid mapping preview")
 		}
+		if input.ProfileID != "" {
+			if server.profiles == nil {
+				return echo.NewHTTPError(http.StatusServiceUnavailable, "mapping profiles are unavailable")
+			}
+			stored, err := server.profiles.Get(input.ProfileID)
+			if err != nil {
+				return profileHTTPError(err)
+			}
+			input.Profile = stored.Profile
+		}
 		result, err := mapping.Preview(input)
 		if err != nil {
 			var validationError *mapping.ValidationError
@@ -272,6 +283,81 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 			return echo.NewHTTPError(http.StatusInternalServerError, "mapping preview failed").SetInternal(err)
 		}
 		return c.JSON(http.StatusOK, map[string]any{"data": result})
+	})
+	e.GET("/api/v1/mapping/profiles", func(c echo.Context) error {
+		if server.profiles == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "mapping profiles are unavailable")
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": server.profiles.List()})
+	})
+	e.POST("/api/v1/mapping/profiles", func(c echo.Context) error {
+		if server.profiles == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "mapping profiles are unavailable")
+		}
+		var item mapping.Profile
+		if err := c.Bind(&item); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid mapping profile")
+		}
+		created, err := server.profiles.Create(c.Request().Context(), item)
+		if err != nil {
+			return profileHTTPError(err)
+		}
+		return c.JSON(http.StatusCreated, map[string]any{"data": created})
+	})
+	e.POST("/api/v1/mapping/profiles/import", func(c echo.Context) error {
+		if server.profiles == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "mapping profiles are unavailable")
+		}
+		var input struct {
+			Profiles []mapping.Profile `json:"profiles"`
+		}
+		if err := c.Bind(&input); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid mapping profile import")
+		}
+		items, err := server.profiles.Import(c.Request().Context(), input.Profiles)
+		if err != nil {
+			return profileHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": items})
+	})
+	e.GET("/api/v1/mapping/profiles/export", func(c echo.Context) error {
+		if server.profiles == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "mapping profiles are unavailable")
+		}
+		return writeJSONDownload(c, "homeloom-mapping-profiles-"+time.Now().UTC().Format("20060102T150405Z")+".json", map[string]any{"schemaVersion": 1, "profiles": server.profiles.Export()})
+	})
+	e.GET("/api/v1/mapping/profiles/:id", func(c echo.Context) error {
+		if server.profiles == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "mapping profiles are unavailable")
+		}
+		item, err := server.profiles.Get(c.Param("id"))
+		if err != nil {
+			return profileHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": item})
+	})
+	e.PUT("/api/v1/mapping/profiles/:id", func(c echo.Context) error {
+		if server.profiles == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "mapping profiles are unavailable")
+		}
+		var item mapping.Profile
+		if err := c.Bind(&item); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid mapping profile")
+		}
+		updated, err := server.profiles.Update(c.Request().Context(), c.Param("id"), item)
+		if err != nil {
+			return profileHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": updated})
+	})
+	e.DELETE("/api/v1/mapping/profiles/:id", func(c echo.Context) error {
+		if server.profiles == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "mapping profiles are unavailable")
+		}
+		if err := server.profiles.Delete(c.Request().Context(), c.Param("id")); err != nil {
+			return profileHTTPError(err)
+		}
+		return c.NoContent(http.StatusNoContent)
 	})
 	e.GET("/api/v1/system/config-export", func(c echo.Context) error {
 		if server.exports == nil {
@@ -867,6 +953,22 @@ func (s *Server) SetAuditService(audit *application.AuditService) { s.audit = au
 
 func (s *Server) SetExportService(exports *application.ExportService) { s.exports = exports }
 
+func (s *Server) SetProfileService(profiles *application.ProfileService) { s.profiles = profiles }
+
+func profileHTTPError(err error) error {
+	if errors.Is(err, application.ErrProfileNotFound) {
+		return echo.NewHTTPError(http.StatusNotFound, "mapping profile not found")
+	}
+	if errors.Is(err, application.ErrProfileExists) || errors.Is(err, application.ErrProfileBuiltIn) {
+		return echo.NewHTTPError(http.StatusConflict, err.Error())
+	}
+	var validation *application.ValidationError
+	if errors.As(err, &validation) {
+		return validation
+	}
+	return echo.NewHTTPError(http.StatusInternalServerError, "mapping profile operation failed").SetInternal(err)
+}
+
 func writeJSONDownload(c echo.Context, filename string, value any) error {
 	c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
 	c.Response().Header().Set(echo.HeaderContentDisposition, fmt.Sprintf("attachment; filename=%q", filename))
@@ -882,6 +984,12 @@ func auditResource(c echo.Context) (action, resourceType, resourceID string) {
 	route := c.Path()
 	if route == "" {
 		route = c.Request().URL.Path
+	}
+	if strings.HasPrefix(route, "/api/v1/mapping/profiles") {
+		resourceType, resourceID = "mapping-profile", c.Param("id")
+		action = strings.ToLower(c.Request().Method)
+		if strings.HasSuffix(route, "/import") { action = "import" }
+		return action, resourceType, resourceID
 	}
 	segments := strings.Split(strings.TrimPrefix(route, "/api/v1/"), "/")
 	resourceType = strings.TrimSuffix(segments[0], "s")

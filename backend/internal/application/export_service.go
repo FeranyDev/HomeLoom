@@ -28,6 +28,7 @@ type ConfigurationExport struct {
 	Providers     []providerconfig.Config `json:"providers"`
 	Targets       []ExportTargetConfig    `json:"targets"`
 	Settings      RuntimeSettings         `json:"settings"`
+	Profiles      []ProfileInfo           `json:"profiles"`
 }
 
 type DiagnosticBundle struct {
@@ -45,11 +46,16 @@ type ExportService struct {
 	targets   *TargetService
 	settings  *SettingsService
 	audit     *AuditService
+	profiles  *ProfileService
 	now       func() time.Time
 }
 
-func NewExportService(devices *DeviceService, providers *ProviderService, targets *TargetService, settings *SettingsService, audit *AuditService) *ExportService {
-	return &ExportService{devices: devices, providers: providers, targets: targets, settings: settings, audit: audit, now: time.Now}
+func NewExportService(devices *DeviceService, providers *ProviderService, targets *TargetService, settings *SettingsService, audit *AuditService, profileServices ...*ProfileService) *ExportService {
+	service := &ExportService{devices: devices, providers: providers, targets: targets, settings: settings, audit: audit, now: time.Now}
+	if len(profileServices) > 0 {
+		service.profiles = profileServices[0]
+	}
+	return service
 }
 
 func (s *ExportService) Configuration() ConfigurationExport {
@@ -57,7 +63,7 @@ func (s *ExportService) Configuration() ConfigurationExport {
 }
 
 func (s *ExportService) configurationAt(generatedAt time.Time) ConfigurationExport {
-	result := ConfigurationExport{FormatVersion: exportFormatVersion, GeneratedAt: generatedAt, Providers: []providerconfig.Config{}, Targets: []ExportTargetConfig{}}
+	result := ConfigurationExport{FormatVersion: exportFormatVersion, GeneratedAt: generatedAt, Providers: []providerconfig.Config{}, Targets: []ExportTargetConfig{}, Profiles: []ProfileInfo{}}
 	if s.providers != nil {
 		result.Providers = s.providers.ExportConfigs()
 	}
@@ -69,6 +75,9 @@ func (s *ExportService) configurationAt(generatedAt time.Time) ConfigurationExpo
 	}
 	if s.settings != nil {
 		result.Settings = s.settings.Get()
+	}
+	if s.profiles != nil {
+		result.Profiles = s.profiles.List()
 	}
 	return result
 }

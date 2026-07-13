@@ -25,6 +25,8 @@ export interface MappingProfile {
   transforms: MappingTransform[]
 }
 
-export interface MappingPreviewRequest { profile: MappingProfile; direction: MappingDirection; value: PropertyValue | null }
+export interface MappingProfileInfo extends MappingProfile { builtIn: boolean }
+
+export interface MappingPreviewRequest { profileId?: string; profile?: MappingProfile; direction: MappingDirection; value: PropertyValue | null }
 export interface MappingStep { index: number; transform: string; input: PropertyValue | null; output: PropertyValue }
 export interface MappingPreviewResult { profileId: string; profileVersion: number; direction: MappingDirection; value: PropertyValue; steps: MappingStep[] }

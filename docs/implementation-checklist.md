@@ -435,16 +435,16 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 
 ### 10.1 Profile 模型
 
-- [ ] Provider Profile；
-- [ ] Capability Profile；
-- [ ] Target Profile；
+- [~] Provider Profile（模型、内置样例和管理已完成，Provider 运行时绑定待实现）；
+- [~] Capability Profile（模型、内置样例和管理已完成，Capability 生成绑定待实现）；
+- [~] Target Profile（模型、内置样例和管理已完成，Target 发布绑定待实现）；
 - [x] Profile ID 和版本；
 - [x] Profile schema；
 - [x] Profile validator；
-- [ ] 内置 Profile；
-- [ ] 用户覆盖；
-- [ ] 数据库存储；
-- [ ] 导入和导出。
+- [x] 内置 Profile；
+- [x] 用户自定义；
+- [x] 数据库存储；
+- [x] 导入和导出。
 
 ### 10.2 转换能力
 
@@ -465,9 +465,9 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [ ] 原始 Provider 数据预览；
 - [ ] Capability 结果预览；
 - [ ] HAP Target 结果预览；
-- [ ] 前端 Profile 管理；
+- [x] 前端 Profile 管理；
 - [x] 映射调试页面；
-- [ ] 热重载；
+- [~] 热重载（管理 API 与预览快照实时更新，运行时映射绑定待接入）；
 - [x] 表驱动转换测试。
 
 退出条件：新增普通 MQTT 设备类型不需要修改 Go 代码。
@@ -501,7 +501,7 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [x] 命令历史页面；
 - [~] 实时日志（审计事件已支持 SQLite 历史和 SSE，进程运行日志流待实现）；
 - [x] Mapping 预览；
-- [ ] Profile 管理；
+- [x] Profile 管理；
 - [ ] 备份恢复；
 - [x] 错误边界；
 - [x] Toast/通知系统；
@@ -634,7 +634,7 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [x] 轮询校准；
 - [ ] Token 过期恢复；
 - [ ] 网络恢复；
-- [ ] 首批设备 Profile；
+- [x] 首批内置转换 Profile；
 - [ ] 实机测试记录。
 
 ### v0.4：Logical Device 和多 Provider 路由

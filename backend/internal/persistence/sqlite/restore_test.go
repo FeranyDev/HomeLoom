@@ -7,8 +7,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	"github.com/feranydev/homeloom/backend/internal/domain/target"
+	"github.com/feranydev/homeloom/backend/internal/mapping"
 )
 
 func TestRestoreValidatesSecretsAndPreservesPreviousDatabase(t *testing.T) {
@@ -20,6 +22,9 @@ func TestRestoreValidatesSecretsAndPreservesPreviousDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := store.SaveTarget(ctx, target.Config{ID: "apple-restored", Type: "apple-hap", Name: "Restored", Pin: "87654321"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveMappingProfile(ctx, mapping.Profile{SchemaVersion: 1, ID: "restored-profile", Version: 1, Kind: mapping.KindProvider, InputType: device.ValueTypeBool, OutputType: device.ValueTypeBool, Transforms: []mapping.Transform{{Type: mapping.TransformInvert}}}); err != nil {
 		t.Fatal(err)
 	}
 	backup := filepath.Join(directory, "backup.db")
@@ -60,6 +65,10 @@ func TestRestoreValidatesSecretsAndPreservesPreviousDatabase(t *testing.T) {
 	if err != nil || targetPIN(targets, "apple-restored") != "87654321" {
 		t.Fatalf("targets = %#v, error = %v", targets, err)
 	}
+	profiles, err := restored.ListMappingProfiles(ctx)
+	if err != nil || !hasProfile(profiles, "restored-profile") {
+		t.Fatalf("profiles = %#v, error = %v", profiles, err)
+	}
 	_ = restored.Close()
 
 	previous, err := Open(ctx, recovery)
@@ -83,6 +92,15 @@ func targetPIN(items []target.Config, id string) string {
 }
 
 func hasProvider(items []providerconfig.Config, id string) bool {
+	for _, item := range items {
+		if item.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func hasProfile(items []mapping.Profile, id string) bool {
 	for _, item := range items {
 		if item.ID == id {
 			return true

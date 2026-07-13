@@ -101,6 +101,52 @@ paths:
                 required: [data]
                 properties: { data: { $ref: "#/components/schemas/MappingPreviewResult" } }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/mapping/profiles:
+    get:
+      operationId: listMappingProfiles
+      responses: { "200": { description: Built-in and database-backed profiles, content: { application/json: { schema: { type: object, required: [data], properties: { data: { type: array, items: { $ref: "#/components/schemas/MappingProfileInfo" } } } } } } } }
+    post:
+      operationId: createMappingProfile
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/MappingProfile" } } } }
+      responses:
+        "201": { description: Profile persisted and hot-loaded, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/MappingProfileInfo" } } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { description: Profile ID already exists or is reserved by a built-in profile, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /api/v1/mapping/profiles/import:
+    post:
+      operationId: importMappingProfiles
+      description: Validates the complete batch before atomically upserting user profiles. Existing versions must increase.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [profiles]
+              properties: { profiles: { type: array, minItems: 1, items: { $ref: "#/components/schemas/MappingProfile" } } }
+      responses:
+        "200": { description: Imported and hot-loaded profiles, content: { application/json: { schema: { $ref: "#/components/schemas/ObjectResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/v1/mapping/profiles/export:
+    get:
+      operationId: exportMappingProfiles
+      description: Downloads only user profiles so the artifact can be imported without colliding with built-ins.
+      responses:
+        "200": { description: Import-compatible no-store JSON attachment, content: { application/json: { schema: { type: object, required: [schemaVersion, profiles], properties: { schemaVersion: { type: integer, const: 1 }, profiles: { type: array, items: { $ref: "#/components/schemas/MappingProfile" } } } } } } }
+  /api/v1/mapping/profiles/{profileId}:
+    parameters: [{ name: profileId, in: path, required: true, schema: { type: string } }]
+    get:
+      operationId: getMappingProfile
+      responses: { "200": { description: Profile, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/MappingProfileInfo" } } } } } }, "404": { $ref: "#/components/responses/NotFound" } }
+    put:
+      operationId: updateMappingProfile
+      description: Persists and hot-loads a version newer than the currently stored version.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/MappingProfile" } } } }
+      responses: { "200": { description: Updated profile, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/MappingProfileInfo" } } } } } }, "400": { $ref: "#/components/responses/BadRequest" }, "404": { $ref: "#/components/responses/NotFound" }, "409": { description: Built-in profile is read-only } }
+    delete:
+      operationId: deleteMappingProfile
+      responses: { "204": { description: User profile deleted from SQLite and the live snapshot }, "404": { $ref: "#/components/responses/NotFound" }, "409": { description: Built-in profile is read-only } }
   /api/v1/audit-events:
     get:
       operationId: listAuditEvents
@@ -296,13 +342,14 @@ components:
         deviceIds: { type: array, items: { type: string } }
     ConfigurationExport:
       type: object
-      required: [formatVersion, generatedAt, providers, targets, settings]
+      required: [formatVersion, generatedAt, providers, targets, settings, profiles]
       properties:
         formatVersion: { type: integer, enum: [1] }
         generatedAt: { type: string, format: date-time }
         providers: { type: array, items: { type: object, additionalProperties: true } }
         targets: { type: array, items: { $ref: "#/components/schemas/ExportTargetConfig" } }
         settings: { $ref: "#/components/schemas/RuntimeSettings" }
+        profiles: { type: array, items: { $ref: "#/components/schemas/MappingProfileInfo" } }
     DiagnosticBundle:
       type: object
       required: [formatVersion, generatedAt, build, metrics, configuration, recentAudit]
@@ -337,10 +384,15 @@ components:
         outputType: { type: string, enum: [bool, int, number, string, enum] }
         default: { $ref: "#/components/schemas/PropertyValue" }
         transforms: { type: array, items: { $ref: "#/components/schemas/MappingTransform" } }
+    MappingProfileInfo:
+      allOf:
+        - { $ref: "#/components/schemas/MappingProfile" }
+        - { type: object, required: [builtIn], properties: { builtIn: { type: boolean } } }
     MappingPreviewRequest:
       type: object
-      required: [profile, direction, value]
+      required: [direction, value]
       properties:
+        profileId: { type: string, description: Resolves the latest built-in or database snapshot. Takes precedence over profile. }
         profile: { $ref: "#/components/schemas/MappingProfile" }
         direction: { type: string, enum: [forward, reverse] }
         value:

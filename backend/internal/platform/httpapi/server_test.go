@@ -592,6 +592,83 @@ func TestMappingPreviewAPIExplainsForwardAndReverseTransforms(t *testing.T) {
 	}
 }
 
+func TestMappingProfileCRUDHotReloadAndExport(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "profiles-api.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, err := application.NewProfileService(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	devices := application.NewDeviceService(virtual.NewProvider(), store)
+	defer devices.Close()
+	server := NewServer(":0", devices, application.NewTargetService(nil, nil), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server.SetProfileService(profiles)
+
+	create := httptest.NewRequest(http.MethodPost, "/api/v1/mapping/profiles", bytes.NewBufferString(`{"schemaVersion":1,"id":"custom-invert","version":1,"kind":"provider","inputType":"bool","outputType":"bool","transforms":[{"type":"invert"}]}`))
+	create.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, create)
+	if response.Code != http.StatusCreated || !bytes.Contains(response.Body.Bytes(), []byte(`"id":"custom-invert"`)) {
+		t.Fatalf("create = %d %s", response.Code, response.Body.String())
+	}
+
+	preview := httptest.NewRequest(http.MethodPost, "/api/v1/mapping/preview", bytes.NewBufferString(`{"profileId":"custom-invert","direction":"forward","value":{"type":"bool","bool":true}}`))
+	preview.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, preview)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"bool":false`)) {
+		t.Fatalf("preview = %d %s", response.Code, response.Body.String())
+	}
+
+	sameVersion := httptest.NewRequest(http.MethodPut, "/api/v1/mapping/profiles/custom-invert", bytes.NewBufferString(`{"schemaVersion":1,"version":1,"kind":"provider","inputType":"bool","outputType":"bool","transforms":[{"type":"invert"}]}`))
+	sameVersion.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, sameVersion)
+	if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte(`"version":"must be greater than current version 1"`)) {
+		t.Fatalf("update = %d %s", response.Code, response.Body.String())
+	}
+
+	export := httptest.NewRequest(http.MethodGet, "/api/v1/mapping/profiles/export", nil)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, export)
+	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" || !strings.Contains(response.Header().Get("Content-Disposition"), "attachment") || !bytes.Contains(response.Body.Bytes(), []byte(`"id":"custom-invert"`)) || bytes.Contains(response.Body.Bytes(), []byte(`builtin-active-low`)) {
+		t.Fatalf("export = %d %v %s", response.Code, response.Header(), response.Body.String())
+	}
+	exported := append([]byte(nil), response.Body.Bytes()...)
+
+	remove := httptest.NewRequest(http.MethodDelete, "/api/v1/mapping/profiles/custom-invert", nil)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, remove)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("delete = %d %s", response.Code, response.Body.String())
+	}
+	preview = httptest.NewRequest(http.MethodPost, "/api/v1/mapping/preview", bytes.NewBufferString(`{"profileId":"custom-invert","direction":"forward","value":{"type":"bool","bool":true}}`))
+	preview.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, preview)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("deleted preview = %d %s", response.Code, response.Body.String())
+	}
+	importRequest := httptest.NewRequest(http.MethodPost, "/api/v1/mapping/profiles/import", bytes.NewReader(exported))
+	importRequest.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, importRequest)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"id":"custom-invert"`)) {
+		t.Fatalf("import = %d %s", response.Code, response.Body.String())
+	}
+	preview = httptest.NewRequest(http.MethodPost, "/api/v1/mapping/preview", bytes.NewBufferString(`{"profileId":"custom-invert","direction":"forward","value":{"type":"bool","bool":true}}`))
+	preview.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, preview)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"bool":false`)) {
+		t.Fatalf("imported preview = %d %s", response.Code, response.Body.String())
+	}
+}
+
 func TestGenericPropertyRead(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/devices/virtual-temperature-1/endpoints/main/capabilities/temperature/properties/current-temperature", nil)
 	response := httptest.NewRecorder()
