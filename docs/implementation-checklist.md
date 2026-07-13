@@ -347,6 +347,9 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 - [x] Switch；
 - [x] Temperature Sensor。
 
+- [x] HomeKit 温度事件实时推送；
+- [x] HomeKit 离线 StatusFault 映射；
+
 ### 8.2 待支持
 
 - [ ] Outlet；

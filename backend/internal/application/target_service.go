@@ -36,11 +36,18 @@ type TargetRegistration struct {
 }
 
 type TargetService struct {
-	mu      sync.RWMutex
-	order   []string
-	targets map[string]TargetRegistration
-	store   TargetStore
-	runtime TargetRuntime
+	mu           sync.RWMutex
+	order        []string
+	targets      map[string]TargetRegistration
+	store        TargetStore
+	runtime      TargetRuntime
+	nextListener uint64
+	listeners    map[uint64]*targetSubscription
+}
+
+type targetSubscription struct {
+	queue chan TargetInfo
+	done  chan struct{}
 }
 
 type TargetStore interface {
@@ -54,7 +61,7 @@ type TargetRuntime interface {
 }
 
 func NewTargetService(registrations []TargetRegistration, store TargetStore) *TargetService {
-	service := &TargetService{targets: make(map[string]TargetRegistration), store: store}
+	service := &TargetService{targets: make(map[string]TargetRegistration), store: store, listeners: make(map[uint64]*targetSubscription)}
 	for _, registration := range registrations {
 		service.order = append(service.order, registration.Info.ID)
 		service.targets[registration.Info.ID] = registration
@@ -116,6 +123,7 @@ func (s *TargetService) Save(ctx context.Context, item domaintarget.Config) (Tar
 	}
 	s.targets[item.ID] = registration
 	s.mu.Unlock()
+	s.notify(registration.Info)
 	return registration.Info, nil
 }
 
@@ -259,11 +267,54 @@ func (s *TargetService) QR(id string) ([]byte, error) {
 
 func (s *TargetService) SetStatus(id, status string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	registration, ok := s.targets[id]
 	if !ok {
+		s.mu.Unlock()
 		return
 	}
 	registration.Info.Status = status
 	s.targets[id] = registration
+	s.mu.Unlock()
+	s.notify(registration.Info)
+}
+
+func (s *TargetService) Subscribe(handler func(TargetInfo)) func() {
+	s.mu.Lock()
+	s.nextListener++
+	id := s.nextListener
+	subscription := &targetSubscription{queue: make(chan TargetInfo, 16), done: make(chan struct{})}
+	s.listeners[id] = subscription
+	s.mu.Unlock()
+	go func() {
+		defer close(subscription.done)
+		for info := range subscription.queue {
+			handler(info)
+		}
+	}()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.mu.Lock()
+			current, ok := s.listeners[id]
+			if ok {
+				delete(s.listeners, id)
+				close(current.queue)
+			}
+			s.mu.Unlock()
+			if ok {
+				<-current.done
+			}
+		})
+	}
+}
+
+func (s *TargetService) notify(info TargetInfo) {
+	s.mu.RLock()
+	for _, subscription := range s.listeners {
+		select {
+		case subscription.queue <- info:
+		default:
+		}
+	}
+	s.mu.RUnlock()
 }

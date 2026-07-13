@@ -20,3 +20,9 @@ export async function listTargets(signal?: AbortSignal): Promise<Target[]> {
 export function pairingQRUrl(id: string): string {
   return `/api/v1/targets/${encodeURIComponent(id)}/pairing-qr`
 }
+
+export function subscribeTargets(onTarget: (target: Target) => void): () => void {
+  const source = new EventSource('/api/v1/events/targets')
+  source.addEventListener('target', (event) => { try { onTarget(JSON.parse(event.data) as Target) } catch { /* ignore malformed events */ } })
+  return () => source.close()
+}

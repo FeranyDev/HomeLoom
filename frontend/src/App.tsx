@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { listDevices, setDevicePower, setDeviceProperty, simulateDevice, subscribeDevices } from './api/devices'
-import { deleteTarget, listTargets, saveTarget } from './api/targets'
+import { deleteTarget, listTargets, saveTarget, subscribeTargets } from './api/targets'
 import { deleteProvider, listProviders, restartProvider, saveProvider } from './api/providers'
 import { getDiagnostics, listCommands, subscribeCommands } from './api/diagnostics'
 import { DeviceCard } from './components/DeviceCard'
@@ -60,11 +60,13 @@ export function App() {
     const timer = window.setInterval(() => void refresh(), 30000)
     const unsubscribe = subscribeDevices((updated) => setDevices((current) => { const exists = current.some((item) => item.id === updated.id); return exists ? current.map((item) => item.id === updated.id ? updated : item) : [...current, updated] }), setLive)
 	const unsubscribeCommands = subscribeCommands((updated) => setCommands((current) => { const exists = current.some((item) => item.id === updated.id); const next = exists ? current.map((item) => item.id === updated.id ? updated : item) : [updated, ...current]; return next.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()).slice(0, 1000) }))
+	const unsubscribeTargets = subscribeTargets((updated) => setTargets((current) => current.map((item) => item.id === updated.id ? updated : item)))
     return () => {
       controller.abort()
       window.clearInterval(timer)
       unsubscribe()
 	  unsubscribeCommands()
+	  unsubscribeTargets()
     }
   }, [refresh])
 

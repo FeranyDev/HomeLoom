@@ -39,6 +39,74 @@ type Target struct {
 	cancelSubscription func()
 }
 
+type accessoryBindings struct {
+	accessories  []*accessory.A
+	switches     map[string]*characteristic.On
+	temperatures map[string]*characteristic.CurrentTemperature
+	faults       map[string]*characteristic.StatusFault
+}
+
+func newAccessoryBindings(items []device.Device, selected map[string]bool, devices *application.DeviceService, logger *slog.Logger) *accessoryBindings {
+	bindings := &accessoryBindings{accessories: make([]*accessory.A, 0, len(items)), switches: make(map[string]*characteristic.On), temperatures: make(map[string]*characteristic.CurrentTemperature), faults: make(map[string]*characteristic.StatusFault)}
+	for _, item := range items {
+		if len(selected) > 0 && !selected[item.ID] {
+			continue
+		}
+		info := accessory.Info{Name: item.Name, SerialNumber: item.ID, Manufacturer: "HomeLoom", Model: string(item.Type), Firmware: "0.0.1"}
+		switch item.Type {
+		case device.TypeSwitch:
+			a := accessory.NewSwitch(info)
+			fault := characteristic.NewStatusFault()
+			a.Switch.AddC(fault.C)
+			deviceID := item.ID
+			a.Switch.On.OnValueRemoteUpdate(func(value bool) {
+				if _, _, err := devices.ExecutePower(context.Background(), deviceID, value); err != nil {
+					logger.Error("HomeKit command failed", "device_id", deviceID, "error", err)
+				}
+			})
+			bindings.switches[item.ID], bindings.faults[item.ID] = a.Switch.On, fault
+			bindings.accessories = append(bindings.accessories, a.A)
+		case device.TypeTemperatureSensor:
+			a := accessory.NewTemperatureSensor(info)
+			fault := characteristic.NewStatusFault()
+			a.TempSensor.AddC(fault.C)
+			bindings.temperatures[item.ID], bindings.faults[item.ID] = a.TempSensor.CurrentTemperature, fault
+			bindings.accessories = append(bindings.accessories, a.A)
+		}
+		bindings.update(item)
+	}
+	return bindings
+}
+
+func (b *accessoryBindings) update(item device.Device) {
+	fault, exists := b.faults[item.ID]
+	if !exists {
+		return
+	}
+	if !item.Online {
+		_ = fault.SetValue(characteristic.StatusFaultGeneralFault)
+		return
+	}
+	_ = fault.SetValue(characteristic.StatusFaultNoFault)
+	if current, ok := b.switches[item.ID]; ok {
+		if property, found := item.Property("main", "switch", "power"); found && property.Value.Bool != nil {
+			current.SetValue(*property.Value.Bool)
+		}
+	}
+	if current, ok := b.temperatures[item.ID]; ok {
+		if property, found := item.Property("main", "temperature", "current-temperature"); found && property.Value.Number != nil {
+			value := *property.Value.Number
+			if value < 0 {
+				value = 0
+			}
+			if value > 100 {
+				value = 100
+			}
+			current.SetValue(value)
+		}
+	}
+}
+
 func New(ctx context.Context, config Config, devices *application.DeviceService, logger *slog.Logger) (*Target, error) {
 	items, err := devices.List(ctx)
 	if err != nil {
@@ -53,41 +121,9 @@ func New(ctx context.Context, config Config, devices *application.DeviceService,
 		Name: config.Name, SerialNumber: "homeloom-" + config.ID,
 		Manufacturer: "HomeLoom", Model: "HomeLoom Demo", Firmware: "0.0.1",
 	})
-	accessories := make([]*accessory.A, 0, len(items))
-	switches := make(map[string]*characteristic.On)
+	bindings := newAccessoryBindings(items, selected, devices, logger)
 
-	for _, item := range items {
-		if len(selected) > 0 && !selected[item.ID] {
-			continue
-		}
-		info := accessory.Info{
-			Name: item.Name, SerialNumber: item.ID,
-			Manufacturer: "HomeLoom", Model: string(item.Type), Firmware: "0.0.1",
-		}
-		switch item.Type {
-		case device.TypeSwitch:
-			a := accessory.NewSwitch(info)
-			if property, ok := item.Property("main", "switch", "power"); ok && property.Value.Bool != nil {
-				a.Switch.On.SetValue(*property.Value.Bool)
-			}
-			deviceID := item.ID
-			a.Switch.On.OnValueRemoteUpdate(func(value bool) {
-				if _, _, updateErr := devices.ExecutePower(context.Background(), deviceID, value); updateErr != nil {
-					logger.Error("HomeKit command failed", "device_id", deviceID, "error", updateErr)
-				}
-			})
-			switches[item.ID] = a.Switch.On
-			accessories = append(accessories, a.A)
-		case device.TypeTemperatureSensor:
-			a := accessory.NewTemperatureSensor(info)
-			if property, ok := item.Property("main", "temperature", "current-temperature"); ok && property.Value.Number != nil {
-				a.TempSensor.CurrentTemperature.SetValue(*property.Value.Number)
-			}
-			accessories = append(accessories, a.A)
-		}
-	}
-
-	server, err := hap.NewServer(hap.NewFsStore(config.StorePath), bridge.A, accessories...)
+	server, err := hap.NewServer(hap.NewFsStore(config.StorePath), bridge.A, bindings.accessories...)
 	if err != nil {
 		return nil, fmt.Errorf("create HAP server: %w", err)
 	}
@@ -112,10 +148,7 @@ func New(ctx context.Context, config Config, devices *application.DeviceService,
 		pairing: PairingInfo{Code: formatPin(config.Pin), SetupURI: setupURI, QR: qr, Devices: append([]string(nil), config.DeviceIDs...)},
 	}
 	target.cancelSubscription = devices.Subscribe(func(item device.Device) {
-		property, propertyExists := item.Property("main", "switch", "power")
-		if characteristic, ok := switches[item.ID]; ok && propertyExists && property.Value.Bool != nil {
-			characteristic.SetValue(*property.Value.Bool)
-		}
+		bindings.update(item)
 	})
 	return target, nil
 }

@@ -333,6 +333,51 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 	e.GET("/api/v1/targets", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"data": targets.List()})
 	})
+	e.GET("/api/v1/events/targets", func(c echo.Context) error {
+		response := c.Response()
+		response.Header().Set(echo.HeaderContentType, "text/event-stream")
+		response.Header().Set(echo.HeaderCacheControl, "no-cache")
+		response.Header().Set("X-Accel-Buffering", "no")
+		response.WriteHeader(http.StatusOK)
+		flusher, ok := response.Writer.(http.Flusher)
+		if !ok {
+			return echo.NewHTTPError(http.StatusInternalServerError, "streaming is unsupported")
+		}
+		events := make(chan application.TargetInfo, 16)
+		unsubscribe := targets.Subscribe(func(item application.TargetInfo) {
+			select {
+			case events <- item:
+			default:
+			}
+		})
+		defer unsubscribe()
+		if _, err := response.Write([]byte("event: ready\ndata: {}\n\n")); err != nil {
+			return nil
+		}
+		flusher.Flush()
+		heartbeat := time.NewTicker(15 * time.Second)
+		defer heartbeat.Stop()
+		for {
+			select {
+			case item := <-events:
+				payload, err := json.Marshal(item)
+				if err != nil {
+					continue
+				}
+				if _, err := fmt.Fprintf(response, "event: target\ndata: %s\n\n", payload); err != nil {
+					return nil
+				}
+				flusher.Flush()
+			case <-heartbeat.C:
+				if _, err := response.Write([]byte(": keepalive\n\n")); err != nil {
+					return nil
+				}
+				flusher.Flush()
+			case <-c.Request().Context().Done():
+				return nil
+			}
+		}
+	})
 	e.GET("/api/v1/targets/:id/pairing-qr", func(c echo.Context) error {
 		png, err := targets.QR(c.Param("id"))
 		if err != nil {

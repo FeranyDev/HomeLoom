@@ -393,6 +393,41 @@ func TestStateEventStreamPublishesQualityChanges(t *testing.T) {
 	}
 }
 
+func TestTargetEventStreamPublishesRuntimeStatus(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	devices := application.NewDeviceService(virtual.NewProvider())
+	defer devices.Close()
+	targets := application.NewTargetService([]application.TargetRegistration{{Info: application.TargetInfo{ID: "bridge", Name: "Bridge", Status: "running"}}}, nil)
+	httpServer := httptest.NewServer(NewServer(":0", devices, targets, logger).Handler())
+	defer httpServer.Close()
+	response, err := http.Get(httpServer.URL + "/api/v1/events/targets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	scanner := bufio.NewScanner(response.Body)
+	if !scanner.Scan() || scanner.Text() != "event: ready" {
+		t.Fatalf("ready = %q", scanner.Text())
+	}
+	for scanner.Scan() {
+		if scanner.Text() == "" {
+			break
+		}
+	}
+	targets.SetStatus("bridge", "error")
+	found := false
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "data: ") && strings.Contains(line, `"id":"bridge"`) && strings.Contains(line, `"status":"error"`) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("target status event not received: %v", scanner.Err())
+	}
+}
+
 func TestRestartProviderEndpoint(t *testing.T) {
 	ctx := context.Background()
 	config := providerconfig.Config{ID: "virtual-main", Type: "virtual", Name: "Virtual", Enabled: true, Config: []byte(`{}`)}

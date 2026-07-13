@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/domain/target"
 )
@@ -39,7 +40,18 @@ func TestTargetSaveGeneratesOptionalFields(t *testing.T) {
 func TestTargetServiceListQRStatusAndDelete(t *testing.T) {
 	store := &targetStoreStub{}
 	service := NewTargetService([]TargetRegistration{{Info: TargetInfo{ID: "one", Status: "starting"}, QR: []byte("qr")}}, store)
+	statusEvents := make(chan TargetInfo, 1)
+	unsubscribe := service.Subscribe(func(info TargetInfo) { statusEvents <- info })
+	defer unsubscribe()
 	service.SetStatus("one", "running")
+	select {
+	case event := <-statusEvents:
+		if event.ID != "one" || event.Status != "running" {
+			t.Fatalf("status event = %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("status event was not published")
+	}
 	items := service.List()
 	if len(items) != 1 || items[0].Status != "running" {
 		t.Fatalf("List() = %#v", items)
@@ -76,4 +88,33 @@ func TestTargetSaveRejectsInvalidConfiguration(t *testing.T) {
 			t.Fatalf("Save() accepted %#v", item)
 		}
 	}
+}
+
+func TestSlowTargetStatusSubscriberDoesNotBlockUpdates(t *testing.T) {
+	service := NewTargetService([]TargetRegistration{{Info: TargetInfo{ID: "one", Status: "starting"}}}, &targetStoreStub{})
+	blocked := make(chan struct{})
+	started := make(chan struct{}, 1)
+	unsubscribe := service.Subscribe(func(TargetInfo) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-blocked
+	})
+	service.SetStatus("one", "first")
+	<-started
+	done := make(chan struct{})
+	go func() {
+		for index := 0; index < 100; index++ {
+			service.SetStatus("one", "running")
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("slow subscriber blocked status updates")
+	}
+	close(blocked)
+	unsubscribe()
 }
