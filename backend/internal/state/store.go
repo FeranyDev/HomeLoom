@@ -29,6 +29,15 @@ func (s *Store) Apply(incoming domainstate.StateValue) (domainstate.StateValue, 
 	return incoming, true
 }
 
+func (s *Store) ApplyOptimistic(incoming domainstate.StateValue) domainstate.StateValue {
+	s.mu.Lock()
+	current := s.values[incoming.Key]
+	incoming.Version = current.Version + 1
+	s.values[incoming.Key] = incoming
+	s.mu.Unlock()
+	return incoming
+}
+
 func (s *Store) Device(deviceID string) []domainstate.StateValue {
 	s.mu.RLock()
 	result := make([]domainstate.StateValue, 0)
@@ -42,6 +51,36 @@ func (s *Store) Device(deviceID string) []domainstate.StateValue {
 	return result
 }
 
+func (s *Store) Get(key domainstate.Key) (domainstate.StateValue, bool) {
+	s.mu.RLock()
+	value, ok := s.values[key]
+	s.mu.RUnlock()
+	return value, ok
+}
+
+// ResolveOptimistic rolls back only while the same command still owns the
+// optimistic value. A provider report that arrived first is never overwritten.
+func (s *Store) ResolveOptimistic(commandID string, fallback *domainstate.StateValue) (domainstate.StateValue, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, current := range s.values {
+		if current.PendingCommandID != commandID {
+			continue
+		}
+		if fallback != nil {
+			restored := *fallback
+			restored.Version = current.Version + 1
+			restored.PendingCommandID = ""
+			s.values[key] = restored
+			return restored, true
+		}
+		current.Quality, current.PendingCommandID, current.Version = domainstate.QualityStale, "", current.Version+1
+		s.values[key] = current
+		return current, true
+	}
+	return domainstate.StateValue{}, false
+}
+
 func (s *Store) MarkStale(now time.Time) []domainstate.StateValue {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -51,6 +90,7 @@ func (s *Store) MarkStale(now time.Time) []domainstate.StateValue {
 			continue
 		}
 		value.Quality = domainstate.QualityStale
+		value.PendingCommandID = ""
 		value.Version++
 		s.values[key] = value
 		changed = append(changed, value)
@@ -69,6 +109,7 @@ func (s *Store) MarkDeviceStale(deviceID string) []domainstate.StateValue {
 			continue
 		}
 		value.Quality = domainstate.QualityStale
+		value.PendingCommandID = ""
 		value.Version++
 		s.values[key] = value
 		changed = append(changed, value)
@@ -77,6 +118,9 @@ func (s *Store) MarkDeviceStale(deviceID string) []domainstate.StateValue {
 }
 
 func preferIncoming(current, incoming domainstate.StateValue) bool {
+	if current.Quality == domainstate.QualityOptimistic && (incoming.Quality == domainstate.QualityReported || incoming.Quality == domainstate.QualityConfirmed) {
+		return true
+	}
 	if current.ProviderID == incoming.ProviderID && current.Sequence > 0 && incoming.Sequence > 0 && current.Sequence != incoming.Sequence {
 		return incoming.Sequence > current.Sequence
 	}

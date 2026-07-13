@@ -209,12 +209,16 @@ func (s *DeviceService) ExecutePower(ctx context.Context, id string, power bool)
 }
 
 func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) (device.Device, domaincommand.Command, error) {
+	key := domainstate.Key{DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID, PropertyID: propertyID}
+	previous, hadPrevious := s.states.Get(key)
 	command := s.commands.Begin(deviceID, endpointID, capabilityID, propertyID, value)
 	s.metrics.commandsStarted.Add(1)
+	s.applyOptimisticState(key, value, command, previous, hadPrevious)
 	s.commands.Sent(command.ID)
 	if s.writer == nil {
 		err := ErrPropertyUnsupported
 		s.commands.Rejected(command.ID, err)
+		s.rollbackOptimistic(command.ID, previous, hadPrevious)
 		s.metrics.commandsRejected.Add(1)
 		current, _ := s.commands.Get(command.ID)
 		return device.Device{}, current, err
@@ -224,6 +228,7 @@ func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointI
 	})
 	if err != nil {
 		s.commands.Rejected(command.ID, err)
+		s.rollbackOptimistic(command.ID, previous, hadPrevious)
 		s.metrics.commandsRejected.Add(1)
 		current, _ := s.commands.Get(command.ID)
 		return device.Device{}, current, err
@@ -231,6 +236,38 @@ func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointI
 	s.commands.Accepted(command.ID)
 	current, _ := s.commands.Get(command.ID)
 	return item, current, nil
+}
+
+func (s *DeviceService) applyOptimisticState(key domainstate.Key, value device.PropertyValue, command domaincommand.Command, previous domainstate.StateValue, hadPrevious bool) {
+	optimistic := domainstate.StateValue{Key: key, ProviderID: previous.ProviderID, Source: domainstate.SourceOptimistic, Quality: domainstate.QualityOptimistic, ObservedAt: command.CreatedAt, ReceivedAt: command.CreatedAt, ExpiresAt: command.Deadline, PendingCommandID: command.ID}
+	switch value.Type {
+	case device.ValueTypeBool:
+		if value.Bool == nil {
+			return
+		}
+		optimistic.Value = domainstate.BoolValue(*value.Bool)
+	case device.ValueTypeNumber:
+		if value.Number == nil {
+			return
+		}
+		optimistic.Value = domainstate.NumberValue(*value.Number)
+	default:
+		return
+	}
+	if !hadPrevious {
+		optimistic.ProviderID = "command"
+	}
+	s.publishState(s.states.ApplyOptimistic(optimistic))
+}
+
+func (s *DeviceService) rollbackOptimistic(commandID string, previous domainstate.StateValue, hadPrevious bool) {
+	var fallback *domainstate.StateValue
+	if hadPrevious {
+		fallback = &previous
+	}
+	if restored, changed := s.states.ResolveOptimistic(commandID, fallback); changed {
+		s.publishState(restored)
+	}
 }
 
 func (s *DeviceService) Commands() []domaincommand.Command { return s.commands.List() }

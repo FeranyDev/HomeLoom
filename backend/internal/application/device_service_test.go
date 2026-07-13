@@ -9,6 +9,7 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/application"
 	domaincommand "github.com/feranydev/homeloom/backend/internal/domain/command"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
+	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	domainstate "github.com/feranydev/homeloom/backend/internal/domain/state"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
@@ -159,4 +160,54 @@ func TestDeviceOfflineImmediatelyMarksStateStaleAndOnlineRestoresIt(t *testing.T
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("state did not recover: %#v", service.States(id))
+}
+
+func TestRejectedCommandRollsBackOptimisticState(t *testing.T) {
+	provider, err := virtual.NewProviderFromConfig(providerconfig.Config{ID: "reject", Name: "Reject", Config: []byte(`{"rejectWrites":true}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := application.NewDeviceService(provider)
+	defer service.Close()
+	id := "reject-switch-1"
+	_, command, err := service.ExecutePower(context.Background(), id, true)
+	if err == nil || command.Status != domaincommand.StatusRejected {
+		t.Fatalf("command = %#v, %v", command, err)
+	}
+	states := service.States(id)
+	if len(states) != 1 || states[0].Quality != domainstate.QualityReported || states[0].PendingCommandID != "" || states[0].Value.Bool == nil || *states[0].Value.Bool {
+		t.Fatalf("rolled back states = %#v", states)
+	}
+}
+
+func TestCommandPublishesOptimisticThenReportedState(t *testing.T) {
+	service := application.NewDeviceService(virtual.NewProvider())
+	defer service.Close()
+	events := make(chan domainstate.StateValue, 4)
+	unsubscribe := service.SubscribeStates(func(value domainstate.StateValue) {
+		if value.Key.DeviceID == "virtual-switch-1" {
+			events <- value
+		}
+	})
+	defer unsubscribe()
+	_, command, err := service.ExecutePower(context.Background(), "virtual-switch-1", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case state := <-events:
+		if state.Quality != domainstate.QualityOptimistic || state.PendingCommandID != command.ID || state.Value.Bool == nil || !*state.Value.Bool {
+			t.Fatalf("optimistic = %#v", state)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("missing optimistic state")
+	}
+	select {
+	case state := <-events:
+		if state.Quality != domainstate.QualityReported || state.PendingCommandID != "" || state.Version < 3 {
+			t.Fatalf("reported = %#v", state)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("missing reported state")
+	}
 }

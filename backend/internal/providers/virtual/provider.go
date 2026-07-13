@@ -135,6 +135,10 @@ func (p *Provider) SetPower(ctx context.Context, id string, power bool) (device.
 		p.mu.Unlock()
 		return device.Device{}, providersdk.ErrPropertyUnsupported
 	}
+	if !item.Online {
+		p.mu.Unlock()
+		return device.Device{}, providersdk.ErrProviderUnavailable
+	}
 	item.State.Power = &power
 	item.SetProperty("main", "switch", "power", device.BoolValue(power))
 	item.LastUpdateAt = time.Now().UTC()

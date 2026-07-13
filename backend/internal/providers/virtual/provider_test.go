@@ -148,6 +148,13 @@ func TestSetPowerErrors(t *testing.T) {
 	if _, err := provider.SetPower(context.Background(), "virtual-temperature-1", true); !errors.Is(err, application.ErrPropertyUnsupported) {
 		t.Fatalf("unsupported property error = %v", err)
 	}
+	offline := false
+	if _, err := provider.Simulate(context.Background(), providersdk.SimulationRequest{DeviceID: "virtual-switch-1", Online: &offline}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.SetPower(context.Background(), "virtual-switch-1", true); !errors.Is(err, providersdk.ErrProviderUnavailable) {
+		t.Fatalf("offline error = %v", err)
+	}
 }
 
 func TestSetPowerNotifiesSubscribers(t *testing.T) {

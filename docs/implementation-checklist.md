@@ -240,9 +240,9 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 - [x] 定时 stale 扫描；
 - [ ] unknown 初始状态；
 - [x] Provider 离线批量标记 stale；
-- [ ] 乐观状态；
-- [ ] 乐观状态到期；
-- [ ] confirmed 状态覆盖 optimistic；
+- [x] 乐观状态；
+- [x] 乐观状态到期；
+- [x] confirmed 状态覆盖 optimistic；
 - [ ] Provider 时间漂移检测；
 - [ ] 不同 Provider 优先级；
 - [ ] 属性级 Provider 优先级；

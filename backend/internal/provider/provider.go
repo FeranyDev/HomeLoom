@@ -13,6 +13,7 @@ var (
 	ErrPropertyUnsupported = errors.New("property unsupported")
 	ErrWriteRejected       = errors.New("provider rejected write")
 	ErrSimulationInvalid   = errors.New("invalid simulation request")
+	ErrProviderUnavailable = errors.New("provider unavailable")
 )
 
 type Manifest struct {

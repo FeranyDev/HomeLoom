@@ -100,3 +100,35 @@ func TestMarkDeviceStaleIsImmediateAndIdempotent(t *testing.T) {
 		t.Fatalf("unrelated state = %#v", current)
 	}
 }
+
+func TestOptimisticStateIsOverriddenByAuthoritativeReport(t *testing.T) {
+	store := NewStore()
+	now := time.Now().UTC()
+	key := domainstate.Key{DeviceID: "switch", PropertyID: "power"}
+	store.Apply(domainstate.StateValue{Key: key, Value: domainstate.BoolValue(false), ProviderID: "provider", ObservedAt: now, ReceivedAt: now, Quality: domainstate.QualityReported})
+	optimistic := store.ApplyOptimistic(domainstate.StateValue{Key: key, Value: domainstate.BoolValue(true), ProviderID: "provider", ObservedAt: now.Add(time.Second), ReceivedAt: now.Add(time.Second), ExpiresAt: now.Add(5 * time.Second), Quality: domainstate.QualityOptimistic, PendingCommandID: "command"})
+	if optimistic.Version != 2 || optimistic.PendingCommandID == "" {
+		t.Fatalf("optimistic = %#v", optimistic)
+	}
+	reported, accepted := store.Apply(domainstate.StateValue{Key: key, Value: domainstate.BoolValue(true), ProviderID: "provider", ObservedAt: now.Add(-time.Second), ReceivedAt: now.Add(2 * time.Second), Quality: domainstate.QualityReported})
+	if !accepted || reported.Quality != domainstate.QualityReported || reported.PendingCommandID != "" || reported.Version != 3 {
+		t.Fatalf("reported = %#v", reported)
+	}
+}
+
+func TestResolveOptimisticRollsBackAndExpiryClearsPendingCommand(t *testing.T) {
+	store := NewStore()
+	now := time.Now().UTC()
+	key := domainstate.Key{DeviceID: "switch", PropertyID: "power"}
+	base, _ := store.Apply(domainstate.StateValue{Key: key, Value: domainstate.BoolValue(false), ProviderID: "provider", ObservedAt: now, ReceivedAt: now, Quality: domainstate.QualityReported})
+	store.ApplyOptimistic(domainstate.StateValue{Key: key, Value: domainstate.BoolValue(true), ProviderID: "provider", ObservedAt: now, ReceivedAt: now, ExpiresAt: now.Add(time.Second), Quality: domainstate.QualityOptimistic, PendingCommandID: "rejected"})
+	restored, changed := store.ResolveOptimistic("rejected", &base)
+	if !changed || restored.Quality != domainstate.QualityReported || restored.Value.Bool == nil || *restored.Value.Bool {
+		t.Fatalf("restored = %#v", restored)
+	}
+	store.ApplyOptimistic(domainstate.StateValue{Key: key, Value: domainstate.BoolValue(true), ProviderID: "provider", ObservedAt: now, ReceivedAt: now, ExpiresAt: now.Add(time.Second), Quality: domainstate.QualityOptimistic, PendingCommandID: "timeout"})
+	expired := store.MarkStale(now.Add(time.Second))
+	if len(expired) != 1 || expired[0].PendingCommandID != "" || expired[0].Quality != domainstate.QualityStale {
+		t.Fatalf("expired = %#v", expired)
+	}
+}

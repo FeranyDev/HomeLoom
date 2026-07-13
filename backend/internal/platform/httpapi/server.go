@@ -370,6 +370,9 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		if errors.Is(err, application.ErrPropertyUnsupported) {
 			return echo.NewHTTPError(http.StatusUnprocessableEntity, "power is not supported")
 		}
+		if errors.Is(err, providersdk.ErrProviderUnavailable) {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "provider unavailable")
+		}
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "failed to update device").SetInternal(err)
 		}
@@ -389,6 +392,9 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		}
 		if errors.Is(err, application.ErrPropertyUnsupported) {
 			return echo.NewHTTPError(http.StatusUnprocessableEntity, "property is not supported")
+		}
+		if errors.Is(err, providersdk.ErrProviderUnavailable) {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "provider unavailable")
 		}
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "failed to update device").SetInternal(err)
