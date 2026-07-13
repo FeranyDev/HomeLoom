@@ -24,8 +24,9 @@ import (
 )
 
 type Server struct {
-	address string
-	echo    *echo.Echo
+	address  string
+	echo     *echo.Echo
+	settings *application.SettingsService
 }
 
 type errorResponse struct {
@@ -107,6 +108,7 @@ func (r targetRequest) domain(id string) domaintarget.Config {
 
 func NewServer(address string, devices *application.DeviceService, targets *application.TargetService, logger *slog.Logger, providerServices ...*application.ProviderService) *Server {
 	e := echo.New()
+	server := &Server{address: address, echo: e}
 	e.HideBanner = true
 	e.HidePort = true
 	e.HTTPErrorHandler = func(err error, c echo.Context) {
@@ -164,6 +166,26 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 	e.GET("/api/v1/system/version", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"data": buildinfo.Current()})
 	})
+	e.GET("/api/v1/system/settings", func(c echo.Context) error {
+		if server.settings == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "runtime settings are unavailable")
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": server.settings.Get()})
+	})
+	e.PUT("/api/v1/system/settings", func(c echo.Context) error {
+		if server.settings == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "runtime settings are unavailable")
+		}
+		var input application.RuntimeSettings
+		if err := c.Bind(&input); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid runtime settings")
+		}
+		updated, err := server.settings.Save(c.Request().Context(), input)
+		if err != nil {
+			return err
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": updated})
+	})
 	e.GET("/api/v1/diagnostics", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"data": devices.Metrics()})
 	})
@@ -184,6 +206,7 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		writeMetric("commands_rejected_total", metrics.CommandsRejected)
 		writeMetric("commands_timed_out_total", metrics.CommandsTimedOut)
 		writeMetric("commands_superseded_total", metrics.CommandsSuperseded)
+		writeMetric("commands_outcome_unknown_total", metrics.CommandsOutcomeUnknown)
 		writeMetric("homekit_pushes_total", metrics.HomeKitPushes)
 		writeMetric("devices_online", metrics.OnlineDevices)
 		writeMetric("devices_offline", metrics.OfflineDevices)
@@ -193,12 +216,16 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		writeMetric("device_subscribers", metrics.DeviceSubscribers)
 		writeMetric("state_subscribers", metrics.StateSubscribers)
 		writeMetric("command_average_latency_milliseconds", metrics.CommandAverageLatencyMS)
+		writeMetric("command_queue_pending", metrics.CommandQueuePending)
+		writeMetric("command_queue_max_pending", metrics.CommandQueueMaxPending)
 		writeMetric("event_average_latency_milliseconds", metrics.EventAverageLatencyMS)
 		writeMetric("event_max_latency_milliseconds", metrics.EventMaxLatencyMS)
 		writeMetric("slow_event_handlers_total", metrics.SlowEventHandlers)
 		writeMetric("database_operations_total", metrics.DatabaseOperations)
 		writeMetric("database_average_latency_milliseconds", metrics.DatabaseAverageLatencyMS)
 		writeMetric("database_max_latency_milliseconds", metrics.DatabaseMaxLatencyMS)
+		writeMetric("provider_clock_skew_events_total", metrics.ProviderClockSkewEvents)
+		writeMetric("provider_max_clock_skew_milliseconds", metrics.ProviderMaxClockSkewMS)
 		writeMetric("go_goroutines", metrics.Goroutines)
 		writeMetric("go_heap_alloc_bytes", metrics.HeapAllocBytes)
 		writeMetric("go_heap_objects", metrics.HeapObjects)
@@ -531,6 +558,9 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		if errors.Is(err, providersdk.ErrProviderUnavailable) {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "provider unavailable")
 		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return echo.NewHTTPError(http.StatusRequestTimeout, "power write canceled")
+		}
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "failed to update device").SetInternal(err)
 		}
@@ -553,6 +583,9 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		}
 		if errors.Is(err, providersdk.ErrProviderUnavailable) {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "provider unavailable")
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return echo.NewHTTPError(http.StatusRequestTimeout, "property write canceled")
 		}
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "failed to update device").SetInternal(err)
@@ -620,8 +653,10 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		return c.JSON(http.StatusOK, map[string]any{"data": command})
 	})
 
-	return &Server{address: address, echo: e}
+	return server
 }
+
+func (s *Server) SetSettingsService(settings *application.SettingsService) { s.settings = settings }
 
 func (s *Server) Address() string { return s.address }
 

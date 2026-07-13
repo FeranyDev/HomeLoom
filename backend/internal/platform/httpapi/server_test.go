@@ -27,6 +27,19 @@ type apiProviderStore struct {
 
 type unavailableDatabase struct{}
 
+type apiSettingsStore struct{ values map[string]string }
+
+func (s *apiSettingsStore) GetSetting(_ context.Context, key string) (string, bool, error) {
+	value, ok := s.values[key]
+	return value, ok, nil
+}
+func (s *apiSettingsStore) SaveSettings(_ context.Context, values map[string]string) error {
+	for key, value := range values {
+		s.values[key] = value
+	}
+	return nil
+}
+
 func (unavailableDatabase) DatabaseOperationMetrics() (uint64, time.Duration, time.Duration) {
 	return 0, 0, 0
 }
@@ -86,6 +99,40 @@ func TestVersionEndpoint(t *testing.T) {
 		if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(expected)) {
 			t.Fatalf("response = %d %s", response.Code, response.Body.String())
 		}
+	}
+}
+
+func TestRuntimeSettingsAPIUpdatesWithoutRestart(t *testing.T) {
+	server := newTestServer()
+	devices := application.NewDeviceService(virtual.NewProvider())
+	t.Cleanup(func() { _ = devices.Close() })
+	store := &apiSettingsStore{values: make(map[string]string)}
+	settings, err := application.NewSettingsService(context.Background(), store, devices)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.SetSettingsService(settings)
+
+	put := httptest.NewRequest(http.MethodPut, "/api/v1/system/settings", bytes.NewBufferString(`{"commandTimeoutSeconds":17,"commandHistoryLimit":800}`))
+	put.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, put)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"commandTimeoutSeconds":17`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"commandHistoryLimit":800`)) || store.values["command_timeout_seconds"] != "17" || store.values["command_history_limit"] != "800" {
+		t.Fatalf("save response = %d %s, store = %#v", response.Code, response.Body.String(), store.values)
+	}
+	get := httptest.NewRequest(http.MethodGet, "/api/v1/system/settings", nil)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, get)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"commandTimeoutSeconds":17`)) {
+		t.Fatalf("get response = %d %s", response.Code, response.Body.String())
+	}
+
+	invalid := httptest.NewRequest(http.MethodPut, "/api/v1/system/settings", bytes.NewBufferString(`{"commandTimeoutSeconds":301,"commandHistoryLimit":1000}`))
+	invalid.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, invalid)
+	if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte(`"fields":{"commandTimeoutSeconds":`)) {
+		t.Fatalf("invalid response = %d %s", response.Code, response.Body.String())
 	}
 }
 
@@ -221,7 +268,7 @@ func TestDiagnosticsAndPrometheusMetrics(t *testing.T) {
 			t.Fatalf("metrics missing device counts: %s", response.Body.String())
 		}
 		if path == "/metrics" {
-			for _, name := range []string{"homeloom_event_average_latency_milliseconds", "homeloom_slow_event_handlers_total", "homeloom_database_operations_total", "homeloom_homekit_pushes_total", "homeloom_devices_unknown"} {
+			for _, name := range []string{"homeloom_event_average_latency_milliseconds", "homeloom_slow_event_handlers_total", "homeloom_database_operations_total", "homeloom_homekit_pushes_total", "homeloom_devices_unknown", "homeloom_command_queue_pending", "homeloom_command_queue_max_pending", "homeloom_commands_outcome_unknown_total", "homeloom_provider_clock_skew_events_total"} {
 				if !bytes.Contains(response.Body.Bytes(), []byte(name)) {
 					t.Fatalf("metrics missing %s: %s", name, response.Body.String())
 				}

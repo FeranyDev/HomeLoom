@@ -273,7 +273,11 @@ func New(ctx context.Context, config Config, devices *application.DeviceService,
 		}
 	}
 
-	server, err := hap.NewServer(hap.NewFsStore(config.StorePath), bridge.A, bindings.accessories...)
+	identityStore, err := newSecureFSStore(config.StorePath)
+	if err != nil {
+		return nil, err
+	}
+	server, err := hap.NewServer(identityStore, bridge.A, bindings.accessories...)
 	if err != nil {
 		return nil, fmt.Errorf("create HAP server: %w", err)
 	}

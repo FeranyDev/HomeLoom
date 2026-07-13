@@ -6,7 +6,7 @@ export interface PropertyValue { type: ValueType; bool?: boolean; number?: numbe
 export interface PropertyDefinition { id: string; name: string; type: ValueType; unit?: string; readable: boolean; writable: boolean; notifiable: boolean; min?: number; max?: number; step?: number; enum?: string[]; staleAfterSeconds?: number }
 export interface Property { definition: PropertyDefinition; value: PropertyValue }
 export interface CommandParameter { id: string; name: string; type: ValueType; required: boolean }
-export interface CommandDefinition { id: string; name: string; parameters?: CommandParameter[] }
+export interface CommandDefinition { id: string; name: string; idempotent?: boolean; parameters?: CommandParameter[] }
 export interface Capability { id: string; type: string; properties: Property[]; commands?: CommandDefinition[]; events?: { id: string; name: string; payload: ValueType }[] }
 export interface Endpoint { id: string; name: string; type: string; capabilities: Capability[] }
 export interface Device {

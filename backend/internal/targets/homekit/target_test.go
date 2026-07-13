@@ -5,6 +5,8 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/brutella/hap/characteristic"
@@ -14,6 +16,43 @@ import (
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
 )
+
+func TestSecureFSStoreEnforcesPrivatePermissionsAndRejectsSymlinks(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "identity")
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	existing := filepath.Join(directory, "existing")
+	if err := os.WriteFile(existing, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store, err := newSecureFSStore(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Set("private:key", []byte("secret")); err != nil {
+		t.Fatal(err)
+	}
+	for path, mode := range map[string]os.FileMode{directory: 0o700, existing: 0o600, filepath.Join(directory, "privatekey"): 0o600} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != mode {
+			t.Fatalf("%s mode = %v", path, info.Mode().Perm())
+		}
+	}
+	unsafe := filepath.Join(t.TempDir(), "unsafe")
+	if err := os.MkdirAll(unsafe, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(existing, filepath.Join(unsafe, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newSecureFSStore(unsafe); err == nil {
+		t.Fatal("identity symlink was accepted")
+	}
+}
 
 func TestHomeKitAddressPreflightDetectsOccupiedPort(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

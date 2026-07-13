@@ -36,6 +36,10 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		database.Close()
 		return nil, err
 	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		database.Close()
+		return nil, fmt.Errorf("secure database permissions: %w", err)
+	}
 	return store, nil
 }
 

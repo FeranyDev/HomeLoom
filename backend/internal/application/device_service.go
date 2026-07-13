@@ -33,6 +33,7 @@ type DeviceService struct {
 	dispatcher     *eventbus.Dispatcher
 	states         *statestore.Store
 	commands       *commandtracker.Tracker
+	commandQueue   *commandCoordinator
 	unsubscribe    func()
 	mu             sync.RWMutex
 	nextID         uint64
@@ -82,6 +83,8 @@ type deviceMetrics struct {
 	commandsTimedOut    atomic.Uint64
 	commandsSuperseded  atomic.Uint64
 	homeKitPushes       atomic.Uint64
+	providerClockSkews  atomic.Uint64
+	maxClockSkewNanos   atomic.Uint64
 }
 
 type DeviceMetrics struct {
@@ -98,6 +101,7 @@ type DeviceMetrics struct {
 	CommandsRejected         uint64  `json:"commandsRejected"`
 	CommandsTimedOut         uint64  `json:"commandsTimedOut"`
 	CommandsSuperseded       uint64  `json:"commandsSuperseded"`
+	CommandsOutcomeUnknown   uint64  `json:"commandsOutcomeUnknown"`
 	HomeKitPushes            uint64  `json:"homeKitPushes"`
 	OnlineDevices            int     `json:"onlineDevices"`
 	OfflineDevices           int     `json:"offlineDevices"`
@@ -107,12 +111,16 @@ type DeviceMetrics struct {
 	DeviceSubscribers        int     `json:"deviceSubscribers"`
 	StateSubscribers         int     `json:"stateSubscribers"`
 	CommandAverageLatencyMS  float64 `json:"commandAverageLatencyMs"`
+	CommandQueuePending      int64   `json:"commandQueuePending"`
+	CommandQueueMaxPending   int64   `json:"commandQueueMaxPending"`
 	EventAverageLatencyMS    float64 `json:"eventAverageLatencyMs"`
 	EventMaxLatencyMS        float64 `json:"eventMaxLatencyMs"`
 	SlowEventHandlers        uint64  `json:"slowEventHandlers"`
 	DatabaseOperations       uint64  `json:"databaseOperations"`
 	DatabaseAverageLatencyMS float64 `json:"databaseAverageLatencyMs"`
 	DatabaseMaxLatencyMS     float64 `json:"databaseMaxLatencyMs"`
+	ProviderClockSkewEvents  uint64  `json:"providerClockSkewEvents"`
+	ProviderMaxClockSkewMS   float64 `json:"providerMaxClockSkewMs"`
 	Goroutines               int     `json:"goroutines"`
 	HeapAllocBytes           uint64  `json:"heapAllocBytes"`
 	HeapObjects              uint64  `json:"heapObjects"`
@@ -132,6 +140,10 @@ func (s *DeviceService) RecordHomeKitPushes(count uint64) {
 	s.metrics.homeKitPushes.Add(count)
 }
 
+func (s *DeviceService) SetCommandTimeout(timeout time.Duration) { s.commands.SetTimeout(timeout) }
+
+func (s *DeviceService) SetCommandHistoryLimit(limit int) { s.commands.SetMaxItems(limit) }
+
 func NewDeviceService(provider providersdk.Provider, storageMetrics ...DatabaseMetricsProvider) *DeviceService {
 	discoverer, _ := provider.(providersdk.Discoverer)
 	reader, _ := provider.(providersdk.PropertyReader)
@@ -144,7 +156,7 @@ func NewDeviceService(provider providersdk.Provider, storageMetrics ...DatabaseM
 	service := &DeviceService{
 		provider: provider, discoverer: discoverer, reader: reader, writer: writer, executor: executor,
 		registry: registry.NewDeviceRegistry(items),
-		states:   statestore.NewStore(), commands: commandtracker.NewTracker(5 * time.Second),
+		states:   statestore.NewStore(), commands: commandtracker.NewTracker(5 * time.Second), commandQueue: newCommandCoordinator(),
 		listeners: make(map[uint64]*deviceSubscription), stateListeners: make(map[uint64]*stateSubscription),
 	}
 	if len(storageMetrics) > 0 {
@@ -240,6 +252,7 @@ func (s *DeviceService) Metrics() DeviceMetrics {
 	var memory runtime.MemStats
 	runtime.ReadMemStats(&memory)
 	eventStats := s.dispatcher.Stats()
+	commandQueuePending, commandQueueMaxPending := s.commandQueue.stats()
 	var databaseOperations uint64
 	var databaseAverage, databaseMaximum time.Duration
 	if s.storageMetrics != nil {
@@ -251,11 +264,14 @@ func (s *DeviceService) Metrics() DeviceMetrics {
 		TargetEventsDropped: s.metrics.targetEventsDropped.Load(), StateEventsDropped: s.metrics.stateEventsDropped.Load(), StatesMarkedStale: s.metrics.statesMarkedStale.Load(),
 		CommandsStarted: s.metrics.commandsStarted.Load(), CommandsConfirmed: s.metrics.commandsConfirmed.Load(),
 		CommandsRejected: s.metrics.commandsRejected.Load(), CommandsTimedOut: s.metrics.commandsTimedOut.Load(), CommandsSuperseded: s.metrics.commandsSuperseded.Load(),
-		HomeKitPushes: s.metrics.homeKitPushes.Load(),
-		OnlineDevices: online, OfflineDevices: offline, UnknownDevices: unknown, ProvidersRunning: providersRunning, ProviderRetries: providerRetries, DeviceSubscribers: subscribers, StateSubscribers: stateSubscribers,
+		CommandsOutcomeUnknown: s.metrics.commandsTimedOut.Load() + s.metrics.commandsSuperseded.Load(),
+		HomeKitPushes:          s.metrics.homeKitPushes.Load(),
+		OnlineDevices:          online, OfflineDevices: offline, UnknownDevices: unknown, ProvidersRunning: providersRunning, ProviderRetries: providerRetries, DeviceSubscribers: subscribers, StateSubscribers: stateSubscribers,
 		CommandAverageLatencyMS: averageLatency,
-		EventAverageLatencyMS:   float64(eventStats.AverageLatency.Nanoseconds()) / float64(time.Millisecond), EventMaxLatencyMS: float64(eventStats.MaxLatency.Nanoseconds()) / float64(time.Millisecond), SlowEventHandlers: eventStats.SlowHandlers,
+		CommandQueuePending:     commandQueuePending, CommandQueueMaxPending: commandQueueMaxPending,
+		EventAverageLatencyMS: float64(eventStats.AverageLatency.Nanoseconds()) / float64(time.Millisecond), EventMaxLatencyMS: float64(eventStats.MaxLatency.Nanoseconds()) / float64(time.Millisecond), SlowEventHandlers: eventStats.SlowHandlers,
 		DatabaseOperations: databaseOperations, DatabaseAverageLatencyMS: float64(databaseAverage.Nanoseconds()) / float64(time.Millisecond), DatabaseMaxLatencyMS: float64(databaseMaximum.Nanoseconds()) / float64(time.Millisecond),
+		ProviderClockSkewEvents: s.metrics.providerClockSkews.Load(), ProviderMaxClockSkewMS: float64(s.metrics.maxClockSkewNanos.Load()) / float64(time.Millisecond),
 		Goroutines: runtime.NumGoroutine(), HeapAllocBytes: memory.HeapAlloc, HeapObjects: memory.HeapObjects,
 	}
 }
@@ -287,6 +303,11 @@ func (s *DeviceService) ExecutePower(ctx context.Context, id string, power bool)
 }
 
 func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) (device.Device, domaincommand.Command, error) {
+	release, err := s.commandQueue.acquire(ctx, deviceID)
+	if err != nil {
+		return device.Device{}, domaincommand.Command{}, err
+	}
+	defer release()
 	key := domainstate.Key{DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID, PropertyID: propertyID}
 	previous, hadPrevious := s.states.Get(key)
 	command, superseded := s.commands.BeginReplacing(deviceID, endpointID, capabilityID, propertyID, value)
@@ -330,6 +351,11 @@ func (s *DeviceService) ExecuteCommand(ctx context.Context, request providersdk.
 	if err := s.validateCommand(request); err != nil {
 		return device.Device{}, domaincommand.Command{}, err
 	}
+	release, err := s.commandQueue.acquire(ctx, request.DeviceID)
+	if err != nil {
+		return device.Device{}, domaincommand.Command{}, err
+	}
+	defer release()
 	command, replayed, err := s.commands.BeginActionIdempotent(request.DeviceID, request.EndpointID, request.CapabilityID, request.CommandID, request.Parameters, request.IdempotencyKey)
 	if err != nil {
 		return device.Device{}, domaincommand.Command{}, err
@@ -551,13 +577,14 @@ func (s *DeviceService) handleEvent(event eventbus.Event) {
 
 func (s *DeviceService) applySnapshot(item device.Device) {
 	receivedAt := time.Now().UTC()
+	observedAt := s.safeObservedAt(item.LastUpdateAt, receivedAt)
 	for _, endpoint := range item.Endpoints {
 		for _, capability := range endpoint.Capabilities {
 			for _, property := range capability.Properties {
 				value := domainstate.StateValue{
 					Key:        domainstate.Key{DeviceID: item.ID, EndpointID: endpoint.ID, CapabilityID: capability.ID, PropertyID: property.Definition.ID},
 					ProviderID: item.ProviderID, Source: domainstate.SourceReported,
-					ObservedAt: item.LastUpdateAt, ReceivedAt: receivedAt, Quality: domainstate.QualityReported,
+					ObservedAt: observedAt, ReceivedAt: receivedAt, Quality: domainstate.QualityReported,
 				}
 				if property.Definition.StaleAfterSeconds > 0 {
 					value.ExpiresAt = receivedAt.Add(time.Duration(property.Definition.StaleAfterSeconds) * time.Second)
@@ -582,6 +609,28 @@ func (s *DeviceService) applySnapshot(item device.Device) {
 			}
 		}
 	}
+}
+
+func (s *DeviceService) safeObservedAt(observedAt, receivedAt time.Time) time.Time {
+	if observedAt.IsZero() {
+		return receivedAt
+	}
+	skew := receivedAt.Sub(observedAt)
+	if skew < 0 {
+		skew = -skew
+	}
+	if skew <= 5*time.Minute {
+		return observedAt
+	}
+	s.metrics.providerClockSkews.Add(1)
+	nanos := uint64(skew)
+	for {
+		current := s.metrics.maxClockSkewNanos.Load()
+		if nanos <= current || s.metrics.maxClockSkewNanos.CompareAndSwap(current, nanos) {
+			break
+		}
+	}
+	return receivedAt
 }
 
 func (s *DeviceService) runStaleScanner(ctx context.Context) {

@@ -22,6 +22,17 @@ paths:
       operationId: getVersion
       responses:
         "200": { description: Build information, content: { application/json: { schema: { $ref: "#/components/schemas/VersionResponse" } } } }
+  /api/v1/system/settings:
+    get:
+      operationId: getRuntimeSettings
+      responses:
+        "200": { description: Database-backed runtime settings, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/RuntimeSettings" } } } } } }
+    put:
+      operationId: updateRuntimeSettings
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RuntimeSettings" } } } }
+      responses:
+        "200": { description: Settings persisted and applied without restart, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/RuntimeSettings" } } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
   /api/v1/diagnostics:
     get:
       operationId: getDiagnostics
@@ -172,6 +183,12 @@ components:
             commit: { type: string }
             buildTime: { type: string }
             goVersion: { type: string }
+    RuntimeSettings:
+      type: object
+      required: [commandTimeoutSeconds, commandHistoryLimit]
+      properties:
+        commandTimeoutSeconds: { type: integer, minimum: 1, maximum: 300, description: Applied only to commands created after the update. }
+        commandHistoryLimit: { type: integer, minimum: 100, maximum: 10000, description: Maximum in-memory command records; lowering it immediately removes the oldest terminal records. }
     PropertyValue:
       type: object
       required: [type]

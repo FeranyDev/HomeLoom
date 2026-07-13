@@ -130,7 +130,7 @@ func poweredDevice(id, providerID, name string, deviceType device.Type, online, 
 			Capabilities: []device.Capability{{ID: "switch", Type: "switch", Properties: []device.Property{{
 				Definition: device.PropertyDefinition{ID: "power", Name: "开关", Type: device.ValueTypeBool, Readable: true, Writable: true, Notifiable: true, StaleAfterSeconds: 15},
 				Value:      device.BoolValue(power),
-			}}, Commands: []device.CommandDefinition{{ID: "toggle", Name: "切换"}, {ID: "set-power", Name: "设置开关", Parameters: []device.CommandParameter{{ID: "value", Name: "开关值", Type: device.ValueTypeBool, Required: true}}}}}},
+			}}, Commands: []device.CommandDefinition{{ID: "toggle", Name: "切换"}, {ID: "set-power", Name: "设置开关", Idempotent: true, Parameters: []device.CommandParameter{{ID: "value", Name: "开关值", Type: device.ValueTypeBool, Required: true}}}}}},
 		}},
 	}
 	item.SetOnline(online)

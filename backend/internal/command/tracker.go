@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	domaincommand "github.com/feranydev/homeloom/backend/internal/domain/command"
@@ -16,7 +17,7 @@ var ErrIdempotencyConflict = errors.New("idempotency key reused with different c
 
 type Tracker struct {
 	mu           sync.RWMutex
-	timeout      time.Duration
+	timeoutNanos atomic.Int64
 	commands     map[string]domaincommand.Command
 	pending      map[string]string
 	idempotency  map[string]string
@@ -26,7 +27,30 @@ type Tracker struct {
 }
 
 func NewTracker(timeout time.Duration) *Tracker {
-	return &Tracker{timeout: timeout, commands: make(map[string]domaincommand.Command), pending: make(map[string]string), idempotency: make(map[string]string), maxItems: 1000, listeners: make(map[uint64]func(domaincommand.Command))}
+	tracker := &Tracker{commands: make(map[string]domaincommand.Command), pending: make(map[string]string), idempotency: make(map[string]string), maxItems: 1000, listeners: make(map[uint64]func(domaincommand.Command))}
+	tracker.SetTimeout(timeout)
+	return tracker
+}
+
+func (t *Tracker) SetTimeout(timeout time.Duration) { t.timeoutNanos.Store(int64(timeout)) }
+
+func (t *Tracker) Timeout() time.Duration { return time.Duration(t.timeoutNanos.Load()) }
+
+func (t *Tracker) SetMaxItems(limit int) {
+	if limit < 1 {
+		limit = 1
+	}
+	t.mu.Lock()
+	t.maxItems = limit
+	for len(t.commands) > t.maxItems && t.removeOldestTerminalLocked() {
+	}
+	t.mu.Unlock()
+}
+
+func (t *Tracker) MaxItems() int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.maxItems
 }
 
 func (t *Tracker) Begin(deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) domaincommand.Command {
@@ -40,7 +64,7 @@ func (t *Tracker) BeginReplacing(deviceID, endpointID, capabilityID, propertyID 
 	command := domaincommand.Command{
 		ID: commandID(), DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID,
 		Kind: domaincommand.KindProperty, PropertyID: propertyID, Expected: value,
-		Status: domaincommand.StatusQueued, CreatedAt: now, UpdatedAt: now, Deadline: now.Add(t.timeout),
+		Status: domaincommand.StatusQueued, CreatedAt: now, UpdatedAt: now, Deadline: now.Add(t.Timeout()),
 	}
 	t.mu.Lock()
 	t.pruneLocked()
@@ -48,7 +72,7 @@ func (t *Tracker) BeginReplacing(deviceID, endpointID, capabilityID, propertyID 
 	if previousID, exists := t.pending[key]; exists {
 		previous := t.commands[previousID]
 		if !terminal(previous.Status) {
-			previous.Status, previous.Error, previous.UpdatedAt = domaincommand.StatusSuperseded, "replaced by a newer command", now
+			previous.Status, previous.Outcome, previous.Error, previous.UpdatedAt = domaincommand.StatusSuperseded, domaincommand.OutcomeUnknown, "replaced by a newer command", now
 			t.commands[previousID] = previous
 			copy := previous
 			superseded = &copy
@@ -71,7 +95,7 @@ func (t *Tracker) BeginAction(deviceID, endpointID, capabilityID, actionID strin
 
 func (t *Tracker) BeginActionIdempotent(deviceID, endpointID, capabilityID, actionID string, parameters map[string]device.PropertyValue, idempotencyKey string) (domaincommand.Command, bool, error) {
 	now := time.Now().UTC()
-	command := domaincommand.Command{ID: commandID(), Kind: domaincommand.KindAction, DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID, CommandID: actionID, Parameters: cloneParameters(parameters), IdempotencyKey: idempotencyKey, Status: domaincommand.StatusQueued, CreatedAt: now, UpdatedAt: now, Deadline: now.Add(t.timeout)}
+	command := domaincommand.Command{ID: commandID(), Kind: domaincommand.KindAction, DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID, CommandID: actionID, Parameters: cloneParameters(parameters), IdempotencyKey: idempotencyKey, Status: domaincommand.StatusQueued, CreatedAt: now, UpdatedAt: now, Deadline: now.Add(t.Timeout())}
 	t.mu.Lock()
 	if idempotencyKey != "" {
 		scope := actionIdempotencyScope(deviceID, endpointID, capabilityID, actionID, idempotencyKey)
@@ -106,9 +130,11 @@ func cloneParameters(parameters map[string]device.PropertyValue) map[string]devi
 }
 
 func (t *Tracker) pruneLocked() {
-	if len(t.commands) < t.maxItems {
-		return
+	for len(t.commands) >= t.maxItems && t.removeOldestTerminalLocked() {
 	}
+}
+
+func (t *Tracker) removeOldestTerminalLocked() bool {
 	var oldestID string
 	var oldest time.Time
 	for id, command := range t.commands {
@@ -126,7 +152,9 @@ func (t *Tracker) pruneLocked() {
 				delete(t.idempotency, key)
 			}
 		}
+		return true
 	}
+	return false
 }
 
 func actionIdempotencyScope(deviceID, endpointID, capabilityID, actionID, key string) string {
@@ -167,9 +195,12 @@ func (t *Tracker) Confirm(deviceID, endpointID, capabilityID, propertyID string,
 		return false
 	}
 	command.Status = domaincommand.StatusConfirmed
+	command.Outcome = domaincommand.OutcomeSucceeded
 	command.UpdatedAt = time.Now().UTC()
 	t.commands[id] = command
 	delete(t.pending, key)
+	for len(t.commands) > t.maxItems && t.removeOldestTerminalLocked() {
+	}
 	t.mu.Unlock()
 	t.notify(command)
 	return true
@@ -203,9 +234,12 @@ func (t *Tracker) transition(id string, status domaincommand.Status, message str
 		return
 	}
 	command.Status, command.Error, command.UpdatedAt = status, message, time.Now().UTC()
+	command.Outcome = outcomeForStatus(status)
 	t.commands[id] = command
 	if terminal(status) {
 		delete(t.pending, pendingKey(command.DeviceID, command.EndpointID, command.CapabilityID, command.PropertyID))
+		for len(t.commands) > t.maxItems && t.removeOldestTerminalLocked() {
+		}
 	}
 	t.mu.Unlock()
 	t.notify(command)
@@ -218,16 +252,31 @@ func (t *Tracker) Expire(now time.Time) []domaincommand.Command {
 		if terminal(command.Status) || now.Before(command.Deadline) {
 			continue
 		}
-		command.Status, command.UpdatedAt = domaincommand.StatusTimeout, now
+		command.Status, command.Outcome, command.UpdatedAt = domaincommand.StatusTimeout, domaincommand.OutcomeUnknown, now
 		t.commands[id] = command
 		delete(t.pending, pendingKey(command.DeviceID, command.EndpointID, command.CapabilityID, command.PropertyID))
 		expired = append(expired, command)
+	}
+	for len(t.commands) > t.maxItems && t.removeOldestTerminalLocked() {
 	}
 	t.mu.Unlock()
 	for _, command := range expired {
 		t.notify(command)
 	}
 	return expired
+}
+
+func outcomeForStatus(status domaincommand.Status) domaincommand.Outcome {
+	switch status {
+	case domaincommand.StatusConfirmed:
+		return domaincommand.OutcomeSucceeded
+	case domaincommand.StatusRejected:
+		return domaincommand.OutcomeFailed
+	case domaincommand.StatusTimeout, domaincommand.StatusSuperseded:
+		return domaincommand.OutcomeUnknown
+	default:
+		return ""
+	}
 }
 
 func (t *Tracker) Subscribe(handler func(domaincommand.Command)) func() {

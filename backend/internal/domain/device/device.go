@@ -96,6 +96,7 @@ type CommandParameter struct {
 type CommandDefinition struct {
 	ID         string             `json:"id"`
 	Name       string             `json:"name"`
+	Idempotent bool               `json:"idempotent"`
 	Parameters []CommandParameter `json:"parameters,omitempty"`
 }
 

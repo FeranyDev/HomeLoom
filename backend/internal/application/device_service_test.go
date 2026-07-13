@@ -18,6 +18,30 @@ import (
 
 type silentProvider struct{ inner *virtual.Provider }
 
+type blockingWriteProvider struct {
+	inner   *virtual.Provider
+	entered chan string
+	release map[string]chan struct{}
+}
+
+type skewedSnapshotProvider struct{ inner *virtual.Provider }
+
+func (p *skewedSnapshotProvider) Manifest() providersdk.Manifest { return p.inner.Manifest() }
+func (p *skewedSnapshotProvider) Capabilities() providersdk.Capabilities {
+	return p.inner.Capabilities()
+}
+func (p *skewedSnapshotProvider) Initialize(ctx context.Context) error {
+	return p.inner.Initialize(ctx)
+}
+func (p *skewedSnapshotProvider) Close(ctx context.Context) error { return p.inner.Close(ctx) }
+func (p *skewedSnapshotProvider) DiscoverDevices(ctx context.Context) ([]device.Device, error) {
+	items, err := p.inner.DiscoverDevices(ctx)
+	if err == nil && len(items) > 0 {
+		items[0].LastUpdateAt = time.Now().UTC().Add(24 * time.Hour)
+	}
+	return items, err
+}
+
 func (p *silentProvider) Manifest() providersdk.Manifest         { return p.inner.Manifest() }
 func (p *silentProvider) Capabilities() providersdk.Capabilities { return p.inner.Capabilities() }
 func (p *silentProvider) Initialize(ctx context.Context) error   { return p.inner.Initialize(ctx) }
@@ -27,6 +51,41 @@ func (p *silentProvider) DiscoverDevices(ctx context.Context) ([]device.Device, 
 }
 func (p *silentProvider) WriteProperty(ctx context.Context, request providersdk.PropertyWriteRequest) (device.Device, error) {
 	return p.inner.WriteProperty(ctx, request)
+}
+
+func newBlockingWriteProvider(t *testing.T) *blockingWriteProvider {
+	t.Helper()
+	inner, err := virtual.NewProviderFromConfig(providerconfig.Config{ID: "ordered", Name: "Ordered", Config: []byte(`{"devices":[{"id":"switch-a","type":"switch"},{"id":"switch-b","type":"switch"}]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &blockingWriteProvider{inner: inner, entered: make(chan string, 8), release: map[string]chan struct{}{"switch-a": make(chan struct{}, 8), "switch-b": make(chan struct{}, 8)}}
+}
+
+func (p *blockingWriteProvider) Manifest() providersdk.Manifest { return p.inner.Manifest() }
+func (p *blockingWriteProvider) Capabilities() providersdk.Capabilities {
+	return p.inner.Capabilities()
+}
+func (p *blockingWriteProvider) Initialize(ctx context.Context) error { return p.inner.Initialize(ctx) }
+func (p *blockingWriteProvider) Close(ctx context.Context) error      { return p.inner.Close(ctx) }
+func (p *blockingWriteProvider) DiscoverDevices(ctx context.Context) ([]device.Device, error) {
+	return p.inner.DiscoverDevices(ctx)
+}
+func (p *blockingWriteProvider) Subscribe(handler func(device.Device)) func() {
+	return p.inner.Subscribe(handler)
+}
+func (p *blockingWriteProvider) WriteProperty(ctx context.Context, request providersdk.PropertyWriteRequest) (device.Device, error) {
+	select {
+	case p.entered <- request.DeviceID:
+	case <-ctx.Done():
+		return device.Device{}, ctx.Err()
+	}
+	select {
+	case <-p.release[request.DeviceID]:
+		return p.inner.WriteProperty(ctx, request)
+	case <-ctx.Done():
+		return device.Device{}, ctx.Err()
+	}
 }
 
 func TestDeviceServiceRoutesProviderEvents(t *testing.T) {
@@ -55,6 +114,99 @@ func TestDeviceServiceRoutesProviderEvents(t *testing.T) {
 	states := service.States("virtual-switch-1")
 	if len(states) != 1 || states[0].Version != 2 {
 		t.Fatalf("States() = %#v", states)
+	}
+}
+
+func TestDeviceServiceDetectsAndClampsProviderClockSkew(t *testing.T) {
+	service := application.NewDeviceService(&skewedSnapshotProvider{inner: virtual.NewProvider()})
+	defer service.Close()
+	metrics := service.Metrics()
+	if metrics.ProviderClockSkewEvents != 1 || metrics.ProviderMaxClockSkewMS < float64((23*time.Hour)/time.Millisecond) {
+		t.Fatalf("clock metrics = %#v", metrics)
+	}
+	states := service.States("virtual-switch-1")
+	if len(states) != 1 || states[0].ObservedAt.After(time.Now().Add(time.Minute)) {
+		t.Fatalf("clamped states = %#v", states)
+	}
+}
+
+func TestDeviceCommandsSerializePerDeviceAndRunAcrossDevices(t *testing.T) {
+	provider := newBlockingWriteProvider(t)
+	service := application.NewDeviceService(provider)
+	defer service.Close()
+	errors := make(chan error, 4)
+	run := func(deviceID string, value bool) {
+		go func() { _, _, err := service.ExecutePower(context.Background(), deviceID, value); errors <- err }()
+	}
+
+	run("switch-a", true)
+	if entered := <-provider.entered; entered != "switch-a" {
+		t.Fatalf("first entered = %q", entered)
+	}
+	run("switch-a", false)
+	deadline := time.Now().Add(time.Second)
+	for service.Metrics().CommandQueuePending != 1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if pending := service.Metrics().CommandQueuePending; pending != 1 {
+		t.Fatalf("pending = %d", pending)
+	}
+	select {
+	case entered := <-provider.entered:
+		t.Fatalf("same device entered concurrently: %s", entered)
+	case <-time.After(20 * time.Millisecond):
+	}
+	provider.release["switch-a"] <- struct{}{}
+	if entered := <-provider.entered; entered != "switch-a" {
+		t.Fatalf("second entered = %q", entered)
+	}
+	provider.release["switch-a"] <- struct{}{}
+	if err := <-errors; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-errors; err != nil {
+		t.Fatal(err)
+	}
+
+	run("switch-a", true)
+	run("switch-b", true)
+	seen := map[string]bool{<-provider.entered: true, <-provider.entered: true}
+	if !seen["switch-a"] || !seen["switch-b"] {
+		t.Fatalf("cross-device entries = %#v", seen)
+	}
+	provider.release["switch-a"] <- struct{}{}
+	provider.release["switch-b"] <- struct{}{}
+	if err := <-errors; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-errors; err != nil {
+		t.Fatal(err)
+	}
+	if service.Metrics().CommandQueueMaxPending < 1 {
+		t.Fatalf("metrics = %#v", service.Metrics())
+	}
+}
+
+func TestDeviceCommandQueueHonorsContextCancellation(t *testing.T) {
+	provider := newBlockingWriteProvider(t)
+	service := application.NewDeviceService(provider)
+	defer service.Close()
+	firstDone := make(chan error, 1)
+	go func() { _, _, err := service.ExecutePower(context.Background(), "switch-a", true); firstDone <- err }()
+	<-provider.entered
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, command, err := service.ExecutePower(ctx, "switch-a", false); !errors.Is(err, context.DeadlineExceeded) || command.ID != "" {
+		t.Fatalf("queued cancellation = %#v, %v", command, err)
+	}
+	select {
+	case entered := <-provider.entered:
+		t.Fatalf("cancelled command reached provider: %s", entered)
+	default:
+	}
+	provider.release["switch-a"] <- struct{}{}
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
 	}
 }
 

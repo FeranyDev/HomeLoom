@@ -86,4 +86,4 @@ GET /api/v1/devices/{deviceId}/endpoints/{endpointId}/capabilities/{capabilityId
 
 返回 `{ "data": Property }`。设备不存在返回 404，属性不支持返回 422，Provider 离线返回 503，请求取消或超时返回 408。前端设备详情页的“从 Provider 读取”操作使用该接口。
 
-Capability 还可以通过 `commands` 声明 Action。每个 `CommandDefinition` 使用稳定 ID，并可声明 bool、number、string 或 enum 类型的必填/可选参数。
+Capability 还可以通过 `commands` 声明 Action。每个 `CommandDefinition` 使用稳定 ID，并可声明 bool、number、string 或 enum 类型的必填/可选参数。`idempotent` 字段声明 Provider 动作本身是否可安全重放，例如 `set-power` 是幂等动作，而 `toggle` 不是。该声明与 HTTP `Idempotency-Key` 的请求去重互补，不能据此推断未确认命令已经失败。

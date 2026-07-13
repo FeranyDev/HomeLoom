@@ -118,6 +118,9 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .queue-card { display: grid; gap: 13px; padding: 24px; border: 1px solid #d2d0c7; background: rgba(250, 249, 245, .72); }
 .queue-card > div:first-child { display: flex; justify-content: space-between; }
 .queue-card small, .command-heading span { color: #898d85; font-size: 11px; }
+.settings-card label { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: 12px; color: #5f625d; }
+.settings-card input { width: 120px; }
+.settings-card > button { justify-self: start; }
 .queue-track { height: 7px; overflow: hidden; background: #dedfd8; }
 .queue-track span { display: block; height: 100%; background: #66806a; }
 .command-section { border: 1px solid #d2d0c7; background: rgba(250, 249, 245, .72); }

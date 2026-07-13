@@ -1,11 +1,14 @@
 package command
 
-import "time"
+import (
+	"time"
 
-import "github.com/feranydev/homeloom/backend/internal/domain/device"
+	"github.com/feranydev/homeloom/backend/internal/domain/device"
+)
 
 type Status string
 type Kind string
+type Outcome string
 
 const (
 	KindProperty Kind = "property"
@@ -18,6 +21,10 @@ const (
 	StatusRejected   Status = "rejected"
 	StatusTimeout    Status = "timeout"
 	StatusSuperseded Status = "superseded"
+
+	OutcomeSucceeded Outcome = "succeeded"
+	OutcomeFailed    Outcome = "failed"
+	OutcomeUnknown   Outcome = "unknown"
 )
 
 type Command struct {
@@ -32,6 +39,7 @@ type Command struct {
 	Parameters     map[string]device.PropertyValue `json:"parameters,omitempty"`
 	IdempotencyKey string                          `json:"idempotencyKey,omitempty"`
 	Status         Status                          `json:"status"`
+	Outcome        Outcome                         `json:"outcome,omitempty"`
 	Error          string                          `json:"error,omitempty"`
 	CreatedAt      time.Time                       `json:"createdAt"`
 	UpdatedAt      time.Time                       `json:"updatedAt"`

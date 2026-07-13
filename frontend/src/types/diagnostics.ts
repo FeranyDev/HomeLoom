@@ -4,22 +4,27 @@ export interface Diagnostics {
   statesMarkedStale: number; commandsStarted: number; commandsConfirmed: number
   commandsRejected: number; commandsTimedOut: number
   commandsSuperseded: number
+	commandsOutcomeUnknown: number
 	homeKitPushes: number
   onlineDevices: number; offlineDevices: number; unknownDevices: number; providersRunning: number; deviceSubscribers: number; stateSubscribers: number
   providerRetries: number
   commandAverageLatencyMs: number
+	commandQueuePending: number; commandQueueMaxPending: number
 	eventAverageLatencyMs: number; eventMaxLatencyMs: number; slowEventHandlers: number
 	databaseOperations: number; databaseAverageLatencyMs: number; databaseMaxLatencyMs: number
+	providerClockSkewEvents: number; providerMaxClockSkewMs: number
 	// Runtime metrics are sampled when diagnostics are requested.
 	goroutines: number; heapAllocBytes: number; heapObjects: number
 }
 
 export interface SystemVersion { version: string; commit: string; buildTime: string; goVersion: string }
+export interface RuntimeSettings { commandTimeoutSeconds: number; commandHistoryLimit: number }
 
 export interface CommandValue { type: string; bool?: boolean; number?: number; string?: string }
 export interface DeviceCommand {
   id: string; kind?: 'property' | 'action'; deviceId: string; endpointId: string; capabilityId: string; propertyId?: string; commandId?: string
   expected?: CommandValue; parameters?: Record<string, CommandValue>; status: 'queued' | 'sent' | 'accepted' | 'confirmed' | 'rejected' | 'timeout' | 'superseded'
+	outcome?: 'succeeded' | 'failed' | 'unknown'
 	idempotencyKey?: string
   error?: string; createdAt: string; updatedAt: string; deadline: string
 }

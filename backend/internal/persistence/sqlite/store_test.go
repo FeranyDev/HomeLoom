@@ -133,6 +133,37 @@ func TestDatabaseOperationMetrics(t *testing.T) {
 	}
 }
 
+func TestSystemSettingsCRUD(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "settings.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	info, err := os.Stat(store.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("database mode = %v", info.Mode().Perm())
+	}
+	if value, exists, err := store.GetSetting(ctx, "command_timeout_seconds"); err != nil || exists || value != "" {
+		t.Fatalf("missing setting = %q, %v, %v", value, exists, err)
+	}
+	if err := store.SaveSetting(ctx, "command_timeout_seconds", "15"); err != nil {
+		t.Fatal(err)
+	}
+	if value, exists, err := store.GetSetting(ctx, "command_timeout_seconds"); err != nil || !exists || value != "15" {
+		t.Fatalf("saved setting = %q, %v, %v", value, exists, err)
+	}
+	if err := store.SaveSetting(ctx, "command_timeout_seconds", "20"); err != nil {
+		t.Fatal(err)
+	}
+	if value, _, _ := store.GetSetting(ctx, "command_timeout_seconds"); value != "20" {
+		t.Fatalf("updated setting = %q", value)
+	}
+}
+
 func TestProviderSeedCRUD(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(ctx, filepath.Join(t.TempDir(), "homeloom.db"))

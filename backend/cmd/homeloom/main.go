@@ -97,6 +97,11 @@ func main() {
 	}
 	service := application.NewDeviceService(providerManager, store)
 	defer service.Close()
+	settingsService, err := application.NewSettingsService(ctx, store, service)
+	if err != nil {
+		logger.Error("runtime settings load failed", "error", err)
+		os.Exit(1)
+	}
 	providerService := application.NewProviderService(providerConfigs, store, factory, providerManager)
 	targetConfigs, err := store.ListTargets(ctx)
 	if err != nil {
@@ -122,6 +127,7 @@ func main() {
 	targetService.SetRuntime(manager)
 	manager.SetStatusHandler(targetService.SetStatus)
 	server := httpapi.NewServer(settings.Server.Address, service, targetService, logger, providerService)
+	server.SetSettingsService(settingsService)
 
 	go func() {
 		if err := server.Start(); err != nil {

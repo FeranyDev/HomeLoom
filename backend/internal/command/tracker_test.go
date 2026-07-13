@@ -21,7 +21,7 @@ func TestCommandConfirmsOnlyMatchingState(t *testing.T) {
 	}
 	tracker.Confirm("switch", "main", "switch", "power", device.BoolValue(true))
 	current, _ = tracker.Get(command.ID)
-	if current.Status != domaincommand.StatusConfirmed {
+	if current.Status != domaincommand.StatusConfirmed || current.Outcome != domaincommand.OutcomeSucceeded {
 		t.Fatalf("status = %s", current.Status)
 	}
 }
@@ -31,12 +31,12 @@ func TestCommandRejectAndTimeout(t *testing.T) {
 	rejected := tracker.Begin("a", "main", "switch", "power", device.BoolValue(true))
 	tracker.Rejected(rejected.ID, errors.New("offline"))
 	current, _ := tracker.Get(rejected.ID)
-	if current.Status != domaincommand.StatusRejected || current.Error != "offline" {
+	if current.Status != domaincommand.StatusRejected || current.Outcome != domaincommand.OutcomeFailed || current.Error != "offline" {
 		t.Fatalf("rejected = %#v", current)
 	}
 	timedOut := tracker.Begin("b", "main", "switch", "power", device.BoolValue(true))
 	current, _ = tracker.Get(timedOut.ID)
-	if current.Status != domaincommand.StatusTimeout {
+	if current.Status != domaincommand.StatusTimeout || current.Outcome != domaincommand.OutcomeUnknown {
 		t.Fatalf("timeout = %#v", current)
 	}
 }
@@ -64,6 +64,18 @@ func TestTrackerBoundsTerminalHistory(t *testing.T) {
 	}
 	if items := tracker.List(); len(items) != 1000 {
 		t.Fatalf("history length = %d", len(items))
+	}
+}
+
+func TestTrackerAppliesHistoryLimitAtRuntime(t *testing.T) {
+	tracker := NewTracker(time.Second)
+	for index := 0; index < 150; index++ {
+		command := tracker.Begin("switch", "main", "switch", "power", device.BoolValue(index%2 == 0))
+		tracker.Rejected(command.ID, errors.New("test"))
+	}
+	tracker.SetMaxItems(100)
+	if tracker.MaxItems() != 100 || len(tracker.List()) != 100 {
+		t.Fatalf("limit = %d, history = %d", tracker.MaxItems(), len(tracker.List()))
 	}
 }
 
