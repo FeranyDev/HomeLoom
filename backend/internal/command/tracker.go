@@ -3,6 +3,7 @@ package command
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"sort"
 	"sync"
 	"time"
@@ -11,18 +12,21 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 )
 
+var ErrIdempotencyConflict = errors.New("idempotency key reused with different command parameters")
+
 type Tracker struct {
 	mu           sync.RWMutex
 	timeout      time.Duration
 	commands     map[string]domaincommand.Command
 	pending      map[string]string
+	idempotency  map[string]string
 	maxItems     int
 	listeners    map[uint64]func(domaincommand.Command)
 	nextListener uint64
 }
 
 func NewTracker(timeout time.Duration) *Tracker {
-	return &Tracker{timeout: timeout, commands: make(map[string]domaincommand.Command), pending: make(map[string]string), maxItems: 1000, listeners: make(map[uint64]func(domaincommand.Command))}
+	return &Tracker{timeout: timeout, commands: make(map[string]domaincommand.Command), pending: make(map[string]string), idempotency: make(map[string]string), maxItems: 1000, listeners: make(map[uint64]func(domaincommand.Command))}
 }
 
 func (t *Tracker) Begin(deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) domaincommand.Command {
@@ -61,14 +65,33 @@ func (t *Tracker) BeginReplacing(deviceID, endpointID, capabilityID, propertyID 
 }
 
 func (t *Tracker) BeginAction(deviceID, endpointID, capabilityID, actionID string, parameters map[string]device.PropertyValue) domaincommand.Command {
+	command, _, _ := t.BeginActionIdempotent(deviceID, endpointID, capabilityID, actionID, parameters, "")
+	return command
+}
+
+func (t *Tracker) BeginActionIdempotent(deviceID, endpointID, capabilityID, actionID string, parameters map[string]device.PropertyValue, idempotencyKey string) (domaincommand.Command, bool, error) {
 	now := time.Now().UTC()
-	command := domaincommand.Command{ID: commandID(), Kind: domaincommand.KindAction, DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID, CommandID: actionID, Parameters: cloneParameters(parameters), Status: domaincommand.StatusQueued, CreatedAt: now, UpdatedAt: now, Deadline: now.Add(t.timeout)}
+	command := domaincommand.Command{ID: commandID(), Kind: domaincommand.KindAction, DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID, CommandID: actionID, Parameters: cloneParameters(parameters), IdempotencyKey: idempotencyKey, Status: domaincommand.StatusQueued, CreatedAt: now, UpdatedAt: now, Deadline: now.Add(t.timeout)}
 	t.mu.Lock()
+	if idempotencyKey != "" {
+		scope := actionIdempotencyScope(deviceID, endpointID, capabilityID, actionID, idempotencyKey)
+		if existingID, found := t.idempotency[scope]; found {
+			existing := t.commands[existingID]
+			t.mu.Unlock()
+			if !parameterMapsEqual(existing.Parameters, parameters) {
+				return domaincommand.Command{}, false, ErrIdempotencyConflict
+			}
+			return existing, true, nil
+		}
+	}
 	t.pruneLocked()
 	t.commands[command.ID] = command
+	if idempotencyKey != "" {
+		t.idempotency[actionIdempotencyScope(deviceID, endpointID, capabilityID, actionID, idempotencyKey)] = command.ID
+	}
 	t.mu.Unlock()
 	t.notify(command)
-	return command
+	return command, false, nil
 }
 
 func cloneParameters(parameters map[string]device.PropertyValue) map[string]device.PropertyValue {
@@ -98,7 +121,29 @@ func (t *Tracker) pruneLocked() {
 	}
 	if oldestID != "" {
 		delete(t.commands, oldestID)
+		for key, id := range t.idempotency {
+			if id == oldestID {
+				delete(t.idempotency, key)
+			}
+		}
 	}
+}
+
+func actionIdempotencyScope(deviceID, endpointID, capabilityID, actionID, key string) string {
+	return deviceID + "\x00" + endpointID + "\x00" + capabilityID + "\x00" + actionID + "\x00" + key
+}
+
+func parameterMapsEqual(left, right map[string]device.PropertyValue) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, value := range left {
+		other, ok := right[key]
+		if !ok || !valuesEqual(value, other) {
+			return false
+		}
+	}
+	return true
 }
 
 func (t *Tracker) Sent(id string)      { t.transition(id, domaincommand.StatusSent, "") }

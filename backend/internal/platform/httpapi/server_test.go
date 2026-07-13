@@ -308,6 +308,35 @@ func TestGenericCommandExecution(t *testing.T) {
 	}
 }
 
+func TestCommandIdempotencyKeyPreventsDuplicateExecution(t *testing.T) {
+	server := newTestServer()
+	execute := func(command, body, key string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/devices/virtual-switch-1/endpoints/main/capabilities/switch/commands/"+command, bytes.NewBufferString(body))
+		request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		request.Header.Set("Idempotency-Key", key)
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		return response
+	}
+	first := execute("toggle", `{}`, "toggle-once")
+	replay := execute("toggle", `{}`, "toggle-once")
+	var firstBody, replayBody struct {
+		Command struct {
+			ID string `json:"id"`
+		} `json:"command"`
+	}
+	_ = json.Unmarshal(first.Body.Bytes(), &firstBody)
+	_ = json.Unmarshal(replay.Body.Bytes(), &replayBody)
+	if first.Code != http.StatusOK || replay.Code != http.StatusOK || firstBody.Command.ID == "" || replayBody.Command.ID != firstBody.Command.ID || !bytes.Contains(replay.Body.Bytes(), []byte(`"bool":true`)) {
+		t.Fatalf("first = %s, replay = %s", first.Body.String(), replay.Body.String())
+	}
+	execute("set-power", `{"parameters":{"value":{"type":"bool","bool":true}}}`, "set-once")
+	conflict := execute("set-power", `{"parameters":{"value":{"type":"bool","bool":false}}}`, "set-once")
+	if conflict.Code != http.StatusConflict || !bytes.Contains(conflict.Body.Bytes(), []byte(`"code":"conflict"`)) {
+		t.Fatalf("conflict = %d %s", conflict.Code, conflict.Body.String())
+	}
+}
+
 func TestSimulateVirtualDevice(t *testing.T) {
 	server := newTestServer()
 	request := httptest.NewRequest(http.MethodPatch, "/api/v1/devices/virtual-temperature-1/simulation", bytes.NewBufferString(`{"online":false,"temperature":17.5}`))

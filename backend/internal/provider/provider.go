@@ -68,11 +68,12 @@ type PropertyWriter interface {
 }
 
 type CommandRequest struct {
-	DeviceID     string
-	EndpointID   string
-	CapabilityID string
-	CommandID    string
-	Parameters   map[string]device.PropertyValue
+	DeviceID       string
+	EndpointID     string
+	CapabilityID   string
+	CommandID      string
+	Parameters     map[string]device.PropertyValue
+	IdempotencyKey string
 }
 
 type CommandExecutor interface {

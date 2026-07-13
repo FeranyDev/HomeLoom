@@ -279,7 +279,7 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 
 - [x] 通用 Property Value，不限于 bool；
 - [x] Action/Command 参数；
-- [ ] Idempotency Key；
+- [x] Action Idempotency Key；
 - [ ] 同设备命令顺序队列；
 - [ ] 相同属性命令去重；
 - [ ] 后写命令取消旧命令；

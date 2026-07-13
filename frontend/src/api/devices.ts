@@ -31,8 +31,8 @@ export async function setDeviceProperty(id: string, endpointId: string, capabili
   return requestData<Device>(`/api/v1/devices/${encodeURIComponent(id)}/endpoints/${encodeURIComponent(endpointId)}/capabilities/${encodeURIComponent(capabilityId)}/properties/${encodeURIComponent(propertyId)}`, { method: 'PUT', body: JSON.stringify(value) })
 }
 
-export async function executeDeviceCommand(id: string, endpointId: string, capabilityId: string, commandId: string, parameters: Record<string, { type: string; bool?: boolean; number?: number; string?: string }>): Promise<Device> {
-  return requestData<Device>(`/api/v1/devices/${encodeURIComponent(id)}/endpoints/${encodeURIComponent(endpointId)}/capabilities/${encodeURIComponent(capabilityId)}/commands/${encodeURIComponent(commandId)}`, { method: 'POST', body: JSON.stringify({ parameters }) })
+export async function executeDeviceCommand(id: string, endpointId: string, capabilityId: string, commandId: string, parameters: Record<string, { type: string; bool?: boolean; number?: number; string?: string }>, idempotencyKey: string): Promise<Device> {
+	return requestData<Device>(`/api/v1/devices/${encodeURIComponent(id)}/endpoints/${encodeURIComponent(endpointId)}/capabilities/${encodeURIComponent(capabilityId)}/commands/${encodeURIComponent(commandId)}`, { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ parameters }) })
 }
 
 export async function simulateDevice(id: string, values: { online?: boolean; power?: boolean; temperature?: number; humidity?: number; contact?: boolean; motion?: boolean }): Promise<Device> {

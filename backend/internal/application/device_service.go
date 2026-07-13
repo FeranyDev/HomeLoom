@@ -268,10 +268,23 @@ func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointI
 }
 
 func (s *DeviceService) ExecuteCommand(ctx context.Context, request providersdk.CommandRequest) (device.Device, domaincommand.Command, error) {
+	if len(request.IdempotencyKey) > 128 {
+		return device.Device{}, domaincommand.Command{}, providersdk.ErrCommandInvalid
+	}
 	if err := s.validateCommand(request); err != nil {
 		return device.Device{}, domaincommand.Command{}, err
 	}
-	command := s.commands.BeginAction(request.DeviceID, request.EndpointID, request.CapabilityID, request.CommandID, request.Parameters)
+	command, replayed, err := s.commands.BeginActionIdempotent(request.DeviceID, request.EndpointID, request.CapabilityID, request.CommandID, request.Parameters, request.IdempotencyKey)
+	if err != nil {
+		return device.Device{}, domaincommand.Command{}, err
+	}
+	if replayed {
+		item, ok := s.registry.Get(request.DeviceID)
+		if !ok {
+			return device.Device{}, command, ErrDeviceNotFound
+		}
+		return item, command, nil
+	}
 	s.metrics.commandsStarted.Add(1)
 	s.commands.Sent(command.ID)
 	if s.executor == nil {
@@ -288,6 +301,7 @@ func (s *DeviceService) ExecuteCommand(ctx context.Context, request providersdk.
 		current, _ := s.commands.Get(command.ID)
 		return device.Device{}, current, err
 	}
+	s.registry.Upsert(item)
 	s.commands.Confirmed(command.ID)
 	s.metrics.commandsConfirmed.Add(1)
 	current, _ := s.commands.Get(command.ID)

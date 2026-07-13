@@ -12,6 +12,7 @@ import (
 
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/buildinfo"
+	commandtracker "github.com/feranydev/homeloom/backend/internal/command"
 	domaincommand "github.com/feranydev/homeloom/backend/internal/domain/command"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
@@ -557,7 +558,7 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 				return echo.NewHTTPError(http.StatusBadRequest, "invalid command parameters")
 			}
 		}
-		item, command, err := devices.ExecuteCommand(c.Request().Context(), providersdk.CommandRequest{DeviceID: c.Param("id"), EndpointID: c.Param("endpoint"), CapabilityID: c.Param("capability"), CommandID: c.Param("command"), Parameters: body.Parameters})
+		item, command, err := devices.ExecuteCommand(c.Request().Context(), providersdk.CommandRequest{DeviceID: c.Param("id"), EndpointID: c.Param("endpoint"), CapabilityID: c.Param("capability"), CommandID: c.Param("command"), Parameters: body.Parameters, IdempotencyKey: c.Request().Header.Get("Idempotency-Key")})
 		if errors.Is(err, application.ErrDeviceNotFound) {
 			return echo.NewHTTPError(http.StatusNotFound, "device not found")
 		}
@@ -566,6 +567,9 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		}
 		if errors.Is(err, providersdk.ErrCommandInvalid) {
 			return echo.NewHTTPError(http.StatusBadRequest, "invalid command parameters")
+		}
+		if errors.Is(err, commandtracker.ErrIdempotencyConflict) {
+			return echo.NewHTTPError(http.StatusConflict, "idempotency key was already used with different parameters")
 		}
 		if errors.Is(err, providersdk.ErrProviderUnavailable) {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "provider unavailable")

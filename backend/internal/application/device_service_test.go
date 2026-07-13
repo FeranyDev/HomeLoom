@@ -83,6 +83,28 @@ func TestDeviceServiceExecutesActionCommand(t *testing.T) {
 	if _, _, err := service.ExecuteCommand(context.Background(), providersdk.CommandRequest{DeviceID: "virtual-switch-1", EndpointID: "main", CapabilityID: "switch", CommandID: "set-power"}); !errors.Is(err, providersdk.ErrCommandInvalid) {
 		t.Fatalf("invalid error = %v", err)
 	}
+	request := providersdk.CommandRequest{DeviceID: "virtual-switch-1", EndpointID: "main", CapabilityID: "switch", CommandID: "toggle", IdempotencyKey: "toggle-once"}
+	_, first, err := service.ExecuteCommand(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, replay, err := service.ExecuteCommand(context.Background(), request)
+	if err != nil || replay.ID != first.ID || service.Metrics().CommandsStarted != 2 {
+		t.Fatalf("replay = %#v, %v, metrics = %#v", replay, err, service.Metrics())
+	}
+}
+
+func TestConcurrentIdempotentActionExecutesOnce(t *testing.T) {
+	service := application.NewDeviceService(virtual.NewProvider())
+	defer service.Close()
+	request := providersdk.CommandRequest{DeviceID: "virtual-switch-1", EndpointID: "main", CapabilityID: "switch", CommandID: "toggle", IdempotencyKey: "concurrent-toggle"}
+	ids := make(chan string, 20); errs := make(chan error, 20)
+	var group sync.WaitGroup
+	for range 20 { group.Add(1); go func() { defer group.Done(); _, command, err := service.ExecuteCommand(context.Background(), request); if err != nil { errs <- err; return }; ids <- command.ID }() }
+	group.Wait(); close(ids); close(errs)
+	for err := range errs { t.Fatal(err) }
+	unique := make(map[string]struct{}); for id := range ids { unique[id] = struct{}{} }
+	if len(unique) != 1 || service.Metrics().CommandsStarted != 1 { t.Fatalf("ids = %#v, metrics = %#v", unique, service.Metrics()) }
 }
 
 func TestSlowSubscriberDoesNotBlockCoreDispatcher(t *testing.T) {

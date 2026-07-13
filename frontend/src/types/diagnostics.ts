@@ -17,5 +17,6 @@ export interface CommandValue { type: string; bool?: boolean; number?: number; s
 export interface DeviceCommand {
   id: string; kind?: 'property' | 'action'; deviceId: string; endpointId: string; capabilityId: string; propertyId?: string; commandId?: string
   expected?: CommandValue; parameters?: Record<string, CommandValue>; status: 'queued' | 'sent' | 'accepted' | 'confirmed' | 'rejected' | 'timeout' | 'superseded'
+	idempotencyKey?: string
   error?: string; createdAt: string; updatedAt: string; deadline: string
 }

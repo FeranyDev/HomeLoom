@@ -121,3 +121,19 @@ func TestActionCommandLifecycle(t *testing.T) {
 		t.Fatalf("command = %#v", current)
 	}
 }
+
+func TestActionIdempotency(t *testing.T) {
+	tracker := NewTracker(time.Second)
+	parameters := map[string]device.PropertyValue{"value": device.BoolValue(true)}
+	first, replayed, err := tracker.BeginActionIdempotent("switch", "main", "switch", "set-power", parameters, "key-1")
+	if err != nil || replayed {
+		t.Fatalf("first = %#v, %v, %v", first, replayed, err)
+	}
+	second, replayed, err := tracker.BeginActionIdempotent("switch", "main", "switch", "set-power", parameters, "key-1")
+	if err != nil || !replayed || second.ID != first.ID {
+		t.Fatalf("second = %#v, %v, %v", second, replayed, err)
+	}
+	if _, _, err := tracker.BeginActionIdempotent("switch", "main", "switch", "set-power", map[string]device.PropertyValue{"value": device.BoolValue(false)}, "key-1"); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("conflict = %v", err)
+	}
+}
