@@ -9,6 +9,7 @@ export function ProviderForm({ provider, onCancel, onSave }: { provider: Provide
   const [config, setConfig] = useState(JSON.stringify(provider?.config ?? {}, null, 2))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const example = { latencyMs: 0, rejectWrites: false, devices: [{ id: 'living-room-light', name: '客厅灯', type: 'switch', online: true, power: false }, { id: 'living-room-temperature', name: '客厅温度', type: 'temperature-sensor', online: true, temperature: 23.6 }] }
   async function submit(event: React.FormEvent) {
     event.preventDefault(); let parsed: Record<string, unknown>
     try { parsed = JSON.parse(config) as Record<string, unknown>; if (!parsed || Array.isArray(parsed)) throw new Error() } catch { setError('扩展配置必须是 JSON 对象'); return }
@@ -16,7 +17,7 @@ export function ProviderForm({ provider, onCancel, onSave }: { provider: Provide
   }
   return <div className="modal-backdrop"><form className="target-form" onSubmit={(event) => void submit(event)}>
     <div className="form-heading"><div><p className="eyebrow">PROVIDER</p><h2>{provider ? '编辑 Provider' : '新建 Provider'}</h2></div><button type="button" onClick={onCancel}>关闭</button></div>
-    <div className="form-grid"><label>ID（留空自动生成）<input value={id} disabled={Boolean(provider)} onChange={(event) => setID(event.target.value)} placeholder="virtual-lab" /></label><label>名称<input value={name} onChange={(event) => setName(event.target.value)} placeholder="实验室虚拟设备" /></label><label className="wide">类型<select value={type} disabled={Boolean(provider)} onChange={(event) => setType(event.target.value)}><option value="virtual">Virtual</option></select></label><label className="wide">扩展配置（JSON）<textarea rows={7} value={config} onChange={(event) => setConfig(event.target.value)} spellCheck={false} /></label></div>
+    <div className="form-grid"><label>ID（留空自动生成）<input value={id} disabled={Boolean(provider)} onChange={(event) => setID(event.target.value)} placeholder="virtual-lab" /></label><label>名称<input value={name} onChange={(event) => setName(event.target.value)} placeholder="实验室虚拟设备" /></label><label className="wide">类型<select value={type} disabled={Boolean(provider)} onChange={(event) => setType(event.target.value)}><option value="virtual">Virtual</option></select></label><label className="wide config-editor"><span>扩展配置（JSON）</span><textarea rows={11} value={config} onChange={(event) => setConfig(event.target.value)} spellCheck={false} /><small>支持 switch、temperature-sensor；可配置 online、power、temperature、latencyMs 和 rejectWrites。</small><button type="button" className="example-button" onClick={() => setConfig(JSON.stringify(example, null, 2))}>载入双设备示例</button></label></div>
     <label className="enable-row"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />立即启用（无需重启服务）</label>
     {error && <p className="inline-error">{error}</p>}<div className="form-actions"><button type="button" onClick={onCancel}>取消</button><button className="primary" disabled={saving}>{saving ? '应用中…' : '保存并应用'}</button></div>
   </form></div>

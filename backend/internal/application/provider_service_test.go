@@ -32,7 +32,7 @@ func TestProviderServiceAppliesDisablesAndDeletes(t *testing.T) {
 	store := &providerStore{items: make(map[string]providerconfig.Config)}
 	factory := providersdk.NewFactory()
 	if err := factory.Register("virtual", func(item providerconfig.Config) (providersdk.Provider, error) {
-		return virtual.NewProviderWithIdentity(item.ID, item.Name), nil
+		return virtual.NewProviderFromConfig(item)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -61,8 +61,22 @@ func TestProviderServiceAppliesDisablesAndDeletes(t *testing.T) {
 }
 
 func TestProviderServiceValidatesConfiguration(t *testing.T) {
-	service := application.NewProviderService(nil, &providerStore{items: make(map[string]providerconfig.Config)}, providersdk.NewFactory(), nil)
+	store := &providerStore{items: make(map[string]providerconfig.Config)}
+	factory := providersdk.NewFactory()
+	if err := factory.Register("virtual", func(item providerconfig.Config) (providersdk.Provider, error) {
+		return virtual.NewProviderFromConfig(item)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime, _ := providermanager.New()
+	service := application.NewProviderService(nil, store, factory, runtime)
 	if _, err := service.Save(context.Background(), providerconfig.Config{ID: "bad id", Config: []byte(`[]`)}); err == nil {
 		t.Fatal("expected validation error")
+	}
+	if _, err := service.Save(context.Background(), providerconfig.Config{ID: "invalid", Type: "virtual", Config: []byte(`{"devices":[{"type":"unknown"}]}`)}); err == nil {
+		t.Fatal("expected provider-specific validation error")
+	}
+	if len(store.items) != 0 {
+		t.Fatal("invalid configuration reached durable storage")
 	}
 }

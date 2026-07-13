@@ -160,6 +160,17 @@ func (m *Manager) Apply(ctx context.Context, item providersdk.Provider) error {
 	m.mu.Unlock()
 	m.attach(id, created)
 	if old != nil {
+		if source, ok := old.provider.(providersdk.Discoverer); ok {
+			if previous, err := source.DiscoverDevices(ctx); err == nil {
+				for _, snapshot := range previous {
+					if _, retained := created.deviceIDs[snapshot.ID]; retained {
+						continue
+					}
+					snapshot.ProviderID, snapshot.Online = id, false
+					m.broadcast(snapshot)
+				}
+			}
+		}
 		if old.unsubscribe != nil {
 			old.unsubscribe()
 		}
@@ -270,6 +281,26 @@ func (m *Manager) WriteProperty(ctx context.Context, request providersdk.Propert
 	return item, nil
 }
 
+func (m *Manager) Simulate(ctx context.Context, request providersdk.SimulationRequest) (device.Device, error) {
+	m.mu.RLock()
+	id, ok := m.routes[request.DeviceID]
+	current := m.providers[id]
+	m.mu.RUnlock()
+	if !ok || current == nil {
+		return device.Device{}, providersdk.ErrDeviceNotFound
+	}
+	simulator, ok := current.provider.(providersdk.Simulator)
+	if !ok {
+		return device.Device{}, providersdk.ErrSimulationInvalid
+	}
+	item, err := simulator.Simulate(ctx, request)
+	if err != nil {
+		return device.Device{}, err
+	}
+	item.ProviderID = id
+	return item, nil
+}
+
 func (m *Manager) Subscribe(handler func(device.Device)) func() {
 	m.mu.Lock()
 	m.nextListener++
@@ -322,3 +353,4 @@ var _ providersdk.Discoverer = (*Manager)(nil)
 var _ providersdk.PropertyWriter = (*Manager)(nil)
 var _ providersdk.EventSubscriber = (*Manager)(nil)
 var _ providersdk.Inspector = (*Manager)(nil)
+var _ providersdk.Simulator = (*Manager)(nil)

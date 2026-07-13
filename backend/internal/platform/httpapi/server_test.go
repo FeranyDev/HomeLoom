@@ -1,13 +1,16 @@
 package httpapi
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
@@ -212,5 +215,71 @@ func TestGenericPropertyWrite(t *testing.T) {
 	newTestServer().Handler().ServeHTTP(unsupportedResponse, unsupported)
 	if unsupportedResponse.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d", unsupportedResponse.Code)
+	}
+}
+
+func TestSimulateVirtualDevice(t *testing.T) {
+	server := newTestServer()
+	request := httptest.NewRequest(http.MethodPatch, "/api/v1/devices/virtual-temperature-1/simulation", bytes.NewBufferString(`{"online":false,"temperature":17.5}`))
+	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"online":false`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"temperature":17.5`)) {
+		t.Fatalf("response = %d %s", response.Code, response.Body.String())
+	}
+	time.Sleep(20 * time.Millisecond)
+	devicesRequest := httptest.NewRequest(http.MethodGet, "/api/v1/devices", nil)
+	devicesResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(devicesResponse, devicesRequest)
+	if !bytes.Contains(devicesResponse.Body.Bytes(), []byte(`"temperature":17.5`)) {
+		t.Fatalf("registry was not updated: %s", devicesResponse.Body.String())
+	}
+	invalid := httptest.NewRequest(http.MethodPatch, "/api/v1/devices/virtual-temperature-1/simulation", bytes.NewBufferString(`{}`))
+	invalid.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	invalidResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(invalidResponse, invalid)
+	if invalidResponse.Code != http.StatusBadRequest {
+		t.Fatalf("invalid status = %d", invalidResponse.Code)
+	}
+}
+
+func TestDeviceEventStreamPublishesSnapshots(t *testing.T) {
+	httpServer := httptest.NewServer(newTestServer().Handler())
+	defer httpServer.Close()
+	request, _ := http.NewRequest(http.MethodGet, httpServer.URL+"/api/v1/events/devices", nil)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK || !strings.HasPrefix(response.Header.Get("Content-Type"), "text/event-stream") {
+		t.Fatalf("stream response = %d %q", response.StatusCode, response.Header.Get("Content-Type"))
+	}
+	scanner := bufio.NewScanner(response.Body)
+	if !scanner.Scan() || scanner.Text() != "event: ready" {
+		t.Fatalf("first stream line = %q", scanner.Text())
+	}
+	for scanner.Scan() {
+		if scanner.Text() == "" {
+			break
+		}
+	}
+	patch, _ := http.NewRequest(http.MethodPatch, httpServer.URL+"/api/v1/devices/virtual-switch-1/simulation", bytes.NewBufferString(`{"power":true}`))
+	patch.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	patchResponse, err := http.DefaultClient.Do(patch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patchResponse.Body.Close()
+	found := false
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "data: ") && strings.Contains(line, `"id":"virtual-switch-1"`) && strings.Contains(line, `"power":true`) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("device event not received: %v", scanner.Err())
 	}
 }

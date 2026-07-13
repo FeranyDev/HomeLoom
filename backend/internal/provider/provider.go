@@ -10,6 +10,8 @@ import (
 var (
 	ErrDeviceNotFound      = errors.New("device not found")
 	ErrPropertyUnsupported = errors.New("property unsupported")
+	ErrWriteRejected       = errors.New("provider rejected write")
+	ErrSimulationInvalid   = errors.New("invalid simulation request")
 )
 
 type Manifest struct {
@@ -51,6 +53,18 @@ type PropertyWriter interface {
 
 type EventSubscriber interface {
 	Subscribe(func(device.Device)) func()
+}
+
+// SimulationRequest changes ephemeral provider state. It is intended for
+// development providers and is never persisted as desired configuration.
+type SimulationRequest struct {
+	DeviceID   string
+	Online     *bool
+	Properties []PropertyWriteRequest
+}
+
+type Simulator interface {
+	Simulate(context.Context, SimulationRequest) (device.Device, error)
 }
 
 type RuntimeInfo struct {

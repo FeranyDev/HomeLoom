@@ -2,16 +2,19 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	domaintarget "github.com/feranydev/homeloom/backend/internal/domain/target"
+	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 )
@@ -23,6 +26,12 @@ type Server struct {
 
 type powerRequest struct {
 	Value *bool `json:"value"`
+}
+
+type simulationRequest struct {
+	Online      *bool    `json:"online"`
+	Power       *bool    `json:"power"`
+	Temperature *float64 `json:"temperature"`
 }
 
 type targetRequest struct {
@@ -96,6 +105,51 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		}
 		return c.JSON(http.StatusOK, map[string]any{"data": items})
 	})
+	e.GET("/api/v1/events/devices", func(c echo.Context) error {
+		response := c.Response()
+		response.Header().Set(echo.HeaderContentType, "text/event-stream")
+		response.Header().Set(echo.HeaderCacheControl, "no-cache")
+		response.Header().Set("X-Accel-Buffering", "no")
+		response.WriteHeader(http.StatusOK)
+		flusher, ok := response.Writer.(http.Flusher)
+		if !ok {
+			return echo.NewHTTPError(http.StatusInternalServerError, "streaming is unsupported")
+		}
+		events := make(chan device.Device, 16)
+		unsubscribe := devices.Subscribe(func(item device.Device) {
+			select {
+			case events <- item:
+			default:
+			}
+		})
+		defer unsubscribe()
+		if _, err := response.Write([]byte("event: ready\ndata: {}\n\n")); err != nil {
+			return nil
+		}
+		flusher.Flush()
+		heartbeat := time.NewTicker(15 * time.Second)
+		defer heartbeat.Stop()
+		for {
+			select {
+			case item := <-events:
+				payload, err := json.Marshal(item)
+				if err != nil {
+					continue
+				}
+				if _, err := fmt.Fprintf(response, "event: device\ndata: %s\n\n", payload); err != nil {
+					return nil
+				}
+				flusher.Flush()
+			case <-heartbeat.C:
+				if _, err := response.Write([]byte(": keepalive\n\n")); err != nil {
+					return nil
+				}
+				flusher.Flush()
+			case <-c.Request().Context().Done():
+				return nil
+			}
+		}
+	})
 	var providers *application.ProviderService
 	if len(providerServices) > 0 {
 		providers = providerServices[0]
@@ -136,6 +190,30 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 	})
 	e.GET("/api/v1/devices/:id/states", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"data": devices.States(c.Param("id"))})
+	})
+	e.PATCH("/api/v1/devices/:id/simulation", func(c echo.Context) error {
+		var input simulationRequest
+		if err := c.Bind(&input); err != nil || (input.Online == nil && input.Power == nil && input.Temperature == nil) {
+			return echo.NewHTTPError(http.StatusBadRequest, "at least one simulation value is required")
+		}
+		request := providersdk.SimulationRequest{DeviceID: c.Param("id"), Online: input.Online}
+		if input.Power != nil {
+			request.Properties = append(request.Properties, providersdk.PropertyWriteRequest{EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Value: device.BoolValue(*input.Power)})
+		}
+		if input.Temperature != nil {
+			request.Properties = append(request.Properties, providersdk.PropertyWriteRequest{EndpointID: "main", CapabilityID: "temperature", PropertyID: "current-temperature", Value: device.NumberValue(*input.Temperature)})
+		}
+		item, err := devices.Simulate(c.Request().Context(), request)
+		if errors.Is(err, application.ErrDeviceNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "device not found")
+		}
+		if errors.Is(err, application.ErrPropertyUnsupported) {
+			return echo.NewHTTPError(http.StatusUnprocessableEntity, "simulation is unsupported")
+		}
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "simulation failed").SetInternal(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": item})
 	})
 	e.GET("/api/v1/targets", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"data": targets.List()})

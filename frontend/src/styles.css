@@ -22,11 +22,13 @@ body::before {
 }
 
 main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80px; }
-.top-nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 72px; }
+.top-nav { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 72px; }
 .wordmark { color: #242722; font-size: 18px; font-weight: 700; letter-spacing: -.04em; text-decoration: none; }
 .top-nav div { display: flex; gap: 6px; padding: 4px; border: 1px solid #d3d1c8; border-radius: 24px; }
 .top-nav button { padding: 8px 16px; border: 0; border-radius: 18px; background: transparent; color: #777b73; cursor: pointer; }
 .top-nav button.is-active { background: #343931; color: #f7f5ee; }
+.live-indicator { padding: 5px 8px; border: 1px solid #d0b8a9; color: #8b6653; font-size: 10px; letter-spacing: .08em; }
+.live-indicator.is-live { border-color: #b4c6b4; color: #52705a; }
 .hero { display: flex; justify-content: space-between; align-items: end; padding: 0 0 72px; border-bottom: 1px solid #c9c7be; }
 .eyebrow { margin: 0 0 18px; color: #73786d; font-size: 12px; font-weight: 600; letter-spacing: .18em; }
 .hero h1 { margin: 0; max-width: 700px; font-size: clamp(54px, 8vw, 104px); line-height: .98; letter-spacing: -.055em; font-weight: 600; }
@@ -67,6 +69,15 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .provider-card .target-id { margin-top: 34px; }
 .capability-list { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 28px; }
 .capability-list span { padding: 5px 8px; background: #e4e5dd; color: #6b7067; font: 11px ui-monospace, monospace; }
+.simulation-panel { display: grid; gap: 10px; margin-top: 26px; padding-top: 18px; border-top: 1px solid #deddd6; }
+.simulation-panel > div:first-child { display: flex; justify-content: space-between; }
+.simulation-panel small { color: #92958e; font-size: 10px; }
+.simulation-device { display: grid; gap: 9px; padding: 11px; background: #ecebe4; }
+.simulation-name { display: grid; grid-template-columns: 10px 1fr auto; align-items: center; gap: 7px; }
+.simulation-name b { font-size: 13px; }
+.simulation-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.simulation-actions button, .simulation-actions input { min-width: 0; padding: 6px 8px; border: 1px solid #c4c5bd; background: #f7f6f0; color: #555a52; font-size: 11px; }
+.simulation-actions input { width: 72px; }
 .inline-error { color: #944f3f; font-size: 13px; }
 .config-note { display: grid; grid-template-columns: 120px 1fr; gap: 8px 20px; padding: 20px 26px; border: 1px dashed #bfc1b8; color: #757970; }
 .config-note strong { color: #3e433c; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
@@ -101,6 +112,8 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .form-grid .wide { grid-column: 1 / -1; }
 .form-grid input, .form-grid select, .form-grid textarea { width: 100%; padding: 11px; border: 1px solid #c9c8c0; background: #fbfaf6; color: #343831; font: inherit; }
 .form-grid textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.config-editor small { color: #92958e; line-height: 1.5; }
+.config-editor .example-button { justify-self: start; padding: 7px 10px; border: 1px solid #c5c6be; background: #ebeae3; color: #575c53; cursor: pointer; }
 .enable-row { display: flex; gap: 9px; margin: 22px 0; font-size: 14px; }
 .target-form fieldset { display: grid; gap: 8px; margin: 0; padding: 18px; border: 1px solid #cfcec6; }
 .target-form fieldset legend { padding: 0 7px; font-weight: 600; }

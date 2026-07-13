@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { listDevices, setDevicePower } from './api/devices'
+import { listDevices, setDevicePower, simulateDevice, subscribeDevices } from './api/devices'
 import { deleteTarget, listTargets, saveTarget } from './api/targets'
 import { deleteProvider, listProviders, saveProvider } from './api/providers'
 import { DeviceCard } from './components/DeviceCard'
@@ -23,6 +23,7 @@ export function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [pendingIds, setPendingIds] = useState<Set<string>>(new Set())
+  const [live, setLive] = useState(false)
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -42,10 +43,12 @@ export function App() {
   useEffect(() => {
     const controller = new AbortController()
     void refresh(controller.signal)
-    const timer = window.setInterval(() => void refresh(), 5000)
+    const timer = window.setInterval(() => void refresh(), 30000)
+    const unsubscribe = subscribeDevices((updated) => setDevices((current) => { const exists = current.some((item) => item.id === updated.id); return exists ? current.map((item) => item.id === updated.id ? updated : item) : [...current, updated] }), setLive)
     return () => {
       controller.abort()
       window.clearInterval(timer)
+      unsubscribe()
     }
   }, [refresh])
 
@@ -84,6 +87,7 @@ export function App() {
 	}
 	async function handleProviderSave(input: ProviderInput, editing: boolean) { await saveProvider(input, editing); setProviderForm({ open: false, provider: null }); await refresh() }
 	async function handleProviderDelete(provider: Provider) { if (!window.confirm(`确定删除“${provider.name}”吗？其设备将立即离线。`)) return; try { await deleteProvider(provider.id); await refresh() } catch (cause) { setError(cause instanceof Error ? cause.message : '删除 Provider 失败') } }
+	async function handleSimulation(device: Device, values: { online?: boolean; power?: boolean; temperature?: number }) { try { const updated = await simulateDevice(device.id, values); setDevices((current) => current.map((item) => item.id === updated.id ? updated : item)); setError(null) } catch (cause) { setError(cause instanceof Error ? cause.message : '模拟状态失败'); throw cause } }
 	const pageCopy = page === 'devices' ? { title: <>把家的状态<br />织在一起。</>, intro: '设备状态驻留内存，由 Provider 实时上报。', eyebrow: 'DEVICES', section: '设备中心' } : page === 'providers' ? { title: <>数据源，随时<br />接入或离开。</>, intro: 'Provider 配置存储于 SQLite，并可在线启停和替换。', eyebrow: 'PROVIDERS', section: 'Provider 管理' } : { title: <>一座桥，或<br />很多座桥。</>, intro: '按设备或平台拆分桥实例。每座桥拥有独立身份、端口、配对资料和二维码。', eyebrow: 'TARGETS', section: '桥接中心' }
 	const summary = page === 'devices' ? devices.filter((item) => item.online).length : page === 'providers' ? providers.filter((item) => item.status === 'running').length : targets.filter((item) => item.status === 'running').length
 
@@ -96,6 +100,7 @@ export function App() {
 	      <button className={page === 'providers' ? 'is-active' : ''} onClick={() => setPage('providers')}>Provider</button>
 	      <button className={page === 'targets' ? 'is-active' : ''} onClick={() => setPage('targets')}>桥接中心</button>
 	    </div>
+	    <span className={`live-indicator ${live ? 'is-live' : ''}`}>{live ? '实时' : '重连中'}</span>
 	  </nav>
       <header className="hero">
         <div>
@@ -127,7 +132,7 @@ export function App() {
               onPowerChange={(item, value) => void handlePowerChange(item, value)}
             />
           ))}
-		</section> : page === 'providers' ? <section className="provider-grid"><div className="config-note"><span>配置来源</span><strong>SQLite · providers</strong><p>保存后运行时立即应用；停用和修改均不需要重启 HomeLoom。</p></div>{providers.map((provider) => <ProviderCard key={provider.id} provider={provider} onEdit={(item) => setProviderForm({ open: true, provider: item })} onDelete={(item) => void handleProviderDelete(item)} />)}</section> : <section className="target-list">
+		</section> : page === 'providers' ? <section className="provider-grid"><div className="config-note"><span>配置来源</span><strong>SQLite · providers</strong><p>保存后运行时立即应用；模拟状态仅驻留内存，重启后按配置重建。</p></div>{providers.map((provider) => <ProviderCard key={provider.id} provider={provider} devices={devices.filter((item) => item.providerId === provider.id)} onEdit={(item) => setProviderForm({ open: true, provider: item })} onDelete={(item) => void handleProviderDelete(item)} onSimulate={handleSimulation} />)}</section> : <section className="target-list">
 		  <div className="config-note">
 		    <span>配置来源</span>
 		    <strong>SQLite · targets</strong>

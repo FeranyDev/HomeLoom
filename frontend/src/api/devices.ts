@@ -25,3 +25,17 @@ export async function setDevicePower(id: string, value: boolean): Promise<Device
   return (await parse<ApiResponse<Device>>(response)).data
 }
 
+export async function simulateDevice(id: string, values: { online?: boolean; power?: boolean; temperature?: number }): Promise<Device> {
+  const response = await fetch(`/api/v1/devices/${encodeURIComponent(id)}/simulation`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values),
+  })
+  return (await parse<ApiResponse<Device>>(response)).data
+}
+
+export function subscribeDevices(onDevice: (device: Device) => void, onConnection?: (connected: boolean) => void): () => void {
+  const source = new EventSource('/api/v1/events/devices')
+  source.addEventListener('ready', () => onConnection?.(true))
+  source.addEventListener('device', (event) => { try { onDevice(JSON.parse(event.data) as Device) } catch { /* ignore malformed stream events */ } })
+  source.onerror = () => onConnection?.(false)
+  return () => source.close()
+}

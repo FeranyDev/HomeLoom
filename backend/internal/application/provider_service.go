@@ -114,6 +114,12 @@ func (s *ProviderService) Save(ctx context.Context, item providerconfig.Config) 
 	if s.store == nil || s.factory == nil || s.runtime == nil {
 		return ProviderInfo{}, errors.New("provider management is unavailable")
 	}
+	// Construct even disabled providers so type-specific configuration is
+	// rejected before an invalid desired state reaches durable storage.
+	instance, err := s.factory.Create(item)
+	if err != nil {
+		return ProviderInfo{}, err
+	}
 	s.mu.RLock()
 	previous, existed := s.configs[item.ID]
 	s.mu.RUnlock()
@@ -124,10 +130,6 @@ func (s *ProviderService) Save(ctx context.Context, item providerconfig.Config) 
 	s.configs[item.ID] = item
 	s.mu.Unlock()
 	if item.Enabled {
-		instance, err := s.factory.Create(item)
-		if err != nil {
-			return ProviderInfo{}, err
-		}
 		if err := s.runtime.Apply(ctx, instance); err != nil {
 			return ProviderInfo{}, err
 		}

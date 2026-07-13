@@ -45,7 +45,7 @@ func main() {
 	}
 	factory := providersdk.NewFactory()
 	if err := factory.Register("virtual", func(config providerconfig.Config) (providersdk.Provider, error) {
-		return virtual.NewProviderWithIdentity(config.ID, config.Name), nil
+		return virtual.NewProviderFromConfig(config)
 	}); err != nil {
 		logger.Error("provider factory registration failed", "error", err)
 		os.Exit(1)

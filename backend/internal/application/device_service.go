@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -112,6 +113,21 @@ func (s *DeviceService) ProviderInfos() []providersdk.RuntimeInfo {
 		return inspector.ProviderInfos()
 	}
 	return []providersdk.RuntimeInfo{{Manifest: s.provider.Manifest(), Capabilities: s.provider.Capabilities(), Status: "running"}}
+}
+
+func (s *DeviceService) Simulate(ctx context.Context, request providersdk.SimulationRequest) (device.Device, error) {
+	simulator, ok := s.provider.(providersdk.Simulator)
+	if !ok {
+		return device.Device{}, ErrPropertyUnsupported
+	}
+	item, err := simulator.Simulate(ctx, request)
+	if errors.Is(err, providersdk.ErrDeviceNotFound) {
+		return device.Device{}, ErrDeviceNotFound
+	}
+	if errors.Is(err, providersdk.ErrSimulationInvalid) {
+		return device.Device{}, ErrPropertyUnsupported
+	}
+	return item, err
 }
 
 func (s *DeviceService) Metrics() DeviceMetrics {
