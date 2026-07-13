@@ -75,6 +75,14 @@ func (s *Store) Close() error {
 	return s.database.Close()
 }
 
+func (s *Store) HealthCheck(ctx context.Context) error {
+	defer s.observe(time.Now())
+	if err := s.database.PingContext(ctx); err != nil {
+		return fmt.Errorf("check database health: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) SchemaVersion(ctx context.Context) (int, error) {
 	defer s.observe(time.Now())
 	var version int

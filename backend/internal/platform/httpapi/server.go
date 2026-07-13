@@ -153,7 +153,12 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 	e.GET("/ready", func(c echo.Context) error {
-		return c.JSON(http.StatusOK, map[string]string{"status": "ready"})
+		readiness := devices.Readiness(c.Request().Context())
+		status := http.StatusOK
+		if !readiness.Ready {
+			status = http.StatusServiceUnavailable
+		}
+		return c.JSON(status, map[string]any{"status": map[bool]string{true: "ready", false: "not_ready"}[readiness.Ready], "checks": readiness})
 	})
 	e.GET("/api/v1/system/version", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"data": buildinfo.Current()})
@@ -178,6 +183,7 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		writeMetric("commands_rejected_total", metrics.CommandsRejected)
 		writeMetric("commands_timed_out_total", metrics.CommandsTimedOut)
 		writeMetric("commands_superseded_total", metrics.CommandsSuperseded)
+		writeMetric("homekit_pushes_total", metrics.HomeKitPushes)
 		writeMetric("devices_online", metrics.OnlineDevices)
 		writeMetric("devices_offline", metrics.OfflineDevices)
 		writeMetric("providers_running", metrics.ProvidersRunning)

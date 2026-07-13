@@ -81,7 +81,9 @@ func TestAccessoryBindingsUpdateTemperatureAndOfflineFault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bindings.update(updated)
+	if pushes := bindings.update(updated); pushes != 2 {
+		t.Fatalf("temperature pushes = %d, want fault + value", pushes)
+	}
 	if value := bindings.temperatures[updated.ID].Value(); value != 0 {
 		t.Fatalf("clamped temperature = %v", value)
 	}
@@ -90,7 +92,9 @@ func TestAccessoryBindingsUpdateTemperatureAndOfflineFault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bindings.update(updated)
+	if pushes := bindings.update(updated); pushes != 1 {
+		t.Fatalf("offline pushes = %d, want fault only", pushes)
+	}
 	if fault := bindings.faults[updated.ID].Value(); fault != characteristic.StatusFaultGeneralFault {
 		t.Fatalf("fault = %d", fault)
 	}

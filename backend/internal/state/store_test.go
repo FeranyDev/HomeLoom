@@ -1,6 +1,7 @@
 package state
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -18,6 +19,26 @@ func TestApplyRejectsOlderSequenceFromSameProvider(t *testing.T) {
 	}
 	if current.Value.Bool == nil || !*current.Value.Bool {
 		t.Fatal("current state was replaced")
+	}
+}
+
+func BenchmarkStoreReadFiveHundredDevices(b *testing.B) {
+	store := NewStore()
+	now := time.Now().UTC()
+	for index := 0; index < 500; index++ {
+		deviceID := fmt.Sprintf("device-%03d", index)
+		store.Apply(domainstate.StateValue{
+			Key:   domainstate.Key{DeviceID: deviceID, EndpointID: "main", CapabilityID: "switch", PropertyID: "power"},
+			Value: domainstate.BoolValue(true), ProviderID: "benchmark", ObservedAt: now, ReceivedAt: now, Quality: domainstate.QualityReported,
+		})
+	}
+	b.ResetTimer()
+	for iteration := 0; iteration < b.N; iteration++ {
+		for index := 0; index < 500; index++ {
+			if values := store.Device(fmt.Sprintf("device-%03d", index)); len(values) != 1 {
+				b.Fatalf("device %d state count = %d", index, len(values))
+			}
+		}
 	}
 }
 

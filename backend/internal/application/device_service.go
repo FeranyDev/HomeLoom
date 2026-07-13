@@ -49,6 +49,16 @@ type DatabaseMetricsProvider interface {
 	DatabaseOperationMetrics() (operations uint64, average time.Duration, maximum time.Duration)
 }
 
+type DatabaseHealthProvider interface {
+	HealthCheck(context.Context) error
+}
+
+type Readiness struct {
+	Ready    bool   `json:"ready"`
+	Database string `json:"database"`
+	Error    string `json:"error,omitempty"`
+}
+
 type deviceSubscription struct {
 	queue chan device.Device
 	done  chan struct{}
@@ -71,6 +81,7 @@ type deviceMetrics struct {
 	commandsRejected    atomic.Uint64
 	commandsTimedOut    atomic.Uint64
 	commandsSuperseded  atomic.Uint64
+	homeKitPushes       atomic.Uint64
 }
 
 type DeviceMetrics struct {
@@ -87,6 +98,7 @@ type DeviceMetrics struct {
 	CommandsRejected         uint64  `json:"commandsRejected"`
 	CommandsTimedOut         uint64  `json:"commandsTimedOut"`
 	CommandsSuperseded       uint64  `json:"commandsSuperseded"`
+	HomeKitPushes            uint64  `json:"homeKitPushes"`
 	OnlineDevices            int     `json:"onlineDevices"`
 	OfflineDevices           int     `json:"offlineDevices"`
 	ProvidersRunning         int     `json:"providersRunning"`
@@ -103,6 +115,20 @@ type DeviceMetrics struct {
 	Goroutines               int     `json:"goroutines"`
 	HeapAllocBytes           uint64  `json:"heapAllocBytes"`
 	HeapObjects              uint64  `json:"heapObjects"`
+}
+
+func (s *DeviceService) Readiness(ctx context.Context) Readiness {
+	result := Readiness{Ready: true, Database: "ok"}
+	if checker, ok := s.storageMetrics.(DatabaseHealthProvider); ok {
+		if err := checker.HealthCheck(ctx); err != nil {
+			result.Ready, result.Database, result.Error = false, "unavailable", "database health check failed"
+		}
+	}
+	return result
+}
+
+func (s *DeviceService) RecordHomeKitPushes(count uint64) {
+	s.metrics.homeKitPushes.Add(count)
 }
 
 func NewDeviceService(provider providersdk.Provider, storageMetrics ...DatabaseMetricsProvider) *DeviceService {
@@ -218,6 +244,7 @@ func (s *DeviceService) Metrics() DeviceMetrics {
 		TargetEventsDropped: s.metrics.targetEventsDropped.Load(), StateEventsDropped: s.metrics.stateEventsDropped.Load(), StatesMarkedStale: s.metrics.statesMarkedStale.Load(),
 		CommandsStarted: s.metrics.commandsStarted.Load(), CommandsConfirmed: s.metrics.commandsConfirmed.Load(),
 		CommandsRejected: s.metrics.commandsRejected.Load(), CommandsTimedOut: s.metrics.commandsTimedOut.Load(), CommandsSuperseded: s.metrics.commandsSuperseded.Load(),
+		HomeKitPushes: s.metrics.homeKitPushes.Load(),
 		OnlineDevices: online, OfflineDevices: len(items) - online, ProvidersRunning: providersRunning, ProviderRetries: providerRetries, DeviceSubscribers: subscribers, StateSubscribers: stateSubscribers,
 		CommandAverageLatencyMS: averageLatency,
 		EventAverageLatencyMS:   float64(eventStats.AverageLatency.Nanoseconds()) / float64(time.Millisecond), EventMaxLatencyMS: float64(eventStats.MaxLatency.Nanoseconds()) / float64(time.Millisecond), SlowEventHandlers: eventStats.SlowHandlers,

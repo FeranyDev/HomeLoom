@@ -4,6 +4,7 @@ export interface Diagnostics {
   statesMarkedStale: number; commandsStarted: number; commandsConfirmed: number
   commandsRejected: number; commandsTimedOut: number
   commandsSuperseded: number
+	homeKitPushes: number
   onlineDevices: number; offlineDevices: number; providersRunning: number; deviceSubscribers: number; stateSubscribers: number
   providerRetries: number
   commandAverageLatencyMs: number

@@ -15,7 +15,8 @@ paths:
     get:
       operationId: ready
       responses:
-        "200": { description: Process startup completed, content: { application/json: { schema: { $ref: "#/components/schemas/Status" } } } }
+        "200": { description: Required dependencies are available, content: { application/json: { schema: { $ref: "#/components/schemas/Readiness" } } } }
+        "503": { description: A required dependency is unavailable, content: { application/json: { schema: { $ref: "#/components/schemas/Readiness" } } } }
   /api/v1/system/version:
     get:
       operationId: getVersion
@@ -143,6 +144,18 @@ components:
       type: object
       required: [status]
       properties: { status: { type: string } }
+    Readiness:
+      type: object
+      required: [status, checks]
+      properties:
+        status: { type: string, enum: [ready, not_ready] }
+        checks:
+          type: object
+          required: [ready, database]
+          properties:
+            ready: { type: boolean }
+            database: { type: string, enum: [ok, unavailable] }
+            error: { type: string }
     ObjectResponse:
       type: object
       required: [data]

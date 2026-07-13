@@ -25,6 +25,14 @@ type apiProviderStore struct {
 	items map[string]providerconfig.Config
 }
 
+type unavailableDatabase struct{}
+
+func (unavailableDatabase) DatabaseOperationMetrics() (uint64, time.Duration, time.Duration) {
+	return 0, 0, 0
+}
+
+func (unavailableDatabase) HealthCheck(context.Context) error { return context.Canceled }
+
 func (s *apiProviderStore) ListProviders(context.Context) ([]providerconfig.Config, error) {
 	return nil, nil
 }
@@ -78,6 +86,25 @@ func TestVersionEndpoint(t *testing.T) {
 		if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(expected)) {
 			t.Fatalf("response = %d %s", response.Code, response.Body.String())
 		}
+	}
+}
+
+func TestReadinessReflectsDatabaseHealth(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	targets := application.NewTargetService(nil, nil)
+	healthy := NewServer(":0", application.NewDeviceService(virtual.NewProvider()), targets, logger)
+	request := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	response := httptest.NewRecorder()
+	healthy.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"status":"ready"`)) {
+		t.Fatalf("healthy readiness = %d %s", response.Code, response.Body.String())
+	}
+
+	unavailable := NewServer(":0", application.NewDeviceService(virtual.NewProvider(), unavailableDatabase{}), targets, logger)
+	response = httptest.NewRecorder()
+	unavailable.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable || !bytes.Contains(response.Body.Bytes(), []byte(`"database":"unavailable"`)) {
+		t.Fatalf("unavailable readiness = %d %s", response.Code, response.Body.String())
 	}
 }
 
@@ -185,7 +212,7 @@ func TestDiagnosticsAndPrometheusMetrics(t *testing.T) {
 			t.Fatalf("metrics missing device counts: %s", response.Body.String())
 		}
 		if path == "/metrics" {
-			for _, name := range []string{"homeloom_event_average_latency_milliseconds", "homeloom_slow_event_handlers_total", "homeloom_database_operations_total"} {
+			for _, name := range []string{"homeloom_event_average_latency_milliseconds", "homeloom_slow_event_handlers_total", "homeloom_database_operations_total", "homeloom_homekit_pushes_total"} {
 				if !bytes.Contains(response.Body.Bytes(), []byte(name)) {
 					t.Fatalf("metrics missing %s: %s", name, response.Body.String())
 				}

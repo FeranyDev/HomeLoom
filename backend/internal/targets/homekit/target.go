@@ -153,21 +153,25 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 	return bindings
 }
 
-func (b *accessoryBindings) update(item device.Device) {
+func (b *accessoryBindings) update(item device.Device) uint64 {
 	fault, exists := b.faults[item.ID]
 	if !exists {
-		return
+		return 0
 	}
+	var pushes uint64
 	if !item.Online {
 		_ = fault.SetValue(characteristic.StatusFaultGeneralFault)
-		return
+		return 1
 	}
 	_ = fault.SetValue(characteristic.StatusFaultNoFault)
+	pushes++
 	if current, ok := b.switches[item.ID]; ok {
 		if property, found := item.Property("main", "switch", "power"); found && property.Value.Bool != nil {
 			current.SetValue(*property.Value.Bool)
+			pushes++
 			if inUse, exists := b.outletInUse[item.ID]; exists {
 				inUse.SetValue(*property.Value.Bool)
+				pushes++
 			}
 		}
 	}
@@ -181,11 +185,13 @@ func (b *accessoryBindings) update(item device.Device) {
 				value = 100
 			}
 			current.SetValue(value)
+			pushes++
 		}
 	}
 	if current, ok := b.humidities[item.ID]; ok {
 		if property, found := item.Property("main", "humidity", "current-humidity"); found && property.Value.Number != nil {
 			current.SetValue(*property.Value.Number)
+			pushes++
 		}
 	}
 	if current, ok := b.contacts[item.ID]; ok {
@@ -195,13 +201,16 @@ func (b *accessoryBindings) update(item device.Device) {
 				value = characteristic.ContactSensorStateContactDetected
 			}
 			_ = current.SetValue(value)
+			pushes++
 		}
 	}
 	if current, ok := b.motions[item.ID]; ok {
 		if property, found := item.Property("main", "motion", "motion-detected"); found && property.Value.Bool != nil {
 			current.SetValue(*property.Value.Bool)
+			pushes++
 		}
 	}
+	return pushes
 }
 
 func assignPersistentIIDs(ctx context.Context, targetID, deviceID string, a *accessory.A, store AccessoryIdentityStore) error {
@@ -289,7 +298,7 @@ func New(ctx context.Context, config Config, devices *application.DeviceService,
 		pairing: PairingInfo{Code: formatPin(config.Pin), SetupURI: setupURI, QR: qr, Devices: append([]string(nil), config.DeviceIDs...)},
 	}
 	target.cancelSubscription = devices.Subscribe(func(item device.Device) {
-		bindings.update(item)
+		devices.RecordHomeKitPushes(bindings.update(item))
 	})
 	return target, nil
 }

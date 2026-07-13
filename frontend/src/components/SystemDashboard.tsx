@@ -13,6 +13,7 @@ export function SystemDashboard({ diagnostics, commands }: { diagnostics: Diagno
 	['平均命令耗时', `${diagnostics.commandAverageLatencyMs.toFixed(1)}ms`],
 	['Provider 重试', diagnostics.providerRetries],
 	['被替代命令', diagnostics.commandsSuperseded],
+	['HomeKit 推送', diagnostics.homeKitPushes],
 	['Goroutine', diagnostics.goroutines],
 	['Go Heap', megabytes(diagnostics.heapAllocBytes)],
 	['Heap 对象', diagnostics.heapObjects],
