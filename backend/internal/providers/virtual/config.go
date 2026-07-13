@@ -17,6 +17,9 @@ type DeviceConfig struct {
 	Online      *bool    `json:"online,omitempty"`
 	Power       *bool    `json:"power,omitempty"`
 	Temperature *float64 `json:"temperature,omitempty"`
+	Humidity    *float64 `json:"humidity,omitempty"`
+	Contact     *bool    `json:"contact,omitempty"`
+	Motion      *bool    `json:"motion,omitempty"`
 }
 
 type Config struct {
@@ -65,12 +68,19 @@ func configuredDevice(providerID string, item DeviceConfig) (device.Device, erro
 		online = *item.Online
 	}
 	switch item.Type {
-	case "switch":
+	case "switch", "lightbulb", "outlet":
 		power := false
 		if item.Power != nil {
 			power = *item.Power
 		}
-		return switchDevice(item.ID, providerID, item.Name, online, power), nil
+		deviceType := device.TypeSwitch
+		if item.Type == "lightbulb" {
+			deviceType = device.TypeLightbulb
+		}
+		if item.Type == "outlet" {
+			deviceType = device.TypeOutlet
+		}
+		return poweredDevice(item.ID, providerID, item.Name, deviceType, online, power), nil
 	case "temperature-sensor":
 		temperature := 23.6
 		if item.Temperature != nil {
@@ -80,6 +90,27 @@ func configuredDevice(providerID string, item DeviceConfig) (device.Device, erro
 			return device.Device{}, fmt.Errorf("device %q temperature is outside -100..200", item.ID)
 		}
 		return temperatureDevice(item.ID, providerID, item.Name, online, temperature), nil
+	case "humidity-sensor":
+		humidity := 50.0
+		if item.Humidity != nil {
+			humidity = *item.Humidity
+		}
+		if humidity < 0 || humidity > 100 {
+			return device.Device{}, fmt.Errorf("device %q humidity is outside 0..100", item.ID)
+		}
+		return humidityDevice(item.ID, providerID, item.Name, online, humidity), nil
+	case "contact-sensor":
+		value := false
+		if item.Contact != nil {
+			value = *item.Contact
+		}
+		return booleanSensorDevice(item.ID, providerID, item.Name, device.TypeContactSensor, "contact", "contact-sensor", "contact-detected", "接触状态", online, value), nil
+	case "motion-sensor":
+		value := false
+		if item.Motion != nil {
+			value = *item.Motion
+		}
+		return booleanSensorDevice(item.ID, providerID, item.Name, device.TypeMotionSensor, "motion", "motion-sensor", "motion-detected", "活动状态", online, value), nil
 	default:
 		return device.Device{}, fmt.Errorf("device %q has unsupported type %q", item.ID, item.Type)
 	}

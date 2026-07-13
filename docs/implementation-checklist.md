@@ -352,11 +352,11 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 
 ### 8.2 待支持
 
-- [ ] Outlet；
-- [ ] Lightbulb；
-- [ ] Humidity Sensor；
-- [ ] Contact Sensor；
-- [ ] Motion Sensor；
+- [x] Outlet；
+- [x] Lightbulb；
+- [x] Humidity Sensor；
+- [x] Contact Sensor；
+- [x] Motion Sensor；
 - [ ] Fan；
 - [ ] Air Purifier；
 - [ ] Filter Maintenance；

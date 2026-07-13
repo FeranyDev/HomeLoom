@@ -9,6 +9,7 @@ import (
 	"github.com/brutella/hap/characteristic"
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
+	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
 )
@@ -126,5 +127,35 @@ func TestPersistentIIDsSurviveAccessoryRebuildAndNewCharacteristic(t *testing.T)
 	}
 	if newCharacteristic.Id <= uint64(len(existing)) {
 		t.Fatalf("new characteristic IID %d was not appended", newCharacteristic.Id)
+	}
+}
+
+func TestAccessoryBindingsMapSupportedDeviceTypes(t *testing.T) {
+	provider, err := virtual.NewProviderFromConfig(providerconfig.Config{ID: "room", Name: "Room", Config: []byte(`{"devices":[{"id":"plain","type":"switch"},{"id":"lamp","type":"lightbulb","power":true},{"id":"socket","type":"outlet","power":true},{"id":"temp","type":"temperature-sensor"},{"id":"humidity","type":"humidity-sensor","humidity":42.5},{"id":"door","type":"contact-sensor","contact":true},{"id":"motion","type":"motion-sensor","motion":true}]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := application.NewDeviceService(provider)
+	defer service.Close()
+	items, _ := service.List(context.Background())
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	bindings := newAccessoryBindings(items, map[string]bool{}, nil, service, logger)
+	if len(bindings.accessories) != 7 || len(bindings.switches) != 3 || len(bindings.outletInUse) != 1 || len(bindings.temperatures) != 1 || len(bindings.humidities) != 1 || len(bindings.contacts) != 1 || len(bindings.motions) != 1 {
+		t.Fatalf("bindings = %#v", bindings)
+	}
+	if !bindings.switches["lamp"].Value() || !bindings.outletInUse["socket"].Value() {
+		t.Fatal("initial powered values were not mapped")
+	}
+	if bindings.humidities["humidity"].Value() != 42.5 || bindings.contacts["door"].Value() != characteristic.ContactSensorStateContactDetected || !bindings.motions["motion"].Value() {
+		t.Fatal("sensor values were not mapped")
+	}
+	off := false
+	updated, err := service.Simulate(context.Background(), providersdk.SimulationRequest{DeviceID: "socket", Properties: []providersdk.PropertyWriteRequest{{EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Value: device.BoolValue(off)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindings.update(updated)
+	if bindings.switches["socket"].Value() || bindings.outletInUse["socket"].Value() {
+		t.Fatal("outlet power was not updated")
 	}
 }

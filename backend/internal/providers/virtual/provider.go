@@ -68,16 +68,16 @@ func defaultDevices(id string) map[string]device.Device {
 	switchID := prefix + "-switch-1"
 	temperatureID := prefix + "-temperature-1"
 	return map[string]device.Device{
-		switchID:      switchDevice(switchID, id, "客厅开关", true, false),
+		switchID:      poweredDevice(switchID, id, "客厅开关", device.TypeSwitch, true, false),
 		temperatureID: temperatureDevice(temperatureID, id, "客厅温度", true, 23.6),
 	}
 }
 
-func switchDevice(id, providerID, name string, online, power bool) device.Device {
+func poweredDevice(id, providerID, name string, deviceType device.Type, online, power bool) device.Device {
 	return device.Device{ID: id, ProviderID: providerID, Name: name,
-		Type: device.TypeSwitch, Online: online, State: device.State{Power: &power}, LastUpdateAt: time.Now().UTC(),
+		Type: deviceType, Online: online, State: device.State{Power: &power}, LastUpdateAt: time.Now().UTC(),
 		Endpoints: []device.Endpoint{{
-			ID: "main", Name: "主端点", Type: "switch",
+			ID: "main", Name: "主端点", Type: string(deviceType),
 			Capabilities: []device.Capability{{ID: "switch", Type: "switch", Properties: []device.Property{{
 				Definition: device.PropertyDefinition{ID: "power", Name: "开关", Type: device.ValueTypeBool, Readable: true, Writable: true, Notifiable: true, StaleAfterSeconds: 15},
 				Value:      device.BoolValue(power),
@@ -98,6 +98,15 @@ func temperatureDevice(id, providerID, name string, online bool, temperature flo
 			}}}},
 		}},
 	}
+}
+
+func humidityDevice(id, providerID, name string, online bool, humidity float64) device.Device {
+	minimum, maximum, step := 0.0, 100.0, 0.1
+	return device.Device{ID: id, ProviderID: providerID, Name: name, Type: device.TypeHumiditySensor, Online: online, LastUpdateAt: time.Now().UTC(), Endpoints: []device.Endpoint{{ID: "main", Name: "主端点", Type: "sensor", Capabilities: []device.Capability{{ID: "humidity", Type: "humidity-sensor", Properties: []device.Property{{Definition: device.PropertyDefinition{ID: "current-humidity", Name: "当前湿度", Type: device.ValueTypeNumber, Unit: "percent", Readable: true, Notifiable: true, Min: &minimum, Max: &maximum, Step: &step, StaleAfterSeconds: 30}, Value: device.NumberValue(humidity)}}}}}}}
+}
+
+func booleanSensorDevice(id, providerID, name string, deviceType device.Type, capabilityID, capabilityType, propertyID, propertyName string, online, value bool) device.Device {
+	return device.Device{ID: id, ProviderID: providerID, Name: name, Type: deviceType, Online: online, LastUpdateAt: time.Now().UTC(), Endpoints: []device.Endpoint{{ID: "main", Name: "主端点", Type: "sensor", Capabilities: []device.Capability{{ID: capabilityID, Type: capabilityType, Properties: []device.Property{{Definition: device.PropertyDefinition{ID: propertyID, Name: propertyName, Type: device.ValueTypeBool, Readable: true, Notifiable: true, StaleAfterSeconds: 30}, Value: device.BoolValue(value)}}}}}}}
 }
 
 func (p *Provider) List(context.Context) ([]device.Device, error) {
@@ -131,7 +140,7 @@ func (p *Provider) SetPower(ctx context.Context, id string, power bool) (device.
 		p.mu.Unlock()
 		return device.Device{}, providersdk.ErrDeviceNotFound
 	}
-	if item.Type != device.TypeSwitch {
+	if item.Type != device.TypeSwitch && item.Type != device.TypeLightbulb && item.Type != device.TypeOutlet {
 		p.mu.Unlock()
 		return device.Device{}, providersdk.ErrPropertyUnsupported
 	}
@@ -167,7 +176,7 @@ func (p *Provider) Simulate(_ context.Context, request providersdk.SimulationReq
 	}
 	for _, change := range request.Properties {
 		switch {
-		case change.EndpointID == "main" && change.CapabilityID == "switch" && change.PropertyID == "power" && change.Value.Type == device.ValueTypeBool && change.Value.Bool != nil && item.Type == device.TypeSwitch:
+		case change.EndpointID == "main" && change.CapabilityID == "switch" && change.PropertyID == "power" && change.Value.Type == device.ValueTypeBool && change.Value.Bool != nil && (item.Type == device.TypeSwitch || item.Type == device.TypeLightbulb || item.Type == device.TypeOutlet):
 			value := *change.Value.Bool
 			item.State.Power = &value
 			item.SetProperty("main", "switch", "power", device.BoolValue(value))
@@ -179,6 +188,17 @@ func (p *Provider) Simulate(_ context.Context, request providersdk.SimulationReq
 			}
 			item.State.Temperature = &value
 			item.SetProperty("main", "temperature", "current-temperature", device.NumberValue(value))
+		case change.EndpointID == "main" && change.CapabilityID == "humidity" && change.PropertyID == "current-humidity" && change.Value.Type == device.ValueTypeNumber && change.Value.Number != nil && item.Type == device.TypeHumiditySensor:
+			value := *change.Value.Number
+			if value < 0 || value > 100 {
+				p.mu.Unlock()
+				return device.Device{}, providersdk.ErrSimulationInvalid
+			}
+			item.SetProperty("main", "humidity", "current-humidity", device.NumberValue(value))
+		case change.EndpointID == "main" && change.CapabilityID == "contact" && change.PropertyID == "contact-detected" && change.Value.Type == device.ValueTypeBool && change.Value.Bool != nil && item.Type == device.TypeContactSensor:
+			item.SetProperty("main", "contact", "contact-detected", device.BoolValue(*change.Value.Bool))
+		case change.EndpointID == "main" && change.CapabilityID == "motion" && change.PropertyID == "motion-detected" && change.Value.Type == device.ValueTypeBool && change.Value.Bool != nil && item.Type == device.TypeMotionSensor:
+			item.SetProperty("main", "motion", "motion-detected", device.BoolValue(*change.Value.Bool))
 		default:
 			p.mu.Unlock()
 			return device.Device{}, providersdk.ErrSimulationInvalid

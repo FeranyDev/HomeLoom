@@ -55,6 +55,41 @@ func TestProviderUsesDatabaseDeviceConfiguration(t *testing.T) {
 	}
 }
 
+func TestProviderSupportsLightbulbAndOutlet(t *testing.T) {
+	provider, err := NewProviderFromConfig(providerconfig.Config{ID: "virtual-room", Name: "Room", Config: []byte(`{"devices":[{"id":"lamp","type":"lightbulb","power":true},{"id":"socket","type":"outlet","power":false}]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, _ := provider.List(context.Background())
+	if len(items) != 2 || items[0].Type != device.TypeLightbulb || items[1].Type != device.TypeOutlet {
+		t.Fatalf("items = %#v", items)
+	}
+	updated, err := provider.SetPower(context.Background(), "socket", true)
+	if err != nil || updated.State.Power == nil || !*updated.State.Power {
+		t.Fatalf("outlet update = %#v, %v", updated, err)
+	}
+}
+
+func TestProviderSupportsHumidityContactAndMotionSensors(t *testing.T) {
+	provider, err := NewProviderFromConfig(providerconfig.Config{ID: "sensors", Config: []byte(`{"devices":[{"id":"humidity","type":"humidity-sensor","humidity":61.2},{"id":"door","type":"contact-sensor","contact":true},{"id":"motion","type":"motion-sensor","motion":false}]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, _ := provider.List(context.Background())
+	if len(items) != 3 || items[0].Type != device.TypeContactSensor || items[1].Type != device.TypeHumiditySensor || items[2].Type != device.TypeMotionSensor {
+		t.Fatalf("items = %#v", items)
+	}
+	humidity := 72.5
+	updated, err := provider.Simulate(context.Background(), providersdk.SimulationRequest{DeviceID: "humidity", Properties: []providersdk.PropertyWriteRequest{{EndpointID: "main", CapabilityID: "humidity", PropertyID: "current-humidity", Value: device.NumberValue(humidity)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	property, ok := updated.Property("main", "humidity", "current-humidity")
+	if !ok || property.Value.Number == nil || *property.Value.Number != humidity {
+		t.Fatalf("humidity = %#v", updated)
+	}
+}
+
 func TestProviderSimulatesRejectedAndCancelledWrites(t *testing.T) {
 	rejecting, err := NewProviderFromConfig(providerconfig.Config{ID: "reject", Config: []byte(`{"rejectWrites":true}`)})
 	if err != nil {

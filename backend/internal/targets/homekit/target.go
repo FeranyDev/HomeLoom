@@ -8,6 +8,7 @@ import (
 	"github.com/brutella/hap"
 	"github.com/brutella/hap/accessory"
 	"github.com/brutella/hap/characteristic"
+	"github.com/brutella/hap/service"
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	homekitqr "github.com/kradalby/homekit-qr"
@@ -51,10 +52,14 @@ type accessoryBindings struct {
 	temperatures map[string]*characteristic.CurrentTemperature
 	faults       map[string]*characteristic.StatusFault
 	byDevice     map[string]*accessory.A
+	outletInUse  map[string]*characteristic.OutletInUse
+	humidities   map[string]*characteristic.CurrentRelativeHumidity
+	contacts     map[string]*characteristic.ContactSensorState
+	motions      map[string]*characteristic.MotionDetected
 }
 
 func newAccessoryBindings(items []device.Device, selected map[string]bool, accessoryIDs map[string]uint64, devices *application.DeviceService, logger *slog.Logger) *accessoryBindings {
-	bindings := &accessoryBindings{accessories: make([]*accessory.A, 0, len(items)), switches: make(map[string]*characteristic.On), temperatures: make(map[string]*characteristic.CurrentTemperature), faults: make(map[string]*characteristic.StatusFault), byDevice: make(map[string]*accessory.A)}
+	bindings := &accessoryBindings{accessories: make([]*accessory.A, 0, len(items)), switches: make(map[string]*characteristic.On), temperatures: make(map[string]*characteristic.CurrentTemperature), faults: make(map[string]*characteristic.StatusFault), byDevice: make(map[string]*accessory.A), outletInUse: make(map[string]*characteristic.OutletInUse), humidities: make(map[string]*characteristic.CurrentRelativeHumidity), contacts: make(map[string]*characteristic.ContactSensorState), motions: make(map[string]*characteristic.MotionDetected)}
 	for _, item := range items {
 		if len(selected) > 0 && !selected[item.ID] {
 			continue
@@ -76,12 +81,66 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 			bindings.switches[item.ID], bindings.faults[item.ID] = a.Switch.On, fault
 			bindings.accessories = append(bindings.accessories, a.A)
 			created = a.A
+		case device.TypeLightbulb:
+			a := accessory.NewLightbulb(info)
+			a.A.Id = accessoryIDs[item.ID]
+			fault := characteristic.NewStatusFault()
+			a.Lightbulb.AddC(fault.C)
+			deviceID := item.ID
+			a.Lightbulb.On.OnValueRemoteUpdate(func(value bool) {
+				if _, _, err := devices.ExecutePower(context.Background(), deviceID, value); err != nil {
+					logger.Error("HomeKit command failed", "device_id", deviceID, "error", err)
+				}
+			})
+			bindings.switches[item.ID], bindings.faults[item.ID] = a.Lightbulb.On, fault
+			bindings.accessories = append(bindings.accessories, a.A)
+			created = a.A
+		case device.TypeOutlet:
+			a := accessory.NewOutlet(info)
+			a.A.Id = accessoryIDs[item.ID]
+			fault := characteristic.NewStatusFault()
+			a.Outlet.AddC(fault.C)
+			deviceID := item.ID
+			a.Outlet.On.OnValueRemoteUpdate(func(value bool) {
+				if _, _, err := devices.ExecutePower(context.Background(), deviceID, value); err != nil {
+					logger.Error("HomeKit command failed", "device_id", deviceID, "error", err)
+				}
+			})
+			bindings.switches[item.ID], bindings.outletInUse[item.ID], bindings.faults[item.ID] = a.Outlet.On, a.Outlet.OutletInUse, fault
+			bindings.accessories = append(bindings.accessories, a.A)
+			created = a.A
 		case device.TypeTemperatureSensor:
 			a := accessory.NewTemperatureSensor(info)
 			a.A.Id = accessoryIDs[item.ID]
 			fault := characteristic.NewStatusFault()
 			a.TempSensor.AddC(fault.C)
 			bindings.temperatures[item.ID], bindings.faults[item.ID] = a.TempSensor.CurrentTemperature, fault
+			bindings.accessories = append(bindings.accessories, a.A)
+			created = a.A
+		case device.TypeHumiditySensor:
+			a := accessory.New(info, accessory.TypeSensor)
+			a.Id = accessoryIDs[item.ID]
+			sensor := service.NewHumiditySensor()
+			fault := characteristic.NewStatusFault()
+			sensor.AddC(fault.C)
+			a.AddS(sensor.S)
+			bindings.humidities[item.ID], bindings.faults[item.ID] = sensor.CurrentRelativeHumidity, fault
+			bindings.accessories = append(bindings.accessories, a)
+			created = a
+		case device.TypeContactSensor:
+			a := accessory.NewContactSensor(info)
+			a.A.Id = accessoryIDs[item.ID]
+			fault := characteristic.NewStatusFault()
+			a.ContactSensor.AddC(fault.C)
+			bindings.contacts[item.ID], bindings.faults[item.ID] = a.ContactSensor.ContactSensorState, fault
+			bindings.accessories = append(bindings.accessories, a.A)
+			created = a.A
+		case device.TypeMotionSensor:
+			a := accessory.NewMotionSensor(info)
+			a.A.Id = accessoryIDs[item.ID]
+			fault := characteristic.NewStatusFault()
+			a.MotionSensor.AddC(fault.C)
+			bindings.motions[item.ID], bindings.faults[item.ID] = a.MotionSensor.MotionDetected, fault
 			bindings.accessories = append(bindings.accessories, a.A)
 			created = a.A
 		}
@@ -106,6 +165,9 @@ func (b *accessoryBindings) update(item device.Device) {
 	if current, ok := b.switches[item.ID]; ok {
 		if property, found := item.Property("main", "switch", "power"); found && property.Value.Bool != nil {
 			current.SetValue(*property.Value.Bool)
+			if inUse, exists := b.outletInUse[item.ID]; exists {
+				inUse.SetValue(*property.Value.Bool)
+			}
 		}
 	}
 	if current, ok := b.temperatures[item.ID]; ok {
@@ -118,6 +180,25 @@ func (b *accessoryBindings) update(item device.Device) {
 				value = 100
 			}
 			current.SetValue(value)
+		}
+	}
+	if current, ok := b.humidities[item.ID]; ok {
+		if property, found := item.Property("main", "humidity", "current-humidity"); found && property.Value.Number != nil {
+			current.SetValue(*property.Value.Number)
+		}
+	}
+	if current, ok := b.contacts[item.ID]; ok {
+		if property, found := item.Property("main", "contact", "contact-detected"); found && property.Value.Bool != nil {
+			value := characteristic.ContactSensorStateContactNotDetected
+			if *property.Value.Bool {
+				value = characteristic.ContactSensorStateContactDetected
+			}
+			_ = current.SetValue(value)
+		}
+	}
+	if current, ok := b.motions[item.ID]; ok {
+		if property, found := item.Property("main", "motion", "motion-detected"); found && property.Value.Bool != nil {
+			current.SetValue(*property.Value.Bool)
 		}
 	}
 }

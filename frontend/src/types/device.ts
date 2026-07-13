@@ -1,4 +1,4 @@
-export type DeviceType = 'switch' | 'temperature-sensor'
+export type DeviceType = 'switch' | 'temperature-sensor' | 'lightbulb' | 'outlet' | 'humidity-sensor' | 'contact-sensor' | 'motion-sensor'
 export type ValueType = 'bool' | 'number' | 'string' | 'enum'
 
 export interface PropertyValue { type: ValueType; bool?: boolean; number?: number; string?: string }

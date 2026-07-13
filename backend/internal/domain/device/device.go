@@ -8,6 +8,11 @@ type ValueType string
 const (
 	TypeSwitch            Type = "switch"
 	TypeTemperatureSensor Type = "temperature-sensor"
+	TypeLightbulb         Type = "lightbulb"
+	TypeOutlet            Type = "outlet"
+	TypeHumiditySensor    Type = "humidity-sensor"
+	TypeContactSensor     Type = "contact-sensor"
+	TypeMotionSensor      Type = "motion-sensor"
 )
 
 const (

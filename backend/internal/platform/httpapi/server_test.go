@@ -38,12 +38,16 @@ func (s *apiProviderStore) DeleteProvider(_ context.Context, id string) error {
 }
 
 func newTestServer() *Server {
+	return newTestServerWithProvider(virtual.NewProvider())
+}
+
+func newTestServerWithProvider(provider providersdk.Provider) *Server {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	targets := application.NewTargetService([]application.TargetRegistration{{
 		Info: application.TargetInfo{ID: "apple-main", Type: "apple-hap", Name: "Main", Enabled: true, Status: "running"},
 		QR:   []byte("png-data"),
 	}}, nil)
-	return NewServer(":0", application.NewDeviceService(virtual.NewProvider()), targets, logger)
+	return NewServer(":0", application.NewDeviceService(provider), targets, logger)
 }
 
 func TestListTargetsAndPairingQR(t *testing.T) {
@@ -266,6 +270,33 @@ func TestSimulateVirtualDevice(t *testing.T) {
 	server.Handler().ServeHTTP(invalidResponse, invalid)
 	if invalidResponse.Code != http.StatusBadRequest {
 		t.Fatalf("invalid status = %d", invalidResponse.Code)
+	}
+}
+
+func TestSimulateVirtualSensorProperties(t *testing.T) {
+	provider, err := virtual.NewProviderFromConfig(providerconfig.Config{ID: "sensors", Config: []byte(`{"devices":[{"id":"humidity","type":"humidity-sensor"},{"id":"door","type":"contact-sensor"},{"id":"motion","type":"motion-sensor"}]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := newTestServerWithProvider(provider)
+	for _, test := range []struct {
+		deviceID string
+		body     string
+		want     string
+	}{
+		{deviceID: "humidity", body: `{"humidity":72.5}`, want: `"number":72.5`},
+		{deviceID: "door", body: `{"contact":true}`, want: `"bool":true`},
+		{deviceID: "motion", body: `{"motion":true}`, want: `"bool":true`},
+	} {
+		t.Run(test.deviceID, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPatch, "/api/v1/devices/"+test.deviceID+"/simulation", bytes.NewBufferString(test.body))
+			request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			response := httptest.NewRecorder()
+			server.Handler().ServeHTTP(response, request)
+			if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(test.want)) {
+				t.Fatalf("response = %d %s", response.Code, response.Body.String())
+			}
+		})
 	}
 }
 

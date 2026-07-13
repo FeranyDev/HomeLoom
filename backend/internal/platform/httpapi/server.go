@@ -34,6 +34,9 @@ type simulationRequest struct {
 	Online      *bool    `json:"online"`
 	Power       *bool    `json:"power"`
 	Temperature *float64 `json:"temperature"`
+	Humidity    *float64 `json:"humidity"`
+	Contact     *bool    `json:"contact"`
+	Motion      *bool    `json:"motion"`
 }
 
 type targetRequest struct {
@@ -308,7 +311,7 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 	})
 	e.PATCH("/api/v1/devices/:id/simulation", func(c echo.Context) error {
 		var input simulationRequest
-		if err := c.Bind(&input); err != nil || (input.Online == nil && input.Power == nil && input.Temperature == nil) {
+		if err := c.Bind(&input); err != nil || (input.Online == nil && input.Power == nil && input.Temperature == nil && input.Humidity == nil && input.Contact == nil && input.Motion == nil) {
 			return echo.NewHTTPError(http.StatusBadRequest, "at least one simulation value is required")
 		}
 		request := providersdk.SimulationRequest{DeviceID: c.Param("id"), Online: input.Online}
@@ -317,6 +320,15 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		}
 		if input.Temperature != nil {
 			request.Properties = append(request.Properties, providersdk.PropertyWriteRequest{EndpointID: "main", CapabilityID: "temperature", PropertyID: "current-temperature", Value: device.NumberValue(*input.Temperature)})
+		}
+		if input.Humidity != nil {
+			request.Properties = append(request.Properties, providersdk.PropertyWriteRequest{EndpointID: "main", CapabilityID: "humidity", PropertyID: "current-humidity", Value: device.NumberValue(*input.Humidity)})
+		}
+		if input.Contact != nil {
+			request.Properties = append(request.Properties, providersdk.PropertyWriteRequest{EndpointID: "main", CapabilityID: "contact", PropertyID: "contact-detected", Value: device.BoolValue(*input.Contact)})
+		}
+		if input.Motion != nil {
+			request.Properties = append(request.Properties, providersdk.PropertyWriteRequest{EndpointID: "main", CapabilityID: "motion", PropertyID: "motion-detected", Value: device.BoolValue(*input.Motion)})
 		}
 		item, err := devices.Simulate(c.Request().Context(), request)
 		if errors.Is(err, application.ErrDeviceNotFound) {

@@ -59,6 +59,10 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .temperature { display: flex; align-items: start; margin-top: 46px; }
 .temperature strong { font-size: 82px; font-weight: 500; line-height: 1; letter-spacing: -.07em; }
 .temperature span { margin: 8px 0 0 10px; color: #73776e; font-size: 20px; }
+.sensor-state { display: grid; gap: 7px; margin-top: 62px; padding-top: 18px; border-top: 1px solid #dddcd4; color: #777b73; }
+.sensor-state strong { font-size: 25px; font-weight: 500; }
+.sensor-state span { font-size: 10px; letter-spacing: .12em; }
+.sensor-state.is-active { color: #55725b; }
 .device-card footer { display: flex; align-items: center; justify-content: space-between; margin-top: 34px; color: #9b9c96; font-size: 12px; }
 .device-card footer button { padding: 5px 0; border: 0; border-bottom: 1px solid #b8bab3; background: transparent; color: #696e66; cursor: pointer; }
 .device-filters { display: grid; grid-template-columns: 1fr 180px auto; gap: 10px; align-items: center; margin-bottom: 18px; }

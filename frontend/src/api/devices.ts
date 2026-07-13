@@ -27,7 +27,7 @@ export async function setDeviceProperty(id: string, endpointId: string, capabili
   return requestData<Device>(`/api/v1/devices/${encodeURIComponent(id)}/endpoints/${encodeURIComponent(endpointId)}/capabilities/${encodeURIComponent(capabilityId)}/properties/${encodeURIComponent(propertyId)}`, { method: 'PUT', body: JSON.stringify(value) })
 }
 
-export async function simulateDevice(id: string, values: { online?: boolean; power?: boolean; temperature?: number }): Promise<Device> {
+export async function simulateDevice(id: string, values: { online?: boolean; power?: boolean; temperature?: number; humidity?: number; contact?: boolean; motion?: boolean }): Promise<Device> {
   return requestData<Device>(`/api/v1/devices/${encodeURIComponent(id)}/simulation`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values),
   })
