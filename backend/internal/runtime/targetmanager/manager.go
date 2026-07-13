@@ -19,16 +19,21 @@ type runningTarget struct {
 }
 
 type Manager struct {
-	root     context.Context
-	devices  *application.DeviceService
-	logger   *slog.Logger
-	mu       sync.Mutex
-	running  map[string]runningTarget
-	onStatus func(string, string)
+	root       context.Context
+	devices    *application.DeviceService
+	logger     *slog.Logger
+	mu         sync.Mutex
+	running    map[string]runningTarget
+	onStatus   func(string, string)
+	identities homekit.AccessoryIdentityStore
 }
 
-func New(root context.Context, devices *application.DeviceService, logger *slog.Logger) *Manager {
-	return &Manager{root: root, devices: devices, logger: logger, running: make(map[string]runningTarget)}
+func New(root context.Context, devices *application.DeviceService, logger *slog.Logger, identityStores ...homekit.AccessoryIdentityStore) *Manager {
+	manager := &Manager{root: root, devices: devices, logger: logger, running: make(map[string]runningTarget)}
+	if len(identityStores) > 0 {
+		manager.identities = identityStores[0]
+	}
+	return manager
 }
 
 func (m *Manager) SetStatusHandler(handler func(string, string)) {
@@ -50,7 +55,7 @@ func (m *Manager) Apply(ctx context.Context, config target.Config) (application.
 
 	next, err := homekit.New(ctx, homekit.Config{
 		ID: config.ID, Name: config.Name, Address: config.Address, Pin: config.Pin,
-		SetupID: config.SetupID, StorePath: config.StorePath, DeviceIDs: config.DeviceIDs,
+		SetupID: config.SetupID, StorePath: config.StorePath, DeviceIDs: config.DeviceIDs, IdentityStore: m.identities,
 	}, m.devices, m.logger)
 	if err != nil {
 		return application.TargetRegistration{}, err

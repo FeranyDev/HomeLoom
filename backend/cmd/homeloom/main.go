@@ -80,7 +80,7 @@ func main() {
 		os.Exit(1)
 	}
 	registrations := make([]application.TargetRegistration, 0, len(targetConfigs))
-	manager := targetmanager.New(ctx, service, logger)
+	manager := targetmanager.New(ctx, service, logger, store)
 	for _, targetConfig := range targetConfigs {
 		registration, targetErr := manager.Apply(ctx, targetConfig)
 		if targetErr != nil {

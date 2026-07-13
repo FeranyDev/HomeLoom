@@ -110,3 +110,71 @@ func TestMissingTargetDelete(t *testing.T) {
 		t.Fatal("DeleteTarget() accepted missing target")
 	}
 }
+
+func TestHomeKitAccessoryAIDIsStableAndNeverReordered(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "homeloom.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	first, err := store.HomeKitAccessoryAID(ctx, "apple-main", "device-z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.HomeKitAccessoryAID(ctx, "apple-main", "device-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := store.HomeKitAccessoryAID(ctx, "apple-main", "device-z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	third, err := store.HomeKitAccessoryAID(ctx, "apple-main", "device-0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != 2 || second != 3 || again != first || third != 4 {
+		t.Fatalf("AIDs = %d %d %d %d", first, second, again, third)
+	}
+}
+
+func TestHomeKitAccessoryAIDRequiresExistingTarget(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "homeloom.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.HomeKitAccessoryAID(ctx, "missing", "device"); err == nil {
+		t.Fatal("foreign-key violation was accepted")
+	}
+}
+
+func TestHomeKitIIDIsStableWhenNewResourcesAreInserted(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "homeloom.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	serviceIID, err := store.HomeKitIID(ctx, "apple-main", "device", "service:switch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	onIID, err := store.HomeKitIID(ctx, "apple-main", "device", "characteristic:on")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newIID, err := store.HomeKitIID(ctx, "apple-main", "device", "characteristic:fault")
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := store.HomeKitIID(ctx, "apple-main", "device", "service:switch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if serviceIID != 1 || onIID != 2 || newIID != 3 || again != serviceIID {
+		t.Fatalf("IIDs = %d %d %d %d", serviceIID, onIID, newIID, again)
+	}
+}

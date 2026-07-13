@@ -319,10 +319,10 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 - [ ] Logical Device ID 表；
 - [ ] Device Endpoint/Capability 身份表；
 - [ ] Accessory UUID 映射表；
-- [ ] AID 持久化表；
-- [ ] IID 持久化表；
-- [ ] 设备改名身份不变测试；
-- [ ] Capability 顺序变化 IID 不变测试；
+- [x] AID 持久化表；
+- [x] IID 持久化表；
+- [x] 设备改名身份不变测试；
+- [x] Capability 顺序变化 IID 不变测试；
 - [ ] 设备离线不删除身份；
 - [ ] 显式删除保留期。
 

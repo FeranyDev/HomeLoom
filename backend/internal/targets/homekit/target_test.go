@@ -13,6 +13,26 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
 )
 
+type memoryIdentityStore struct {
+	values map[string]uint64
+	next   map[string]uint64
+}
+
+func (s *memoryIdentityStore) HomeKitAccessoryAID(context.Context, string, string) (uint64, error) {
+	return 2, nil
+}
+func (s *memoryIdentityStore) HomeKitIID(_ context.Context, targetID, deviceID, key string) (uint64, error) {
+	composite := targetID + "/" + deviceID + "/" + key
+	if value := s.values[composite]; value != 0 {
+		return value, nil
+	}
+	scope := targetID + "/" + deviceID
+	s.next[scope]++
+	value := s.next[scope]
+	s.values[composite] = value
+	return value, nil
+}
+
 func TestFormatPin(t *testing.T) {
 	if got := formatPin("00102003"); got != "001-02-003" {
 		t.Fatalf("formatPin() = %q", got)
@@ -27,9 +47,12 @@ func TestAccessoryBindingsUpdateTemperatureAndOfflineFault(t *testing.T) {
 	defer service.Close()
 	items, _ := service.List(context.Background())
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	bindings := newAccessoryBindings(items, map[string]bool{}, service, logger)
+	bindings := newAccessoryBindings(items, map[string]bool{}, map[string]uint64{"virtual-switch-1": 7, "virtual-temperature-1": 11}, service, logger)
 	if len(bindings.accessories) != 2 || len(bindings.switches) != 1 || len(bindings.temperatures) != 1 || len(bindings.faults) != 2 {
 		t.Fatalf("bindings = %#v", bindings)
+	}
+	if bindings.accessories[0].Id == 0 || bindings.accessories[1].Id == 0 || bindings.accessories[0].Id == bindings.accessories[1].Id {
+		t.Fatalf("persistent AIDs were not applied: %d %d", bindings.accessories[0].Id, bindings.accessories[1].Id)
 	}
 	temperature := -12.5
 	updated, err := service.Simulate(context.Background(), providersdk.SimulationRequest{DeviceID: "virtual-temperature-1", Properties: []providersdk.PropertyWriteRequest{{EndpointID: "main", CapabilityID: "temperature", PropertyID: "current-temperature", Value: device.NumberValue(temperature)}}})
@@ -62,8 +85,46 @@ func TestAccessoryBindingsHonorSelectedDevices(t *testing.T) {
 	defer service.Close()
 	items, _ := service.List(context.Background())
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	bindings := newAccessoryBindings(items, map[string]bool{"virtual-switch-1": true}, service, logger)
+	bindings := newAccessoryBindings(items, map[string]bool{"virtual-switch-1": true}, nil, service, logger)
 	if len(bindings.accessories) != 1 || bindings.switches["virtual-switch-1"] == nil || bindings.temperatures["virtual-temperature-1"] != nil {
 		t.Fatalf("selected bindings = %#v", bindings)
+	}
+}
+
+func TestPersistentIIDsSurviveAccessoryRebuildAndNewCharacteristic(t *testing.T) {
+	service := application.NewDeviceService(virtual.NewProvider())
+	defer service.Close()
+	items, _ := service.List(context.Background())
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	identities := &memoryIdentityStore{values: make(map[string]uint64), next: make(map[string]uint64)}
+	first := newAccessoryBindings(items, map[string]bool{"virtual-switch-1": true}, map[string]uint64{"virtual-switch-1": 2}, service, logger).byDevice["virtual-switch-1"]
+	if err := assignPersistentIIDs(context.Background(), "bridge", "virtual-switch-1", first, identities); err != nil {
+		t.Fatal(err)
+	}
+	existing := make(map[string]uint64)
+	for _, currentService := range first.Ss {
+		existing["s:"+currentService.Type] = currentService.Id
+		for _, current := range currentService.Cs {
+			existing["c:"+currentService.Type+":"+current.Type] = current.Id
+		}
+	}
+	second := newAccessoryBindings(items, map[string]bool{"virtual-switch-1": true}, map[string]uint64{"virtual-switch-1": 2}, service, logger).byDevice["virtual-switch-1"]
+	newCharacteristic := characteristic.NewStatusActive()
+	second.Ss[len(second.Ss)-1].AddC(newCharacteristic.C)
+	if err := assignPersistentIIDs(context.Background(), "bridge", "virtual-switch-1", second, identities); err != nil {
+		t.Fatal(err)
+	}
+	for _, currentService := range second.Ss {
+		if expected, ok := existing["s:"+currentService.Type]; ok && currentService.Id != expected {
+			t.Fatalf("service IID changed: %d -> %d", expected, currentService.Id)
+		}
+		for _, current := range currentService.Cs {
+			if expected, ok := existing["c:"+currentService.Type+":"+current.Type]; ok && current.Id != expected {
+				t.Fatalf("characteristic %s IID changed: %d -> %d", current.Type, expected, current.Id)
+			}
+		}
+	}
+	if newCharacteristic.Id <= uint64(len(existing)) {
+		t.Fatalf("new characteristic IID %d was not appended", newCharacteristic.Id)
 	}
 }
