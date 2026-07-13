@@ -24,7 +24,7 @@ type StorageConfig struct {
 
 func Default() Config {
 	return Config{
-		Server:  ServerConfig{Address: ":8090"},
+		Server:  ServerConfig{Address: "127.0.0.1:8090"},
 		Storage: StorageConfig{Database: "./data/homeloom.db"},
 	}
 }

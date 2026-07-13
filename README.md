@@ -25,6 +25,7 @@ docs/      项目计划与设计文档
 ```
 
 打开 `http://localhost:5173`。开发服务器会将 `/api`、`/health` 和 `/ready` 代理到 `http://localhost:8090`。
+管理 API 默认只监听 `127.0.0.1:8090`。需要局域网访问时必须显式设置 `HOMELOOM_HTTP_ADDRESS=0.0.0.0:8090`，并使用防火墙或反向代理限制访问来源。
 
 HomeKit Bridge 同时监听 `51826`，配对码为 `001-02-003`。HAP 身份和配对信息保存在 `backend/data/hap/`，该目录不会提交到版本库。
 
@@ -66,6 +67,14 @@ HomeKit Bridge 同时监听 `51826`，配对码为 `001-02-003`。HAP 身份和�
 backend/bin/homeloom -version
 ```
 
+对实际二进制执行启动、HTTP 和优雅停止烟雾测试：
+
+```bash
+./scripts/smoke.sh
+```
+
+容器部署、host network 与数据卷说明见 [`deploy/README.md`](deploy/README.md)。
+
 ## 当前 Demo 链路
 
 ```text
@@ -89,6 +98,7 @@ GET /api/v1/devices/:id/states
 返回当前值、Provider、来源、质量、设备观察时间、服务接收时间、sequence 和内部 version。
 
 HTTP 成功/错误包装、请求 ID 和诊断入口见 [HTTP API 约定](docs/http-api.md)。
+OpenAPI 3.1 契约位于 [`docs/openapi.yaml`](docs/openapi.yaml)。
 
 实时设备状态只保存在内存。服务重启后 State Store 为空，由各 Provider 重新发现、订阅并读取设备状态；SQLite 只保存桥配置、设备绑定和稳定身份。
 

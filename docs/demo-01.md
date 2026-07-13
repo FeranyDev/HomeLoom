@@ -3,7 +3,7 @@
 ## 已完成
 
 - 前后端分离目录；
-- 虚拟开关和温度传感器；
+- 虚拟开关、灯泡、插座、温湿度、接触和活动传感器；
 - REST 设备查询与开关写入；
 - Provider 状态订阅；
 - HomeKit Bridge、Switch 和 Temperature Sensor；
@@ -24,7 +24,11 @@
 - Core/Target 队列及命令 Prometheus 指标；
 - Provider 边界深拷贝快照，避免异步共享可变 slice；
 - Provider SDK 与多 Provider 聚合管理、设备归属路由；
+- Device Model v1、稳定 ID 校验和统一 Capability/Property 契约；
+- 通用 PropertyReader、PropertyWriter 和带幂等 key 的 Action/Command；
 - SQLite Provider 配置、默认种子和类型 Factory；
+- 统一 API 错误包装、Request ID、OpenAPI 与 runtime 指标；
+- 前后端独立容器、Linux host-network Compose 和数据卷；
 - 项目级 Go/npm 缓存；
 - Go 测试、ESLint 和前端生产构建。
 
@@ -49,7 +53,7 @@
 
 ## 下一步
 
-- 将监听地址、PIN 和数据目录移入配置层；
-- 增加 API 集成测试；
-- 验证三次重启和 Apple Home 自动化身份；
-- 评估并记录 HAP 库的 mDNS 和并发行为。
+- 完成 Apple Home 实机配对、双向控制和三次重启验收；
+- 加入管理员认证、CSRF 防护和敏感操作二次确认；
+- 完成 SQLite 一致性备份/恢复和版本兼容检查；
+- 开始 MQTT Provider 与 discovery/state/command 协议实现。

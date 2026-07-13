@@ -26,4 +26,14 @@ jobs:
         working-directory: frontend
       - run: ./scripts/check.sh --race
       - run: ./scripts/build.sh
+      - run: ./scripts/smoke.sh
 
+  containers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build backend image
+        run: docker build --file deploy/backend.Dockerfile --tag homeloom-backend:ci --build-arg VERSION=ci --build-arg COMMIT=${GITHUB_SHA::12} --build-arg BUILD_TIME=ci .
+      - name: Build frontend image
+        run: docker build --file deploy/frontend.Dockerfile --tag homeloom-frontend:ci .

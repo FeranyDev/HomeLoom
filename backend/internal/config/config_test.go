@@ -36,6 +36,10 @@ func TestLoadRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+func TestDefaultOnlyListensOnLoopback(t *testing.T) {
+	if address := Default().Server.Address; address != "127.0.0.1:8090" { t.Fatalf("default address = %q", address) }
+}
+
 func TestLoadRejectsDatabaseBackedTargets(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte("targets: []\n"), 0o600); err != nil {

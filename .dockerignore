@@ -1,0 +1,12 @@
+.git
+.github
+.cache
+backend/bin
+backend/data
+backend/coverage.out
+frontend/node_modules
+frontend/dist
+frontend/.npm-cache
+frontend/*.tsbuildinfo
+.DS_Store
+

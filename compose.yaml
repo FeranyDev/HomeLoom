@@ -1,0 +1,31 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: deploy/backend.Dockerfile
+      args:
+        VERSION: ${HOMELOOM_VERSION:-compose}
+        COMMIT: ${HOMELOOM_COMMIT:-unknown}
+        BUILD_TIME: ${HOMELOOM_BUILD_TIME:-unknown}
+    network_mode: host
+    environment:
+      HOMELOOM_HTTP_ADDRESS: 0.0.0.0:8090
+      HOMELOOM_DATABASE: /data/homeloom.db
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - homeloom-data:/data
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: deploy/frontend.Dockerfile
+    network_mode: host
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  homeloom-data:
+

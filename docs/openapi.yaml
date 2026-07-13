@@ -1,0 +1,223 @@
+openapi: 3.1.0
+info:
+  title: HomeLoom API
+  version: 0.1.0
+  description: HomeLoom management API. Runtime device values are ephemeral; configuration is stored in SQLite.
+servers:
+  - url: http://127.0.0.1:8090
+paths:
+  /health:
+    get:
+      operationId: health
+      responses:
+        "200": { description: Process is alive, content: { application/json: { schema: { $ref: "#/components/schemas/Status" } } } }
+  /ready:
+    get:
+      operationId: ready
+      responses:
+        "200": { description: Process startup completed, content: { application/json: { schema: { $ref: "#/components/schemas/Status" } } } }
+  /api/v1/system/version:
+    get:
+      operationId: getVersion
+      responses:
+        "200": { description: Build information, content: { application/json: { schema: { $ref: "#/components/schemas/VersionResponse" } } } }
+  /api/v1/diagnostics:
+    get:
+      operationId: getDiagnostics
+      responses:
+        "200": { description: Runtime metrics snapshot, content: { application/json: { schema: { $ref: "#/components/schemas/ObjectResponse" } } } }
+  /api/v1/devices:
+    get:
+      operationId: listDevices
+      responses:
+        "200": { description: Device snapshots, content: { application/json: { schema: { type: object, required: [data], properties: { data: { type: array, items: { $ref: "#/components/schemas/Device" } } } } } } }
+  /api/v1/devices/{deviceId}/states:
+    parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+    get:
+      operationId: listDeviceStates
+      responses:
+        "200": { description: In-memory state with provenance, content: { application/json: { schema: { $ref: "#/components/schemas/ObjectResponse" } } } }
+  /api/v1/devices/{deviceId}/endpoints/{endpointId}/capabilities/{capabilityId}/properties/{propertyId}:
+    parameters:
+      - { $ref: "#/components/parameters/DeviceId" }
+      - { $ref: "#/components/parameters/EndpointId" }
+      - { $ref: "#/components/parameters/CapabilityId" }
+      - { $ref: "#/components/parameters/PropertyId" }
+    get:
+      operationId: readProperty
+      responses:
+        "200": { description: Provider property value, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/Property" } } } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    put:
+      operationId: writeProperty
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/PropertyValue" } } } }
+      responses:
+        "200": { description: Updated device and command lifecycle, content: { application/json: { schema: { $ref: "#/components/schemas/DeviceCommandResponse" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/v1/devices/{deviceId}/endpoints/{endpointId}/capabilities/{capabilityId}/commands/{commandId}:
+    parameters:
+      - { $ref: "#/components/parameters/DeviceId" }
+      - { $ref: "#/components/parameters/EndpointId" }
+      - { $ref: "#/components/parameters/CapabilityId" }
+      - { name: commandId, in: path, required: true, schema: { type: string } }
+      - { name: Idempotency-Key, in: header, required: false, schema: { type: string, maxLength: 128 } }
+    post:
+      operationId: executeCommand
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                parameters: { type: object, additionalProperties: { $ref: "#/components/schemas/PropertyValue" } }
+      responses:
+        "200": { description: Updated device and action lifecycle, content: { application/json: { schema: { $ref: "#/components/schemas/DeviceCommandResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { description: Idempotency key conflict, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+  /api/v1/providers:
+    get:
+      operationId: listProviders
+      responses: { "200": { description: Provider configurations and runtime status, content: { application/json: { schema: { $ref: "#/components/schemas/ObjectResponse" } } } } }
+    post:
+      operationId: createProvider
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ProviderInput" } } } }
+      responses: { "200": { description: Provider created, content: { application/json: { schema: { $ref: "#/components/schemas/ObjectResponse" } } } }, "400": { $ref: "#/components/responses/BadRequest" } }
+  /api/v1/providers/{providerId}:
+    parameters: [{ name: providerId, in: path, required: true, schema: { type: string } }]
+    put:
+      operationId: updateProvider
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ProviderInput" } } } }
+      responses: { "200": { description: Provider updated, content: { application/json: { schema: { $ref: "#/components/schemas/ObjectResponse" } } } }, "400": { $ref: "#/components/responses/BadRequest" } }
+    delete:
+      operationId: deleteProvider
+      responses: { "204": { description: Provider deleted }, "400": { $ref: "#/components/responses/BadRequest" } }
+  /api/v1/providers/{providerId}/restart:
+    parameters: [{ name: providerId, in: path, required: true, schema: { type: string } }]
+    post:
+      operationId: restartProvider
+      responses: { "200": { description: Provider restarted, content: { application/json: { schema: { $ref: "#/components/schemas/ObjectResponse" } } } }, "400": { $ref: "#/components/responses/BadRequest" } }
+  /api/v1/targets:
+    get:
+      operationId: listTargets
+      responses: { "200": { description: Target configurations and status, content: { application/json: { schema: { $ref: "#/components/schemas/ObjectResponse" } } } } }
+    post:
+      operationId: createTarget
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TargetInput" } } } }
+      responses: { "200": { description: Target created, content: { application/json: { schema: { $ref: "#/components/schemas/ObjectResponse" } } } }, "400": { $ref: "#/components/responses/BadRequest" } }
+  /api/v1/targets/{targetId}:
+    parameters: [{ name: targetId, in: path, required: true, schema: { type: string } }]
+    put:
+      operationId: updateTarget
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TargetInput" } } } }
+      responses: { "200": { description: Target updated, content: { application/json: { schema: { $ref: "#/components/schemas/ObjectResponse" } } } }, "400": { $ref: "#/components/responses/BadRequest" } }
+    delete:
+      operationId: deleteTarget
+      responses: { "204": { description: Target deleted }, "400": { $ref: "#/components/responses/BadRequest" } }
+  /api/v1/commands:
+    get:
+      operationId: listCommands
+      responses: { "200": { description: Bounded in-memory command history, content: { application/json: { schema: { $ref: "#/components/schemas/ObjectResponse" } } } } }
+  /api/v1/commands/{commandId}:
+    parameters: [{ name: commandId, in: path, required: true, schema: { type: string } }]
+    get:
+      operationId: getCommand
+      responses: { "200": { description: Command lifecycle, content: { application/json: { schema: { $ref: "#/components/schemas/ObjectResponse" } } } }, "404": { $ref: "#/components/responses/NotFound" } }
+components:
+  parameters:
+    DeviceId: { name: deviceId, in: path, required: true, schema: { type: string } }
+    EndpointId: { name: endpointId, in: path, required: true, schema: { type: string } }
+    CapabilityId: { name: capabilityId, in: path, required: true, schema: { type: string } }
+    PropertyId: { name: propertyId, in: path, required: true, schema: { type: string } }
+  responses:
+    BadRequest: { description: Invalid request, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    NotFound: { description: Resource not found, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    Unprocessable: { description: Unsupported device operation, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    Unavailable: { description: Provider unavailable, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  schemas:
+    Status:
+      type: object
+      required: [status]
+      properties: { status: { type: string } }
+    ObjectResponse:
+      type: object
+      required: [data]
+      properties: { data: {} }
+    VersionResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [version, commit, buildTime, goVersion]
+          properties:
+            version: { type: string }
+            commit: { type: string }
+            buildTime: { type: string }
+            goVersion: { type: string }
+    PropertyValue:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, enum: [bool, number, string, enum] }
+        bool: { type: boolean }
+        number: { type: number }
+        string: { type: string }
+    Property:
+      type: object
+      required: [definition, value]
+      properties:
+        definition: { type: object, additionalProperties: true }
+        value: { $ref: "#/components/schemas/PropertyValue" }
+    Device:
+      type: object
+      required: [schemaVersion, id, providerId, name, type, online, endpoints, lastUpdateAt]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        id: { type: string }
+        providerId: { type: string }
+        name: { type: string }
+        type: { type: string }
+        online: { type: boolean }
+        endpoints: { type: array, items: { type: object, additionalProperties: true } }
+        lastUpdateAt: { type: string, format: date-time }
+    DeviceCommandResponse:
+      type: object
+      required: [data, command]
+      properties:
+        data: { $ref: "#/components/schemas/Device" }
+        command: { type: object, additionalProperties: true }
+    ProviderInput:
+      type: object
+      required: [type, name, enabled, config]
+      properties:
+        id: { type: string }
+        type: { type: string }
+        name: { type: string }
+        enabled: { type: boolean }
+        config: { type: object, additionalProperties: true }
+    TargetInput:
+      type: object
+      required: [type, name, enabled]
+      properties:
+        id: { type: string }
+        type: { type: string }
+        name: { type: string }
+        enabled: { type: boolean }
+        address: { type: string }
+        pin: { type: string }
+        setupId: { type: string }
+        storePath: { type: string }
+        deviceIds: { type: array, items: { type: string } }
+    Error:
+      type: object
+      required: [code, message, requestId]
+      properties:
+        code: { type: string }
+        message: { type: string }
+        requestId: { type: string }
+        fields: { type: object, additionalProperties: { type: string } }

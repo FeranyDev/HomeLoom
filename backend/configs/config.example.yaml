@@ -1,5 +1,5 @@
 server:
-  address: ":8090"
+  address: "127.0.0.1:8090"
 
 storage:
   database: "./data/homeloom.db"
