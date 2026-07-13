@@ -37,7 +37,9 @@ func TestLoadRejectsUnknownFields(t *testing.T) {
 }
 
 func TestDefaultOnlyListensOnLoopback(t *testing.T) {
-	if address := Default().Server.Address; address != "127.0.0.1:8090" { t.Fatalf("default address = %q", address) }
+	if address := Default().Server.Address; address != "127.0.0.1:8090" {
+		t.Fatalf("default address = %q", address)
+	}
 }
 
 func TestLoadRejectsDatabaseBackedTargets(t *testing.T) {

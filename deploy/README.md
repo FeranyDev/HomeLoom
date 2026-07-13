@@ -22,4 +22,14 @@ Docker Desktop 的 host network 行为与原生 Linux 不完全一致。macOS/Wi
 - 回滚到旧版本前必须确认旧程序能够识别当前数据库 schema；
 - `docker compose down` 保留卷，`docker compose down -v` 会删除卷。
 
+运行中可以生成 SQLite 一致性快照：
+
+```bash
+docker compose exec backend homeloom -backup /data/backups/homeloom.db
+```
+
+`-backup` 使用 SQLite `VACUUM INTO`，不会对源库执行 migrations，并将输出权限设为 `0600`。该文件包含数据库配置，但不包含 `/data/hap/...` 下的 HomeKit 密钥和配对资料。完整灾难恢复应停止 backend，同时备份整个 `homeloom-data` 卷。
+
+恢复数据库前应保留当前卷副本，停止 backend，替换 `.db` 后移除旧的 `-wal`/`-shm` 临时文件再启动。程序会拒绝打开高于自身支持版本的数据库，不应绕过该检查强制回滚。
+
 当前管理 API 尚未实现认证。不要直接暴露到公网；如需开放到局域网，应配合主机防火墙或可信反向代理限制来源。

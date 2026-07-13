@@ -2,12 +2,89 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	"github.com/feranydev/homeloom/backend/internal/domain/target"
 )
+
+func TestConsistentBackupPreservesSchemaAndConfiguration(t *testing.T) {
+	ctx := context.Background()
+	directory := t.TempDir()
+	source := filepath.Join(directory, "source.db")
+	store, err := Open(ctx, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.SaveProvider(ctx, providerconfig.Config{ID: "backup-provider", Type: "virtual", Name: "Backup", Config: []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(directory, "nested", "backup.db")
+	if err := store.Backup(ctx, destination); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("backup mode = %o", info.Mode().Perm())
+	}
+	backup, err := sql.Open("sqlite", destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backup.Close()
+	var integrity string
+	if err := backup.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&integrity); err != nil || integrity != "ok" {
+		t.Fatalf("integrity = %q, %v", integrity, err)
+	}
+	var providers, version int
+	if err := backup.QueryRowContext(ctx, "SELECT COUNT(*) FROM providers WHERE id = 'backup-provider'").Scan(&providers); err != nil {
+		t.Fatal(err)
+	}
+	if err := backup.QueryRowContext(ctx, "SELECT MAX(version) FROM schema_migrations").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if providers != 1 || version == 0 {
+		t.Fatalf("providers = %d, version = %d", providers, version)
+	}
+	if err := store.Backup(ctx, destination); err == nil {
+		t.Fatal("existing backup was overwritten")
+	}
+	if err := store.Backup(ctx, source); err == nil {
+		t.Fatal("database was backed up over itself")
+	}
+}
+
+func TestOpenRejectsDatabaseFromNewerVersion(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "future.db")
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, "CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL); INSERT INTO schema_migrations VALUES(999, 0)"); err != nil {
+		t.Fatal(err)
+	}
+	database.Close()
+	if _, err := Open(ctx, path); err == nil || !strings.Contains(err.Error(), "newer than supported") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestOpenForBackupDoesNotRunMigrations(t *testing.T) {
+	ctx := context.Background(); path := filepath.Join(t.TempDir(), "old.db")
+	database, err := sql.Open("sqlite", path); if err != nil { t.Fatal(err) }
+	if _, err := database.ExecContext(ctx, "CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL); INSERT INTO schema_migrations VALUES(1, 0)"); err != nil { t.Fatal(err) }; database.Close()
+	store, err := OpenForBackup(ctx, path); if err != nil { t.Fatal(err) }; defer store.Close()
+	version, err := store.SchemaVersion(ctx); if err != nil || version != 1 { t.Fatalf("version = %d, %v", version, err) }
+}
 
 func TestRuntimeStateTableIsRemoved(t *testing.T) {
 	ctx := context.Background()

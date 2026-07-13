@@ -28,6 +28,23 @@ func (s *Store) migrate(ctx context.Context) error {
 		return fmt.Errorf("list migrations: %w", err)
 	}
 	sort.Strings(files)
+	supported := 0
+	for _, name := range files {
+		version, versionErr := migrationVersion(name)
+		if versionErr != nil {
+			return versionErr
+		}
+		if version > supported {
+			supported = version
+		}
+	}
+	current, err := s.SchemaVersion(ctx)
+	if err != nil {
+		return err
+	}
+	if current > supported {
+		return fmt.Errorf("database schema version %d is newer than supported version %d", current, supported)
+	}
 	for _, name := range files {
 		version, err := migrationVersion(name)
 		if err != nil {

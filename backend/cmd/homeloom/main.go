@@ -25,6 +25,7 @@ import (
 func main() {
 	configPath := flag.String("config", "", "path to a YAML configuration file")
 	showVersion := flag.Bool("version", false, "print build version and exit")
+	backupPath := flag.String("backup", "", "create a consistent SQLite backup and exit")
 	flag.Parse()
 	if *showVersion {
 		info := buildinfo.Current()
@@ -40,6 +41,15 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if *backupPath != "" {
+		store, openErr := sqlite.OpenForBackup(ctx, settings.Storage.Database)
+		if openErr != nil { logger.Error("database backup source failed", "error", openErr); os.Exit(1) }
+		defer store.Close()
+		if err := store.Backup(ctx, *backupPath); err != nil { logger.Error("database backup failed", "destination", *backupPath, "error", err); os.Exit(1) }
+		version, _ := store.SchemaVersion(ctx)
+		logger.Info("database backup completed", "source", settings.Storage.Database, "destination", *backupPath, "schema_version", version)
+		return
+	}
 	store, err := sqlite.Open(ctx, settings.Storage.Database)
 	if err != nil {
 		logger.Error("database initialization failed", "error", err)

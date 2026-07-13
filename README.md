@@ -75,6 +75,14 @@ backend/bin/homeloom -version
 
 容器部署、host network 与数据卷说明见 [`deploy/README.md`](deploy/README.md)。
 
+SQLite 在线一致性备份（不会在备份前迁移源库）：
+
+```bash
+./scripts/backup.sh
+```
+
+该脚本备份 SQLite 配置与稳定 ID 表。灾难恢复 HomeKit 配对关系时，还必须备份相应的 HAP 身份目录。
+
 ## 当前 Demo 链路
 
 ```text

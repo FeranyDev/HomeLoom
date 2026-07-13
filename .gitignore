@@ -5,6 +5,7 @@
 backend/bin/
 backend/data/
 backend/coverage.out
+backups/
 backend/.cache/
 .cache/
 
