@@ -103,7 +103,7 @@ M0 退出条件：Apple Home 实机配对、双向控制、多桥运行和三次
 - [x] 定义 `EventDefinition`；
 - [x] 定义模型 schema version；
 - [x] 定义所有稳定 ID 的格式和字符限制；
-- [ ] 定义设备可用性：online、offline、unknown；
+- [x] 定义设备可用性：online、offline、unknown；
 - [ ] 定义设备删除、禁用和暂时离线的区别。
 
 ### 2.2 类型系统
@@ -163,7 +163,7 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 - [x] 提供 Provider 列表 API；
 - [x] 提供 Provider CRUD API；
 - [x] 前端 Provider 管理页面；
-- [ ] 凭据字段脱敏；
+- [x] 凭据字段脱敏；
 - [x] Provider Manager 单元测试。
 
 ### 3.3 Virtual Provider 重构
@@ -590,7 +590,7 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [ ] State stale/optimistic 测试；
 - [x] 500 设备基准测试；
 - [x] 每秒 100 事件基准测试；
-- [ ] 20 并发命令测试；
+- [x] 20 并发命令测试；
 - [ ] 24 小时稳定性测试；
 - [ ] 前端 API 错误测试；
 - [x] 前端 Target/Provider 删除确认测试；

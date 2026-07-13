@@ -56,7 +56,7 @@ func (s *ProviderService) List() []ProviderInfo {
 	s.mu.RLock()
 	configs := make([]providerconfig.Config, 0, len(s.configs))
 	for _, item := range s.configs {
-		item.Config = append(json.RawMessage(nil), item.Config...)
+		item.Config = redactProviderConfig(item.Config)
 		configs = append(configs, item)
 	}
 	s.mu.RUnlock()
@@ -101,16 +101,31 @@ func (s *ProviderService) Save(ctx context.Context, item providerconfig.Config) 
 	if item.Name == "" {
 		item.Name = item.ID
 	}
+	s.mu.RLock()
+	previous, existed := s.configs[item.ID]
+	s.mu.RUnlock()
 	if !validProviderID.MatchString(item.ID) {
 		return ProviderInfo{}, NewValidationError("invalid provider configuration", map[string]string{"id": "may contain only letters, numbers, underscores and hyphens"})
 	}
 	if len(item.Config) == 0 {
-		item.Config = json.RawMessage(`{}`)
+		if existed {
+			item.Config = append(json.RawMessage(nil), previous.Config...)
+		} else {
+			item.Config = json.RawMessage(`{}`)
+		}
 	}
 	var object map[string]any
 	if err := json.Unmarshal(item.Config, &object); err != nil || object == nil {
 		return ProviderInfo{}, NewValidationError("invalid provider configuration", map[string]string{"config": "must be a JSON object"})
 	}
+	if err := restoreProviderSecrets(object, previous.Config); err != nil {
+		return ProviderInfo{}, NewValidationError("invalid provider configuration", map[string]string{"config": err.Error()})
+	}
+	encoded, err := json.Marshal(object)
+	if err != nil {
+		return ProviderInfo{}, NewValidationError("invalid provider configuration", map[string]string{"config": "could not be encoded"})
+	}
+	item.Config = encoded
 	if s.store == nil || s.factory == nil || s.runtime == nil {
 		return ProviderInfo{}, errors.New("provider management is unavailable")
 	}
@@ -124,9 +139,6 @@ func (s *ProviderService) Save(ctx context.Context, item providerconfig.Config) 
 		}
 		return ProviderInfo{}, NewValidationError("invalid provider configuration", map[string]string{field: err.Error()})
 	}
-	s.mu.RLock()
-	previous, existed := s.configs[item.ID]
-	s.mu.RUnlock()
 	if err := s.store.SaveProvider(ctx, item); err != nil {
 		return ProviderInfo{}, err
 	}

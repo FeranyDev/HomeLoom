@@ -49,6 +49,7 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .device-card__topline { display: flex; align-items: center; gap: 8px; color: #7b8077; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #a8a8a2; }
 .status-dot.is-online { background: #6d9270; box-shadow: 0 0 0 4px rgba(109, 146, 112, .12); }
+.status-dot.is-unknown { background: #c28a36; box-shadow: 0 0 0 4px rgba(194, 138, 54, .12); }
 .provider { margin-left: auto; }
 .device-card h2 { margin: 34px 0 3px; font-size: 26px; }
 .device-kind { margin: 0; color: #92958e; }

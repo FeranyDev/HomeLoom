@@ -15,12 +15,14 @@ type DeviceRegistry struct {
 func NewDeviceRegistry(items []device.Device) *DeviceRegistry {
 	registry := &DeviceRegistry{devices: make(map[string]device.Device, len(items))}
 	for _, item := range items {
+		item.NormalizeAvailability()
 		registry.devices[item.ID] = item
 	}
 	return registry
 }
 
 func (r *DeviceRegistry) Upsert(item device.Device) {
+	item.NormalizeAvailability()
 	r.mu.Lock()
 	r.devices[item.ID] = item
 	r.mu.Unlock()

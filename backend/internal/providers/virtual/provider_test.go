@@ -113,6 +113,17 @@ func TestProviderSimulatesRejectedAndCancelledWrites(t *testing.T) {
 	}
 }
 
+func TestProviderConfigSupportsUnknownAvailability(t *testing.T) {
+	provider, err := NewProviderFromConfig(providerconfig.Config{ID: "virtual-test", Name: "Test", Config: []byte(`{"devices":[{"id":"pending","name":"Pending","type":"switch","availability":"unknown"}]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := provider.List(context.Background())
+	if err != nil || len(items) != 1 || items[0].Availability != device.AvailabilityUnknown || items[0].Online {
+		t.Fatalf("items = %#v, error = %v", items, err)
+	}
+}
+
 func TestProviderRejectsInvalidDeviceConfiguration(t *testing.T) {
 	for _, raw := range []string{`{"latencyMs":-1}`, `{"devices":[{"id":"x","type":"unknown"}]}`, `{"devices":[{"id":"x","type":"switch"},{"id":"x","type":"switch"}]}`, `{"devices":[{"id":"Invalid ID","type":"switch"}]}`} {
 		if _, err := NewProviderFromConfig(providerconfig.Config{ID: "invalid", Config: []byte(raw)}); err == nil {

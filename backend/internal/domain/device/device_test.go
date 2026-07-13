@@ -41,6 +41,26 @@ func TestTypedValues(t *testing.T) {
 	}
 }
 
+func TestAvailabilityNormalizationAndValidation(t *testing.T) {
+	legacy := Device{Online: true}
+	legacy.NormalizeAvailability()
+	if legacy.Availability != AvailabilityOnline || !legacy.IsOnline() || !legacy.Online {
+		t.Fatalf("normalized legacy availability = %#v", legacy)
+	}
+	legacy.SetAvailability(AvailabilityUnknown)
+	if legacy.IsOnline() || legacy.Online || legacy.EffectiveAvailability() != AvailabilityUnknown {
+		t.Fatalf("unknown availability = %#v", legacy)
+	}
+	invalid := Device{SchemaVersion: SchemaVersion, ID: "device", ProviderID: "provider", Availability: "missing"}
+	if err := invalid.Validate(); !errors.Is(err, ErrInvalidModel) {
+		t.Fatalf("invalid availability error = %v", err)
+	}
+	conflict := Device{SchemaVersion: SchemaVersion, ID: "device", ProviderID: "provider", Availability: AvailabilityOnline}
+	if err := conflict.Validate(); !errors.Is(err, ErrInvalidModel) {
+		t.Fatalf("conflicting projection error = %v", err)
+	}
+}
+
 func TestCloneDoesNotShareMutableState(t *testing.T) {
 	original := Device{Endpoints: []Endpoint{{
 		ID: "main", Capabilities: []Capability{{ID: "switch", Properties: []Property{{

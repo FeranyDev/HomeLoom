@@ -9,7 +9,7 @@ describe('TargetForm', () => {
   it('allows generated fields and selected device bindings', async () => {
     const onSave = vi.fn().mockResolvedValue(undefined)
     render(<TargetForm target={null} devices={[{
-      schemaVersion: 1, id: 'switch-1', providerId: 'virtual', name: '客厅开关', type: 'switch', online: true,
+      schemaVersion: 1, id: 'switch-1', providerId: 'virtual', name: '客厅开关', type: 'switch', availability: 'online', online: true,
       endpoints: [], lastUpdateAt: new Date().toISOString(),
     }]} onCancel={vi.fn()} onSave={onSave} />)
     await userEvent.click(screen.getByText('客厅开关'))

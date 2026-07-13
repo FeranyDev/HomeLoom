@@ -54,7 +54,7 @@ func (p *Provider) ReadProperty(ctx context.Context, request providersdk.Propert
 	if !ok {
 		return device.Property{}, providersdk.ErrDeviceNotFound
 	}
-	if !item.Online {
+	if !item.IsOnline() {
 		return device.Property{}, providersdk.ErrProviderUnavailable
 	}
 	property, ok := item.Clone().Property(request.EndpointID, request.CapabilityID, request.PropertyID)
@@ -123,8 +123,8 @@ func defaultDevices(id string) map[string]device.Device {
 }
 
 func poweredDevice(id, providerID, name string, deviceType device.Type, online, power bool) device.Device {
-	return device.Device{SchemaVersion: device.SchemaVersion, ID: id, ProviderID: providerID, Name: name,
-		Type: deviceType, Online: online, LastUpdateAt: time.Now().UTC(),
+	item := device.Device{SchemaVersion: device.SchemaVersion, ID: id, ProviderID: providerID, Name: name,
+		Type: deviceType, LastUpdateAt: time.Now().UTC(),
 		Endpoints: []device.Endpoint{{
 			ID: "main", Name: "主端点", Type: string(deviceType),
 			Capabilities: []device.Capability{{ID: "switch", Type: "switch", Properties: []device.Property{{
@@ -133,11 +133,13 @@ func poweredDevice(id, providerID, name string, deviceType device.Type, online, 
 			}}, Commands: []device.CommandDefinition{{ID: "toggle", Name: "切换"}, {ID: "set-power", Name: "设置开关", Parameters: []device.CommandParameter{{ID: "value", Name: "开关值", Type: device.ValueTypeBool, Required: true}}}}}},
 		}},
 	}
+	item.SetOnline(online)
+	return item
 }
 
 func temperatureDevice(id, providerID, name string, online bool, temperature float64) device.Device {
-	return device.Device{SchemaVersion: device.SchemaVersion, ID: id, ProviderID: providerID, Name: name,
-		Type: device.TypeTemperatureSensor, Online: online,
+	item := device.Device{SchemaVersion: device.SchemaVersion, ID: id, ProviderID: providerID, Name: name,
+		Type:         device.TypeTemperatureSensor,
 		LastUpdateAt: time.Now().UTC(),
 		Endpoints: []device.Endpoint{{
 			ID: "main", Name: "主端点", Type: "sensor",
@@ -147,15 +149,21 @@ func temperatureDevice(id, providerID, name string, online bool, temperature flo
 			}}}},
 		}},
 	}
+	item.SetOnline(online)
+	return item
 }
 
 func humidityDevice(id, providerID, name string, online bool, humidity float64) device.Device {
 	minimum, maximum, step := 0.0, 100.0, 0.1
-	return device.Device{SchemaVersion: device.SchemaVersion, ID: id, ProviderID: providerID, Name: name, Type: device.TypeHumiditySensor, Online: online, LastUpdateAt: time.Now().UTC(), Endpoints: []device.Endpoint{{ID: "main", Name: "主端点", Type: "sensor", Capabilities: []device.Capability{{ID: "humidity", Type: "humidity-sensor", Properties: []device.Property{{Definition: device.PropertyDefinition{ID: "current-humidity", Name: "当前湿度", Type: device.ValueTypeNumber, Unit: "percent", Readable: true, Notifiable: true, Min: &minimum, Max: &maximum, Step: &step, StaleAfterSeconds: 30}, Value: device.NumberValue(humidity)}}}}}}}
+	item := device.Device{SchemaVersion: device.SchemaVersion, ID: id, ProviderID: providerID, Name: name, Type: device.TypeHumiditySensor, LastUpdateAt: time.Now().UTC(), Endpoints: []device.Endpoint{{ID: "main", Name: "主端点", Type: "sensor", Capabilities: []device.Capability{{ID: "humidity", Type: "humidity-sensor", Properties: []device.Property{{Definition: device.PropertyDefinition{ID: "current-humidity", Name: "当前湿度", Type: device.ValueTypeNumber, Unit: "percent", Readable: true, Notifiable: true, Min: &minimum, Max: &maximum, Step: &step, StaleAfterSeconds: 30}, Value: device.NumberValue(humidity)}}}}}}}
+	item.SetOnline(online)
+	return item
 }
 
 func booleanSensorDevice(id, providerID, name string, deviceType device.Type, capabilityID, capabilityType, propertyID, propertyName string, online, value bool) device.Device {
-	return device.Device{SchemaVersion: device.SchemaVersion, ID: id, ProviderID: providerID, Name: name, Type: deviceType, Online: online, LastUpdateAt: time.Now().UTC(), Endpoints: []device.Endpoint{{ID: "main", Name: "主端点", Type: "sensor", Capabilities: []device.Capability{{ID: capabilityID, Type: capabilityType, Properties: []device.Property{{Definition: device.PropertyDefinition{ID: propertyID, Name: propertyName, Type: device.ValueTypeBool, Readable: true, Notifiable: true, StaleAfterSeconds: 30}, Value: device.BoolValue(value)}}}}}}}
+	item := device.Device{SchemaVersion: device.SchemaVersion, ID: id, ProviderID: providerID, Name: name, Type: deviceType, LastUpdateAt: time.Now().UTC(), Endpoints: []device.Endpoint{{ID: "main", Name: "主端点", Type: "sensor", Capabilities: []device.Capability{{ID: capabilityID, Type: capabilityType, Properties: []device.Property{{Definition: device.PropertyDefinition{ID: propertyID, Name: propertyName, Type: device.ValueTypeBool, Readable: true, Notifiable: true, StaleAfterSeconds: 30}, Value: device.BoolValue(value)}}}}}}}
+	item.SetOnline(online)
+	return item
 }
 
 func (p *Provider) List(context.Context) ([]device.Device, error) {
@@ -193,7 +201,7 @@ func (p *Provider) SetPower(ctx context.Context, id string, power bool) (device.
 		p.mu.Unlock()
 		return device.Device{}, providersdk.ErrPropertyUnsupported
 	}
-	if !item.Online {
+	if !item.IsOnline() {
 		p.mu.Unlock()
 		return device.Device{}, providersdk.ErrProviderUnavailable
 	}
@@ -220,7 +228,14 @@ func (p *Provider) Simulate(_ context.Context, request providersdk.SimulationReq
 		return device.Device{}, providersdk.ErrDeviceNotFound
 	}
 	if request.Online != nil {
-		item.Online = *request.Online
+		item.SetOnline(*request.Online)
+	}
+	if request.Availability != nil {
+		if *request.Availability != device.AvailabilityOnline && *request.Availability != device.AvailabilityOffline && *request.Availability != device.AvailabilityUnknown {
+			p.mu.Unlock()
+			return device.Device{}, providersdk.ErrSimulationInvalid
+		}
+		item.SetAvailability(*request.Availability)
 	}
 	for _, change := range request.Properties {
 		switch {

@@ -22,4 +22,9 @@ describe('ProviderForm', () => {
 		await userEvent.click(screen.getByRole('button', { name: '保存并应用' }))
 		expect(await screen.findByText('invalid id')).toBeInTheDocument(); expect(screen.getByLabelText(/ID/)).toHaveAttribute('aria-invalid', 'true')
 	})
+
+	it('explains redacted secret placeholders while editing', () => {
+		render(<ProviderForm provider={{ id: 'secure', type: 'virtual', name: 'Secure', enabled: true, config: { password: '********' }, status: 'disabled', capabilities: { discovery: false, propertyRead: false, propertyWrite: false, events: false }, retryCount: 0 }} onCancel={() => {}} onSave={vi.fn()} />)
+		expect(screen.getByText(/保持占位符即可沿用数据库中的原值/)).toBeInTheDocument()
+	})
 })

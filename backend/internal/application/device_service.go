@@ -101,6 +101,7 @@ type DeviceMetrics struct {
 	HomeKitPushes            uint64  `json:"homeKitPushes"`
 	OnlineDevices            int     `json:"onlineDevices"`
 	OfflineDevices           int     `json:"offlineDevices"`
+	UnknownDevices           int     `json:"unknownDevices"`
 	ProvidersRunning         int     `json:"providersRunning"`
 	ProviderRetries          int     `json:"providerRetries"`
 	DeviceSubscribers        int     `json:"deviceSubscribers"`
@@ -150,8 +151,9 @@ func NewDeviceService(provider providersdk.Provider, storageMetrics ...DatabaseM
 		service.storageMetrics = storageMetrics[0]
 	}
 	for _, item := range items {
+		item.NormalizeAvailability()
 		service.applySnapshot(item)
-		if !item.Online {
+		if !item.IsOnline() {
 			service.states.MarkDeviceStale(item.ID)
 		}
 	}
@@ -201,10 +203,15 @@ func (s *DeviceService) Simulate(ctx context.Context, request providersdk.Simula
 
 func (s *DeviceService) Metrics() DeviceMetrics {
 	items := s.registry.List()
-	online := 0
+	online, offline, unknown := 0, 0, 0
 	for _, item := range items {
-		if item.Online {
+		switch item.EffectiveAvailability() {
+		case device.AvailabilityOnline:
 			online++
+		case device.AvailabilityUnknown:
+			unknown++
+		default:
+			offline++
 		}
 	}
 	providersRunning, providerRetries := 0, 0
@@ -245,7 +252,7 @@ func (s *DeviceService) Metrics() DeviceMetrics {
 		CommandsStarted: s.metrics.commandsStarted.Load(), CommandsConfirmed: s.metrics.commandsConfirmed.Load(),
 		CommandsRejected: s.metrics.commandsRejected.Load(), CommandsTimedOut: s.metrics.commandsTimedOut.Load(), CommandsSuperseded: s.metrics.commandsSuperseded.Load(),
 		HomeKitPushes: s.metrics.homeKitPushes.Load(),
-		OnlineDevices: online, OfflineDevices: len(items) - online, ProvidersRunning: providersRunning, ProviderRetries: providerRetries, DeviceSubscribers: subscribers, StateSubscribers: stateSubscribers,
+		OnlineDevices: online, OfflineDevices: offline, UnknownDevices: unknown, ProvidersRunning: providersRunning, ProviderRetries: providerRetries, DeviceSubscribers: subscribers, StateSubscribers: stateSubscribers,
 		CommandAverageLatencyMS: averageLatency,
 		EventAverageLatencyMS:   float64(eventStats.AverageLatency.Nanoseconds()) / float64(time.Millisecond), EventMaxLatencyMS: float64(eventStats.MaxLatency.Nanoseconds()) / float64(time.Millisecond), SlowEventHandlers: eventStats.SlowHandlers,
 		DatabaseOperations: databaseOperations, DatabaseAverageLatencyMS: float64(databaseAverage.Nanoseconds()) / float64(time.Millisecond), DatabaseMaxLatencyMS: float64(databaseMaximum.Nanoseconds()) / float64(time.Millisecond),
@@ -509,8 +516,9 @@ func (s *DeviceService) handleEvent(event eventbus.Event) {
 		return
 	}
 	s.metrics.eventsProcessed.Add(1)
+	item.NormalizeAvailability()
 	s.registry.Upsert(item)
-	if item.Online {
+	if item.IsOnline() {
 		s.applySnapshot(item)
 	} else {
 		stale := s.states.MarkDeviceStale(item.ID)
@@ -519,7 +527,7 @@ func (s *DeviceService) handleEvent(event eventbus.Event) {
 			s.publishState(value)
 		}
 	}
-	if item.Online {
+	if item.IsOnline() {
 		for _, endpoint := range item.Endpoints {
 			for _, capability := range endpoint.Capabilities {
 				for _, property := range capability.Properties {

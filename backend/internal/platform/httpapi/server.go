@@ -70,12 +70,13 @@ type powerRequest struct {
 }
 
 type simulationRequest struct {
-	Online      *bool    `json:"online"`
-	Power       *bool    `json:"power"`
-	Temperature *float64 `json:"temperature"`
-	Humidity    *float64 `json:"humidity"`
-	Contact     *bool    `json:"contact"`
-	Motion      *bool    `json:"motion"`
+	Availability *device.Availability `json:"availability"`
+	Online       *bool                `json:"online"`
+	Power        *bool                `json:"power"`
+	Temperature  *float64             `json:"temperature"`
+	Humidity     *float64             `json:"humidity"`
+	Contact      *bool                `json:"contact"`
+	Motion       *bool                `json:"motion"`
 }
 
 type commandRequest struct {
@@ -186,6 +187,7 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		writeMetric("homekit_pushes_total", metrics.HomeKitPushes)
 		writeMetric("devices_online", metrics.OnlineDevices)
 		writeMetric("devices_offline", metrics.OfflineDevices)
+		writeMetric("devices_unknown", metrics.UnknownDevices)
 		writeMetric("providers_running", metrics.ProvidersRunning)
 		writeMetric("provider_retries_total", metrics.ProviderRetries)
 		writeMetric("device_subscribers", metrics.DeviceSubscribers)
@@ -405,10 +407,10 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 	})
 	e.PATCH("/api/v1/devices/:id/simulation", func(c echo.Context) error {
 		var input simulationRequest
-		if err := c.Bind(&input); err != nil || (input.Online == nil && input.Power == nil && input.Temperature == nil && input.Humidity == nil && input.Contact == nil && input.Motion == nil) {
+		if err := c.Bind(&input); err != nil || (input.Availability == nil && input.Online == nil && input.Power == nil && input.Temperature == nil && input.Humidity == nil && input.Contact == nil && input.Motion == nil) {
 			return echo.NewHTTPError(http.StatusBadRequest, "at least one simulation value is required")
 		}
-		request := providersdk.SimulationRequest{DeviceID: c.Param("id"), Online: input.Online}
+		request := providersdk.SimulationRequest{DeviceID: c.Param("id"), Online: input.Online, Availability: input.Availability}
 		if input.Power != nil {
 			request.Properties = append(request.Properties, providersdk.PropertyWriteRequest{EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Value: device.BoolValue(*input.Power)})
 		}

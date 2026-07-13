@@ -1,4 +1,4 @@
-import { deviceProperty, type Device } from '../types/device'
+import { availabilityLabel, deviceProperty, type Device } from '../types/device'
 
 interface DeviceCardProps {
   device: Device
@@ -19,8 +19,8 @@ export function DeviceCard({ device, pending, onPowerChange, onDetails }: Device
   return (
     <article className="device-card">
       <div className="device-card__topline">
-        <span className={`status-dot ${device.online ? 'is-online' : ''}`} />
-        <span>{device.online ? '在线' : '离线'}</span>
+        <span className={`status-dot is-${device.availability}`} />
+        <span>{availabilityLabel(device.availability)}</span>
         <span className="provider">{device.providerId}</span>
       </div>
       <h2>{device.name}</h2>

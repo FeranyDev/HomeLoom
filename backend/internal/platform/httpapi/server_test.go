@@ -140,7 +140,7 @@ func TestValidationErrorsIncludeFieldLocations(t *testing.T) {
 func newProviderManagementTestServer(t *testing.T) *Server {
 	t.Helper()
 	ctx := context.Background()
-	config := providerconfig.Config{ID: "virtual-main", Type: "virtual", Name: "Virtual", Enabled: true, Config: []byte(`{}`)}
+	config := providerconfig.Config{ID: "virtual-main", Type: "virtual", Name: "Virtual", Enabled: true, Config: []byte(`{"password":"do-not-return"}`)}
 	factory := providersdk.NewFactory()
 	if err := factory.Register("virtual", func(item providerconfig.Config) (providersdk.Provider, error) {
 		return virtual.NewProviderFromConfig(item)
@@ -162,6 +162,15 @@ func newProviderManagementTestServer(t *testing.T) *Server {
 	return NewServer(":0", devices, targets, logger, providers)
 }
 
+func TestProviderAPIConfigIsRedacted(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/providers", nil)
+	response := httptest.NewRecorder()
+	newProviderManagementTestServer(t).Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"password":"********"`)) || bytes.Contains(response.Body.Bytes(), []byte("do-not-return")) {
+		t.Fatalf("response = %d %s", response.Code, response.Body.String())
+	}
+}
+
 func TestListDevices(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/devices", nil)
 	response := httptest.NewRecorder()
@@ -179,7 +188,7 @@ func TestListDevices(t *testing.T) {
 	if len(body.Data) != 2 {
 		t.Fatalf("device count = %d, want 2", len(body.Data))
 	}
-	if !bytes.Contains(response.Body.Bytes(), []byte(`"schemaVersion":1`)) || bytes.Contains(response.Body.Bytes(), []byte(`"state":`)) {
+	if !bytes.Contains(response.Body.Bytes(), []byte(`"schemaVersion":1`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"availability":"online"`)) || bytes.Contains(response.Body.Bytes(), []byte(`"state":`)) {
 		t.Fatalf("device response does not follow schema v1: %s", response.Body.String())
 	}
 }
@@ -212,7 +221,7 @@ func TestDiagnosticsAndPrometheusMetrics(t *testing.T) {
 			t.Fatalf("metrics missing device counts: %s", response.Body.String())
 		}
 		if path == "/metrics" {
-			for _, name := range []string{"homeloom_event_average_latency_milliseconds", "homeloom_slow_event_handlers_total", "homeloom_database_operations_total", "homeloom_homekit_pushes_total"} {
+			for _, name := range []string{"homeloom_event_average_latency_milliseconds", "homeloom_slow_event_handlers_total", "homeloom_database_operations_total", "homeloom_homekit_pushes_total", "homeloom_devices_unknown"} {
 				if !bytes.Contains(response.Body.Bytes(), []byte(name)) {
 					t.Fatalf("metrics missing %s: %s", name, response.Body.String())
 				}
@@ -435,6 +444,16 @@ func TestSimulateVirtualDevice(t *testing.T) {
 	server.Handler().ServeHTTP(invalidResponse, invalid)
 	if invalidResponse.Code != http.StatusBadRequest {
 		t.Fatalf("invalid status = %d", invalidResponse.Code)
+	}
+}
+
+func TestSimulateUnknownAvailability(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPatch, "/api/v1/devices/virtual-switch-1/simulation", bytes.NewBufferString(`{"availability":"unknown"}`))
+	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response := httptest.NewRecorder()
+	newTestServer().Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"availability":"unknown","online":false`)) {
+		t.Fatalf("response = %d %s", response.Code, response.Body.String())
 	}
 }
 

@@ -159,7 +159,7 @@ func (b *accessoryBindings) update(item device.Device) uint64 {
 		return 0
 	}
 	var pushes uint64
-	if !item.Online {
+	if !item.IsOnline() {
 		_ = fault.SetValue(characteristic.StatusFaultGeneralFault)
 		return 1
 	}

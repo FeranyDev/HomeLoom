@@ -204,7 +204,8 @@ func (m *Manager) Apply(ctx context.Context, item providersdk.Provider) error {
 					if _, retained := created.deviceIDs[snapshot.ID]; retained {
 						continue
 					}
-					snapshot.ProviderID, snapshot.Online = id, false
+					snapshot.ProviderID = id
+					snapshot.SetOnline(false)
 					m.broadcast(snapshot)
 				}
 			}
@@ -247,7 +248,7 @@ func (m *Manager) Remove(ctx context.Context, id string) error {
 		if items, err := discoverer.DiscoverDevices(ctx); err == nil {
 			for _, item := range items {
 				item.ProviderID = id
-				item.Online = false
+				item.SetOnline(false)
 				m.broadcast(item)
 			}
 		}
@@ -265,6 +266,7 @@ func (m *Manager) attach(id string, current *managedProvider) {
 	}
 	unsubscribe := subscriber.Subscribe(func(item device.Device) {
 		item.ProviderID = id
+		item.NormalizeAvailability()
 		if err := item.Validate(); err != nil {
 			m.mu.Lock()
 			if m.providers[id] == current {

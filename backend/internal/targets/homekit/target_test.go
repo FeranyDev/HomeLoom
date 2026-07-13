@@ -98,6 +98,10 @@ func TestAccessoryBindingsUpdateTemperatureAndOfflineFault(t *testing.T) {
 	if fault := bindings.faults[updated.ID].Value(); fault != characteristic.StatusFaultGeneralFault {
 		t.Fatalf("fault = %d", fault)
 	}
+	updated.SetAvailability(device.AvailabilityUnknown)
+	if pushes := bindings.update(updated); pushes != 1 || bindings.faults[updated.ID].Value() != characteristic.StatusFaultGeneralFault {
+		t.Fatalf("unknown availability did not preserve fault, pushes = %d", pushes)
+	}
 	online := true
 	updated, _ = service.Simulate(context.Background(), providersdk.SimulationRequest{DeviceID: updated.ID, Online: &online})
 	bindings.update(updated)

@@ -87,9 +87,10 @@ type EventSubscriber interface {
 // SimulationRequest changes ephemeral provider state. It is intended for
 // development providers and is never persisted as desired configuration.
 type SimulationRequest struct {
-	DeviceID   string
-	Online     *bool
-	Properties []PropertyWriteRequest
+	DeviceID     string
+	Online       *bool
+	Availability *device.Availability
+	Properties   []PropertyWriteRequest
 }
 
 type Simulator interface {

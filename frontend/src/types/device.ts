@@ -1,5 +1,6 @@
 export type DeviceType = 'switch' | 'temperature-sensor' | 'lightbulb' | 'outlet' | 'humidity-sensor' | 'contact-sensor' | 'motion-sensor'
 export type ValueType = 'bool' | 'number' | 'string' | 'enum'
+export type DeviceAvailability = 'online' | 'offline' | 'unknown'
 
 export interface PropertyValue { type: ValueType; bool?: boolean; number?: number; string?: string }
 export interface PropertyDefinition { id: string; name: string; type: ValueType; unit?: string; readable: boolean; writable: boolean; notifiable: boolean; min?: number; max?: number; step?: number; enum?: string[]; staleAfterSeconds?: number }
@@ -9,9 +10,11 @@ export interface CommandDefinition { id: string; name: string; parameters?: Comm
 export interface Capability { id: string; type: string; properties: Property[]; commands?: CommandDefinition[]; events?: { id: string; name: string; payload: ValueType }[] }
 export interface Endpoint { id: string; name: string; type: string; capabilities: Capability[] }
 export interface Device {
-  schemaVersion: number; id: string; providerId: string; name: string; type: DeviceType; online: boolean
+  schemaVersion: number; id: string; providerId: string; name: string; type: DeviceType; availability: DeviceAvailability; online: boolean
   endpoints: Endpoint[]; lastUpdateAt: string
 }
+
+export function availabilityLabel(value: DeviceAvailability): string { return value === 'online' ? '在线' : value === 'offline' ? '离线' : '未知' }
 
 export function deviceProperty(device: Device, capabilityId: string, propertyId: string): PropertyValue | undefined {
   return device.endpoints.flatMap((endpoint) => endpoint.capabilities).find((capability) => capability.id === capabilityId)?.properties.find((property) => property.definition.id === propertyId)?.value

@@ -188,13 +188,14 @@ components:
         value: { $ref: "#/components/schemas/PropertyValue" }
     Device:
       type: object
-      required: [schemaVersion, id, providerId, name, type, online, endpoints, lastUpdateAt]
+      required: [schemaVersion, id, providerId, name, type, availability, online, endpoints, lastUpdateAt]
       properties:
         schemaVersion: { type: integer, const: 1 }
         id: { type: string }
         providerId: { type: string }
         name: { type: string }
         type: { type: string }
+        availability: { type: string, enum: [online, offline, unknown] }
         online: { type: boolean }
         endpoints: { type: array, items: { type: object, additionalProperties: true } }
         lastUpdateAt: { type: string, format: date-time }
@@ -212,7 +213,7 @@ components:
         type: { type: string }
         name: { type: string }
         enabled: { type: boolean }
-        config: { type: object, additionalProperties: true }
+        config: { type: object, additionalProperties: true, description: Sensitive values are returned as ********; submit the placeholder unchanged to preserve the stored value. }
     TargetInput:
       type: object
       required: [type, name, enabled]

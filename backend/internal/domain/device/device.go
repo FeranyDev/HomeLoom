@@ -9,6 +9,7 @@ import (
 
 type Type string
 type ValueType string
+type Availability string
 
 const (
 	SchemaVersion = 1
@@ -20,6 +21,12 @@ const (
 	TypeHumiditySensor    Type = "humidity-sensor"
 	TypeContactSensor     Type = "contact-sensor"
 	TypeMotionSensor      Type = "motion-sensor"
+)
+
+const (
+	AvailabilityOnline  Availability = "online"
+	AvailabilityOffline Availability = "offline"
+	AvailabilityUnknown Availability = "unknown"
 )
 
 var stableIDPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$`)
@@ -106,17 +113,48 @@ type Endpoint struct {
 }
 
 type Device struct {
-	SchemaVersion int        `json:"schemaVersion"`
-	ID            string     `json:"id"`
-	ProviderID    string     `json:"providerId"`
-	Name          string     `json:"name"`
-	Type          Type       `json:"type"`
-	Online        bool       `json:"online"`
-	Endpoints     []Endpoint `json:"endpoints"`
-	LastUpdateAt  time.Time  `json:"lastUpdateAt"`
+	SchemaVersion int          `json:"schemaVersion"`
+	ID            string       `json:"id"`
+	ProviderID    string       `json:"providerId"`
+	Name          string       `json:"name"`
+	Type          Type         `json:"type"`
+	Availability  Availability `json:"availability"`
+	// Online is retained as a compatibility projection for schema v1 clients.
+	Online       bool       `json:"online"`
+	Endpoints    []Endpoint `json:"endpoints"`
+	LastUpdateAt time.Time  `json:"lastUpdateAt"`
 }
 
 func ValidStableID(value string) bool { return stableIDPattern.MatchString(value) }
+
+func (d Device) EffectiveAvailability() Availability {
+	switch d.Availability {
+	case AvailabilityOnline, AvailabilityOffline, AvailabilityUnknown:
+		return d.Availability
+	default:
+		if d.Online {
+			return AvailabilityOnline
+		}
+		return AvailabilityOffline
+	}
+}
+
+func (d Device) IsOnline() bool { return d.EffectiveAvailability() == AvailabilityOnline }
+
+func (d *Device) SetAvailability(value Availability) {
+	d.Availability = value
+	d.Online = value == AvailabilityOnline
+}
+
+func (d *Device) SetOnline(online bool) {
+	if online {
+		d.SetAvailability(AvailabilityOnline)
+	} else {
+		d.SetAvailability(AvailabilityOffline)
+	}
+}
+
+func (d *Device) NormalizeAvailability() { d.SetAvailability(d.EffectiveAvailability()) }
 
 func (d Device) Validate() error {
 	if d.SchemaVersion != SchemaVersion {
@@ -124,6 +162,12 @@ func (d Device) Validate() error {
 	}
 	if !ValidStableID(d.ID) || !ValidStableID(d.ProviderID) {
 		return fmt.Errorf("%w: invalid device or provider id", ErrInvalidModel)
+	}
+	if d.Availability != "" && d.Availability != AvailabilityOnline && d.Availability != AvailabilityOffline && d.Availability != AvailabilityUnknown {
+		return fmt.Errorf("%w: invalid availability %q", ErrInvalidModel, d.Availability)
+	}
+	if d.Availability != "" && d.Online != (d.Availability == AvailabilityOnline) {
+		return fmt.Errorf("%w: online compatibility projection conflicts with availability", ErrInvalidModel)
 	}
 	endpointIDs := make(map[string]struct{}, len(d.Endpoints))
 	for _, endpoint := range d.Endpoints {

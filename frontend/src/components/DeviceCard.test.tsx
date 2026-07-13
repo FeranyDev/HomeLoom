@@ -5,13 +5,13 @@ import { DeviceCard } from './DeviceCard'
 import type { Device } from '../types/device'
 
 const sensorDevice = (type: Device['type'], capabilityId: string, propertyId: string, value: { type: 'bool'; bool: boolean } | { type: 'number'; number: number }): Device => ({
-  schemaVersion: 1, id: type, providerId: 'virtual', name: type, type, online: true, lastUpdateAt: new Date().toISOString(),
+  schemaVersion: 1, id: type, providerId: 'virtual', name: type, type, availability: 'online', online: true, lastUpdateAt: new Date().toISOString(),
   endpoints: [{ id: 'main', name: 'Main', type: 'sensor', capabilities: [{ id: capabilityId, type, properties: [{ definition: { id: propertyId, name: propertyId, type: value.type, readable: true, writable: false, notifiable: true }, value }] }] }],
 })
 
 describe('DeviceCard device types', () => {
   it.each([['lightbulb', '灯泡'], ['outlet', '插座']] as const)('controls %s devices', async (type, label) => {
-    const device: Device = { schemaVersion: 1, id: type, providerId: 'virtual', name: label, type, online: true, endpoints: [{ id: 'main', name: 'Main', type, capabilities: [{ id: 'switch', type: 'switch', properties: [{ definition: { id: 'power', name: '开关', type: 'bool', readable: true, writable: true, notifiable: true }, value: { type: 'bool', bool: false } }] }] }], lastUpdateAt: new Date().toISOString() }; const onPowerChange = vi.fn()
+    const device: Device = { schemaVersion: 1, id: type, providerId: 'virtual', name: label, type, availability: 'online', online: true, endpoints: [{ id: 'main', name: 'Main', type, capabilities: [{ id: 'switch', type: 'switch', properties: [{ definition: { id: 'power', name: '开关', type: 'bool', readable: true, writable: true, notifiable: true }, value: { type: 'bool', bool: false } }] }] }], lastUpdateAt: new Date().toISOString() }; const onPowerChange = vi.fn()
     render(<DeviceCard device={device} pending={false} onPowerChange={onPowerChange} onDetails={() => {}} />)
     expect(screen.getByRole('heading', { name: label })).toBeInTheDocument(); await userEvent.click(screen.getByRole('button', { name: /已关闭/ })); expect(onPowerChange).toHaveBeenCalledWith(device, true)
   })
