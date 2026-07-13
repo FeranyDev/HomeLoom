@@ -8,7 +8,7 @@ export function SystemDashboard({ diagnostics, commands }: { diagnostics: Diagno
   const queueRate = diagnostics.eventQueueCapacity ? Math.round(diagnostics.eventQueuePending / diagnostics.eventQueueCapacity * 100) : 0
   const metrics = [
     ['在线设备', diagnostics.onlineDevices], ['离线设备', diagnostics.offlineDevices], ['运行中 Provider', diagnostics.providersRunning], ['实时订阅', diagnostics.deviceSubscribers],
-    ['已接收事件', diagnostics.eventsReceived], ['丢弃事件', diagnostics.eventsDropped + diagnostics.targetEventsDropped], ['命令成功率', `${successRate}%`], ['过期状态', diagnostics.statesMarkedStale],
+    ['已接收事件', diagnostics.eventsReceived], ['丢弃事件', diagnostics.eventsDropped + diagnostics.targetEventsDropped + diagnostics.stateEventsDropped], ['命令成功率', `${successRate}%`], ['过期状态', diagnostics.statesMarkedStale],
 	['平均命令耗时', `${diagnostics.commandAverageLatencyMs.toFixed(1)}ms`],
 	['Provider 重试', diagnostics.providerRetries],
   ]

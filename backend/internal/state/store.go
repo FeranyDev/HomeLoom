@@ -58,6 +58,24 @@ func (s *Store) MarkStale(now time.Time) []domainstate.StateValue {
 	return changed
 }
 
+// MarkDeviceStale invalidates the last known values without deleting them.
+// Repeated offline events are idempotent and do not inflate state versions.
+func (s *Store) MarkDeviceStale(deviceID string) []domainstate.StateValue {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	changed := make([]domainstate.StateValue, 0)
+	for key, value := range s.values {
+		if key.DeviceID != deviceID || value.Quality == domainstate.QualityStale {
+			continue
+		}
+		value.Quality = domainstate.QualityStale
+		value.Version++
+		s.values[key] = value
+		changed = append(changed, value)
+	}
+	return changed
+}
+
 func preferIncoming(current, incoming domainstate.StateValue) bool {
 	if current.ProviderID == incoming.ProviderID && current.Sequence > 0 && incoming.Sequence > 0 && current.Sequence != incoming.Sequence {
 		return incoming.Sequence > current.Sequence

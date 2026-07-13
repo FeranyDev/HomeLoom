@@ -23,24 +23,31 @@ var (
 )
 
 type DeviceService struct {
-	provider    providersdk.Provider
-	discoverer  providersdk.Discoverer
-	writer      providersdk.PropertyWriter
-	registry    *registry.DeviceRegistry
-	dispatcher  *eventbus.Dispatcher
-	states      *statestore.Store
-	commands    *commandtracker.Tracker
-	unsubscribe func()
-	mu          sync.RWMutex
-	nextID      uint64
-	listeners   map[uint64]*deviceSubscription
-	staleCancel context.CancelFunc
-	staleDone   chan struct{}
-	metrics     deviceMetrics
+	provider       providersdk.Provider
+	discoverer     providersdk.Discoverer
+	writer         providersdk.PropertyWriter
+	registry       *registry.DeviceRegistry
+	dispatcher     *eventbus.Dispatcher
+	states         *statestore.Store
+	commands       *commandtracker.Tracker
+	unsubscribe    func()
+	mu             sync.RWMutex
+	nextID         uint64
+	listeners      map[uint64]*deviceSubscription
+	nextStateID    uint64
+	stateListeners map[uint64]*stateSubscription
+	staleCancel    context.CancelFunc
+	staleDone      chan struct{}
+	metrics        deviceMetrics
 }
 
 type deviceSubscription struct {
 	queue chan device.Device
+	done  chan struct{}
+}
+
+type stateSubscription struct {
+	queue chan domainstate.StateValue
 	done  chan struct{}
 }
 
@@ -49,6 +56,7 @@ type deviceMetrics struct {
 	eventsProcessed     atomic.Uint64
 	eventsDropped       atomic.Uint64
 	targetEventsDropped atomic.Uint64
+	stateEventsDropped  atomic.Uint64
 	statesMarkedStale   atomic.Uint64
 	commandsStarted     atomic.Uint64
 	commandsConfirmed   atomic.Uint64
@@ -63,6 +71,7 @@ type DeviceMetrics struct {
 	EventQueuePending       int     `json:"eventQueuePending"`
 	EventQueueCapacity      int     `json:"eventQueueCapacity"`
 	TargetEventsDropped     uint64  `json:"targetEventsDropped"`
+	StateEventsDropped      uint64  `json:"stateEventsDropped"`
 	StatesMarkedStale       uint64  `json:"statesMarkedStale"`
 	CommandsStarted         uint64  `json:"commandsStarted"`
 	CommandsConfirmed       uint64  `json:"commandsConfirmed"`
@@ -73,6 +82,7 @@ type DeviceMetrics struct {
 	ProvidersRunning        int     `json:"providersRunning"`
 	ProviderRetries         int     `json:"providerRetries"`
 	DeviceSubscribers       int     `json:"deviceSubscribers"`
+	StateSubscribers        int     `json:"stateSubscribers"`
 	CommandAverageLatencyMS float64 `json:"commandAverageLatencyMs"`
 }
 
@@ -87,10 +97,13 @@ func NewDeviceService(provider providersdk.Provider) *DeviceService {
 		provider: provider, discoverer: discoverer, writer: writer,
 		registry: registry.NewDeviceRegistry(items),
 		states:   statestore.NewStore(), commands: commandtracker.NewTracker(5 * time.Second),
-		listeners: make(map[uint64]*deviceSubscription),
+		listeners: make(map[uint64]*deviceSubscription), stateListeners: make(map[uint64]*stateSubscription),
 	}
 	for _, item := range items {
 		service.applySnapshot(item)
+		if !item.Online {
+			service.states.MarkDeviceStale(item.ID)
+		}
 	}
 	service.dispatcher = eventbus.NewDispatcher(8, 128, service.handleEvent)
 	staleCtx, staleCancel := context.WithCancel(context.Background())
@@ -152,7 +165,7 @@ func (s *DeviceService) Metrics() DeviceMetrics {
 		}
 	}
 	s.mu.RLock()
-	subscribers := len(s.listeners)
+	subscribers, stateSubscribers := len(s.listeners), len(s.stateListeners)
 	s.mu.RUnlock()
 	commands := s.commands.List()
 	var latency time.Duration
@@ -170,10 +183,10 @@ func (s *DeviceService) Metrics() DeviceMetrics {
 	return DeviceMetrics{
 		EventsReceived: s.metrics.eventsReceived.Load(), EventsProcessed: s.metrics.eventsProcessed.Load(),
 		EventsDropped: s.metrics.eventsDropped.Load(), EventQueuePending: s.dispatcher.Pending(), EventQueueCapacity: s.dispatcher.Capacity(),
-		TargetEventsDropped: s.metrics.targetEventsDropped.Load(), StatesMarkedStale: s.metrics.statesMarkedStale.Load(),
+		TargetEventsDropped: s.metrics.targetEventsDropped.Load(), StateEventsDropped: s.metrics.stateEventsDropped.Load(), StatesMarkedStale: s.metrics.statesMarkedStale.Load(),
 		CommandsStarted: s.metrics.commandsStarted.Load(), CommandsConfirmed: s.metrics.commandsConfirmed.Load(),
 		CommandsRejected: s.metrics.commandsRejected.Load(), CommandsTimedOut: s.metrics.commandsTimedOut.Load(),
-		OnlineDevices: online, OfflineDevices: len(items) - online, ProvidersRunning: providersRunning, ProviderRetries: providerRetries, DeviceSubscribers: subscribers,
+		OnlineDevices: online, OfflineDevices: len(items) - online, ProvidersRunning: providersRunning, ProviderRetries: providerRetries, DeviceSubscribers: subscribers, StateSubscribers: stateSubscribers,
 		CommandAverageLatencyMS: averageLatency,
 	}
 }
@@ -245,6 +258,23 @@ func (s *DeviceService) Subscribe(handler func(device.Device)) func() {
 	return func() { once.Do(func() { s.removeSubscription(id) }) }
 }
 
+func (s *DeviceService) SubscribeStates(handler func(domainstate.StateValue)) func() {
+	s.mu.Lock()
+	s.nextStateID++
+	id := s.nextStateID
+	subscription := &stateSubscription{queue: make(chan domainstate.StateValue, 64), done: make(chan struct{})}
+	s.stateListeners[id] = subscription
+	s.mu.Unlock()
+	go func() {
+		defer close(subscription.done)
+		for item := range subscription.queue {
+			handler(item)
+		}
+	}()
+	var once sync.Once
+	return func() { once.Do(func() { s.removeStateSubscription(id) }) }
+}
+
 func (s *DeviceService) Close() error {
 	s.unsubscribe()
 	s.closeSubscriptions()
@@ -265,12 +295,22 @@ func (s *DeviceService) handleEvent(event eventbus.Event) {
 	}
 	s.metrics.eventsProcessed.Add(1)
 	s.registry.Upsert(item)
-	s.applySnapshot(item)
-	for _, endpoint := range item.Endpoints {
-		for _, capability := range endpoint.Capabilities {
-			for _, property := range capability.Properties {
-				if s.commands.Confirm(item.ID, endpoint.ID, capability.ID, property.Definition.ID, property.Value) {
-					s.metrics.commandsConfirmed.Add(1)
+	if item.Online {
+		s.applySnapshot(item)
+	} else {
+		stale := s.states.MarkDeviceStale(item.ID)
+		s.metrics.statesMarkedStale.Add(uint64(len(stale)))
+		for _, value := range stale {
+			s.publishState(value)
+		}
+	}
+	if item.Online {
+		for _, endpoint := range item.Endpoints {
+			for _, capability := range endpoint.Capabilities {
+				for _, property := range capability.Properties {
+					if s.commands.Confirm(item.ID, endpoint.ID, capability.ID, property.Definition.ID, property.Value) {
+						s.metrics.commandsConfirmed.Add(1)
+					}
 				}
 			}
 		}
@@ -313,7 +353,9 @@ func (s *DeviceService) applySnapshot(item device.Device) {
 				default:
 					continue
 				}
-				s.states.Apply(value)
+				if applied, changed := s.states.Apply(value); changed {
+					s.publishState(applied)
+				}
 			}
 		}
 	}
@@ -328,6 +370,9 @@ func (s *DeviceService) runStaleScanner(ctx context.Context) {
 		case now := <-ticker.C:
 			stale := s.states.MarkStale(now.UTC())
 			s.metrics.statesMarkedStale.Add(uint64(len(stale)))
+			for _, value := range stale {
+				s.publishState(value)
+			}
 			expired := s.commands.Expire(now.UTC())
 			s.metrics.commandsTimedOut.Add(uint64(len(expired)))
 		case <-ctx.Done():
@@ -349,6 +394,31 @@ func (s *DeviceService) removeSubscription(id uint64) {
 	}
 }
 
+func (s *DeviceService) removeStateSubscription(id uint64) {
+	s.mu.Lock()
+	subscription, ok := s.stateListeners[id]
+	if ok {
+		delete(s.stateListeners, id)
+		close(subscription.queue)
+	}
+	s.mu.Unlock()
+	if ok {
+		<-subscription.done
+	}
+}
+
+func (s *DeviceService) publishState(value domainstate.StateValue) {
+	s.mu.RLock()
+	for _, subscription := range s.stateListeners {
+		select {
+		case subscription.queue <- value:
+		default:
+			s.metrics.stateEventsDropped.Add(1)
+		}
+	}
+	s.mu.RUnlock()
+}
+
 func (s *DeviceService) closeSubscriptions() {
 	s.mu.Lock()
 	subscriptions := make([]*deviceSubscription, 0, len(s.listeners))
@@ -357,8 +427,17 @@ func (s *DeviceService) closeSubscriptions() {
 		close(subscription.queue)
 		subscriptions = append(subscriptions, subscription)
 	}
+	stateSubscriptions := make([]*stateSubscription, 0, len(s.stateListeners))
+	for id, subscription := range s.stateListeners {
+		delete(s.stateListeners, id)
+		close(subscription.queue)
+		stateSubscriptions = append(stateSubscriptions, subscription)
+	}
 	s.mu.Unlock()
 	for _, subscription := range subscriptions {
+		<-subscription.done
+	}
+	for _, subscription := range stateSubscriptions {
 		<-subscription.done
 	}
 }

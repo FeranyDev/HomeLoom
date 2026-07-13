@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react'
-import { getDeviceStates } from '../api/devices'
+import { getDeviceStates, subscribeDeviceStates } from '../api/devices'
 import type { Device, PropertyValue, StateValue } from '../types/device'
 import { PropertyControl } from './PropertyControl'
 
 function displayValue(value: PropertyValue): string { if (value.bool !== undefined) return value.bool ? 'true' : 'false'; if (value.number !== undefined) return String(value.number); return value.string ?? '—' }
+function mergeState(items: StateValue[], incoming: StateValue): StateValue[] { const index = items.findIndex((item) => item.key.endpointId === incoming.key.endpointId && item.key.capabilityId === incoming.key.capabilityId && item.key.propertyId === incoming.key.propertyId); if (index < 0) return [...items, incoming]; if (items[index].version > incoming.version) return items; return items.map((item, current) => current === index ? incoming : item) }
 
 export function DeviceDetails({ device, onClose, onPropertyWrite }: { device: Device; onClose: () => void; onPropertyWrite: (endpointId: string, capabilityId: string, propertyId: string, value: PropertyValue) => Promise<void> }) {
   const [states, setStates] = useState<StateValue[]>([])
   const [error, setError] = useState<string | null>(null)
-  useEffect(() => { const controller = new AbortController(); const load = () => void getDeviceStates(device.id, controller.signal).then((items) => { setStates(items); setError(null) }).catch((cause) => { if (!(cause instanceof DOMException && cause.name === 'AbortError')) setError(cause instanceof Error ? cause.message : '状态读取失败') }); load(); const timer = window.setInterval(load, 2000); return () => { controller.abort(); window.clearInterval(timer) } }, [device.id, device.lastUpdateAt])
+  useEffect(() => { const controller = new AbortController(); void getDeviceStates(device.id, controller.signal).then((items) => { setStates((current) => items.reduce(mergeState, current)); setError(null) }).catch((cause) => { if (!(cause instanceof DOMException && cause.name === 'AbortError')) setError(cause instanceof Error ? cause.message : '状态读取失败') }); const unsubscribe = subscribeDeviceStates(device.id, (state) => setStates((current) => mergeState(current, state))); return () => { controller.abort(); unsubscribe() } }, [device.id])
   useEffect(() => { const close = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }; window.addEventListener('keydown', close); return () => window.removeEventListener('keydown', close) }, [onClose])
   const stateFor = (endpointId: string, capabilityId: string, propertyId: string) => states.find((item) => item.key.endpointId === endpointId && item.key.capabilityId === capabilityId && item.key.propertyId === propertyId)
   return <div className="modal-backdrop"><section className="device-details" role="dialog" aria-label={`${device.name}详情`}><div className="form-heading"><div><p className="eyebrow">DEVICE · {device.providerId}</p><h2>{device.name}</h2><small>{device.id}</small></div><button onClick={onClose}>关闭</button></div>

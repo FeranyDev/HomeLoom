@@ -82,3 +82,21 @@ func TestMarkStaleExpiresOnceAndIncrementsVersion(t *testing.T) {
 		t.Fatalf("duplicate stale changes = %#v", changed)
 	}
 }
+
+func TestMarkDeviceStaleIsImmediateAndIdempotent(t *testing.T) {
+	store := NewStore()
+	now := time.Now().UTC()
+	for _, deviceID := range []string{"offline", "online"} {
+		store.Apply(domainstate.StateValue{Key: domainstate.Key{DeviceID: deviceID, PropertyID: "power"}, Value: domainstate.BoolValue(true), ProviderID: "provider", ObservedAt: now, ReceivedAt: now, ExpiresAt: now.Add(time.Hour), Quality: domainstate.QualityReported})
+	}
+	changed := store.MarkDeviceStale("offline")
+	if len(changed) != 1 || changed[0].Quality != domainstate.QualityStale || changed[0].Version != 2 {
+		t.Fatalf("changed = %#v", changed)
+	}
+	if repeated := store.MarkDeviceStale("offline"); len(repeated) != 0 {
+		t.Fatalf("repeated = %#v", repeated)
+	}
+	if current := store.Device("online"); len(current) != 1 || current[0].Quality != domainstate.QualityReported {
+		t.Fatalf("unrelated state = %#v", current)
+	}
+}

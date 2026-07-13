@@ -239,7 +239,7 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 - [x] stale TTL；
 - [x] 定时 stale 扫描；
 - [ ] unknown 初始状态；
-- [ ] Provider 离线批量标记 stale；
+- [x] Provider 离线批量标记 stale；
 - [ ] 乐观状态；
 - [ ] 乐观状态到期；
 - [ ] confirmed 状态覆盖 optimistic；
@@ -247,7 +247,7 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 - [ ] 不同 Provider 优先级；
 - [ ] 属性级 Provider 优先级；
 - [ ] 可解释的冲突结果；
-- [ ] 状态变更订阅 API；
+- [x] 状态变更订阅 API；
 - [x] WebSocket/SSE 实时推送；
 - [ ] 可选低频 checkpoint；
 - [ ] checkpoint 恢复时强制标记 stale；

@@ -356,6 +356,43 @@ func TestCommandEventStreamPublishesLifecycle(t *testing.T) {
 	}
 }
 
+func TestStateEventStreamPublishesQualityChanges(t *testing.T) {
+	httpServer := httptest.NewServer(newTestServer().Handler())
+	defer httpServer.Close()
+	response, err := http.Get(httpServer.URL + "/api/v1/events/states?deviceId=virtual-switch-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	scanner := bufio.NewScanner(response.Body)
+	if !scanner.Scan() || scanner.Text() != "event: ready" {
+		t.Fatalf("ready = %q", scanner.Text())
+	}
+	for scanner.Scan() {
+		if scanner.Text() == "" {
+			break
+		}
+	}
+	patch, _ := http.NewRequest(http.MethodPatch, httpServer.URL+"/api/v1/devices/virtual-switch-1/simulation", bytes.NewBufferString(`{"online":false}`))
+	patch.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	patchResponse, err := http.DefaultClient.Do(patch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patchResponse.Body.Close()
+	found := false
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "data: ") && strings.Contains(line, `"deviceId":"virtual-switch-1"`) && strings.Contains(line, `"quality":"stale"`) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("stale state event not received: %v", scanner.Err())
+	}
+}
+
 func TestRestartProviderEndpoint(t *testing.T) {
 	ctx := context.Background()
 	config := providerconfig.Config{ID: "virtual-main", Type: "virtual", Name: "Virtual", Enabled: true, Config: []byte(`{}`)}

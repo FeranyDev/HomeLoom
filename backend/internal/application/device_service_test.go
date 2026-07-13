@@ -9,6 +9,8 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/application"
 	domaincommand "github.com/feranydev/homeloom/backend/internal/domain/command"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
+	domainstate "github.com/feranydev/homeloom/backend/internal/domain/state"
+	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
 )
 
@@ -90,4 +92,71 @@ func TestDeviceServiceCommandIsConfirmedByProviderEvent(t *testing.T) {
 	}
 	current, _ := service.Command(command.ID)
 	t.Fatalf("command status = %s", current.Status)
+}
+
+func TestDeviceOfflineImmediatelyMarksStateStaleAndOnlineRestoresIt(t *testing.T) {
+	service := application.NewDeviceService(virtual.NewProvider())
+	defer service.Close()
+	id := "virtual-switch-1"
+	offline := false
+	stateEvents := make(chan domainstate.StateValue, 3)
+	unsubscribe := service.SubscribeStates(func(value domainstate.StateValue) { stateEvents <- value })
+	defer unsubscribe()
+	if _, err := service.Simulate(context.Background(), providersdk.SimulationRequest{DeviceID: id, Online: &offline}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	var staleVersion uint64
+	for time.Now().Before(deadline) {
+		states := service.States(id)
+		if len(states) == 1 && states[0].Quality == domainstate.QualityStale {
+			staleVersion = states[0].Version
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if staleVersion == 0 {
+		t.Fatalf("state did not become stale: %#v", service.States(id))
+	}
+	select {
+	case event := <-stateEvents:
+		if event.Quality != domainstate.QualityStale {
+			t.Fatalf("offline event = %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("missing stale state event")
+	}
+	if _, err := service.Simulate(context.Background(), providersdk.SimulationRequest{DeviceID: id, Online: &offline}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if version := service.States(id)[0].Version; version != staleVersion {
+		t.Fatalf("duplicate offline changed version from %d to %d", staleVersion, version)
+	}
+	select {
+	case event := <-stateEvents:
+		t.Fatalf("duplicate offline published %#v", event)
+	default:
+	}
+	online := true
+	if _, err := service.Simulate(context.Background(), providersdk.SimulationRequest{DeviceID: id, Online: &online}); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		states := service.States(id)
+		if len(states) == 1 && states[0].Quality == domainstate.QualityReported && states[0].Version == staleVersion+1 {
+			select {
+			case event := <-stateEvents:
+				if event.Quality != domainstate.QualityReported {
+					t.Fatalf("online event = %#v", event)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("missing recovered state event")
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("state did not recover: %#v", service.States(id))
 }

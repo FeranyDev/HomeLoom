@@ -9,6 +9,12 @@ export async function getDeviceStates(id: string, signal?: AbortSignal): Promise
   return requestData<StateValue[]>(`/api/v1/devices/${encodeURIComponent(id)}/states`, { signal })
 }
 
+export function subscribeDeviceStates(id: string, onState: (state: StateValue) => void): () => void {
+  const source = new EventSource(`/api/v1/events/states?deviceId=${encodeURIComponent(id)}`)
+  source.addEventListener('state', (event) => { try { onState(JSON.parse(event.data) as StateValue) } catch { /* ignore malformed events */ } })
+  return () => source.close()
+}
+
 export async function setDevicePower(id: string, value: boolean): Promise<Device> {
   return requestData<Device>(`/api/v1/devices/${encodeURIComponent(id)}/properties/power`, {
     method: 'PUT',

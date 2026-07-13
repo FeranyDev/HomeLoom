@@ -1,9 +1,9 @@
 export interface Diagnostics {
   eventsReceived: number; eventsProcessed: number; eventsDropped: number
-  eventQueuePending: number; eventQueueCapacity: number; targetEventsDropped: number
+  eventQueuePending: number; eventQueueCapacity: number; targetEventsDropped: number; stateEventsDropped: number
   statesMarkedStale: number; commandsStarted: number; commandsConfirmed: number
   commandsRejected: number; commandsTimedOut: number
-  onlineDevices: number; offlineDevices: number; providersRunning: number; deviceSubscribers: number
+  onlineDevices: number; offlineDevices: number; providersRunning: number; deviceSubscribers: number; stateSubscribers: number
   providerRetries: number
   commandAverageLatencyMs: number
 }
