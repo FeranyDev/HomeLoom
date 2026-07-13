@@ -72,6 +72,19 @@ func TestDeviceServiceReadsProviderProperty(t *testing.T) {
 	}
 }
 
+func TestDeviceServiceExecutesActionCommand(t *testing.T) {
+	service := application.NewDeviceService(virtual.NewProvider())
+	defer service.Close()
+	updated, command, err := service.ExecuteCommand(context.Background(), providersdk.CommandRequest{DeviceID: "virtual-switch-1", EndpointID: "main", CapabilityID: "switch", CommandID: "set-power", Parameters: map[string]device.PropertyValue{"value": device.BoolValue(true)}})
+	property, _ := updated.Property("main", "switch", "power")
+	if err != nil || command.Kind != domaincommand.KindAction || command.CommandID != "set-power" || command.Status != domaincommand.StatusConfirmed || property.Value.Bool == nil || !*property.Value.Bool {
+		t.Fatalf("ExecuteCommand() = %#v, %#v, %v", updated, command, err)
+	}
+	if _, _, err := service.ExecuteCommand(context.Background(), providersdk.CommandRequest{DeviceID: "virtual-switch-1", EndpointID: "main", CapabilityID: "switch", CommandID: "set-power"}); !errors.Is(err, providersdk.ErrCommandInvalid) {
+		t.Fatalf("invalid error = %v", err)
+	}
+}
+
 func TestSlowSubscriberDoesNotBlockCoreDispatcher(t *testing.T) {
 	service := application.NewDeviceService(virtual.NewProvider())
 	blocked := make(chan struct{})

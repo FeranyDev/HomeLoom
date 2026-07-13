@@ -26,6 +26,16 @@ func (r *DeviceRegistry) Upsert(item device.Device) {
 	r.mu.Unlock()
 }
 
+func (r *DeviceRegistry) Get(id string) (device.Device, bool) {
+	r.mu.RLock()
+	item, ok := r.devices[id]
+	r.mu.RUnlock()
+	if !ok {
+		return device.Device{}, false
+	}
+	return item.Clone(), true
+}
+
 func (r *DeviceRegistry) List() []device.Device {
 	r.mu.RLock()
 	result := make([]device.Device, 0, len(r.devices))

@@ -53,3 +53,20 @@
 - `GET /api/v1/commands`：命令生命周期历史。
 
 `/metrics` 中的 runtime 指标包括 `homeloom_go_goroutines`、`homeloom_go_heap_alloc_bytes` 和 `homeloom_go_heap_objects`。
+
+## Action / Command
+
+Capability 可以声明带 typed parameters 的命令，执行入口为：
+
+```http
+POST /api/v1/devices/{deviceId}/endpoints/{endpointId}/capabilities/{capabilityId}/commands/{commandId}
+Content-Type: application/json
+
+{
+  "parameters": {
+    "value": { "type": "bool", "bool": true }
+  }
+}
+```
+
+Core 会根据 Capability 中的 `CommandDefinition` 校验必填参数、未声明参数和 typed payload。动作会记入统一命令历史，`kind` 为 `action`。动作默认不自动重试，避免对非幂等操作产生重复副作用。

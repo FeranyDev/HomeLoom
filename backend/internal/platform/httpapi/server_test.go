@@ -289,6 +289,25 @@ func TestGenericPropertyRead(t *testing.T) {
 	}
 }
 
+func TestGenericCommandExecution(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/devices/virtual-switch-1/endpoints/main/capabilities/switch/commands/set-power", bytes.NewBufferString(`{"parameters":{"value":{"type":"bool","bool":true}}}`))
+	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response := httptest.NewRecorder()
+	newTestServer().Handler().ServeHTTP(response, request)
+	for _, expected := range []string{`"kind":"action"`, `"commandId":"set-power"`, `"status":"confirmed"`, `"bool":true`} {
+		if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(expected)) {
+			t.Fatalf("response = %d %s", response.Code, response.Body.String())
+		}
+	}
+	invalid := httptest.NewRequest(http.MethodPost, "/api/v1/devices/virtual-switch-1/endpoints/main/capabilities/switch/commands/set-power", bytes.NewBufferString(`{}`))
+	invalid.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	invalidResponse := httptest.NewRecorder()
+	newTestServer().Handler().ServeHTTP(invalidResponse, invalid)
+	if invalidResponse.Code != http.StatusBadRequest {
+		t.Fatalf("invalid response = %d %s", invalidResponse.Code, invalidResponse.Body.String())
+	}
+}
+
 func TestSimulateVirtualDevice(t *testing.T) {
 	server := newTestServer()
 	request := httptest.NewRequest(http.MethodPatch, "/api/v1/devices/virtual-temperature-1/simulation", bytes.NewBufferString(`{"online":false,"temperature":17.5}`))

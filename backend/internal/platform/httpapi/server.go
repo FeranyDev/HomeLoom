@@ -77,6 +77,10 @@ type simulationRequest struct {
 	Motion      *bool    `json:"motion"`
 }
 
+type commandRequest struct {
+	Parameters map[string]device.PropertyValue `json:"parameters"`
+}
+
 type targetRequest struct {
 	ID        string   `json:"id"`
 	Type      string   `json:"type"`
@@ -545,6 +549,34 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 			return echo.NewHTTPError(http.StatusInternalServerError, "failed to read property").SetInternal(err)
 		}
 		return c.JSON(http.StatusOK, map[string]any{"data": property})
+	})
+	e.POST("/api/v1/devices/:id/endpoints/:endpoint/capabilities/:capability/commands/:command", func(c echo.Context) error {
+		var body commandRequest
+		if c.Request().ContentLength > 0 {
+			if err := c.Bind(&body); err != nil {
+				return echo.NewHTTPError(http.StatusBadRequest, "invalid command parameters")
+			}
+		}
+		item, command, err := devices.ExecuteCommand(c.Request().Context(), providersdk.CommandRequest{DeviceID: c.Param("id"), EndpointID: c.Param("endpoint"), CapabilityID: c.Param("capability"), CommandID: c.Param("command"), Parameters: body.Parameters})
+		if errors.Is(err, application.ErrDeviceNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "device not found")
+		}
+		if errors.Is(err, providersdk.ErrCommandUnsupported) {
+			return echo.NewHTTPError(http.StatusUnprocessableEntity, "command is not supported")
+		}
+		if errors.Is(err, providersdk.ErrCommandInvalid) {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid command parameters")
+		}
+		if errors.Is(err, providersdk.ErrProviderUnavailable) {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "provider unavailable")
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return echo.NewHTTPError(http.StatusRequestTimeout, "command canceled")
+		}
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to execute command").SetInternal(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": item, "command": command})
 	})
 	e.GET("/api/v1/commands", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"data": devices.Commands()})

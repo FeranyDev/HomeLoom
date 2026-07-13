@@ -15,7 +15,7 @@ export interface SystemVersion { version: string; commit: string; buildTime: str
 
 export interface CommandValue { type: string; bool?: boolean; number?: number; string?: string }
 export interface DeviceCommand {
-  id: string; deviceId: string; endpointId: string; capabilityId: string; propertyId: string
-  expected: CommandValue; status: 'queued' | 'sent' | 'accepted' | 'confirmed' | 'rejected' | 'timeout' | 'superseded'
+  id: string; kind?: 'property' | 'action'; deviceId: string; endpointId: string; capabilityId: string; propertyId?: string; commandId?: string
+  expected?: CommandValue; parameters?: Record<string, CommandValue>; status: 'queued' | 'sent' | 'accepted' | 'confirmed' | 'rejected' | 'timeout' | 'superseded'
   error?: string; createdAt: string; updatedAt: string; deadline: string
 }

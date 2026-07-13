@@ -2,6 +2,7 @@ export interface ProviderCapabilities {
   discovery: boolean
   propertyRead: boolean
   propertyWrite: boolean
+	commands?: boolean
   events: boolean
 }
 

@@ -28,6 +28,7 @@ type DeviceService struct {
 	discoverer     providersdk.Discoverer
 	reader         providersdk.PropertyReader
 	writer         providersdk.PropertyWriter
+	executor       providersdk.CommandExecutor
 	registry       *registry.DeviceRegistry
 	dispatcher     *eventbus.Dispatcher
 	states         *statestore.Store
@@ -97,12 +98,13 @@ func NewDeviceService(provider providersdk.Provider) *DeviceService {
 	discoverer, _ := provider.(providersdk.Discoverer)
 	reader, _ := provider.(providersdk.PropertyReader)
 	writer, _ := provider.(providersdk.PropertyWriter)
+	executor, _ := provider.(providersdk.CommandExecutor)
 	items := make([]device.Device, 0)
 	if discoverer != nil {
 		items, _ = discoverer.DiscoverDevices(context.Background())
 	}
 	service := &DeviceService{
-		provider: provider, discoverer: discoverer, reader: reader, writer: writer,
+		provider: provider, discoverer: discoverer, reader: reader, writer: writer, executor: executor,
 		registry: registry.NewDeviceRegistry(items),
 		states:   statestore.NewStore(), commands: commandtracker.NewTracker(5 * time.Second),
 		listeners: make(map[uint64]*deviceSubscription), stateListeners: make(map[uint64]*stateSubscription),
@@ -263,6 +265,92 @@ func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointI
 	s.commands.Accepted(command.ID)
 	current, _ := s.commands.Get(command.ID)
 	return item, current, nil
+}
+
+func (s *DeviceService) ExecuteCommand(ctx context.Context, request providersdk.CommandRequest) (device.Device, domaincommand.Command, error) {
+	if err := s.validateCommand(request); err != nil {
+		return device.Device{}, domaincommand.Command{}, err
+	}
+	command := s.commands.BeginAction(request.DeviceID, request.EndpointID, request.CapabilityID, request.CommandID, request.Parameters)
+	s.metrics.commandsStarted.Add(1)
+	s.commands.Sent(command.ID)
+	if s.executor == nil {
+		err := providersdk.ErrCommandUnsupported
+		s.commands.Rejected(command.ID, err)
+		s.metrics.commandsRejected.Add(1)
+		current, _ := s.commands.Get(command.ID)
+		return device.Device{}, current, err
+	}
+	item, err := s.executor.ExecuteCommand(ctx, request)
+	if err != nil {
+		s.commands.Rejected(command.ID, err)
+		s.metrics.commandsRejected.Add(1)
+		current, _ := s.commands.Get(command.ID)
+		return device.Device{}, current, err
+	}
+	s.commands.Confirmed(command.ID)
+	s.metrics.commandsConfirmed.Add(1)
+	current, _ := s.commands.Get(command.ID)
+	return item, current, nil
+}
+
+func (s *DeviceService) validateCommand(request providersdk.CommandRequest) error {
+	item, ok := s.registry.Get(request.DeviceID)
+	if !ok {
+		return ErrDeviceNotFound
+	}
+	for _, endpoint := range item.Endpoints {
+		if endpoint.ID != request.EndpointID {
+			continue
+		}
+		for _, capability := range endpoint.Capabilities {
+			if capability.ID != request.CapabilityID {
+				continue
+			}
+			for _, definition := range capability.Commands {
+				if definition.ID != request.CommandID {
+					continue
+				}
+				declared := make(map[string]device.CommandParameter, len(definition.Parameters))
+				for _, parameter := range definition.Parameters {
+					declared[parameter.ID] = parameter
+					if parameter.Required {
+						if _, exists := request.Parameters[parameter.ID]; !exists {
+							return providersdk.ErrCommandInvalid
+						}
+					}
+				}
+				for id, value := range request.Parameters {
+					parameter, exists := declared[id]
+					if !exists || !valueMatchesType(value, parameter.Type) {
+						return providersdk.ErrCommandInvalid
+					}
+				}
+				return nil
+			}
+		}
+	}
+	return providersdk.ErrCommandUnsupported
+}
+
+func valueMatchesType(value device.PropertyValue, expected device.ValueType) bool {
+	if value.Type != expected {
+		return false
+	}
+	payloads := 0
+	if value.Bool != nil {
+		payloads++
+	}
+	if value.Number != nil {
+		payloads++
+	}
+	if value.String != nil {
+		payloads++
+	}
+	if payloads != 1 {
+		return false
+	}
+	return (expected == device.ValueTypeBool && value.Bool != nil) || (expected == device.ValueTypeNumber && value.Number != nil) || ((expected == device.ValueTypeString || expected == device.ValueTypeEnum) && value.String != nil)
 }
 
 func (s *DeviceService) applyOptimisticState(key domainstate.Key, value device.PropertyValue, command domaincommand.Command, previous domainstate.StateValue, hadPrevious bool) {

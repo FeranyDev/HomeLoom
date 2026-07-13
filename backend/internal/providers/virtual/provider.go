@@ -25,6 +25,7 @@ var _ providersdk.Provider = (*Provider)(nil)
 var _ providersdk.Discoverer = (*Provider)(nil)
 var _ providersdk.PropertyReader = (*Provider)(nil)
 var _ providersdk.PropertyWriter = (*Provider)(nil)
+var _ providersdk.CommandExecutor = (*Provider)(nil)
 var _ providersdk.EventSubscriber = (*Provider)(nil)
 var _ providersdk.Simulator = (*Provider)(nil)
 
@@ -33,7 +34,7 @@ func (p *Provider) Manifest() providersdk.Manifest {
 }
 
 func (p *Provider) Capabilities() providersdk.Capabilities {
-	return providersdk.Capabilities{Discovery: true, PropertyRead: true, PropertyWrite: true, Events: true}
+	return providersdk.Capabilities{Discovery: true, PropertyRead: true, PropertyWrite: true, Commands: true, Events: true}
 }
 
 func (p *Provider) Initialize(context.Context) error { return nil }
@@ -71,6 +72,31 @@ func (p *Provider) WriteProperty(ctx context.Context, request providersdk.Proper
 	return p.SetPower(ctx, request.DeviceID, *request.Value.Bool)
 }
 
+func (p *Provider) ExecuteCommand(ctx context.Context, request providersdk.CommandRequest) (device.Device, error) {
+	if request.EndpointID != "main" || request.CapabilityID != "switch" {
+		return device.Device{}, providersdk.ErrCommandUnsupported
+	}
+	switch request.CommandID {
+	case "toggle":
+		if len(request.Parameters) != 0 {
+			return device.Device{}, providersdk.ErrCommandInvalid
+		}
+		property, err := p.ReadProperty(ctx, providersdk.PropertyReadRequest{DeviceID: request.DeviceID, EndpointID: "main", CapabilityID: "switch", PropertyID: "power"})
+		if err != nil {
+			return device.Device{}, err
+		}
+		return p.SetPower(ctx, request.DeviceID, !*property.Value.Bool)
+	case "set-power":
+		value, ok := request.Parameters["value"]
+		if !ok || len(request.Parameters) != 1 || value.Type != device.ValueTypeBool || value.Bool == nil {
+			return device.Device{}, providersdk.ErrCommandInvalid
+		}
+		return p.SetPower(ctx, request.DeviceID, *value.Bool)
+	default:
+		return device.Device{}, providersdk.ErrCommandUnsupported
+	}
+}
+
 func NewProvider() *Provider {
 	return NewProviderWithIdentity("virtual-main", "Virtual Provider")
 }
@@ -104,7 +130,7 @@ func poweredDevice(id, providerID, name string, deviceType device.Type, online, 
 			Capabilities: []device.Capability{{ID: "switch", Type: "switch", Properties: []device.Property{{
 				Definition: device.PropertyDefinition{ID: "power", Name: "开关", Type: device.ValueTypeBool, Readable: true, Writable: true, Notifiable: true, StaleAfterSeconds: 15},
 				Value:      device.BoolValue(power),
-			}}}},
+			}}, Commands: []device.CommandDefinition{{ID: "toggle", Name: "切换"}, {ID: "set-power", Name: "设置开关", Parameters: []device.CommandParameter{{ID: "value", Name: "开关值", Type: device.ValueTypeBool, Required: true}}}}}},
 		}},
 	}
 }

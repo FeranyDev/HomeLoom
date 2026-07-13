@@ -144,7 +144,7 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 - [x] 定义可选 `Discoverer`；
 - [x] 定义可选 `PropertyReader`；
 - [x] 定义可选 `PropertyWriter`；
-- [ ] 定义可选 `CommandExecutor`；
+- [x] 定义可选 `CommandExecutor`；
 - [x] 定义可选 `EventSubscriber`；
 - [x] 定义 Provider 健康状态；
 - [x] 定义初始化、启动、停止和关闭顺序；
@@ -278,7 +278,7 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 ### 6.2 待完善
 
 - [x] 通用 Property Value，不限于 bool；
-- [ ] Action/Command 参数；
+- [x] Action/Command 参数；
 - [ ] Idempotency Key；
 - [ ] 同设备命令顺序队列；
 - [ ] 相同属性命令去重；

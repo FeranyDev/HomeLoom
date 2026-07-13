@@ -170,7 +170,7 @@ func TestProviderManifestAndCapabilities(t *testing.T) {
 	if manifest.ID != "virtual-main" || manifest.Type != "virtual" || manifest.Version == "" {
 		t.Fatalf("manifest = %#v", manifest)
 	}
-	if !capabilities.Discovery || !capabilities.PropertyRead || !capabilities.PropertyWrite || !capabilities.Events {
+	if !capabilities.Discovery || !capabilities.PropertyRead || !capabilities.PropertyWrite || !capabilities.Commands || !capabilities.Events {
 		t.Fatalf("capabilities = %#v", capabilities)
 	}
 }
@@ -202,6 +202,25 @@ func TestReadProperty(t *testing.T) {
 	cancel()
 	if _, err := provider.ReadProperty(canceled, request); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled error = %v", err)
+	}
+}
+
+func TestExecuteCommand(t *testing.T) {
+	provider := NewProvider()
+	request := providersdk.CommandRequest{DeviceID: "virtual-switch-1", EndpointID: "main", CapabilityID: "switch", CommandID: "toggle"}
+	updated, err := provider.ExecuteCommand(context.Background(), request)
+	if err != nil || !boolProperty(updated, "switch", "power") {
+		t.Fatalf("toggle = %#v, %v", updated, err)
+	}
+	request.CommandID = "set-power"
+	request.Parameters = map[string]device.PropertyValue{"value": device.BoolValue(false)}
+	updated, err = provider.ExecuteCommand(context.Background(), request)
+	if err != nil || boolProperty(updated, "switch", "power") {
+		t.Fatalf("set-power = %#v, %v", updated, err)
+	}
+	request.Parameters = nil
+	if _, err := provider.ExecuteCommand(context.Background(), request); !errors.Is(err, providersdk.ErrCommandInvalid) {
+		t.Fatalf("invalid error = %v", err)
 	}
 }
 

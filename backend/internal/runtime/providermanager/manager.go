@@ -57,7 +57,7 @@ func (m *Manager) Manifest() providersdk.Manifest {
 	return providersdk.Manifest{ID: "provider-manager", Type: "manager", Name: "Provider Manager", Version: "0.2.0"}
 }
 func (m *Manager) Capabilities() providersdk.Capabilities {
-	return providersdk.Capabilities{Discovery: true, PropertyRead: true, PropertyWrite: true, Events: true}
+	return providersdk.Capabilities{Discovery: true, PropertyRead: true, PropertyWrite: true, Commands: true, Events: true}
 }
 
 func (m *Manager) Initialize(ctx context.Context) error {
@@ -346,6 +346,29 @@ func (m *Manager) ReadProperty(ctx context.Context, request providersdk.Property
 	return reader.ReadProperty(ctx, request)
 }
 
+func (m *Manager) ExecuteCommand(ctx context.Context, request providersdk.CommandRequest) (device.Device, error) {
+	m.mu.RLock()
+	id, ok := m.routes[request.DeviceID]
+	current := m.providers[id]
+	m.mu.RUnlock()
+	if !ok || current == nil {
+		return device.Device{}, providersdk.ErrDeviceNotFound
+	}
+	executor, ok := current.provider.(providersdk.CommandExecutor)
+	if !ok {
+		return device.Device{}, providersdk.ErrCommandUnsupported
+	}
+	item, err := executor.ExecuteCommand(ctx, request)
+	if err != nil {
+		return device.Device{}, err
+	}
+	item.ProviderID = id
+	if err := item.Validate(); err != nil {
+		return device.Device{}, fmt.Errorf("provider %q returned invalid device snapshot: %w", id, err)
+	}
+	return item, nil
+}
+
 func (m *Manager) Simulate(ctx context.Context, request providersdk.SimulationRequest) (device.Device, error) {
 	m.mu.RLock()
 	id, ok := m.routes[request.DeviceID]
@@ -579,6 +602,7 @@ var _ providersdk.Provider = (*Manager)(nil)
 var _ providersdk.Discoverer = (*Manager)(nil)
 var _ providersdk.PropertyReader = (*Manager)(nil)
 var _ providersdk.PropertyWriter = (*Manager)(nil)
+var _ providersdk.CommandExecutor = (*Manager)(nil)
 var _ providersdk.EventSubscriber = (*Manager)(nil)
 var _ providersdk.Inspector = (*Manager)(nil)
 var _ providersdk.Simulator = (*Manager)(nil)

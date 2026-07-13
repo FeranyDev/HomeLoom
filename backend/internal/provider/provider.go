@@ -14,6 +14,8 @@ var (
 	ErrWriteRejected       = errors.New("provider rejected write")
 	ErrSimulationInvalid   = errors.New("invalid simulation request")
 	ErrProviderUnavailable = errors.New("provider unavailable")
+	ErrCommandUnsupported  = errors.New("command unsupported")
+	ErrCommandInvalid      = errors.New("invalid command request")
 )
 
 type Manifest struct {
@@ -27,6 +29,7 @@ type Capabilities struct {
 	Discovery     bool `json:"discovery"`
 	PropertyRead  bool `json:"propertyRead"`
 	PropertyWrite bool `json:"propertyWrite"`
+	Commands      bool `json:"commands"`
 	Events        bool `json:"events"`
 }
 
@@ -62,6 +65,18 @@ type PropertyWriteRequest struct {
 
 type PropertyWriter interface {
 	WriteProperty(context.Context, PropertyWriteRequest) (device.Device, error)
+}
+
+type CommandRequest struct {
+	DeviceID     string
+	EndpointID   string
+	CapabilityID string
+	CommandID    string
+	Parameters   map[string]device.PropertyValue
+}
+
+type CommandExecutor interface {
+	ExecuteCommand(context.Context, CommandRequest) (device.Device, error)
 }
 
 type EventSubscriber interface {

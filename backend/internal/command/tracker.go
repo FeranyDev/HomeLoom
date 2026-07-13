@@ -35,7 +35,7 @@ func (t *Tracker) BeginReplacing(deviceID, endpointID, capabilityID, propertyID 
 	key := pendingKey(deviceID, endpointID, capabilityID, propertyID)
 	command := domaincommand.Command{
 		ID: commandID(), DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID,
-		PropertyID: propertyID, Expected: value,
+		Kind: domaincommand.KindProperty, PropertyID: propertyID, Expected: value,
 		Status: domaincommand.StatusQueued, CreatedAt: now, UpdatedAt: now, Deadline: now.Add(t.timeout),
 	}
 	t.mu.Lock()
@@ -60,6 +60,28 @@ func (t *Tracker) BeginReplacing(deviceID, endpointID, capabilityID, propertyID 
 	return command, superseded
 }
 
+func (t *Tracker) BeginAction(deviceID, endpointID, capabilityID, actionID string, parameters map[string]device.PropertyValue) domaincommand.Command {
+	now := time.Now().UTC()
+	command := domaincommand.Command{ID: commandID(), Kind: domaincommand.KindAction, DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID, CommandID: actionID, Parameters: cloneParameters(parameters), Status: domaincommand.StatusQueued, CreatedAt: now, UpdatedAt: now, Deadline: now.Add(t.timeout)}
+	t.mu.Lock()
+	t.pruneLocked()
+	t.commands[command.ID] = command
+	t.mu.Unlock()
+	t.notify(command)
+	return command
+}
+
+func cloneParameters(parameters map[string]device.PropertyValue) map[string]device.PropertyValue {
+	if len(parameters) == 0 {
+		return nil
+	}
+	result := make(map[string]device.PropertyValue, len(parameters))
+	for key, value := range parameters {
+		result[key] = value
+	}
+	return result
+}
+
 func (t *Tracker) pruneLocked() {
 	if len(t.commands) < t.maxItems {
 		return
@@ -79,8 +101,9 @@ func (t *Tracker) pruneLocked() {
 	}
 }
 
-func (t *Tracker) Sent(id string)     { t.transition(id, domaincommand.StatusSent, "") }
-func (t *Tracker) Accepted(id string) { t.transition(id, domaincommand.StatusAccepted, "") }
+func (t *Tracker) Sent(id string)      { t.transition(id, domaincommand.StatusSent, "") }
+func (t *Tracker) Accepted(id string)  { t.transition(id, domaincommand.StatusAccepted, "") }
+func (t *Tracker) Confirmed(id string) { t.transition(id, domaincommand.StatusConfirmed, "") }
 func (t *Tracker) Rejected(id string, err error) {
 	t.transition(id, domaincommand.StatusRejected, err.Error())
 }

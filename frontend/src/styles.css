@@ -178,6 +178,13 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .property-control input { width: 150px; }
 .property-control button { cursor: pointer; }
 .property-control small { align-self: center; color: #9a5545; }
+.command-controls { display: grid; grid-column: 1 / -1; gap: 8px; margin-top: 8px; }
+.command-control { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; padding: 12px; border: 1px solid #c9c9c1; background: #e9e9e2; }
+.command-control > div { display: grid; margin-right: auto; }
+.command-control code, .command-control label span { color: #858981; font-size: 9px; }
+.command-control label { display: grid; gap: 3px; }
+.command-control input, .command-control select, .command-control button { padding: 7px 9px; border: 1px solid #c4c5bd; background: #f8f7f1; color: #545950; font-size: 11px; }
+.command-control small { width: 100%; color: #9a5545; }
 .property-node dl { display: grid; grid-template-columns: repeat(3, 1fr); grid-column: 1 / -1; gap: 1px; margin: 0; background: #d9d8d1; }
 .property-node dl div { padding: 9px; background: #f3f1ea; }
 .property-node dt { color: #999b95; font-size: 9px; }
