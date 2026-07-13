@@ -174,6 +174,30 @@ func TestNewProviderStartsWithFreshRuntimeState(t *testing.T) {
 	}
 }
 
+func TestSimulationCanEmitRepeatedAndOutOfOrderSequences(t *testing.T) {
+	provider := NewProvider()
+	events := make(chan device.Device, 4)
+	unsubscribe := provider.Subscribe(func(item device.Device) { events <- item })
+	defer unsubscribe()
+	sequence := uint64(9)
+	updated, err := provider.Simulate(context.Background(), providersdk.SimulationRequest{DeviceID: "virtual-switch-1", Sequence: &sequence, Repeat: 2})
+	if err != nil || updated.Sequence != sequence {
+		t.Fatalf("simulation = %#v, %v", updated, err)
+	}
+	for index := 0; index < 2; index++ {
+		if event := <-events; event.Sequence != sequence {
+			t.Fatalf("event sequence = %d", event.Sequence)
+		}
+	}
+	older := uint64(3)
+	if event, err := provider.Simulate(context.Background(), providersdk.SimulationRequest{DeviceID: "virtual-switch-1", Sequence: &older}); err != nil || event.Sequence != older {
+		t.Fatalf("out-of-order simulation = %#v, %v", event, err)
+	}
+	if _, err := provider.Simulate(context.Background(), providersdk.SimulationRequest{DeviceID: "virtual-switch-1", Repeat: 11}); !errors.Is(err, providersdk.ErrSimulationInvalid) {
+		t.Fatalf("repeat error = %v", err)
+	}
+}
+
 func TestProviderManifestAndCapabilities(t *testing.T) {
 	provider := NewProvider()
 	manifest := provider.Manifest()

@@ -70,6 +70,10 @@ type powerRequest struct {
 	Value *bool `json:"value"`
 }
 
+type deviceEnabledRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
 type simulationRequest struct {
 	Availability *device.Availability `json:"availability"`
 	Online       *bool                `json:"online"`
@@ -78,6 +82,8 @@ type simulationRequest struct {
 	Humidity     *float64             `json:"humidity"`
 	Contact      *bool                `json:"contact"`
 	Motion       *bool                `json:"motion"`
+	Sequence     *uint64              `json:"sequence"`
+	Repeat       int                  `json:"repeat"`
 }
 
 type commandRequest struct {
@@ -211,6 +217,8 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		writeMetric("devices_online", metrics.OnlineDevices)
 		writeMetric("devices_offline", metrics.OfflineDevices)
 		writeMetric("devices_unknown", metrics.UnknownDevices)
+		writeMetric("devices_disabled", metrics.DisabledDevices)
+		writeMetric("devices_removed", metrics.RemovedDevices)
 		writeMetric("providers_running", metrics.ProvidersRunning)
 		writeMetric("provider_retries_total", metrics.ProviderRetries)
 		writeMetric("device_subscribers", metrics.DeviceSubscribers)
@@ -226,6 +234,7 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		writeMetric("database_max_latency_milliseconds", metrics.DatabaseMaxLatencyMS)
 		writeMetric("provider_clock_skew_events_total", metrics.ProviderClockSkewEvents)
 		writeMetric("provider_max_clock_skew_milliseconds", metrics.ProviderMaxClockSkewMS)
+		writeMetric("provider_events_ignored_total", metrics.ProviderEventsIgnored)
 		writeMetric("go_goroutines", metrics.Goroutines)
 		writeMetric("go_heap_alloc_bytes", metrics.HeapAllocBytes)
 		writeMetric("go_heap_objects", metrics.HeapObjects)
@@ -237,6 +246,20 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 			return echo.NewHTTPError(http.StatusInternalServerError, "failed to list devices").SetInternal(err)
 		}
 		return c.JSON(http.StatusOK, map[string]any{"data": items})
+	})
+	e.PUT("/api/v1/devices/:id/enabled", func(c echo.Context) error {
+		var input deviceEnabledRequest
+		if err := c.Bind(&input); err != nil || input.Enabled == nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "enabled is required")
+		}
+		item, err := devices.SetDeviceEnabled(c.Request().Context(), c.Param("id"), *input.Enabled)
+		if errors.Is(err, application.ErrDeviceNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "device not found")
+		}
+		if err != nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "device preferences are unavailable").SetInternal(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": item})
 	})
 	e.GET("/api/v1/events/devices", func(c echo.Context) error {
 		response := c.Response()
@@ -434,10 +457,10 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 	})
 	e.PATCH("/api/v1/devices/:id/simulation", func(c echo.Context) error {
 		var input simulationRequest
-		if err := c.Bind(&input); err != nil || (input.Availability == nil && input.Online == nil && input.Power == nil && input.Temperature == nil && input.Humidity == nil && input.Contact == nil && input.Motion == nil) {
+		if err := c.Bind(&input); err != nil || (input.Availability == nil && input.Online == nil && input.Power == nil && input.Temperature == nil && input.Humidity == nil && input.Contact == nil && input.Motion == nil && input.Sequence == nil && input.Repeat == 0) {
 			return echo.NewHTTPError(http.StatusBadRequest, "at least one simulation value is required")
 		}
-		request := providersdk.SimulationRequest{DeviceID: c.Param("id"), Online: input.Online, Availability: input.Availability}
+		request := providersdk.SimulationRequest{DeviceID: c.Param("id"), Online: input.Online, Availability: input.Availability, Sequence: input.Sequence, Repeat: input.Repeat}
 		if input.Power != nil {
 			request.Properties = append(request.Properties, providersdk.PropertyWriteRequest{EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Value: device.BoolValue(*input.Power)})
 		}
@@ -552,6 +575,9 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		if errors.Is(err, application.ErrDeviceNotFound) {
 			return echo.NewHTTPError(http.StatusNotFound, "device not found")
 		}
+		if errors.Is(err, application.ErrDeviceDisabled) {
+			return echo.NewHTTPError(http.StatusConflict, "device is disabled or removed")
+		}
 		if errors.Is(err, application.ErrPropertyUnsupported) {
 			return echo.NewHTTPError(http.StatusUnprocessableEntity, "power is not supported")
 		}
@@ -578,6 +604,9 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		if errors.Is(err, application.ErrDeviceNotFound) {
 			return echo.NewHTTPError(http.StatusNotFound, "device not found")
 		}
+		if errors.Is(err, application.ErrDeviceDisabled) {
+			return echo.NewHTTPError(http.StatusConflict, "device is disabled or removed")
+		}
 		if errors.Is(err, application.ErrPropertyUnsupported) {
 			return echo.NewHTTPError(http.StatusUnprocessableEntity, "property is not supported")
 		}
@@ -599,6 +628,9 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		property, err := devices.ReadProperty(c.Request().Context(), c.Param("id"), c.Param("endpoint"), c.Param("capability"), c.Param("property"))
 		if errors.Is(err, application.ErrDeviceNotFound) {
 			return echo.NewHTTPError(http.StatusNotFound, "device not found")
+		}
+		if errors.Is(err, application.ErrDeviceDisabled) {
+			return echo.NewHTTPError(http.StatusConflict, "device is disabled or removed")
 		}
 		if errors.Is(err, application.ErrPropertyUnsupported) {
 			return echo.NewHTTPError(http.StatusUnprocessableEntity, "property is not supported")
@@ -624,6 +656,9 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		item, command, err := devices.ExecuteCommand(c.Request().Context(), providersdk.CommandRequest{DeviceID: c.Param("id"), EndpointID: c.Param("endpoint"), CapabilityID: c.Param("capability"), CommandID: c.Param("command"), Parameters: body.Parameters, IdempotencyKey: c.Request().Header.Get("Idempotency-Key")})
 		if errors.Is(err, application.ErrDeviceNotFound) {
 			return echo.NewHTTPError(http.StatusNotFound, "device not found")
+		}
+		if errors.Is(err, application.ErrDeviceDisabled) {
+			return echo.NewHTTPError(http.StatusConflict, "device is disabled or removed")
 		}
 		if errors.Is(err, providersdk.ErrCommandUnsupported) {
 			return echo.NewHTTPError(http.StatusUnprocessableEntity, "command is not supported")

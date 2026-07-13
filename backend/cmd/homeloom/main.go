@@ -97,6 +97,10 @@ func main() {
 	}
 	service := application.NewDeviceService(providerManager, store)
 	defer service.Close()
+	if err := service.LoadDevicePreferences(ctx); err != nil {
+		logger.Error("device preference load failed", "error", err)
+		os.Exit(1)
+	}
 	settingsService, err := application.NewSettingsService(ctx, store, service)
 	if err != nil {
 		logger.Error("runtime settings load failed", "error", err)

@@ -264,6 +264,29 @@ func TestDatabaseOperationMetrics(t *testing.T) {
 	}
 }
 
+func TestDeviceDisabledPreferencePersistsAndCanBeCleared(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "homeloom.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.SetDeviceDisabled(ctx, "switch-1", true); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := store.ListDisabledDeviceIDs(ctx)
+	if err != nil || len(ids) != 1 || ids[0] != "switch-1" {
+		t.Fatalf("disabled ids = %#v, %v", ids, err)
+	}
+	if err := store.SetDeviceDisabled(ctx, "switch-1", false); err != nil {
+		t.Fatal(err)
+	}
+	ids, err = store.ListDisabledDeviceIDs(ctx)
+	if err != nil || len(ids) != 0 {
+		t.Fatalf("cleared ids = %#v, %v", ids, err)
+	}
+}
+
 func TestSystemSettingsCRUD(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(ctx, filepath.Join(t.TempDir(), "settings.db"))

@@ -121,8 +121,11 @@ func preferIncoming(current, incoming domainstate.StateValue) bool {
 	if current.Quality == domainstate.QualityOptimistic && (incoming.Quality == domainstate.QualityReported || incoming.Quality == domainstate.QualityConfirmed) {
 		return true
 	}
-	if current.ProviderID == incoming.ProviderID && current.Sequence > 0 && incoming.Sequence > 0 && current.Sequence != incoming.Sequence {
-		return incoming.Sequence > current.Sequence
+	if current.ProviderID == incoming.ProviderID && current.Sequence > 0 && incoming.Sequence > 0 {
+		if current.Sequence != incoming.Sequence {
+			return incoming.Sequence > current.Sequence
+		}
+		return false
 	}
 	if !current.ObservedAt.Equal(incoming.ObservedAt) {
 		return incoming.ObservedAt.After(current.ObservedAt)

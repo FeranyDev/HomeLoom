@@ -5,9 +5,10 @@ interface DeviceCardProps {
   pending: boolean
   onPowerChange: (device: Device, value: boolean) => void
   onDetails: (device: Device) => void
+	onEnabledChange?: (device: Device, enabled: boolean) => void
 }
 
-export function DeviceCard({ device, pending, onPowerChange, onDetails }: DeviceCardProps) {
+export function DeviceCard({ device, pending, onPowerChange, onDetails, onEnabledChange }: DeviceCardProps) {
   const hasPower = device.type === 'switch' || device.type === 'lightbulb' || device.type === 'outlet'
   const kind = device.type === 'lightbulb' ? '灯泡' : device.type === 'outlet' ? '插座' : device.type === 'switch' ? '开关' : device.type === 'humidity-sensor' ? '湿度传感器' : device.type === 'contact-sensor' ? '接触传感器' : device.type === 'motion-sensor' ? '活动传感器' : '温度传感器'
   const power = deviceProperty(device, 'switch', 'power')?.bool ?? false
@@ -20,7 +21,7 @@ export function DeviceCard({ device, pending, onPowerChange, onDetails }: Device
     <article className="device-card">
       <div className="device-card__topline">
         <span className={`status-dot is-${device.availability}`} />
-        <span>{availabilityLabel(device.availability)}</span>
+        <span>{device.removed ? '来源已删除' : device.disabled ? '已禁用' : availabilityLabel(device.availability)}</span>
         <span className="provider">{device.providerId}</span>
       </div>
       <h2>{device.name}</h2>
@@ -44,7 +45,7 @@ export function DeviceCard({ device, pending, onPowerChange, onDetails }: Device
         : <div className={`sensor-state ${(contact || motion) ? 'is-active' : ''}`}><strong>{device.type === 'contact-sensor' ? (contact ? '已闭合' : '已打开') : (motion ? '检测到活动' : '无活动')}</strong><span>{device.type === 'contact-sensor' ? 'CONTACT' : 'MOTION'}</span></div>
       }
 
-      <footer><span>更新于 {new Date(device.lastUpdateAt).toLocaleTimeString('zh-CN')}</span><button onClick={() => onDetails(device)}>查看详情</button></footer>
+      <footer><span>更新于 {new Date(device.lastUpdateAt).toLocaleTimeString('zh-CN')}</span><div><button onClick={() => onDetails(device)}>查看详情</button>{onEnabledChange && !device.removed && <button disabled={pending} onClick={() => onEnabledChange(device, Boolean(device.disabled))}>{device.disabled ? '重新启用' : '禁用设备'}</button>}</div></footer>
     </article>
   )
 }

@@ -128,8 +128,8 @@ func TestManagerHotAppliesAndRemovesProvider(t *testing.T) {
 	for range 2 {
 		select {
 		case item := <-events:
-			if item.Online {
-				t.Fatalf("remove event still online = %#v", item)
+			if item.Online || !item.Removed {
+				t.Fatalf("remove event is not a tombstone = %#v", item)
 			}
 		case <-time.After(time.Second):
 			t.Fatal("missing offline event")

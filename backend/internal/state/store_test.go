@@ -22,6 +22,20 @@ func TestApplyRejectsOlderSequenceFromSameProvider(t *testing.T) {
 	}
 }
 
+func TestApplyRejectsDuplicateSequenceDespiteNewerTimestamp(t *testing.T) {
+	store := NewStore()
+	now := time.Now().UTC()
+	key := domainstate.Key{DeviceID: "device", PropertyID: "power"}
+	first, accepted := store.Apply(domainstate.StateValue{Key: key, Value: domainstate.BoolValue(true), ProviderID: "provider", Sequence: 7, ObservedAt: now, ReceivedAt: now, Quality: domainstate.QualityReported})
+	if !accepted {
+		t.Fatal("first sequence was rejected")
+	}
+	current, accepted := store.Apply(domainstate.StateValue{Key: key, Value: domainstate.BoolValue(false), ProviderID: "provider", Sequence: 7, ObservedAt: now.Add(time.Minute), ReceivedAt: now.Add(time.Minute), Quality: domainstate.QualityConfirmed})
+	if accepted || current.Version != first.Version || current.Value.Bool == nil || !*current.Value.Bool {
+		t.Fatalf("duplicate sequence accepted: %#v", current)
+	}
+}
+
 func BenchmarkStoreReadFiveHundredDevices(b *testing.B) {
 	store := NewStore()
 	now := time.Now().UTC()

@@ -26,6 +26,32 @@ type blockingWriteProvider struct {
 
 type skewedSnapshotProvider struct{ inner *virtual.Provider }
 
+type devicePreferenceMetrics struct {
+	mu       sync.Mutex
+	disabled map[string]bool
+}
+
+func (p *devicePreferenceMetrics) DatabaseOperationMetrics() (uint64, time.Duration, time.Duration) {
+	return 0, 0, 0
+}
+func (p *devicePreferenceMetrics) ListDisabledDeviceIDs(context.Context) ([]string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	result := make([]string, 0)
+	for id, disabled := range p.disabled {
+		if disabled {
+			result = append(result, id)
+		}
+	}
+	return result, nil
+}
+func (p *devicePreferenceMetrics) SetDeviceDisabled(_ context.Context, id string, disabled bool) error {
+	p.mu.Lock()
+	p.disabled[id] = disabled
+	p.mu.Unlock()
+	return nil
+}
+
 type integerSnapshotProvider struct{}
 
 func (*integerSnapshotProvider) Manifest() providersdk.Manifest {
@@ -131,6 +157,79 @@ func TestDeviceServiceRoutesProviderEvents(t *testing.T) {
 	states := service.States("virtual-switch-1")
 	if len(states) != 1 || states[0].Version != 2 {
 		t.Fatalf("States() = %#v", states)
+	}
+}
+
+func TestDeviceServiceIgnoresRepeatedAndOutOfOrderProviderSnapshots(t *testing.T) {
+	provider := virtual.NewProvider()
+	service := application.NewDeviceService(provider)
+	defer service.Close()
+	newer := uint64(10)
+	if _, err := service.Simulate(context.Background(), providersdk.SimulationRequest{DeviceID: "virtual-switch-1", Sequence: &newer, Properties: []providersdk.PropertyWriteRequest{{EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Value: device.BoolValue(true)}}}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		states := service.States("virtual-switch-1")
+		if len(states) == 1 && states[0].Sequence == newer {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	older := uint64(2)
+	if _, err := service.Simulate(context.Background(), providersdk.SimulationRequest{DeviceID: "virtual-switch-1", Sequence: &older, Repeat: 2, Properties: []providersdk.PropertyWriteRequest{{EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Value: device.BoolValue(false)}}}); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(time.Second)
+	for service.Metrics().ProviderEventsIgnored < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	states := service.States("virtual-switch-1")
+	items, _ := service.List(context.Background())
+	property, _ := items[0].Property("main", "switch", "power")
+	if len(states) != 1 || states[0].Sequence != newer || states[0].Value.Bool == nil || !*states[0].Value.Bool || property.Value.Bool == nil || !*property.Value.Bool || service.Metrics().ProviderEventsIgnored != 2 {
+		t.Fatalf("states = %#v, registry = %#v, metrics = %#v", states, property, service.Metrics())
+	}
+}
+
+func TestDeviceDisablePersistsAndProviderEventsCannotReviveIt(t *testing.T) {
+	provider := virtual.NewProvider()
+	preferences := &devicePreferenceMetrics{disabled: map[string]bool{"virtual-switch-1": true}}
+	service := application.NewDeviceService(provider, preferences)
+	defer service.Close()
+	if err := service.LoadDevicePreferences(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	items, _ := service.List(context.Background())
+	var current device.Device
+	for _, item := range items {
+		if item.ID == "virtual-switch-1" {
+			current = item
+		}
+	}
+	if !current.Disabled || current.Online {
+		t.Fatalf("disabled device = %#v", current)
+	}
+	if _, err := provider.SetPower(context.Background(), current.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	items, _ = service.List(context.Background())
+	for _, item := range items {
+		if item.ID == current.ID && (!item.Disabled || item.Online) {
+			t.Fatalf("provider revived disabled device: %#v", item)
+		}
+	}
+	enabled, err := service.SetDeviceEnabled(context.Background(), current.ID, true)
+	if err != nil || enabled.Disabled || !enabled.Online || preferences.disabled[current.ID] {
+		t.Fatalf("enabled device = %#v, preferences = %#v, %v", enabled, preferences.disabled, err)
+	}
+	disabled, err := service.SetDeviceEnabled(context.Background(), current.ID, false)
+	if err != nil || !disabled.Disabled || disabled.Online || !preferences.disabled[current.ID] {
+		t.Fatalf("disabled device = %#v, preferences = %#v, %v", disabled, preferences.disabled, err)
+	}
+	if _, _, err := service.ExecutePower(context.Background(), current.ID, false); !errors.Is(err, application.ErrDeviceDisabled) {
+		t.Fatalf("disabled write error = %v", err)
 	}
 }
 

@@ -75,7 +75,9 @@ deviceId / endpointId / capabilityId / propertyId
 - 定义类型和值类型必须一致；
 - `step` 必须大于零，`min` 不得大于 `max`。
 
-设备可用性由 `availability` 表示：`online` 代表 Provider 明确确认设备可通信，`offline` 代表明确不可通信，`unknown` 代表尚未获得或暂时无法判断可用性。schema v1 暂时保留 `online` 布尔字段作为兼容投影，只有 `availability=online` 时它才为 `true`。属性的新鲜度、来源、sequence、quality 和乐观命令状态由内存 State Store 单独维护；设备不是 `online` 时，现有属性会标记 stale，但不会删除设备身份或最后值。
+设备可用性由 `availability` 表示：`online` 代表 Provider 明确确认设备可通信，`offline` 代表 Provider 暂时确认不可通信，`unknown` 代表尚未获得或暂时无法判断。`disabled=true` 是用户持久化到 SQLite 的管理意图，Provider 后续事件不能重新将其置为在线；`removed=true` 是 Provider 配置删除设备后保留的 tombstone，用于保留内部及 HomeKit 稳定身份。恢复同一 ID 的 Provider 设备会清除 tombstone。schema v1 暂时保留 `online` 布尔字段作为兼容投影，只有 `availability=online` 且设备未禁用、未删除时才为 `true`。设备不是在线状态时，现有属性会标记 stale，但不会删除身份或最后值。
+
+Provider 可以为快照提供设备级 `sequence`。同一 Provider、同一设备的 sequence 必须单调递增；重复或倒退的在线快照会在更新 Registry 和 State Store 前整体丢弃。离线事件会重置 sequence epoch，使 Provider 热重启后从较小序列重新开始仍能恢复。
 
 ## 属性读取 API
 

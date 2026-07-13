@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { executeDeviceCommand, listDevices, setDevicePower, setDeviceProperty, simulateDevice, subscribeDevices } from './api/devices'
+import { executeDeviceCommand, listDevices, setDeviceEnabled, setDevicePower, setDeviceProperty, simulateDevice, subscribeDevices } from './api/devices'
 import { deleteTarget, listTargets, saveTarget, subscribeTargets } from './api/targets'
 import { deleteProvider, listProviders, restartProvider, saveProvider } from './api/providers'
 import { getDiagnostics, getRuntimeSettings, listCommands, saveRuntimeSettings, subscribeCommands } from './api/diagnostics'
@@ -38,7 +38,7 @@ export function App() {
   const [pendingIds, setPendingIds] = useState<Set<string>>(new Set())
   const [live, setLive] = useState(false)
   const [deviceQuery, setDeviceQuery] = useState('')
-  const [deviceStatus, setDeviceStatus] = useState<'all' | 'online' | 'offline' | 'unknown'>('all')
+  const [deviceStatus, setDeviceStatus] = useState<'all' | 'online' | 'offline' | 'unknown' | 'disabled' | 'removed'>('all')
   const [selectedDeviceID, setSelectedDeviceID] = useState<string | null>(null)
   const { toasts, notify, dismiss } = useToasts()
 
@@ -117,13 +117,14 @@ export function App() {
 	async function handleProviderSave(input: ProviderInput, editing: boolean) { try { await saveProvider(input, editing); setProviderForm({ open: false, provider: null }); await refresh(); notify('success', editing ? 'Provider 配置已更新' : 'Provider 已创建') } catch (cause) { notify('error', cause instanceof Error ? cause.message : '保存 Provider 失败'); throw cause } }
 	async function handleProviderDelete(provider: Provider) { if (!confirmProviderDeletion(provider.name)) return; try { await deleteProvider(provider.id); await refresh(); notify('success', `Provider“${provider.name}”已删除`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '删除 Provider 失败') } }
 	async function handleProviderRestart(provider: Provider) { try { await restartProvider(provider.id); await refresh(); setError(null); notify('success', `Provider“${provider.name}”已重新启动`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : 'Provider 重新启动失败'); throw cause } }
-	async function handleSimulation(device: Device, values: { availability?: DeviceAvailability; online?: boolean; power?: boolean; temperature?: number; humidity?: number; contact?: boolean; motion?: boolean }) { try { const updated = await simulateDevice(device.id, values); setDevices((current) => current.map((item) => item.id === updated.id ? updated : item)); setError(null); notify('info', `${device.name}模拟状态已更新`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '模拟状态失败'); throw cause } }
+	async function handleSimulation(device: Device, values: { availability?: DeviceAvailability; online?: boolean; power?: boolean; temperature?: number; humidity?: number; contact?: boolean; motion?: boolean; sequence?: number; repeat?: number }) { try { const updated = await simulateDevice(device.id, values); setDevices((current) => current.map((item) => item.id === updated.id ? updated : item)); setError(null); notify('info', `${device.name}模拟状态已更新`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '模拟状态失败'); throw cause } }
+	async function handleDeviceEnabled(device: Device, enabled: boolean) { setPendingIds((current) => new Set(current).add(device.id)); try { const updated = await setDeviceEnabled(device.id, enabled); setDevices((current) => current.map((item) => item.id === updated.id ? updated : item)); notify('success', `${device.name}已${enabled ? '启用' : '禁用'}`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '设备状态更新失败') } finally { setPendingIds((current) => { const next = new Set(current); next.delete(device.id); return next }) } }
 	async function handlePropertyWrite(device: Device, endpointId: string, capabilityId: string, propertyId: string, value: PropertyValue) { try { const updated = await setDeviceProperty(device.id, endpointId, capabilityId, propertyId, value); setDevices((current) => current.map((item) => item.id === updated.id ? updated : item)); const [diagnosticData, commandData] = await Promise.all([getDiagnostics(), listCommands()]); setDiagnostics(diagnosticData); setCommands(commandData); setError(null); notify('success', `${device.name}.${propertyId} 写入成功`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '属性写入失败'); throw cause } }
 	async function handleCommandExecute(device: Device, endpointId: string, capabilityId: string, commandId: string, parameters: Record<string, PropertyValue>, idempotencyKey: string) { try { const updated = await executeDeviceCommand(device.id, endpointId, capabilityId, commandId, parameters, idempotencyKey); setDevices((current) => current.map((item) => item.id === updated.id ? updated : item)); const [diagnosticData, commandData] = await Promise.all([getDiagnostics(), listCommands()]); setDiagnostics(diagnosticData); setCommands(commandData); setError(null); notify('success', `${device.name}.${commandId} 执行成功`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '命令执行失败'); throw cause } }
 	async function handleRuntimeSettingsSave(next: RuntimeSettings) { try { const saved = await saveRuntimeSettings(next); commandHistoryLimit.current = saved.commandHistoryLimit; setCommands((current) => current.slice(0, saved.commandHistoryLimit)); setRuntimeSettings(saved); notify('success', '运行时设置已保存并实时生效') } catch (cause) { notify('error', cause instanceof Error ? cause.message : '保存运行时设置失败'); throw cause } }
 	const pageCopy = page === 'devices' ? { title: <>把家的状态<br />织在一起。</>, intro: '设备状态驻留内存，由 Provider 实时上报。', eyebrow: 'DEVICES', section: '设备中心' } : page === 'providers' ? { title: <>数据源，随时<br />接入或离开。</>, intro: 'Provider 配置存储于 SQLite，并可在线启停和替换。', eyebrow: 'PROVIDERS', section: 'Provider 管理' } : page === 'targets' ? { title: <>一座桥，或<br />很多座桥。</>, intro: '按设备或平台拆分桥实例。每座桥拥有独立身份、端口、配对资料和二维码。', eyebrow: 'TARGETS', section: '桥接中心' } : { title: <>看见系统的<br />每一次呼吸。</>, intro: '观察事件队列、设备连接和命令生命周期。', eyebrow: 'SYSTEM', section: '系统诊断' }
 	const summary = page === 'devices' ? devices.filter((item) => item.availability === 'online').length : page === 'providers' ? providers.filter((item) => item.status === 'running').length : page === 'targets' ? targets.filter((item) => item.status === 'running').length : diagnostics?.eventsProcessed ?? 0
-	const filteredDevices = devices.filter((item) => { const matchesText = `${item.name} ${item.id} ${item.providerId}`.toLowerCase().includes(deviceQuery.trim().toLowerCase()); const matchesStatus = deviceStatus === 'all' || item.availability === deviceStatus; return matchesText && matchesStatus })
+	const filteredDevices = devices.filter((item) => { const matchesText = `${item.name} ${item.id} ${item.providerId}`.toLowerCase().includes(deviceQuery.trim().toLowerCase()); const matchesStatus = deviceStatus === 'all' || (deviceStatus === 'disabled' ? item.disabled : deviceStatus === 'removed' ? item.removed : item.availability === deviceStatus && !item.disabled && !item.removed); return matchesText && matchesStatus })
 	const selectedDevice = selectedDeviceID ? devices.find((item) => item.id === selectedDeviceID) ?? null : null
 
   return (
@@ -154,7 +155,7 @@ export function App() {
         </div>
 		<div className="heading-actions">{page === 'providers' && <button className="add-button" onClick={() => setProviderForm({ open: true, provider: null })}>＋ 新建 Provider</button>}{page === 'targets' && <button className="add-button" onClick={() => setTargetForm({ open: true, target: null })}>＋ 新建桥</button>}<button className="refresh-button" onClick={() => void refresh()} disabled={loading}>刷新状态</button></div>
       </section>
-	  {page === 'devices' && <div className="device-filters"><input aria-label="搜索设备" value={deviceQuery} onChange={(event) => setDeviceQuery(event.target.value)} placeholder="搜索名称、ID 或 Provider" /><select aria-label="设备状态" value={deviceStatus} onChange={(event) => setDeviceStatus(event.target.value as typeof deviceStatus)}><option value="all">全部状态</option><option value="online">仅在线</option><option value="offline">仅离线</option><option value="unknown">可用性未知</option></select><span>{filteredDevices.length} / {devices.length}</span></div>}
+	  {page === 'devices' && <div className="device-filters"><input aria-label="搜索设备" value={deviceQuery} onChange={(event) => setDeviceQuery(event.target.value)} placeholder="搜索名称、ID 或 Provider" /><select aria-label="设备状态" value={deviceStatus} onChange={(event) => setDeviceStatus(event.target.value as typeof deviceStatus)}><option value="all">全部状态</option><option value="online">仅在线</option><option value="offline">暂时离线</option><option value="unknown">可用性未知</option><option value="disabled">人工禁用</option><option value="removed">来源已删除</option></select><span>{filteredDevices.length} / {devices.length}</span></div>}
 
       {error && <div className="error-banner">{error}，请确认后端已在 8090 端口运行。</div>}
       {loading ? (
@@ -168,10 +169,11 @@ export function App() {
               pending={pendingIds.has(device.id)}
               onPowerChange={(item, value) => void handlePowerChange(item, value)}
               onDetails={(item) => setSelectedDeviceID(item.id)}
+			  onEnabledChange={(item, enabled) => void handleDeviceEnabled(item, enabled)}
             />
           ))}
 		  {filteredDevices.length === 0 && <CollectionEmpty title="没有匹配的设备" description={devices.length ? '请调整搜索文字或在线状态筛选。' : '启用 Provider 后，发现的设备会显示在这里。'} />}
-		</section> : page === 'providers' ? <section className="provider-grid"><div className="config-note"><span>配置来源</span><strong>SQLite · providers</strong><p>保存后运行时立即应用；单个 Provider 失败不会影响其他实例，可独立重新启动。</p></div>{providers.map((provider) => <ProviderCard key={provider.id} provider={provider} devices={devices.filter((item) => item.providerId === provider.id)} onEdit={(item) => setProviderForm({ open: true, provider: item })} onDelete={(item) => void handleProviderDelete(item)} onRestart={handleProviderRestart} onSimulate={handleSimulation} />)}{providers.length === 0 && <CollectionEmpty title="还没有 Provider" description="创建 Provider 后，HomeLoom 会立即初始化并发现设备。" />}</section> : page === 'system' ? <SystemDashboard diagnostics={diagnostics} commands={commands} settings={runtimeSettings} onSettingsSave={handleRuntimeSettingsSave} /> : <section className="target-list">
+		</section> : page === 'providers' ? <section className="provider-grid"><div className="config-note"><span>配置来源</span><strong>SQLite · providers</strong><p>保存后运行时立即应用；单个 Provider 失败不会影响其他实例，可独立重新启动。</p></div>{providers.map((provider) => <ProviderCard key={provider.id} provider={provider} devices={devices.filter((item) => item.providerId === provider.id && !item.removed)} onEdit={(item) => setProviderForm({ open: true, provider: item })} onDelete={(item) => void handleProviderDelete(item)} onRestart={handleProviderRestart} onSimulate={handleSimulation} />)}{providers.length === 0 && <CollectionEmpty title="还没有 Provider" description="创建 Provider 后，HomeLoom 会立即初始化并发现设备。" />}</section> : page === 'system' ? <SystemDashboard diagnostics={diagnostics} commands={commands} settings={runtimeSettings} onSettingsSave={handleRuntimeSettingsSave} /> : <section className="target-list">
 		  <div className="config-note">
 		    <span>配置来源</span>
 		    <strong>SQLite · targets</strong>
@@ -181,7 +183,7 @@ export function App() {
 		  {targets.length === 0 && <CollectionEmpty title="还没有桥" description="新建桥并绑定设备后，即可接入 HomeKit 等目标平台。" />}
 		</section>
       )}
-	  {targetForm.open && <TargetForm target={targetForm.target} devices={devices} onCancel={() => setTargetForm({ open: false, target: null })} onSave={handleTargetSave} />}
+	  {targetForm.open && <TargetForm target={targetForm.target} devices={devices.filter((item) => !item.removed)} onCancel={() => setTargetForm({ open: false, target: null })} onSave={handleTargetSave} />}
 	  {providerForm.open && <ProviderForm provider={providerForm.provider} onCancel={() => setProviderForm({ open: false, provider: null })} onSave={handleProviderSave} />}
 	  {selectedDevice && <DeviceDetails device={selectedDevice} onClose={() => setSelectedDeviceID(null)} onPropertyWrite={(endpointId, capabilityId, propertyId, value) => handlePropertyWrite(selectedDevice, endpointId, capabilityId, propertyId, value)} onCommandExecute={(endpointId, capabilityId, commandId, parameters, idempotencyKey) => handleCommandExecute(selectedDevice, endpointId, capabilityId, commandId, parameters, idempotencyKey)} />}
 	  <ToastCenter toasts={toasts} dismiss={dismiss} />

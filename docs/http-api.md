@@ -51,6 +51,7 @@
 - `GET /api/v1/diagnostics`：设备、事件、命令、订阅及 Go runtime 快照；
 - `GET /metrics`：Prometheus 文本指标；
 - `GET /api/v1/devices/{id}/states`：内存状态、来源和质量；
+- `PUT /api/v1/devices/{id}/enabled`：持久禁用或重新启用设备；
 - `GET /api/v1/commands`：命令生命周期历史。
 
 `/metrics` 中的 runtime 指标包括 `homeloom_go_goroutines`、`homeloom_go_heap_alloc_bytes` 和 `homeloom_go_heap_objects`。事件指标包含入队到处理完成的平均/最大延迟及超过 100ms 的慢 Handler 计数；SQLite 指标包含配置、身份、schema、健康检查和备份操作数以及平均/最大延迟；`homeloom_homekit_pushes_total` 统计运行期间应用到 HomeKit Characteristic 的状态更新次数。命令协调指标 `homeloom_command_queue_pending` 和 `homeloom_command_queue_max_pending` 分别表示当前等待 Provider 执行槽的命令数及进程生命周期内的最大等待数。
@@ -62,6 +63,10 @@
 命令确认超时由 `system_settings.command_timeout_seconds` 保存，允许范围为 1–300 秒，默认 5 秒；历史上限由 `command_history_limit` 保存，允许 100–10000 条，默认 1000 条。两项设置通过同一事务保存并实时应用。新超时只用于之后创建的命令；降低历史上限会立即清理最旧的终态记录，但不删除执行中的命令。
 
 Provider 上报时间与接收时间相差超过 5 分钟时，Core 会记录时钟漂移指标，并将 State Store 的 `observedAt` 钳制为接收时间，避免错误的未来时间戳长期阻止正常状态合并。原始设备快照时间仍保留用于排查。
+
+带正数 `sequence` 的 Provider 快照按设备进行单调比较。重复或倒退事件不会覆盖设备列表或属性状态，并计入 `homeloom_provider_events_ignored_total`。Virtual Provider 的 simulation API 支持 `sequence` 和 1–10 次的 `repeat`，管理页可直接触发重复与旧序列事件。
+
+设备临时离线仅来自 Provider availability，不写数据库；人工禁用写入 `device_preferences`，实时标记状态 stale 并阻止读写及后续 Provider 事件复活；设备从 Provider 配置中删除后保留 `removed` tombstone 和稳定身份。重新出现相同设备 ID 时可恢复原身份。
 
 ## Action / Command
 

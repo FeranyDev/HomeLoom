@@ -49,6 +49,14 @@ paths:
       operationId: listDeviceStates
       responses:
         "200": { description: In-memory state with provenance, content: { application/json: { schema: { $ref: "#/components/schemas/ObjectResponse" } } } }
+  /api/v1/devices/{deviceId}/enabled:
+    parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+    put:
+      operationId: setDeviceEnabled
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [enabled], properties: { enabled: { type: boolean } } } } } }
+      responses:
+        "200": { description: Persisted device preference applied immediately, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/Device" } } } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/v1/devices/{deviceId}/endpoints/{endpointId}/capabilities/{capabilityId}/properties/{propertyId}:
     parameters:
       - { $ref: "#/components/parameters/DeviceId" }
@@ -215,6 +223,9 @@ components:
         type: { type: string }
         availability: { type: string, enum: [online, offline, unknown] }
         online: { type: boolean }
+        sequence: { type: integer, minimum: 0, description: Provider-local snapshot sequence when available. }
+        disabled: { type: boolean, description: Persisted operator preference; Provider events cannot make the device online while true. }
+        removed: { type: boolean, description: Tombstone retained after the Provider removes the device identity. }
         endpoints: { type: array, items: { type: object, additionalProperties: true } }
         lastUpdateAt: { type: string, format: date-time }
     DeviceCommandResponse:

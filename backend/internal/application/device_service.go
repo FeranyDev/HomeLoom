@@ -22,6 +22,7 @@ import (
 var (
 	ErrDeviceNotFound      = providersdk.ErrDeviceNotFound
 	ErrPropertyUnsupported = providersdk.ErrPropertyUnsupported
+	ErrDeviceDisabled      = errors.New("device is disabled or removed")
 )
 
 type DeviceService struct {
@@ -41,10 +42,15 @@ type DeviceService struct {
 	listeners      map[uint64]*deviceSubscription
 	nextStateID    uint64
 	stateListeners map[uint64]*stateSubscription
+	snapshotMu     sync.Mutex
+	snapshotSeq    map[string]uint64
 	staleCancel    context.CancelFunc
 	staleDone      chan struct{}
 	metrics        deviceMetrics
 	storageMetrics DatabaseMetricsProvider
+	preferences    DevicePreferenceStore
+	disabledMu     sync.RWMutex
+	disabled       map[string]struct{}
 }
 
 type DatabaseMetricsProvider interface {
@@ -53,6 +59,11 @@ type DatabaseMetricsProvider interface {
 
 type DatabaseHealthProvider interface {
 	HealthCheck(context.Context) error
+}
+
+type DevicePreferenceStore interface {
+	ListDisabledDeviceIDs(context.Context) ([]string, error)
+	SetDeviceDisabled(context.Context, string, bool) error
 }
 
 type Readiness struct {
@@ -72,20 +83,21 @@ type stateSubscription struct {
 }
 
 type deviceMetrics struct {
-	eventsReceived      atomic.Uint64
-	eventsProcessed     atomic.Uint64
-	eventsDropped       atomic.Uint64
-	targetEventsDropped atomic.Uint64
-	stateEventsDropped  atomic.Uint64
-	statesMarkedStale   atomic.Uint64
-	commandsStarted     atomic.Uint64
-	commandsConfirmed   atomic.Uint64
-	commandsRejected    atomic.Uint64
-	commandsTimedOut    atomic.Uint64
-	commandsSuperseded  atomic.Uint64
-	homeKitPushes       atomic.Uint64
-	providerClockSkews  atomic.Uint64
-	maxClockSkewNanos   atomic.Uint64
+	eventsReceived        atomic.Uint64
+	eventsProcessed       atomic.Uint64
+	eventsDropped         atomic.Uint64
+	targetEventsDropped   atomic.Uint64
+	stateEventsDropped    atomic.Uint64
+	statesMarkedStale     atomic.Uint64
+	commandsStarted       atomic.Uint64
+	commandsConfirmed     atomic.Uint64
+	commandsRejected      atomic.Uint64
+	commandsTimedOut      atomic.Uint64
+	commandsSuperseded    atomic.Uint64
+	homeKitPushes         atomic.Uint64
+	providerClockSkews    atomic.Uint64
+	providerEventsIgnored atomic.Uint64
+	maxClockSkewNanos     atomic.Uint64
 }
 
 type DeviceMetrics struct {
@@ -107,6 +119,8 @@ type DeviceMetrics struct {
 	OnlineDevices            int     `json:"onlineDevices"`
 	OfflineDevices           int     `json:"offlineDevices"`
 	UnknownDevices           int     `json:"unknownDevices"`
+	DisabledDevices          int     `json:"disabledDevices"`
+	RemovedDevices           int     `json:"removedDevices"`
 	ProvidersRunning         int     `json:"providersRunning"`
 	ProviderRetries          int     `json:"providerRetries"`
 	DeviceSubscribers        int     `json:"deviceSubscribers"`
@@ -122,6 +136,7 @@ type DeviceMetrics struct {
 	DatabaseMaxLatencyMS     float64 `json:"databaseMaxLatencyMs"`
 	ProviderClockSkewEvents  uint64  `json:"providerClockSkewEvents"`
 	ProviderMaxClockSkewMS   float64 `json:"providerMaxClockSkewMs"`
+	ProviderEventsIgnored    uint64  `json:"providerEventsIgnored"`
 	Goroutines               int     `json:"goroutines"`
 	HeapAllocBytes           uint64  `json:"heapAllocBytes"`
 	HeapObjects              uint64  `json:"heapObjects"`
@@ -158,13 +173,15 @@ func NewDeviceService(provider providersdk.Provider, storageMetrics ...DatabaseM
 		provider: provider, discoverer: discoverer, reader: reader, writer: writer, executor: executor,
 		registry: registry.NewDeviceRegistry(items),
 		states:   statestore.NewStore(), commands: commandtracker.NewTracker(5 * time.Second), commandQueue: newCommandCoordinator(),
-		listeners: make(map[uint64]*deviceSubscription), stateListeners: make(map[uint64]*stateSubscription),
+		listeners: make(map[uint64]*deviceSubscription), stateListeners: make(map[uint64]*stateSubscription), snapshotSeq: make(map[string]uint64), disabled: make(map[string]struct{}),
 	}
 	if len(storageMetrics) > 0 {
 		service.storageMetrics = storageMetrics[0]
+		service.preferences, _ = any(storageMetrics[0]).(DevicePreferenceStore)
 	}
 	for _, item := range items {
 		item.NormalizeAvailability()
+		service.acceptSnapshotSequence(item)
 		service.applySnapshot(item)
 		if !item.IsOnline() {
 			service.states.MarkDeviceStale(item.ID)
@@ -185,6 +202,102 @@ func NewDeviceService(provider providersdk.Provider, storageMetrics ...DatabaseM
 		service.unsubscribe = func() {}
 	}
 	return service
+}
+
+func (s *DeviceService) LoadDevicePreferences(ctx context.Context) error {
+	if s.preferences == nil {
+		return nil
+	}
+	ids, err := s.preferences.ListDisabledDeviceIDs(ctx)
+	if err != nil {
+		return err
+	}
+	s.disabledMu.Lock()
+	for _, id := range ids {
+		s.disabled[id] = struct{}{}
+	}
+	s.disabledMu.Unlock()
+	for _, id := range ids {
+		if item, ok := s.registry.Get(id); ok {
+			item.Disabled = true
+			item.SetOnline(false)
+			s.registry.Upsert(item)
+			s.states.MarkDeviceStale(id)
+			s.resetSnapshotSequence(id)
+		}
+	}
+	return nil
+}
+
+func (s *DeviceService) SetDeviceEnabled(ctx context.Context, id string, enabled bool) (device.Device, error) {
+	item, ok := s.registry.Get(id)
+	if !ok {
+		return device.Device{}, ErrDeviceNotFound
+	}
+	if s.preferences == nil {
+		return device.Device{}, errors.New("device preferences are unavailable")
+	}
+	s.disabledMu.Lock()
+	_, wasDisabled := s.disabled[id]
+	if enabled {
+		delete(s.disabled, id)
+	} else {
+		s.disabled[id] = struct{}{}
+	}
+	if err := s.preferences.SetDeviceDisabled(ctx, id, !enabled); err != nil {
+		if wasDisabled {
+			s.disabled[id] = struct{}{}
+		} else {
+			delete(s.disabled, id)
+		}
+		s.disabledMu.Unlock()
+		return device.Device{}, err
+	}
+	s.disabledMu.Unlock()
+	if !enabled {
+		item.Disabled = true
+		item.SetOnline(false)
+		s.resetSnapshotSequence(id)
+		s.registry.Upsert(item)
+		stale := s.states.MarkDeviceStale(id)
+		s.metrics.statesMarkedStale.Add(uint64(len(stale)))
+		for _, state := range stale {
+			s.publishState(state)
+		}
+		s.publishDevice(item)
+		return item, nil
+	}
+	item.Disabled = false
+	s.resetSnapshotSequence(id)
+	if s.discoverer != nil {
+		if snapshots, err := s.discoverer.DiscoverDevices(ctx); err == nil {
+			for _, snapshot := range snapshots {
+				if snapshot.ID == id {
+					item = snapshot
+					item.Disabled, item.Removed = false, false
+					item.NormalizeAvailability()
+					break
+				}
+			}
+		}
+	}
+	if item.Removed {
+		item.SetOnline(false)
+	}
+	s.acceptSnapshotSequence(item)
+	s.registry.Upsert(item)
+	if item.IsOnline() {
+		s.applySnapshot(item)
+	}
+	s.publishDevice(item)
+	return item, nil
+}
+
+func (s *DeviceService) isDeviceDisabled(id string) bool {
+	s.disabledMu.RLock()
+	_, disabled := s.disabled[id]
+	s.disabledMu.RUnlock()
+	return disabled
 }
 
 func (s *DeviceService) States(deviceID string) []domainstate.StateValue {
@@ -216,8 +329,16 @@ func (s *DeviceService) Simulate(ctx context.Context, request providersdk.Simula
 
 func (s *DeviceService) Metrics() DeviceMetrics {
 	items := s.registry.List()
-	online, offline, unknown := 0, 0, 0
+	online, offline, unknown, disabled, removed := 0, 0, 0, 0, 0
 	for _, item := range items {
+		if item.Disabled {
+			disabled++
+			continue
+		}
+		if item.Removed {
+			removed++
+			continue
+		}
 		switch item.EffectiveAvailability() {
 		case device.AvailabilityOnline:
 			online++
@@ -267,12 +388,12 @@ func (s *DeviceService) Metrics() DeviceMetrics {
 		CommandsRejected: s.metrics.commandsRejected.Load(), CommandsTimedOut: s.metrics.commandsTimedOut.Load(), CommandsSuperseded: s.metrics.commandsSuperseded.Load(),
 		CommandsOutcomeUnknown: s.metrics.commandsTimedOut.Load() + s.metrics.commandsSuperseded.Load(),
 		HomeKitPushes:          s.metrics.homeKitPushes.Load(),
-		OnlineDevices:          online, OfflineDevices: offline, UnknownDevices: unknown, ProvidersRunning: providersRunning, ProviderRetries: providerRetries, DeviceSubscribers: subscribers, StateSubscribers: stateSubscribers,
+		OnlineDevices:          online, OfflineDevices: offline, UnknownDevices: unknown, DisabledDevices: disabled, RemovedDevices: removed, ProvidersRunning: providersRunning, ProviderRetries: providerRetries, DeviceSubscribers: subscribers, StateSubscribers: stateSubscribers,
 		CommandAverageLatencyMS: averageLatency,
 		CommandQueuePending:     commandQueuePending, CommandQueueMaxPending: commandQueueMaxPending,
 		EventAverageLatencyMS: float64(eventStats.AverageLatency.Nanoseconds()) / float64(time.Millisecond), EventMaxLatencyMS: float64(eventStats.MaxLatency.Nanoseconds()) / float64(time.Millisecond), SlowEventHandlers: eventStats.SlowHandlers,
 		DatabaseOperations: databaseOperations, DatabaseAverageLatencyMS: float64(databaseAverage.Nanoseconds()) / float64(time.Millisecond), DatabaseMaxLatencyMS: float64(databaseMaximum.Nanoseconds()) / float64(time.Millisecond),
-		ProviderClockSkewEvents: s.metrics.providerClockSkews.Load(), ProviderMaxClockSkewMS: float64(s.metrics.maxClockSkewNanos.Load()) / float64(time.Millisecond),
+		ProviderClockSkewEvents: s.metrics.providerClockSkews.Load(), ProviderMaxClockSkewMS: float64(s.metrics.maxClockSkewNanos.Load()) / float64(time.Millisecond), ProviderEventsIgnored: s.metrics.providerEventsIgnored.Load(),
 		Goroutines: runtime.NumGoroutine(), HeapAllocBytes: memory.HeapAlloc, HeapObjects: memory.HeapObjects,
 	}
 }
@@ -282,6 +403,9 @@ func (s *DeviceService) List(ctx context.Context) ([]device.Device, error) {
 }
 
 func (s *DeviceService) SetPower(ctx context.Context, id string, power bool) (device.Device, error) {
+	if item, ok := s.registry.Get(id); ok && (item.Disabled || item.Removed) {
+		return device.Device{}, ErrDeviceDisabled
+	}
 	if s.writer == nil {
 		return device.Device{}, ErrPropertyUnsupported
 	}
@@ -291,6 +415,9 @@ func (s *DeviceService) SetPower(ctx context.Context, id string, power bool) (de
 }
 
 func (s *DeviceService) ReadProperty(ctx context.Context, deviceID, endpointID, capabilityID, propertyID string) (device.Property, error) {
+	if item, ok := s.registry.Get(deviceID); ok && (item.Disabled || item.Removed) {
+		return device.Property{}, ErrDeviceDisabled
+	}
 	if s.reader == nil {
 		return device.Property{}, ErrPropertyUnsupported
 	}
@@ -353,6 +480,9 @@ func (s *DeviceService) validatePropertyWrite(deviceID, endpointID, capabilityID
 	if !ok {
 		return ErrDeviceNotFound
 	}
+	if item.Disabled || item.Removed {
+		return ErrDeviceDisabled
+	}
 	property, ok := item.Property(endpointID, capabilityID, propertyID)
 	if !ok || !property.Definition.Writable {
 		return ErrPropertyUnsupported
@@ -414,6 +544,9 @@ func (s *DeviceService) validateCommand(request providersdk.CommandRequest) erro
 	item, ok := s.registry.Get(request.DeviceID)
 	if !ok {
 		return ErrDeviceNotFound
+	}
+	if item.Disabled || item.Removed {
+		return ErrDeviceDisabled
 	}
 	for _, endpoint := range item.Endpoints {
 		if endpoint.ID != request.EndpointID {
@@ -571,6 +704,20 @@ func (s *DeviceService) handleEvent(event eventbus.Event) {
 	}
 	s.metrics.eventsProcessed.Add(1)
 	item.NormalizeAvailability()
+	if s.isDeviceDisabled(item.ID) {
+		item.Disabled = true
+		item.SetOnline(false)
+	}
+	if item.Removed {
+		item.SetOnline(false)
+	}
+	if item.IsOnline() && !s.acceptSnapshotSequence(item) {
+		s.metrics.providerEventsIgnored.Add(1)
+		return
+	}
+	if !item.IsOnline() {
+		s.resetSnapshotSequence(item.ID)
+	}
 	s.registry.Upsert(item)
 	if item.IsOnline() {
 		s.applySnapshot(item)
@@ -592,6 +739,10 @@ func (s *DeviceService) handleEvent(event eventbus.Event) {
 			}
 		}
 	}
+	s.publishDevice(item)
+}
+
+func (s *DeviceService) publishDevice(item device.Device) {
 	s.mu.RLock()
 	for _, subscription := range s.listeners {
 		select {
@@ -603,6 +754,26 @@ func (s *DeviceService) handleEvent(event eventbus.Event) {
 	s.mu.RUnlock()
 }
 
+func (s *DeviceService) acceptSnapshotSequence(item device.Device) bool {
+	if item.Sequence == 0 {
+		return true
+	}
+	s.snapshotMu.Lock()
+	defer s.snapshotMu.Unlock()
+	current := s.snapshotSeq[item.ID]
+	if current > 0 && item.Sequence <= current {
+		return false
+	}
+	s.snapshotSeq[item.ID] = item.Sequence
+	return true
+}
+
+func (s *DeviceService) resetSnapshotSequence(deviceID string) {
+	s.snapshotMu.Lock()
+	delete(s.snapshotSeq, deviceID)
+	s.snapshotMu.Unlock()
+}
+
 func (s *DeviceService) applySnapshot(item device.Device) {
 	receivedAt := time.Now().UTC()
 	observedAt := s.safeObservedAt(item.LastUpdateAt, receivedAt)
@@ -612,7 +783,7 @@ func (s *DeviceService) applySnapshot(item device.Device) {
 				value := domainstate.StateValue{
 					Key:        domainstate.Key{DeviceID: item.ID, EndpointID: endpoint.ID, CapabilityID: capability.ID, PropertyID: property.Definition.ID},
 					ProviderID: item.ProviderID, Source: domainstate.SourceReported,
-					ObservedAt: observedAt, ReceivedAt: receivedAt, Quality: domainstate.QualityReported,
+					ObservedAt: observedAt, ReceivedAt: receivedAt, Sequence: item.Sequence, Quality: domainstate.QualityReported,
 				}
 				if property.Definition.StaleAfterSeconds > 0 {
 					value.ExpiresAt = receivedAt.Add(time.Duration(property.Definition.StaleAfterSeconds) * time.Second)

@@ -27,7 +27,7 @@ export function SystemDashboard({ diagnostics, commands, settings, onSettingsSav
   const successRate = diagnostics.commandsStarted ? Math.round(diagnostics.commandsConfirmed / diagnostics.commandsStarted * 100) : 100
   const queueRate = diagnostics.eventQueueCapacity ? Math.round(diagnostics.eventQueuePending / diagnostics.eventQueueCapacity * 100) : 0
   const metrics = [
-    ['在线设备', diagnostics.onlineDevices], ['离线设备', diagnostics.offlineDevices], ['可用性未知', diagnostics.unknownDevices], ['运行中 Provider', diagnostics.providersRunning], ['实时订阅', diagnostics.deviceSubscribers],
+    ['在线设备', diagnostics.onlineDevices], ['暂时离线', diagnostics.offlineDevices], ['可用性未知', diagnostics.unknownDevices], ['人工禁用', diagnostics.disabledDevices ?? 0], ['来源已删除', diagnostics.removedDevices ?? 0], ['运行中 Provider', diagnostics.providersRunning], ['实时订阅', diagnostics.deviceSubscribers],
     ['已接收事件', diagnostics.eventsReceived], ['丢弃事件', diagnostics.eventsDropped + diagnostics.targetEventsDropped + diagnostics.stateEventsDropped], ['命令成功率', `${successRate}%`], ['过期状态', diagnostics.statesMarkedStale],
 	['平均命令耗时', `${diagnostics.commandAverageLatencyMs.toFixed(1)}ms`],
 	['命令排队中', diagnostics.commandQueuePending],
@@ -46,6 +46,7 @@ export function SystemDashboard({ diagnostics, commands, settings, onSettingsSav
 	['SQLite 平均延迟', `${diagnostics.databaseAverageLatencyMs.toFixed(1)}ms`],
 	['SQLite 最大延迟', `${diagnostics.databaseMaxLatencyMs.toFixed(1)}ms`],
 	['Provider 时钟漂移', diagnostics.providerClockSkewEvents],
+	['忽略乱序/重复事件', diagnostics.providerEventsIgnored ?? 0],
 	['最大时钟偏差', `${diagnostics.providerMaxClockSkewMs.toFixed(0)}ms`],
   ]
   return <section className="system-dashboard"><div className="metric-grid">{metrics.map(([label, value]) => <article key={label}><span>{label}</span><strong>{value}</strong></article>)}</div>

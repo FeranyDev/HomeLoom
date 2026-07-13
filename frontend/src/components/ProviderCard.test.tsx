@@ -12,6 +12,8 @@ describe('ProviderCard simulation', () => {
     render(<ProviderCard provider={provider} devices={[{ schemaVersion: 1, id: 'temp-1', providerId: provider.id, name: '温度', type: 'temperature-sensor', availability: 'online', online: true, endpoints: [], lastUpdateAt: '' }]} onEdit={() => {}} onDelete={() => {}} onRestart={onRestart} onSimulate={onSimulate} />)
     await userEvent.click(screen.getByRole('button', { name: '设为离线' })); expect(onSimulate).toHaveBeenCalledWith(expect.objectContaining({ id: 'temp-1' }), { online: false })
     const input = screen.getByLabelText('温度温度'); await userEvent.clear(input); await userEvent.type(input, '19.5'); await userEvent.click(screen.getByRole('button', { name: '上报' })); expect(onSimulate).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'temp-1' }), { temperature: 19.5 })
+		await userEvent.click(screen.getByRole('button', { name: '重复事件' })); expect(onSimulate).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'temp-1' }), { repeat: 2 })
+		await userEvent.click(screen.getByRole('button', { name: '旧序列事件' })); expect(onSimulate).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'temp-1' }), { sequence: 1 })
     await userEvent.click(screen.getByRole('button', { name: '重新启动' })); expect(onRestart).toHaveBeenCalledWith(provider)
   })
 

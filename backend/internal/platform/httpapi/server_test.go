@@ -9,12 +9,14 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
+	"github.com/feranydev/homeloom/backend/internal/persistence/sqlite"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
 	"github.com/feranydev/homeloom/backend/internal/runtime/providermanager"
@@ -88,6 +90,39 @@ func TestListTargetsAndPairingQR(t *testing.T) {
 	}
 	if qrResponse.Body.String() != "png-data" {
 		t.Fatalf("QR body = %q", qrResponse.Body.String())
+	}
+}
+
+func TestDeviceEnabledAPIIsPersisted(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "homeloom.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	service := application.NewDeviceService(virtual.NewProvider(), store)
+	defer service.Close()
+	if err := service.LoadDevicePreferences(ctx); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(":0", service, application.NewTargetService(nil, nil), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	disable := httptest.NewRequest(http.MethodPut, "/api/v1/devices/virtual-switch-1/enabled", bytes.NewBufferString(`{"enabled":false}`))
+	disable.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, disable)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"disabled":true`)) || bytes.Contains(response.Body.Bytes(), []byte(`"online":true`)) {
+		t.Fatalf("disable response = %d %s", response.Code, response.Body.String())
+	}
+	ids, err := store.ListDisabledDeviceIDs(ctx)
+	if err != nil || len(ids) != 1 || ids[0] != "virtual-switch-1" {
+		t.Fatalf("disabled ids = %#v, %v", ids, err)
+	}
+	enable := httptest.NewRequest(http.MethodPut, "/api/v1/devices/virtual-switch-1/enabled", bytes.NewBufferString(`{"enabled":true}`))
+	enable.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, enable)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"online":true`)) {
+		t.Fatalf("enable response = %d %s", response.Code, response.Body.String())
 	}
 }
 
@@ -502,6 +537,13 @@ func TestSimulateVirtualDevice(t *testing.T) {
 	server.Handler().ServeHTTP(invalidResponse, invalid)
 	if invalidResponse.Code != http.StatusBadRequest {
 		t.Fatalf("invalid status = %d", invalidResponse.Code)
+	}
+	sequence := httptest.NewRequest(http.MethodPatch, "/api/v1/devices/virtual-temperature-1/simulation", bytes.NewBufferString(`{"sequence":12,"repeat":2}`))
+	sequence.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	sequenceResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(sequenceResponse, sequence)
+	if sequenceResponse.Code != http.StatusOK || !bytes.Contains(sequenceResponse.Body.Bytes(), []byte(`"sequence":12`)) {
+		t.Fatalf("sequence response = %d %s", sequenceResponse.Code, sequenceResponse.Body.String())
 	}
 }
 

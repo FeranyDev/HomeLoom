@@ -92,6 +92,8 @@ type SimulationRequest struct {
 	Online       *bool
 	Availability *device.Availability
 	Properties   []PropertyWriteRequest
+	Sequence     *uint64
+	Repeat       int
 }
 
 type Simulator interface {

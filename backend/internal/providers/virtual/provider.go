@@ -124,7 +124,7 @@ func defaultDevices(id string) map[string]device.Device {
 
 func poweredDevice(id, providerID, name string, deviceType device.Type, online, power bool) device.Device {
 	item := device.Device{SchemaVersion: device.SchemaVersion, ID: id, ProviderID: providerID, Name: name,
-		Type: deviceType, LastUpdateAt: time.Now().UTC(),
+		Type: deviceType, Sequence: 1, LastUpdateAt: time.Now().UTC(),
 		Endpoints: []device.Endpoint{{
 			ID: "main", Name: "主端点", Type: string(deviceType),
 			Capabilities: []device.Capability{{ID: "switch", Type: "switch", Properties: []device.Property{{
@@ -140,6 +140,7 @@ func poweredDevice(id, providerID, name string, deviceType device.Type, online, 
 func temperatureDevice(id, providerID, name string, online bool, temperature float64) device.Device {
 	item := device.Device{SchemaVersion: device.SchemaVersion, ID: id, ProviderID: providerID, Name: name,
 		Type:         device.TypeTemperatureSensor,
+		Sequence:     1,
 		LastUpdateAt: time.Now().UTC(),
 		Endpoints: []device.Endpoint{{
 			ID: "main", Name: "主端点", Type: "sensor",
@@ -155,13 +156,13 @@ func temperatureDevice(id, providerID, name string, online bool, temperature flo
 
 func humidityDevice(id, providerID, name string, online bool, humidity float64) device.Device {
 	minimum, maximum, step := 0.0, 100.0, 0.1
-	item := device.Device{SchemaVersion: device.SchemaVersion, ID: id, ProviderID: providerID, Name: name, Type: device.TypeHumiditySensor, LastUpdateAt: time.Now().UTC(), Endpoints: []device.Endpoint{{ID: "main", Name: "主端点", Type: "sensor", Capabilities: []device.Capability{{ID: "humidity", Type: "humidity-sensor", Properties: []device.Property{{Definition: device.PropertyDefinition{ID: "current-humidity", Name: "当前湿度", Type: device.ValueTypeNumber, Unit: "percent", Readable: true, Notifiable: true, Min: &minimum, Max: &maximum, Step: &step, StaleAfterSeconds: 30}, Value: device.NumberValue(humidity)}}}}}}}
+	item := device.Device{SchemaVersion: device.SchemaVersion, ID: id, ProviderID: providerID, Name: name, Type: device.TypeHumiditySensor, Sequence: 1, LastUpdateAt: time.Now().UTC(), Endpoints: []device.Endpoint{{ID: "main", Name: "主端点", Type: "sensor", Capabilities: []device.Capability{{ID: "humidity", Type: "humidity-sensor", Properties: []device.Property{{Definition: device.PropertyDefinition{ID: "current-humidity", Name: "当前湿度", Type: device.ValueTypeNumber, Unit: "percent", Readable: true, Notifiable: true, Min: &minimum, Max: &maximum, Step: &step, StaleAfterSeconds: 30}, Value: device.NumberValue(humidity)}}}}}}}
 	item.SetOnline(online)
 	return item
 }
 
 func booleanSensorDevice(id, providerID, name string, deviceType device.Type, capabilityID, capabilityType, propertyID, propertyName string, online, value bool) device.Device {
-	item := device.Device{SchemaVersion: device.SchemaVersion, ID: id, ProviderID: providerID, Name: name, Type: deviceType, LastUpdateAt: time.Now().UTC(), Endpoints: []device.Endpoint{{ID: "main", Name: "主端点", Type: "sensor", Capabilities: []device.Capability{{ID: capabilityID, Type: capabilityType, Properties: []device.Property{{Definition: device.PropertyDefinition{ID: propertyID, Name: propertyName, Type: device.ValueTypeBool, Readable: true, Notifiable: true, StaleAfterSeconds: 30}, Value: device.BoolValue(value)}}}}}}}
+	item := device.Device{SchemaVersion: device.SchemaVersion, ID: id, ProviderID: providerID, Name: name, Type: deviceType, Sequence: 1, LastUpdateAt: time.Now().UTC(), Endpoints: []device.Endpoint{{ID: "main", Name: "主端点", Type: "sensor", Capabilities: []device.Capability{{ID: capabilityID, Type: capabilityType, Properties: []device.Property{{Definition: device.PropertyDefinition{ID: propertyID, Name: propertyName, Type: device.ValueTypeBool, Readable: true, Notifiable: true, StaleAfterSeconds: 30}, Value: device.BoolValue(value)}}}}}}}
 	item.SetOnline(online)
 	return item
 }
@@ -206,6 +207,7 @@ func (p *Provider) SetPower(ctx context.Context, id string, power bool) (device.
 		return device.Device{}, providersdk.ErrProviderUnavailable
 	}
 	item.SetProperty("main", "switch", "power", device.BoolValue(power))
+	item.Sequence++
 	item.LastUpdateAt = time.Now().UTC()
 	p.devices[id] = item
 	listeners := make([]func(device.Device), 0, len(p.listeners))
@@ -221,6 +223,13 @@ func (p *Provider) SetPower(ctx context.Context, id string, power bool) (device.
 }
 
 func (p *Provider) Simulate(_ context.Context, request providersdk.SimulationRequest) (device.Device, error) {
+	repeat := request.Repeat
+	if repeat == 0 {
+		repeat = 1
+	}
+	if repeat < 1 || repeat > 10 {
+		return device.Device{}, providersdk.ErrSimulationInvalid
+	}
 	p.mu.Lock()
 	item, ok := p.devices[request.DeviceID]
 	if !ok {
@@ -265,17 +274,28 @@ func (p *Provider) Simulate(_ context.Context, request providersdk.SimulationReq
 			return device.Device{}, providersdk.ErrSimulationInvalid
 		}
 	}
+	eventSequence := item.Sequence + 1
+	if request.Sequence != nil {
+		eventSequence = *request.Sequence
+	}
+	if eventSequence > item.Sequence {
+		item.Sequence = eventSequence
+	}
 	item.LastUpdateAt = time.Now().UTC()
 	p.devices[item.ID] = item
+	event := item.Clone()
+	event.Sequence = eventSequence
 	listeners := make([]func(device.Device), 0, len(p.listeners))
 	for _, listener := range p.listeners {
 		listeners = append(listeners, listener)
 	}
 	p.mu.Unlock()
-	for _, listener := range listeners {
-		listener(item.Clone())
+	for index := 0; index < repeat; index++ {
+		for _, listener := range listeners {
+			listener(event.Clone())
+		}
 	}
-	return item.Clone(), nil
+	return event, nil
 }
 
 func (p *Provider) Subscribe(handler func(device.Device)) func() {

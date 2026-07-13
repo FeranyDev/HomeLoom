@@ -5,6 +5,10 @@ export async function listDevices(signal?: AbortSignal): Promise<Device[]> {
   return requestData<Device[]>('/api/v1/devices', { signal })
 }
 
+export async function setDeviceEnabled(id: string, enabled: boolean): Promise<Device> {
+	return requestData<Device>(`/api/v1/devices/${encodeURIComponent(id)}/enabled`, { method: 'PUT', body: JSON.stringify({ enabled }) })
+}
+
 export async function getDeviceStates(id: string, signal?: AbortSignal): Promise<StateValue[]> {
   return requestData<StateValue[]>(`/api/v1/devices/${encodeURIComponent(id)}/states`, { signal })
 }
@@ -35,7 +39,7 @@ export async function executeDeviceCommand(id: string, endpointId: string, capab
 	return requestData<Device>(`/api/v1/devices/${encodeURIComponent(id)}/endpoints/${encodeURIComponent(endpointId)}/capabilities/${encodeURIComponent(capabilityId)}/commands/${encodeURIComponent(commandId)}`, { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ parameters }) })
 }
 
-export async function simulateDevice(id: string, values: { availability?: DeviceAvailability; online?: boolean; power?: boolean; temperature?: number; humidity?: number; contact?: boolean; motion?: boolean }): Promise<Device> {
+export async function simulateDevice(id: string, values: { availability?: DeviceAvailability; online?: boolean; power?: boolean; temperature?: number; humidity?: number; contact?: boolean; motion?: boolean; sequence?: number; repeat?: number }): Promise<Device> {
   return requestData<Device>(`/api/v1/devices/${encodeURIComponent(id)}/simulation`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values),
   })

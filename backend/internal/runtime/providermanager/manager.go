@@ -205,6 +205,7 @@ func (m *Manager) Apply(ctx context.Context, item providersdk.Provider) error {
 						continue
 					}
 					snapshot.ProviderID = id
+					snapshot.Removed = true
 					snapshot.SetOnline(false)
 					m.broadcast(snapshot)
 				}
@@ -248,6 +249,7 @@ func (m *Manager) Remove(ctx context.Context, id string) error {
 		if items, err := discoverer.DiscoverDevices(ctx); err == nil {
 			for _, item := range items {
 				item.ProviderID = id
+				item.Removed = true
 				item.SetOnline(false)
 				m.broadcast(item)
 			}

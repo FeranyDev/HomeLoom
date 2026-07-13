@@ -67,6 +67,7 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .sensor-state span { font-size: 10px; letter-spacing: .12em; }
 .sensor-state.is-active { color: #55725b; }
 .device-card footer { display: flex; align-items: center; justify-content: space-between; margin-top: 34px; color: #9b9c96; font-size: 12px; }
+.device-card footer > div { display: flex; gap: 12px; }
 .device-card footer button { padding: 5px 0; border: 0; border-bottom: 1px solid #b8bab3; background: transparent; color: #696e66; cursor: pointer; }
 .device-filters { display: grid; grid-template-columns: 1fr 180px auto; gap: 10px; align-items: center; margin-bottom: 18px; }
 .device-filters input, .device-filters select { padding: 11px 13px; border: 1px solid #cac9c1; background: rgba(250,249,245,.72); color: #4f534c; font: inherit; }

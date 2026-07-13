@@ -126,6 +126,9 @@ type Device struct {
 	Availability  Availability `json:"availability"`
 	// Online is retained as a compatibility projection for schema v1 clients.
 	Online       bool       `json:"online"`
+	Sequence     uint64     `json:"sequence,omitempty"`
+	Disabled     bool       `json:"disabled,omitempty"`
+	Removed      bool       `json:"removed,omitempty"`
 	Endpoints    []Endpoint `json:"endpoints"`
 	LastUpdateAt time.Time  `json:"lastUpdateAt"`
 }
@@ -173,6 +176,9 @@ func (d Device) Validate() error {
 	}
 	if d.Availability != "" && d.Online != (d.Availability == AvailabilityOnline) {
 		return fmt.Errorf("%w: online compatibility projection conflicts with availability", ErrInvalidModel)
+	}
+	if (d.Disabled || d.Removed) && d.IsOnline() {
+		return fmt.Errorf("%w: disabled or removed device cannot be online", ErrInvalidModel)
 	}
 	endpointIDs := make(map[string]struct{}, len(d.Endpoints))
 	for _, endpoint := range d.Endpoints {

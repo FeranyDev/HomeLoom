@@ -96,6 +96,7 @@ func TestValidateModelContract(t *testing.T) {
 		"wrong value type":   func(item *Device) { item.Endpoints[0].Capabilities[0].Properties[0].Value = StringValue("auto") },
 		"invalid enum":       func(item *Device) { item.Endpoints[0].Capabilities[0].Properties[0].Value = EnumValue("invalid") },
 		"out of range":       func(item *Device) { item.Endpoints[0].Capabilities[0].Properties[1].Value = NumberValue(101) },
+		"disabled online":    func(item *Device) { item.Disabled, item.Availability, item.Online = true, AvailabilityOnline, true },
 	} {
 		t.Run(name, func(t *testing.T) {
 			item := valid.Clone()
