@@ -125,6 +125,7 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .command-status { justify-self: start; padding: 4px 7px; background: #e4e5df; color: #6a6e67; font-style: normal; font-size: 10px; }
 .command-status.is-confirmed { background: #dfe9df; color: #4f7055; }
 .command-status.is-rejected, .command-status.is-timeout { background: #efe0da; color: #8b5547; }
+.command-status.is-superseded { background: #e6e2d6; color: #776b4d; }
 .config-note { display: grid; grid-template-columns: 120px 1fr; gap: 8px 20px; padding: 20px 26px; border: 1px dashed #bfc1b8; color: #757970; }
 .config-note strong { color: #3e433c; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
 .config-note p { grid-column: 2; margin: 0; font-size: 13px; }

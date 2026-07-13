@@ -15,6 +15,19 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
 )
 
+type silentProvider struct{ inner *virtual.Provider }
+
+func (p *silentProvider) Manifest() providersdk.Manifest         { return p.inner.Manifest() }
+func (p *silentProvider) Capabilities() providersdk.Capabilities { return p.inner.Capabilities() }
+func (p *silentProvider) Initialize(ctx context.Context) error   { return p.inner.Initialize(ctx) }
+func (p *silentProvider) Close(ctx context.Context) error        { return p.inner.Close(ctx) }
+func (p *silentProvider) DiscoverDevices(ctx context.Context) ([]device.Device, error) {
+	return p.inner.DiscoverDevices(ctx)
+}
+func (p *silentProvider) WriteProperty(ctx context.Context, request providersdk.PropertyWriteRequest) (device.Device, error) {
+	return p.inner.WriteProperty(ctx, request)
+}
+
 func TestDeviceServiceRoutesProviderEvents(t *testing.T) {
 	provider := virtual.NewProvider()
 	service := application.NewDeviceService(provider)
@@ -209,5 +222,30 @@ func TestCommandPublishesOptimisticThenReportedState(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("missing reported state")
+	}
+}
+
+func TestNewPropertyCommandSupersedesOldOptimisticCommand(t *testing.T) {
+	service := application.NewDeviceService(&silentProvider{inner: virtual.NewProvider()})
+	defer service.Close()
+	id := "virtual-switch-1"
+	_, first, err := service.ExecutePower(context.Background(), id, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, second, err := service.ExecutePower(context.Background(), id, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, _ := service.Command(first.ID)
+	if old.Status != domaincommand.StatusSuperseded {
+		t.Fatalf("old = %#v", old)
+	}
+	states := service.States(id)
+	if len(states) != 1 || states[0].Quality != domainstate.QualityOptimistic || states[0].PendingCommandID != second.ID || states[0].Value.Bool == nil || *states[0].Value.Bool {
+		t.Fatalf("latest optimistic state = %#v", states)
+	}
+	if service.Metrics().CommandsSuperseded != 1 {
+		t.Fatalf("metrics = %#v", service.Metrics())
 	}
 }

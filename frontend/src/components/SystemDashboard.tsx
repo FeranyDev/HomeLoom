@@ -11,6 +11,7 @@ export function SystemDashboard({ diagnostics, commands }: { diagnostics: Diagno
     ['已接收事件', diagnostics.eventsReceived], ['丢弃事件', diagnostics.eventsDropped + diagnostics.targetEventsDropped + diagnostics.stateEventsDropped], ['命令成功率', `${successRate}%`], ['过期状态', diagnostics.statesMarkedStale],
 	['平均命令耗时', `${diagnostics.commandAverageLatencyMs.toFixed(1)}ms`],
 	['Provider 重试', diagnostics.providerRetries],
+	['被替代命令', diagnostics.commandsSuperseded],
   ]
   return <section className="system-dashboard"><div className="metric-grid">{metrics.map(([label, value]) => <article key={label}><span>{label}</span><strong>{value}</strong></article>)}</div>
     <div className="queue-card"><div><span>事件队列</span><strong>{diagnostics.eventQueuePending} / {diagnostics.eventQueueCapacity}</strong></div><div className="queue-track"><span style={{ width: `${Math.min(queueRate, 100)}%` }} /></div><small>当前占用 {queueRate}% · 核心队列满时会丢弃并计数，不阻塞 Provider 线程。</small></div>

@@ -99,6 +99,7 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		writeMetric("commands_confirmed_total", metrics.CommandsConfirmed)
 		writeMetric("commands_rejected_total", metrics.CommandsRejected)
 		writeMetric("commands_timed_out_total", metrics.CommandsTimedOut)
+		writeMetric("commands_superseded_total", metrics.CommandsSuperseded)
 		writeMetric("devices_online", metrics.OnlineDevices)
 		writeMetric("devices_offline", metrics.OfflineDevices)
 		writeMetric("providers_running", metrics.ProvidersRunning)

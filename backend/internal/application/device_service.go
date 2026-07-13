@@ -62,6 +62,7 @@ type deviceMetrics struct {
 	commandsConfirmed   atomic.Uint64
 	commandsRejected    atomic.Uint64
 	commandsTimedOut    atomic.Uint64
+	commandsSuperseded  atomic.Uint64
 }
 
 type DeviceMetrics struct {
@@ -77,6 +78,7 @@ type DeviceMetrics struct {
 	CommandsConfirmed       uint64  `json:"commandsConfirmed"`
 	CommandsRejected        uint64  `json:"commandsRejected"`
 	CommandsTimedOut        uint64  `json:"commandsTimedOut"`
+	CommandsSuperseded      uint64  `json:"commandsSuperseded"`
 	OnlineDevices           int     `json:"onlineDevices"`
 	OfflineDevices          int     `json:"offlineDevices"`
 	ProvidersRunning        int     `json:"providersRunning"`
@@ -171,7 +173,7 @@ func (s *DeviceService) Metrics() DeviceMetrics {
 	var latency time.Duration
 	terminalCount := 0
 	for _, command := range commands {
-		if command.Status == domaincommand.StatusConfirmed || command.Status == domaincommand.StatusRejected || command.Status == domaincommand.StatusTimeout {
+		if command.Status == domaincommand.StatusConfirmed || command.Status == domaincommand.StatusRejected || command.Status == domaincommand.StatusTimeout || command.Status == domaincommand.StatusSuperseded {
 			latency += command.UpdatedAt.Sub(command.CreatedAt)
 			terminalCount++
 		}
@@ -185,7 +187,7 @@ func (s *DeviceService) Metrics() DeviceMetrics {
 		EventsDropped: s.metrics.eventsDropped.Load(), EventQueuePending: s.dispatcher.Pending(), EventQueueCapacity: s.dispatcher.Capacity(),
 		TargetEventsDropped: s.metrics.targetEventsDropped.Load(), StateEventsDropped: s.metrics.stateEventsDropped.Load(), StatesMarkedStale: s.metrics.statesMarkedStale.Load(),
 		CommandsStarted: s.metrics.commandsStarted.Load(), CommandsConfirmed: s.metrics.commandsConfirmed.Load(),
-		CommandsRejected: s.metrics.commandsRejected.Load(), CommandsTimedOut: s.metrics.commandsTimedOut.Load(),
+		CommandsRejected: s.metrics.commandsRejected.Load(), CommandsTimedOut: s.metrics.commandsTimedOut.Load(), CommandsSuperseded: s.metrics.commandsSuperseded.Load(),
 		OnlineDevices: online, OfflineDevices: len(items) - online, ProvidersRunning: providersRunning, ProviderRetries: providerRetries, DeviceSubscribers: subscribers, StateSubscribers: stateSubscribers,
 		CommandAverageLatencyMS: averageLatency,
 	}
@@ -211,7 +213,14 @@ func (s *DeviceService) ExecutePower(ctx context.Context, id string, power bool)
 func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) (device.Device, domaincommand.Command, error) {
 	key := domainstate.Key{DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID, PropertyID: propertyID}
 	previous, hadPrevious := s.states.Get(key)
-	command := s.commands.Begin(deviceID, endpointID, capabilityID, propertyID, value)
+	command, superseded := s.commands.BeginReplacing(deviceID, endpointID, capabilityID, propertyID, value)
+	if superseded != nil {
+		s.metrics.commandsSuperseded.Add(1)
+		if stale, changed := s.states.ResolveOptimistic(superseded.ID, nil); changed {
+			s.publishState(stale)
+		}
+		previous, hadPrevious = s.states.Get(key)
+	}
 	s.metrics.commandsStarted.Add(1)
 	s.applyOptimisticState(key, value, command, previous, hadPrevious)
 	s.commands.Sent(command.ID)

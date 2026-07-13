@@ -87,3 +87,26 @@ func TestTrackerPublishesLifecycleTransitions(t *testing.T) {
 		}
 	}
 }
+
+func TestNewCommandSupersedesPendingCommandForSameProperty(t *testing.T) {
+	tracker := NewTracker(time.Second)
+	first := tracker.Begin("switch", "main", "switch", "power", device.BoolValue(true))
+	tracker.Accepted(first.ID)
+	second, superseded := tracker.BeginReplacing("switch", "main", "switch", "power", device.BoolValue(false))
+	if superseded == nil || superseded.ID != first.ID || superseded.Status != domaincommand.StatusSuperseded {
+		t.Fatalf("superseded = %#v", superseded)
+	}
+	current, _ := tracker.Get(first.ID)
+	if current.Status != domaincommand.StatusSuperseded {
+		t.Fatalf("first = %#v", current)
+	}
+	tracker.Accepted(first.ID)
+	current, _ = tracker.Get(first.ID)
+	if current.Status != domaincommand.StatusSuperseded {
+		t.Fatal("terminal command transitioned again")
+	}
+	tracker.Accepted(second.ID)
+	if !tracker.Confirm("switch", "main", "switch", "power", device.BoolValue(false)) {
+		t.Fatal("new command was not pending")
+	}
+}

@@ -26,7 +26,13 @@ func NewTracker(timeout time.Duration) *Tracker {
 }
 
 func (t *Tracker) Begin(deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) domaincommand.Command {
+	command, _ := t.BeginReplacing(deviceID, endpointID, capabilityID, propertyID, value)
+	return command
+}
+
+func (t *Tracker) BeginReplacing(deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) (domaincommand.Command, *domaincommand.Command) {
 	now := time.Now().UTC()
+	key := pendingKey(deviceID, endpointID, capabilityID, propertyID)
 	command := domaincommand.Command{
 		ID: commandID(), DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID,
 		PropertyID: propertyID, Expected: value,
@@ -34,11 +40,24 @@ func (t *Tracker) Begin(deviceID, endpointID, capabilityID, propertyID string, v
 	}
 	t.mu.Lock()
 	t.pruneLocked()
+	var superseded *domaincommand.Command
+	if previousID, exists := t.pending[key]; exists {
+		previous := t.commands[previousID]
+		if !terminal(previous.Status) {
+			previous.Status, previous.Error, previous.UpdatedAt = domaincommand.StatusSuperseded, "replaced by a newer command", now
+			t.commands[previousID] = previous
+			copy := previous
+			superseded = &copy
+		}
+	}
 	t.commands[command.ID] = command
-	t.pending[pendingKey(deviceID, endpointID, capabilityID, propertyID)] = command.ID
+	t.pending[key] = command.ID
 	t.mu.Unlock()
+	if superseded != nil {
+		t.notify(*superseded)
+	}
 	t.notify(command)
-	return command
+	return command, superseded
 }
 
 func (t *Tracker) pruneLocked() {
@@ -166,7 +185,7 @@ func (t *Tracker) notify(command domaincommand.Command) {
 }
 
 func terminal(status domaincommand.Status) bool {
-	return status == domaincommand.StatusConfirmed || status == domaincommand.StatusRejected || status == domaincommand.StatusTimeout
+	return status == domaincommand.StatusConfirmed || status == domaincommand.StatusRejected || status == domaincommand.StatusTimeout || status == domaincommand.StatusSuperseded
 }
 
 func pendingKey(deviceID, endpointID, capabilityID, propertyID string) string {

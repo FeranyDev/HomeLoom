@@ -266,6 +266,7 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 - [x] confirmed；
 - [x] rejected；
 - [x] timeout；
+- [x] 同属性新命令替代旧命令；
 - [x] 期望 bool 值；
 - [x] Provider 状态回报确认；
 - [x] 终态保护；

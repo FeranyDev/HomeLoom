@@ -7,12 +7,13 @@ import "github.com/feranydev/homeloom/backend/internal/domain/device"
 type Status string
 
 const (
-	StatusQueued    Status = "queued"
-	StatusSent      Status = "sent"
-	StatusAccepted  Status = "accepted"
-	StatusConfirmed Status = "confirmed"
-	StatusRejected  Status = "rejected"
-	StatusTimeout   Status = "timeout"
+	StatusQueued     Status = "queued"
+	StatusSent       Status = "sent"
+	StatusAccepted   Status = "accepted"
+	StatusConfirmed  Status = "confirmed"
+	StatusRejected   Status = "rejected"
+	StatusTimeout    Status = "timeout"
+	StatusSuperseded Status = "superseded"
 )
 
 type Command struct {
