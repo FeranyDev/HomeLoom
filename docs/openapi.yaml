@@ -6,6 +6,25 @@ info:
 servers:
   - url: http://127.0.0.1:8090
 paths:
+  /api/versions:
+    get:
+      operationId: listApiVersions
+      responses:
+        "200":
+          description: Supported management API path versions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [current, supported, deprecated]
+                    properties:
+                      current: { type: string, const: v1 }
+                      supported: { type: array, items: { type: string } }
+                      deprecated: { type: array, items: { type: string } }
   /health:
     get:
       operationId: health
@@ -269,6 +288,7 @@ components:
         propertyId: { type: string }
         commandId: { type: string }
         correlationId: { type: string, maxLength: 128, description: HTTP X-Request-Id that created the command. }
+        coalescedRequests: { type: integer, minimum: 1, description: Number of later identical property writes that reused this command. }
         status: { type: string, enum: [queued, sent, accepted, confirmed, rejected, timeout, superseded] }
         outcome: { type: string, enum: [succeeded, failed, unknown] }
         error: { type: string }

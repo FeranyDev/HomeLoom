@@ -281,8 +281,8 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 - [x] Action/Command 参数；
 - [x] Action Idempotency Key；
 - [x] 同设备命令顺序队列；
-- [ ] 相同属性命令去重；
-- [ ] 后写命令取消旧命令；
+- [x] 相同属性命令去重；
+- [x] 后写命令取消旧命令；
 - [x] outcome-unknown；
 - [x] timeout 不自动视为执行失败；
 - [x] 安全重试声明；
@@ -559,7 +559,7 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [x] Trace/Correlation ID；
 - [x] 统一错误响应结构；
 - [x] OpenAPI 3.1 文档；
-- [ ] API 版本兼容策略。
+- [x] API 版本兼容策略。
 
 ## 13. 测试完善
 
@@ -586,7 +586,7 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [ ] API Target CRUD 集成测试；
 - [ ] Target 保存失败回滚测试；
 - [x] Dispatcher 关闭超时测试；
-- [ ] Command 多次覆盖测试；
+- [x] Command 多次覆盖测试；
 - [ ] State stale/optimistic 测试；
 - [x] 500 设备基准测试；
 - [x] 每秒 100 事件基准测试；

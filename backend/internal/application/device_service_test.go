@@ -131,6 +131,20 @@ func (p *blockingWriteProvider) WriteProperty(ctx context.Context, request provi
 	}
 }
 
+func (p *blockingWriteProvider) ExecuteCommand(ctx context.Context, request providersdk.CommandRequest) (device.Device, error) {
+	select {
+	case p.entered <- request.DeviceID:
+	case <-ctx.Done():
+		return device.Device{}, ctx.Err()
+	}
+	select {
+	case <-p.release[request.DeviceID]:
+		return p.inner.ExecuteCommand(ctx, request)
+	case <-ctx.Done():
+		return device.Device{}, ctx.Err()
+	}
+}
+
 func TestDeviceServiceRoutesProviderEvents(t *testing.T) {
 	provider := virtual.NewProvider()
 	service := application.NewDeviceService(provider)
@@ -268,13 +282,20 @@ func TestDeviceServiceRejectsInvalidTypedPropertyBeforeCreatingCommand(t *testin
 	}
 }
 
-func TestDeviceCommandsSerializePerDeviceAndRunAcrossDevices(t *testing.T) {
+func TestNewPropertyValueSupersedesActiveWriteAndDevicesStillRunConcurrently(t *testing.T) {
 	provider := newBlockingWriteProvider(t)
 	service := application.NewDeviceService(provider)
 	defer service.Close()
-	errors := make(chan error, 4)
+	type result struct {
+		command domaincommand.Command
+		err     error
+	}
+	results := make(chan result, 4)
 	run := func(deviceID string, value bool) {
-		go func() { _, _, err := service.ExecutePower(context.Background(), deviceID, value); errors <- err }()
+		go func() {
+			_, command, err := service.ExecutePower(context.Background(), deviceID, value)
+			results <- result{command: command, err: err}
+		}()
 	}
 
 	run("switch-a", true)
@@ -282,28 +303,19 @@ func TestDeviceCommandsSerializePerDeviceAndRunAcrossDevices(t *testing.T) {
 		t.Fatalf("first entered = %q", entered)
 	}
 	run("switch-a", false)
-	deadline := time.Now().Add(time.Second)
-	for service.Metrics().CommandQueuePending != 1 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if pending := service.Metrics().CommandQueuePending; pending != 1 {
-		t.Fatalf("pending = %d", pending)
-	}
-	select {
-	case entered := <-provider.entered:
-		t.Fatalf("same device entered concurrently: %s", entered)
-	case <-time.After(20 * time.Millisecond):
-	}
-	provider.release["switch-a"] <- struct{}{}
 	if entered := <-provider.entered; entered != "switch-a" {
-		t.Fatalf("second entered = %q", entered)
+		t.Fatalf("replacement entered = %q", entered)
 	}
 	provider.release["switch-a"] <- struct{}{}
-	if err := <-errors; err != nil {
-		t.Fatal(err)
+	first, second := <-results, <-results
+	if errors.Is(second.err, application.ErrCommandSuperseded) {
+		first, second = second, first
 	}
-	if err := <-errors; err != nil {
-		t.Fatal(err)
+	if !errors.Is(first.err, application.ErrCommandSuperseded) || first.command.Status != domaincommand.StatusSuperseded || second.err != nil {
+		t.Fatalf("replacement results = %#v, %#v", first, second)
+	}
+	if metrics := service.Metrics(); metrics.CommandsSuperseded != 1 || metrics.CommandsStarted != 2 {
+		t.Fatalf("replacement metrics = %#v", metrics)
 	}
 
 	run("switch-a", true)
@@ -314,14 +326,57 @@ func TestDeviceCommandsSerializePerDeviceAndRunAcrossDevices(t *testing.T) {
 	}
 	provider.release["switch-a"] <- struct{}{}
 	provider.release["switch-b"] <- struct{}{}
-	if err := <-errors; err != nil {
+	if result := <-results; result.err != nil {
+		t.Fatal(result.err)
+	}
+	if result := <-results; result.err != nil {
+		t.Fatal(result.err)
+	}
+	if service.Metrics().CommandQueuePending != 0 {
+		t.Fatalf("queue metrics = %#v", service.Metrics())
+	}
+}
+
+func TestConcurrentIdenticalPropertyWritesShareProviderCall(t *testing.T) {
+	provider := newBlockingWriteProvider(t)
+	service := application.NewDeviceService(provider)
+	defer service.Close()
+	type result struct {
+		command domaincommand.Command
+		err     error
+	}
+	results := make(chan result, 2)
+	for range 2 {
+		go func() {
+			_, command, err := service.ExecutePower(context.Background(), "switch-a", true)
+			results <- result{command: command, err: err}
+		}()
+		if len(service.Commands()) == 0 {
+			<-provider.entered
+		}
+	}
+	select {
+	case entered := <-provider.entered:
+		t.Fatalf("duplicate reached provider: %s", entered)
+	case <-time.After(20 * time.Millisecond):
+	}
+	provider.release["switch-a"] <- struct{}{}
+	first, second := <-results, <-results
+	if first.err != nil || second.err != nil || first.command.ID != second.command.ID || first.command.Coalesced != 1 || second.command.Coalesced != 1 || service.Metrics().CommandsStarted != 1 || service.Metrics().CommandsCoalesced != 1 {
+		t.Fatalf("deduplicated results = %#v, %#v, metrics = %#v", first, second, service.Metrics())
+	}
+}
+
+func TestAcceptedIdenticalPropertyWriteIsReplayed(t *testing.T) {
+	service := application.NewDeviceService(&silentProvider{inner: virtual.NewProvider()})
+	defer service.Close()
+	_, first, err := service.ExecutePower(context.Background(), "virtual-switch-1", true)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := <-errors; err != nil {
-		t.Fatal(err)
-	}
-	if service.Metrics().CommandQueueMaxPending < 1 {
-		t.Fatalf("metrics = %#v", service.Metrics())
+	_, replay, err := service.ExecutePower(context.Background(), "virtual-switch-1", true)
+	if err != nil || replay.ID != first.ID || replay.Coalesced != 1 || len(service.Commands()) != 1 || service.Metrics().CommandsStarted != 1 || service.Metrics().CommandsCoalesced != 1 {
+		t.Fatalf("replay = %#v, %v, commands = %#v", replay, err, service.Commands())
 	}
 }
 
@@ -334,7 +389,7 @@ func TestDeviceCommandQueueHonorsContextCancellation(t *testing.T) {
 	<-provider.entered
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if _, command, err := service.ExecutePower(ctx, "switch-a", false); !errors.Is(err, context.DeadlineExceeded) || command.ID != "" {
+	if _, command, err := service.ExecuteCommand(ctx, providersdk.CommandRequest{DeviceID: "switch-a", EndpointID: "main", CapabilityID: "switch", CommandID: "toggle", IdempotencyKey: "queued-toggle"}); !errors.Is(err, context.DeadlineExceeded) || command.ID != "" {
 		t.Fatalf("queued cancellation = %#v, %v", command, err)
 	}
 	select {

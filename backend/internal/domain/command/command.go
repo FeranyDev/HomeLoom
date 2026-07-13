@@ -39,6 +39,7 @@ type Command struct {
 	Parameters     map[string]device.PropertyValue `json:"parameters,omitempty"`
 	IdempotencyKey string                          `json:"idempotencyKey,omitempty"`
 	CorrelationID  string                          `json:"correlationId,omitempty"`
+	Coalesced      uint64                          `json:"coalescedRequests,omitempty"`
 	Status         Status                          `json:"status"`
 	Outcome        Outcome                         `json:"outcome,omitempty"`
 	Error          string                          `json:"error,omitempty"`

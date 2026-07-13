@@ -23,6 +23,7 @@ var (
 	ErrDeviceNotFound      = providersdk.ErrDeviceNotFound
 	ErrPropertyUnsupported = providersdk.ErrPropertyUnsupported
 	ErrDeviceDisabled      = errors.New("device is disabled or removed")
+	ErrCommandSuperseded   = errors.New("command superseded by a newer property write")
 )
 
 type DeviceService struct {
@@ -51,6 +52,19 @@ type DeviceService struct {
 	preferences    DevicePreferenceStore
 	disabledMu     sync.RWMutex
 	disabled       map[string]struct{}
+	propertyMu     sync.Mutex
+	propertyOps    map[domainstate.Key]*propertyOperation
+}
+
+type propertyOperation struct {
+	expected  device.PropertyValue
+	ctx       context.Context
+	cancel    context.CancelFunc
+	done      chan struct{}
+	command   domaincommand.Command
+	item      device.Device
+	err       error
+	coalesced uint64
 }
 
 type DatabaseMetricsProvider interface {
@@ -94,6 +108,7 @@ type deviceMetrics struct {
 	commandsRejected      atomic.Uint64
 	commandsTimedOut      atomic.Uint64
 	commandsSuperseded    atomic.Uint64
+	commandsCoalesced     atomic.Uint64
 	homeKitPushes         atomic.Uint64
 	providerClockSkews    atomic.Uint64
 	providerEventsIgnored atomic.Uint64
@@ -114,6 +129,7 @@ type DeviceMetrics struct {
 	CommandsRejected         uint64  `json:"commandsRejected"`
 	CommandsTimedOut         uint64  `json:"commandsTimedOut"`
 	CommandsSuperseded       uint64  `json:"commandsSuperseded"`
+	CommandsCoalesced        uint64  `json:"commandsCoalesced"`
 	CommandsOutcomeUnknown   uint64  `json:"commandsOutcomeUnknown"`
 	HomeKitPushes            uint64  `json:"homeKitPushes"`
 	OnlineDevices            int     `json:"onlineDevices"`
@@ -173,7 +189,7 @@ func NewDeviceService(provider providersdk.Provider, storageMetrics ...DatabaseM
 		provider: provider, discoverer: discoverer, reader: reader, writer: writer, executor: executor,
 		registry: registry.NewDeviceRegistry(items),
 		states:   statestore.NewStore(), commands: commandtracker.NewTracker(5 * time.Second), commandQueue: newCommandCoordinator(),
-		listeners: make(map[uint64]*deviceSubscription), stateListeners: make(map[uint64]*stateSubscription), snapshotSeq: make(map[string]uint64), disabled: make(map[string]struct{}),
+		listeners: make(map[uint64]*deviceSubscription), stateListeners: make(map[uint64]*stateSubscription), snapshotSeq: make(map[string]uint64), disabled: make(map[string]struct{}), propertyOps: make(map[domainstate.Key]*propertyOperation),
 	}
 	if len(storageMetrics) > 0 {
 		service.storageMetrics = storageMetrics[0]
@@ -385,7 +401,7 @@ func (s *DeviceService) Metrics() DeviceMetrics {
 		EventsDropped: s.metrics.eventsDropped.Load(), EventQueuePending: s.dispatcher.Pending(), EventQueueCapacity: s.dispatcher.Capacity(),
 		TargetEventsDropped: s.metrics.targetEventsDropped.Load(), StateEventsDropped: s.metrics.stateEventsDropped.Load(), StatesMarkedStale: s.metrics.statesMarkedStale.Load(),
 		CommandsStarted: s.metrics.commandsStarted.Load(), CommandsConfirmed: s.metrics.commandsConfirmed.Load(),
-		CommandsRejected: s.metrics.commandsRejected.Load(), CommandsTimedOut: s.metrics.commandsTimedOut.Load(), CommandsSuperseded: s.metrics.commandsSuperseded.Load(),
+		CommandsRejected: s.metrics.commandsRejected.Load(), CommandsTimedOut: s.metrics.commandsTimedOut.Load(), CommandsSuperseded: s.metrics.commandsSuperseded.Load(), CommandsCoalesced: s.metrics.commandsCoalesced.Load(),
 		CommandsOutcomeUnknown: s.metrics.commandsTimedOut.Load() + s.metrics.commandsSuperseded.Load(),
 		HomeKitPushes:          s.metrics.homeKitPushes.Load(),
 		OnlineDevices:          online, OfflineDevices: offline, UnknownDevices: unknown, DisabledDevices: disabled, RemovedDevices: removed, ProvidersRunning: providersRunning, ProviderRetries: providerRetries, DeviceSubscribers: subscribers, StateSubscribers: stateSubscribers,
@@ -430,18 +446,46 @@ func (s *DeviceService) ExecutePower(ctx context.Context, id string, power bool)
 	return s.ExecuteProperty(ctx, id, "main", "switch", "power", device.BoolValue(power))
 }
 
-func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) (device.Device, domaincommand.Command, error) {
+func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) (result device.Device, resultCommand domaincommand.Command, resultErr error) {
 	if err := s.validatePropertyWrite(deviceID, endpointID, capabilityID, propertyID, value); err != nil {
 		return device.Device{}, domaincommand.Command{}, err
 	}
-	release, err := s.commandQueue.acquire(ctx, deviceID)
+	key := domainstate.Key{DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID, PropertyID: propertyID}
+	operation, joined := s.beginPropertyOperation(ctx, key, value)
+	if joined {
+		select {
+		case <-operation.done:
+			return operation.item, operation.command, operation.err
+		case <-ctx.Done():
+			return device.Device{}, domaincommand.Command{}, ctx.Err()
+		}
+	}
+	defer func() {
+		result, resultCommand, resultErr = s.finishPropertyOperation(key, operation, result, resultCommand, resultErr)
+	}()
+	release, err := s.commandQueue.acquire(operation.ctx, deviceID)
 	if err != nil {
 		return device.Device{}, domaincommand.Command{}, err
 	}
 	defer release()
-	key := domainstate.Key{DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID, PropertyID: propertyID}
 	previous, hadPrevious := s.states.Get(key)
-	command, superseded := s.commands.BeginReplacingCorrelated(deviceID, endpointID, capabilityID, propertyID, value, CorrelationID(ctx))
+	command, superseded, replayed := s.commands.BeginPropertyCorrelated(deviceID, endpointID, capabilityID, propertyID, value, CorrelationID(ctx))
+	if !s.setPropertyOperationCommand(key, operation, command) {
+		s.metrics.commandsStarted.Add(1)
+		current, changed := s.commands.Supersede(command.ID, "replaced before provider execution")
+		if changed {
+			s.metrics.commandsSuperseded.Add(1)
+		}
+		return device.Device{}, current, ErrCommandSuperseded
+	}
+	if replayed {
+		s.metrics.commandsCoalesced.Add(1)
+		item, ok := s.registry.Get(deviceID)
+		if !ok {
+			return device.Device{}, command, ErrDeviceNotFound
+		}
+		return item, command, nil
+	}
 	if superseded != nil {
 		s.metrics.commandsSuperseded.Add(1)
 		if stale, changed := s.states.ResolveOptimistic(superseded.ID, nil); changed {
@@ -460,19 +504,113 @@ func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointI
 		current, _ := s.commands.Get(command.ID)
 		return device.Device{}, current, err
 	}
-	item, err := s.writer.WriteProperty(ctx, providersdk.PropertyWriteRequest{
+	item, err := s.writer.WriteProperty(operation.ctx, providersdk.PropertyWriteRequest{
 		DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID, PropertyID: propertyID, Value: value,
 	})
 	if err != nil {
+		if current, ok := s.commands.Get(command.ID); ok && current.Status == domaincommand.StatusSuperseded {
+			s.rollbackOptimistic(command.ID, previous, hadPrevious)
+			return device.Device{}, current, ErrCommandSuperseded
+		}
 		s.commands.Rejected(command.ID, err)
 		s.rollbackOptimistic(command.ID, previous, hadPrevious)
 		s.metrics.commandsRejected.Add(1)
 		current, _ := s.commands.Get(command.ID)
 		return device.Device{}, current, err
 	}
+	if current, ok := s.commands.Get(command.ID); ok && current.Status == domaincommand.StatusSuperseded {
+		s.rollbackOptimistic(command.ID, previous, hadPrevious)
+		return device.Device{}, current, ErrCommandSuperseded
+	}
 	s.commands.Accepted(command.ID)
 	current, _ := s.commands.Get(command.ID)
 	return item, current, nil
+}
+
+func (s *DeviceService) beginPropertyOperation(ctx context.Context, key domainstate.Key, value device.PropertyValue) (*propertyOperation, bool) {
+	s.propertyMu.Lock()
+	var supersededCommandID string
+	if existing := s.propertyOps[key]; existing != nil {
+		if propertyValuesEqual(existing.expected, value) {
+			existing.coalesced++
+			commandID := existing.command.ID
+			s.propertyMu.Unlock()
+			s.metrics.commandsCoalesced.Add(1)
+			if commandID != "" {
+				s.commands.AddCoalesced(commandID, 1)
+			}
+			return existing, true
+		}
+		supersededCommandID = existing.command.ID
+		existing.cancel()
+	}
+	operationContext, cancel := context.WithCancel(ctx)
+	operation := &propertyOperation{expected: value, ctx: operationContext, cancel: cancel, done: make(chan struct{})}
+	s.propertyOps[key] = operation
+	s.propertyMu.Unlock()
+	if supersededCommandID != "" {
+		if superseded, changed := s.commands.Supersede(supersededCommandID, "replaced by a newer property write"); changed {
+			s.metrics.commandsSuperseded.Add(1)
+			if stale, stateChanged := s.states.ResolveOptimistic(superseded.ID, nil); stateChanged {
+				s.publishState(stale)
+			}
+		}
+	}
+	return operation, false
+}
+
+func (s *DeviceService) setPropertyOperationCommand(key domainstate.Key, operation *propertyOperation, command domaincommand.Command) bool {
+	s.propertyMu.Lock()
+	operation.command = command
+	active := s.propertyOps[key] == operation
+	coalesced := operation.coalesced
+	s.propertyMu.Unlock()
+	if coalesced > 0 {
+		if updated, ok := s.commands.AddCoalesced(command.ID, coalesced); ok {
+			s.propertyMu.Lock()
+			operation.command = updated
+			s.propertyMu.Unlock()
+		}
+	}
+	return active
+}
+
+func (s *DeviceService) finishPropertyOperation(key domainstate.Key, operation *propertyOperation, item device.Device, command domaincommand.Command, err error) (device.Device, domaincommand.Command, error) {
+	if command.ID != "" {
+		if current, ok := s.commands.Get(command.ID); ok {
+			command = current
+			if current.Status == domaincommand.StatusSuperseded {
+				err = ErrCommandSuperseded
+			}
+		}
+	}
+	s.propertyMu.Lock()
+	operation.item, operation.command, operation.err = item, command, err
+	if s.propertyOps[key] == operation {
+		delete(s.propertyOps, key)
+	}
+	operation.cancel()
+	close(operation.done)
+	s.propertyMu.Unlock()
+	return item, command, err
+}
+
+func propertyValuesEqual(left, right device.PropertyValue) bool {
+	if left.Type != right.Type {
+		return false
+	}
+	switch left.Type {
+	case device.ValueTypeBool:
+		return left.Bool != nil && right.Bool != nil && *left.Bool == *right.Bool
+	case device.ValueTypeInt:
+		return left.Int != nil && right.Int != nil && *left.Int == *right.Int
+	case device.ValueTypeNumber:
+		return left.Number != nil && right.Number != nil && *left.Number == *right.Number
+	case device.ValueTypeString, device.ValueTypeEnum:
+		return left.String != nil && right.String != nil && *left.String == *right.String
+	default:
+		return false
+	}
 }
 
 func (s *DeviceService) validatePropertyWrite(deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) error {

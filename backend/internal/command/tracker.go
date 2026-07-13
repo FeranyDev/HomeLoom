@@ -63,6 +63,13 @@ func (t *Tracker) BeginReplacing(deviceID, endpointID, capabilityID, propertyID 
 }
 
 func (t *Tracker) BeginReplacingCorrelated(deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue, correlationID string) (domaincommand.Command, *domaincommand.Command) {
+	command, superseded, _ := t.BeginPropertyCorrelated(deviceID, endpointID, capabilityID, propertyID, value, correlationID)
+	return command, superseded
+}
+
+// BeginPropertyCorrelated coalesces an identical pending property command and
+// supersedes a pending command with a different value.
+func (t *Tracker) BeginPropertyCorrelated(deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue, correlationID string) (domaincommand.Command, *domaincommand.Command, bool) {
 	now := time.Now().UTC()
 	key := pendingKey(deviceID, endpointID, capabilityID, propertyID)
 	command := domaincommand.Command{
@@ -77,6 +84,14 @@ func (t *Tracker) BeginReplacingCorrelated(deviceID, endpointID, capabilityID, p
 	if previousID, exists := t.pending[key]; exists {
 		previous := t.commands[previousID]
 		if !terminal(previous.Status) {
+			if valuesEqual(previous.Expected, value) {
+				previous.Coalesced++
+				previous.UpdatedAt = now
+				t.commands[previousID] = previous
+				t.mu.Unlock()
+				t.notify(previous)
+				return previous, nil, true
+			}
 			previous.Status, previous.Outcome, previous.Error, previous.UpdatedAt = domaincommand.StatusSuperseded, domaincommand.OutcomeUnknown, "replaced by a newer command", now
 			t.commands[previousID] = previous
 			copy := previous
@@ -90,7 +105,48 @@ func (t *Tracker) BeginReplacingCorrelated(deviceID, endpointID, capabilityID, p
 		t.notify(*superseded)
 	}
 	t.notify(command)
-	return command, superseded
+	return command, superseded, false
+}
+
+func (t *Tracker) AddCoalesced(id string, count uint64) (domaincommand.Command, bool) {
+	if count == 0 {
+		return domaincommand.Command{}, false
+	}
+	t.mu.Lock()
+	command, ok := t.commands[id]
+	if !ok {
+		t.mu.Unlock()
+		return domaincommand.Command{}, false
+	}
+	command.Coalesced += count
+	command.UpdatedAt = time.Now().UTC()
+	t.commands[id] = command
+	t.mu.Unlock()
+	t.notify(command)
+	return command, true
+}
+
+func (t *Tracker) Supersede(id, message string) (domaincommand.Command, bool) {
+	if message == "" {
+		message = "replaced by a newer command"
+	}
+	t.mu.Lock()
+	command, ok := t.commands[id]
+	if !ok || terminal(command.Status) {
+		t.mu.Unlock()
+		return command, false
+	}
+	command.Status, command.Outcome, command.Error, command.UpdatedAt = domaincommand.StatusSuperseded, domaincommand.OutcomeUnknown, message, time.Now().UTC()
+	t.commands[id] = command
+	key := pendingKey(command.DeviceID, command.EndpointID, command.CapabilityID, command.PropertyID)
+	if t.pending[key] == id {
+		delete(t.pending, key)
+	}
+	for len(t.commands) > t.maxItems && t.removeOldestTerminalLocked() {
+	}
+	t.mu.Unlock()
+	t.notify(command)
+	return command, true
 }
 
 func (t *Tracker) BeginAction(deviceID, endpointID, capabilityID, actionID string, parameters map[string]device.PropertyValue) domaincommand.Command {

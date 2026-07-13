@@ -188,6 +188,22 @@ func TestVersionEndpoint(t *testing.T) {
 	}
 }
 
+func TestAPIVersionDiscoveryAndResponseHeader(t *testing.T) {
+	server := newTestServer()
+	request := httptest.NewRequest(http.MethodGet, "/api/versions", nil)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"current":"v1"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"supported":["v1"]`)) {
+		t.Fatalf("versions response = %d %s", response.Code, response.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/system/version", nil)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Header().Get(apiVersionHeader) != "1" {
+		t.Fatalf("version header = %q, response = %d", response.Header().Get(apiVersionHeader), response.Code)
+	}
+}
+
 func TestRuntimeSettingsAPIUpdatesWithoutRestart(t *testing.T) {
 	server := newTestServer()
 	devices := application.NewDeviceService(virtual.NewProvider())
@@ -354,7 +370,7 @@ func TestDiagnosticsAndPrometheusMetrics(t *testing.T) {
 			t.Fatalf("metrics missing device counts: %s", response.Body.String())
 		}
 		if path == "/metrics" {
-			for _, name := range []string{"homeloom_event_average_latency_milliseconds", "homeloom_slow_event_handlers_total", "homeloom_database_operations_total", "homeloom_homekit_pushes_total", "homeloom_devices_unknown", "homeloom_command_queue_pending", "homeloom_command_queue_max_pending", "homeloom_commands_outcome_unknown_total", "homeloom_provider_clock_skew_events_total"} {
+			for _, name := range []string{"homeloom_event_average_latency_milliseconds", "homeloom_slow_event_handlers_total", "homeloom_database_operations_total", "homeloom_homekit_pushes_total", "homeloom_devices_unknown", "homeloom_command_queue_pending", "homeloom_command_queue_max_pending", "homeloom_commands_outcome_unknown_total", "homeloom_commands_coalesced_total", "homeloom_provider_clock_skew_events_total"} {
 				if !bytes.Contains(response.Body.Bytes(), []byte(name)) {
 					t.Fatalf("metrics missing %s: %s", name, response.Body.String())
 				}

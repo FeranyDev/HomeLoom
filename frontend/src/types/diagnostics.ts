@@ -4,6 +4,7 @@ export interface Diagnostics {
   statesMarkedStale: number; commandsStarted: number; commandsConfirmed: number
   commandsRejected: number; commandsTimedOut: number
   commandsSuperseded: number
+	commandsCoalesced?: number
 	commandsOutcomeUnknown: number
 	homeKitPushes: number
   onlineDevices: number; offlineDevices: number; unknownDevices: number; providersRunning: number; deviceSubscribers: number; stateSubscribers: number
@@ -29,6 +30,7 @@ export interface DeviceCommand {
 	outcome?: 'succeeded' | 'failed' | 'unknown'
 	idempotencyKey?: string
 	correlationId?: string
+	coalescedRequests?: number
   error?: string; createdAt: string; updatedAt: string; deadline: string
 }
 

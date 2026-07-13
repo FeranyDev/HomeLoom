@@ -32,6 +32,8 @@ type Server struct {
 	audit    *application.AuditService
 }
 
+const apiVersionHeader = "HomeLoom-API-Version"
+
 type errorResponse struct {
 	Code      string            `json:"code"`
 	Message   string            `json:"message"`
@@ -155,6 +157,9 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 				requestID = c.Request().Header.Get(echo.HeaderXRequestID)
 			}
 			c.SetRequest(c.Request().WithContext(application.WithCorrelationID(c.Request().Context(), requestID)))
+			if strings.HasPrefix(c.Request().URL.Path, "/api/v1/") {
+				c.Response().Header().Set(apiVersionHeader, "1")
+			}
 			return next(c)
 		}
 	})
@@ -211,6 +216,11 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 
 	e.GET("/health", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	})
+	e.GET("/api/versions", func(c echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]any{"data": map[string]any{
+			"current": "v1", "supported": []string{"v1"}, "deprecated": []string{},
+		}})
 	})
 	e.GET("/ready", func(c echo.Context) error {
 		readiness := devices.Readiness(c.Request().Context())
@@ -329,6 +339,7 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		writeMetric("commands_rejected_total", metrics.CommandsRejected)
 		writeMetric("commands_timed_out_total", metrics.CommandsTimedOut)
 		writeMetric("commands_superseded_total", metrics.CommandsSuperseded)
+		writeMetric("commands_coalesced_total", metrics.CommandsCoalesced)
 		writeMetric("commands_outcome_unknown_total", metrics.CommandsOutcomeUnknown)
 		writeMetric("homekit_pushes_total", metrics.HomeKitPushes)
 		writeMetric("devices_online", metrics.OnlineDevices)
@@ -701,6 +712,9 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		if errors.Is(err, providersdk.ErrProviderUnavailable) {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "provider unavailable")
 		}
+		if errors.Is(err, application.ErrCommandSuperseded) {
+			return echo.NewHTTPError(http.StatusConflict, "property write was superseded by a newer value")
+		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return echo.NewHTTPError(http.StatusRequestTimeout, "power write canceled")
 		}
@@ -732,6 +746,9 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		}
 		if errors.Is(err, providersdk.ErrProviderUnavailable) {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "provider unavailable")
+		}
+		if errors.Is(err, application.ErrCommandSuperseded) {
+			return echo.NewHTTPError(http.StatusConflict, "property write was superseded by a newer value")
 		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return echo.NewHTTPError(http.StatusRequestTimeout, "property write canceled")

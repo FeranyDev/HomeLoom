@@ -32,6 +32,14 @@
 客户端可以传入 `X-Request-Id` 以关联一次跨服务调用；未传入时由 HomeLoom 自动生成。
 该值也会作为写操作的 `correlationId` 写入审计事件，并附加到由该请求创建的命令历史中，因此可以从前端操作一路定位到 HTTP 日志、审计记录和 Provider 命令。服务端会去除首尾空白并将 correlation ID 限制为 128 字符。
 
+## API 版本兼容
+
+- `GET /api/versions` 返回当前、仍受支持和已弃用的 API 版本；
+- 所有 `/api/v1/*` 响应携带 `HomeLoom-API-Version: 1`；
+- v1 内允许新增可选字段、新资源和新枚举能力，不删除字段、不改变字段类型或既有状态码语义；
+- 破坏性变化必须发布新的路径主版本，并在旧版本仍受支持时同时提供；
+- 未识别的响应字段必须由客户端忽略，新增请求字段默认保持可选。
+
 ## 常用状态码
 
 | 状态码 | code | 说明 |
@@ -61,7 +69,9 @@
 
 `/metrics` 中的 runtime 指标包括 `homeloom_go_goroutines`、`homeloom_go_heap_alloc_bytes` 和 `homeloom_go_heap_objects`。事件指标包含入队到处理完成的平均/最大延迟及超过 100ms 的慢 Handler 计数；SQLite 指标包含配置、身份、schema、健康检查和备份操作数以及平均/最大延迟；`homeloom_homekit_pushes_total` 统计运行期间应用到 HomeKit Characteristic 的状态更新次数。命令协调指标 `homeloom_command_queue_pending` 和 `homeloom_command_queue_max_pending` 分别表示当前等待 Provider 执行槽的命令数及进程生命周期内的最大等待数。
 
-属性写入和 Action 按 Device ID 串行进入 Provider，不同设备仍可并行执行。等待执行槽时会响应 HTTP 请求取消或 deadline，取消的请求不会创建命令记录，也不会到达 Provider。
+属性写入和 Action 按 Device ID 串行进入 Provider，不同设备仍可并行执行。等待执行槽时会响应 HTTP 请求取消或 deadline，取消的排队请求不会创建命令记录，也不会到达 Provider。
+
+同一属性已有执行中或待确认命令时，相同 typed value 不会再次调用 Provider，而是返回原命令并增加 `coalescedRequests`；对应累计指标为 `homeloom_commands_coalesced_total`。后写不同值会把旧命令切换为 `superseded/outcome=unknown`，通过 context 协作取消仍在执行的 Provider 调用，并在设备串行槽释放后执行新值。旧 HTTP 请求返回 409；终态保护会阻止迟到的 Provider 返回把旧命令改回 accepted/rejected。Provider 如果不响应 context，物理设备仍可能短暂执行旧值，因此新值始终会继续发送而不是假定取消已经生效。
 
 属性写入会在创建命令和调用 Provider 之前按模型校验 typed payload、`min`、`max` 与整数约束。类型不匹配、包含多个 payload 或越界统一返回 `400 bad_request`；不存在或不可写的属性返回 422。校验失败不会产生虚假的命令历史。
 

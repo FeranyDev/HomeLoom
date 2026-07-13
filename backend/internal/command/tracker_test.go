@@ -138,6 +138,31 @@ func TestNewCommandSupersedesPendingCommandForSameProperty(t *testing.T) {
 	}
 }
 
+func TestIdenticalPendingPropertyCommandIsCoalesced(t *testing.T) {
+	tracker := NewTracker(time.Second)
+	first, _, replayed := tracker.BeginPropertyCorrelated("switch", "main", "switch", "power", device.BoolValue(true), "trace-first")
+	second, superseded, replayed := tracker.BeginPropertyCorrelated("switch", "main", "switch", "power", device.BoolValue(true), "trace-second")
+	if replayed == false || superseded != nil || second.ID != first.ID || second.CorrelationID != "trace-first" || second.Coalesced != 1 || len(tracker.List()) != 1 {
+		t.Fatalf("coalesced = %#v, %#v, replayed=%v", second, superseded, replayed)
+	}
+}
+
+func TestSupersedeTerminatesCommandAndProtectsNewPendingEntry(t *testing.T) {
+	tracker := NewTracker(time.Second)
+	first := tracker.Begin("switch", "main", "switch", "power", device.BoolValue(true))
+	superseded, changed := tracker.Supersede(first.ID, "newer write")
+	if !changed || superseded.Status != domaincommand.StatusSuperseded || superseded.Outcome != domaincommand.OutcomeUnknown || superseded.Error != "newer write" {
+		t.Fatalf("superseded = %#v, changed=%v", superseded, changed)
+	}
+	second := tracker.Begin("switch", "main", "switch", "power", device.BoolValue(false))
+	tracker.Rejected(first.ID, errors.New("late error"))
+	tracker.Accepted(second.ID)
+	current, _ := tracker.Get(second.ID)
+	if current.Status != domaincommand.StatusAccepted {
+		t.Fatalf("new command = %#v", current)
+	}
+}
+
 func TestActionCommandLifecycle(t *testing.T) {
 	tracker := NewTracker(time.Second)
 	created := tracker.BeginAction("switch", "main", "switch", "set-power", map[string]device.PropertyValue{"value": device.BoolValue(true)})
