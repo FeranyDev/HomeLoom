@@ -97,6 +97,7 @@ func (m *Manager) DiscoverDevices(ctx context.Context) ([]device.Device, error) 
 	m.mu.RUnlock()
 	result := make([]device.Device, 0)
 	routes := make(map[string]string)
+providerLoop:
 	for _, id := range ids {
 		m.mu.RLock()
 		current := m.providers[id]
@@ -119,10 +120,17 @@ func (m *Manager) DiscoverDevices(ctx context.Context) ([]device.Device, error) 
 		}
 		currentIDs := make(map[string]struct{}, len(items))
 		for _, item := range items {
+			item.ProviderID = id
+			if err := item.Validate(); err != nil {
+				m.mu.Lock()
+				m.markFailureLocked(current, fmt.Errorf("invalid device snapshot: %w", err))
+				m.mu.Unlock()
+				m.startRetryWorker()
+				continue providerLoop
+			}
 			if owner, exists := routes[item.ID]; exists {
 				return nil, fmt.Errorf("device id %q is provided by both %q and %q", item.ID, owner, id)
 			}
-			item.ProviderID = id
 			routes[item.ID] = id
 			currentIDs[item.ID] = struct{}{}
 			result = append(result, item)
@@ -156,6 +164,13 @@ func (m *Manager) Apply(ctx context.Context, item providersdk.Provider) error {
 		if err != nil {
 			_ = item.Close(ctx)
 			return fmt.Errorf("discover provider %q: %w", id, err)
+		}
+		for index := range items {
+			items[index].ProviderID = id
+			if err := items[index].Validate(); err != nil {
+				_ = item.Close(ctx)
+				return fmt.Errorf("provider %q returned invalid device snapshot: %w", id, err)
+			}
 		}
 		discovered = items
 	}
@@ -250,6 +265,15 @@ func (m *Manager) attach(id string, current *managedProvider) {
 	}
 	unsubscribe := subscriber.Subscribe(func(item device.Device) {
 		item.ProviderID = id
+		if err := item.Validate(); err != nil {
+			m.mu.Lock()
+			if m.providers[id] == current {
+				m.markFailureLocked(current, fmt.Errorf("invalid device event: %w", err))
+			}
+			m.mu.Unlock()
+			m.startRetryWorker()
+			return
+		}
 		m.mu.Lock()
 		owner, exists := m.routes[item.ID]
 		if !exists || owner == id {
@@ -301,7 +325,25 @@ func (m *Manager) WriteProperty(ctx context.Context, request providersdk.Propert
 		return device.Device{}, err
 	}
 	item.ProviderID = id
+	if err := item.Validate(); err != nil {
+		return device.Device{}, fmt.Errorf("provider %q returned invalid device snapshot: %w", id, err)
+	}
 	return item, nil
+}
+
+func (m *Manager) ReadProperty(ctx context.Context, request providersdk.PropertyReadRequest) (device.Property, error) {
+	m.mu.RLock()
+	id, ok := m.routes[request.DeviceID]
+	current := m.providers[id]
+	m.mu.RUnlock()
+	if !ok || current == nil {
+		return device.Property{}, providersdk.ErrDeviceNotFound
+	}
+	reader, ok := current.provider.(providersdk.PropertyReader)
+	if !ok {
+		return device.Property{}, providersdk.ErrPropertyUnsupported
+	}
+	return reader.ReadProperty(ctx, request)
 }
 
 func (m *Manager) Simulate(ctx context.Context, request providersdk.SimulationRequest) (device.Device, error) {
@@ -321,6 +363,9 @@ func (m *Manager) Simulate(ctx context.Context, request providersdk.SimulationRe
 		return device.Device{}, err
 	}
 	item.ProviderID = id
+	if err := item.Validate(); err != nil {
+		return device.Device{}, fmt.Errorf("provider %q returned invalid device snapshot: %w", id, err)
+	}
 	return item, nil
 }
 
@@ -532,6 +577,7 @@ func (m *Manager) Close(ctx context.Context) error {
 
 var _ providersdk.Provider = (*Manager)(nil)
 var _ providersdk.Discoverer = (*Manager)(nil)
+var _ providersdk.PropertyReader = (*Manager)(nil)
 var _ providersdk.PropertyWriter = (*Manager)(nil)
 var _ providersdk.EventSubscriber = (*Manager)(nil)
 var _ providersdk.Inspector = (*Manager)(nil)

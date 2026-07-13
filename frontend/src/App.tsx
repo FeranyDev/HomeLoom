@@ -3,6 +3,7 @@ import { listDevices, setDevicePower, setDeviceProperty, simulateDevice, subscri
 import { deleteTarget, listTargets, saveTarget, subscribeTargets } from './api/targets'
 import { deleteProvider, listProviders, restartProvider, saveProvider } from './api/providers'
 import { getDiagnostics, listCommands, subscribeCommands } from './api/diagnostics'
+import { getSystemVersion } from './api/system'
 import { DeviceCard } from './components/DeviceCard'
 import { TargetCard } from './components/TargetCard'
 import { TargetForm } from './components/TargetForm'
@@ -16,7 +17,7 @@ import { CollectionEmpty, LoadingState } from './components/PageState'
 import type { Device, PropertyValue } from './types/device'
 import type { Target, TargetInput } from './types/target'
 import type { Provider, ProviderInput } from './types/provider'
-import type { DeviceCommand, Diagnostics } from './types/diagnostics'
+import type { DeviceCommand, Diagnostics, SystemVersion } from './types/diagnostics'
 import { usePageRoute } from './routing'
 
 export function App() {
@@ -24,6 +25,7 @@ export function App() {
 	const [targets, setTargets] = useState<Target[]>([])
 	const [providers, setProviders] = useState<Provider[]>([])
 	const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null)
+	const [version, setVersion] = useState<SystemVersion | null>(null)
 	const [commands, setCommands] = useState<DeviceCommand[]>([])
 	const [page, setPage] = usePageRoute()
 	const [targetForm, setTargetForm] = useState<{ open: boolean, target: Target | null }>({ open: false, target: null })
@@ -39,12 +41,13 @@ export function App() {
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
-	  const [deviceData, targetData, providerData, diagnosticData, commandData] = await Promise.all([listDevices(signal), listTargets(signal), listProviders(signal), getDiagnostics(signal), listCommands(signal)])
+	  const [deviceData, targetData, providerData, diagnosticData, commandData, versionData] = await Promise.all([listDevices(signal), listTargets(signal), listProviders(signal), getDiagnostics(signal), listCommands(signal), getSystemVersion(signal).catch(() => null)])
 	  setDevices(deviceData)
 	  setTargets(targetData)
 	  setProviders(providerData)
 	  setDiagnostics(diagnosticData)
 	  setCommands(commandData)
+	  setVersion(versionData)
       setError(null)
     } catch (cause) {
       if (cause instanceof DOMException && cause.name === 'AbortError') return
@@ -126,7 +129,7 @@ export function App() {
 	      <button className={page === 'targets' ? 'is-active' : ''} onClick={() => setPage('targets')}>桥接中心</button>
 	      <button className={page === 'system' ? 'is-active' : ''} onClick={() => setPage('system')}>系统</button>
 	    </div>
-	    <span className={`live-indicator ${live ? 'is-live' : ''}`}>{live ? '实时' : '重连中'}</span>
+	    <span className="runtime-meta"><span className="version-badge" title={version ? `${version.commit} · ${version.buildTime}` : '版本读取中'}>{version?.version ?? '…'}</span><span className={`live-indicator ${live ? 'is-live' : ''}`}>{live ? '实时' : '重连中'}</span></span>
 	  </nav>
       <header className="hero">
         <div>

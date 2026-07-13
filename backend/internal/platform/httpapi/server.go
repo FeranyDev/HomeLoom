@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/application"
+	"github.com/feranydev/homeloom/backend/internal/buildinfo"
 	domaincommand "github.com/feranydev/homeloom/backend/internal/domain/command"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
@@ -24,6 +25,43 @@ import (
 type Server struct {
 	address string
 	echo    *echo.Echo
+}
+
+type errorResponse struct {
+	Code      string            `json:"code"`
+	Message   string            `json:"message"`
+	RequestID string            `json:"requestId"`
+	Fields    map[string]string `json:"fields,omitempty"`
+}
+
+func errorCode(status int) string {
+	switch status {
+	case http.StatusBadRequest:
+		return "bad_request"
+	case http.StatusNotFound:
+		return "not_found"
+	case http.StatusConflict:
+		return "conflict"
+	case http.StatusUnauthorized:
+		return "unauthorized"
+	case http.StatusForbidden:
+		return "forbidden"
+	case http.StatusMethodNotAllowed:
+		return "method_not_allowed"
+	case http.StatusTooManyRequests:
+		return "too_many_requests"
+	case http.StatusRequestTimeout:
+		return "request_timeout"
+	case http.StatusUnprocessableEntity:
+		return "unprocessable_entity"
+	case http.StatusServiceUnavailable:
+		return "service_unavailable"
+	default:
+		if status >= 500 {
+			return "internal_error"
+		}
+		return "client_error"
+	}
 }
 
 type powerRequest struct {
@@ -65,14 +103,38 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
+	e.HTTPErrorHandler = func(err error, c echo.Context) {
+		if c.Response().Committed {
+			return
+		}
+		status, message := http.StatusInternalServerError, "internal server error"
+		var httpError *echo.HTTPError
+		if errors.As(err, &httpError) {
+			status = httpError.Code
+			if text, ok := httpError.Message.(string); ok && status < http.StatusInternalServerError {
+				message = text
+			} else if status < http.StatusInternalServerError {
+				message = http.StatusText(status)
+			}
+		}
+		requestID := c.Response().Header().Get(echo.HeaderXRequestID)
+		if requestID == "" {
+			requestID = c.Request().Header.Get(echo.HeaderXRequestID)
+		}
+		if writeErr := c.JSON(status, errorResponse{Code: errorCode(status), Message: message, RequestID: requestID}); writeErr != nil {
+			logger.Error("http error response failed", "request_id", requestID, "error", writeErr)
+		}
+	}
+	e.Use(middleware.RequestID())
 	e.Use(middleware.Recover())
 	e.Use(middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
-		LogMethod: true,
-		LogStatus: true,
-		LogURI:    true,
-		LogError:  true,
+		LogMethod:    true,
+		LogStatus:    true,
+		LogURI:       true,
+		LogError:     true,
+		LogRequestID: true,
 		LogValuesFunc: func(_ echo.Context, values middleware.RequestLoggerValues) error {
-			logger.Info("http request", "method", values.Method, "uri", values.URI, "status", values.Status, "error", values.Error)
+			logger.Info("http request", "request_id", values.RequestID, "method", values.Method, "uri", values.URI, "status", values.Status, "error", values.Error)
 			return nil
 		},
 	}))
@@ -82,6 +144,9 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 	})
 	e.GET("/ready", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ready"})
+	})
+	e.GET("/api/v1/system/version", func(c echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]any{"data": buildinfo.Current()})
 	})
 	e.GET("/api/v1/diagnostics", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"data": devices.Metrics()})
@@ -110,6 +175,9 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		writeMetric("device_subscribers", metrics.DeviceSubscribers)
 		writeMetric("state_subscribers", metrics.StateSubscribers)
 		writeMetric("command_average_latency_milliseconds", metrics.CommandAverageLatencyMS)
+		writeMetric("go_goroutines", metrics.Goroutines)
+		writeMetric("go_heap_alloc_bytes", metrics.HeapAllocBytes)
+		writeMetric("go_heap_objects", metrics.HeapObjects)
 		return c.String(http.StatusOK, output.String())
 	})
 	e.GET("/api/v1/devices", func(c echo.Context) error {
@@ -458,6 +526,25 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 			return echo.NewHTTPError(http.StatusInternalServerError, "failed to update device").SetInternal(err)
 		}
 		return c.JSON(http.StatusOK, map[string]any{"data": item, "command": command})
+	})
+	e.GET("/api/v1/devices/:id/endpoints/:endpoint/capabilities/:capability/properties/:property", func(c echo.Context) error {
+		property, err := devices.ReadProperty(c.Request().Context(), c.Param("id"), c.Param("endpoint"), c.Param("capability"), c.Param("property"))
+		if errors.Is(err, application.ErrDeviceNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "device not found")
+		}
+		if errors.Is(err, application.ErrPropertyUnsupported) {
+			return echo.NewHTTPError(http.StatusUnprocessableEntity, "property is not supported")
+		}
+		if errors.Is(err, providersdk.ErrProviderUnavailable) {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "provider unavailable")
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return echo.NewHTTPError(http.StatusRequestTimeout, "property read canceled")
+		}
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to read property").SetInternal(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": property})
 	})
 	e.GET("/api/v1/commands", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"data": devices.Commands()})

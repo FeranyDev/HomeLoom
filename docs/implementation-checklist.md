@@ -1,6 +1,6 @@
 # HomeLoom 详细实施清单
 
-更新时间：2026-07-12
+更新时间：2026-07-13
 
 状态说明：
 
@@ -21,9 +21,9 @@
 - [x] Vitest 前端测试；
 - [x] ESLint；
 - [x] TypeScript 和 Vite 生产构建；
-- [ ] 配置 CI 自动执行上述检查；
-- [ ] 添加提交前快速检查脚本；
-- [ ] 确定版本号注入方式。
+- [x] 配置 CI 自动执行上述检查；
+- [x] 添加提交前快速检查脚本；
+- [x] 确定版本号注入方式。
 
 基线验收命令：
 
@@ -94,15 +94,15 @@ M0 退出条件：Apple Home 实机配对、双向控制、多桥运行和三次
 
 ### 2.1 模型定义
 
-- [ ] 将当前简化 `Device.State.Power/Temperature` 改为通用模型；
+- [x] 将当前简化 `Device.State.Power/Temperature` 改为通用模型；
 - [x] 定义 `Device`；
 - [x] 定义 `Endpoint`；
 - [x] 定义 `Capability`；
 - [x] 定义 `PropertyDefinition`；
 - [x] 定义 `CommandDefinition`；
 - [x] 定义 `EventDefinition`；
-- [ ] 定义模型 schema version；
-- [ ] 定义所有稳定 ID 的格式和字符限制；
+- [x] 定义模型 schema version；
+- [x] 定义所有稳定 ID 的格式和字符限制；
 - [ ] 定义设备可用性：online、offline、unknown；
 - [ ] 定义设备删除、禁用和暂时离线的区别。
 
@@ -111,25 +111,25 @@ M0 退出条件：Apple Home 实机配对、双向控制、多桥运行和三次
 - [x] bool 属性；
 - [ ] int 属性；
 - [x] float 属性；
-- [ ] string 属性；
-- [ ] enum 属性；
+- [x] string 属性；
+- [x] enum 属性；
 - [x] 最小值、最大值和步长；
 - [x] 单位；
 - [x] 读、写和通知权限；
 - [ ] unknown、null 和 unavailable 语义；
 - [ ] 类型转换失败的标准错误；
-- [ ] JSON 序列化契约；
-- [ ] 模型表驱动测试。
+- [x] JSON 序列化契约；
+- [x] 模型表驱动测试。
 
 ### 2.3 兼容迁移
 
 - [x] 将虚拟开关迁移为 `switch/power` Capability；
 - [x] 将温度传感器迁移为 `temperature/current-temperature`；
-- [ ] 保持现有前端设备列表兼容，或一次性升级 API；
+- [x] 一次性升级设备 API 和前端到 schema v1；
 - [x] HomeKit Target 改为读取 Capability；
-- [ ] 删除 Target 中对简化 State 字段的直接依赖；
-- [ ] 更新测试 fixtures；
-- [ ] 更新 API 文档。
+- [x] 删除 Target 中对简化 State 字段的直接依赖；
+- [x] 更新测试 fixtures；
+- [x] 更新设备模型和 API 契约文档。
 
 M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go 结构体。
 
@@ -142,13 +142,13 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 - [x] 定义 Provider 类型和版本；
 - [x] 定义能力声明；
 - [x] 定义可选 `Discoverer`；
-- [ ] 定义可选 `PropertyReader`；
+- [x] 定义可选 `PropertyReader`；
 - [x] 定义可选 `PropertyWriter`；
 - [ ] 定义可选 `CommandExecutor`；
 - [x] 定义可选 `EventSubscriber`；
 - [x] 定义 Provider 健康状态；
 - [x] 定义初始化、启动、停止和关闭顺序；
-- [ ] 定义上下文取消语义；
+- [x] 定义上下文取消语义；
 - [x] 定义重连和退避接口。
 
 ### 3.2 Provider Manager
@@ -530,6 +530,7 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 
 - [x] `/health`；
 - [x] `/ready`；
+- [x] 运行时版本 API；
 - [x] Device API；
 - [x] Property Write API；
 - [x] State Diagnostics API；
@@ -552,11 +553,11 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [x] 命令超时数；
 - [ ] HomeKit 推送数；
 - [ ] SQLite 延迟；
-- [ ] goroutine 数；
-- [ ] 内存和 CPU；
-- [ ] Request ID；
+- [x] goroutine 数；
+- [~] 内存指标（CPU 指标待长期采样）；
+- [x] Request ID；
 - [ ] Trace/Correlation ID；
-- [ ] 统一错误响应结构；
+- [x] 统一错误响应结构；
 - [ ] OpenAPI 文档；
 - [ ] API 版本兼容策略。
 

@@ -7,7 +7,11 @@ export interface Diagnostics {
   onlineDevices: number; offlineDevices: number; providersRunning: number; deviceSubscribers: number; stateSubscribers: number
   providerRetries: number
   commandAverageLatencyMs: number
+	// Runtime metrics are sampled when diagnostics are requested.
+	goroutines: number; heapAllocBytes: number; heapObjects: number
 }
+
+export interface SystemVersion { version: string; commit: string; buildTime: string; goVersion: string }
 
 export interface CommandValue { type: string; bool?: boolean; number?: number; string?: string }
 export interface DeviceCommand {

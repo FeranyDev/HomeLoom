@@ -6,11 +6,13 @@ export interface PropertyDefinition { id: string; name: string; type: ValueType;
 export interface Property { definition: PropertyDefinition; value: PropertyValue }
 export interface Capability { id: string; type: string; properties: Property[]; commands?: { id: string; name: string }[]; events?: { id: string; name: string; payload: ValueType }[] }
 export interface Endpoint { id: string; name: string; type: string; capabilities: Capability[] }
-export interface DeviceState { power?: boolean; temperature?: number }
-
 export interface Device {
-  id: string; providerId: string; name: string; type: DeviceType; online: boolean
-  state: DeviceState; endpoints: Endpoint[]; lastUpdateAt: string
+  schemaVersion: number; id: string; providerId: string; name: string; type: DeviceType; online: boolean
+  endpoints: Endpoint[]; lastUpdateAt: string
+}
+
+export function deviceProperty(device: Device, capabilityId: string, propertyId: string): PropertyValue | undefined {
+  return device.endpoints.flatMap((endpoint) => endpoint.capabilities).find((capability) => capability.id === capabilityId)?.properties.find((property) => property.definition.id === propertyId)?.value
 }
 
 export interface StateValue {

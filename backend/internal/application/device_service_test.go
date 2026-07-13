@@ -2,6 +2,7 @@ package application_test
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -40,7 +41,8 @@ func TestDeviceServiceRoutesProviderEvents(t *testing.T) {
 	}
 	select {
 	case item := <-notified:
-		if item.State.Power == nil || !*item.State.Power {
+		property, ok := item.Property("main", "switch", "power")
+		if !ok || property.Value.Bool == nil || !*property.Value.Bool {
 			t.Fatal("subscriber received wrong state")
 		}
 	case <-time.After(time.Second):
@@ -53,6 +55,20 @@ func TestDeviceServiceRoutesProviderEvents(t *testing.T) {
 	states := service.States("virtual-switch-1")
 	if len(states) != 1 || states[0].Version != 2 {
 		t.Fatalf("States() = %#v", states)
+	}
+}
+
+func TestDeviceServiceReadsProviderProperty(t *testing.T) {
+	service := application.NewDeviceService(virtual.NewProvider())
+	defer service.Close()
+	property, err := service.ReadProperty(context.Background(), "virtual-switch-1", "main", "switch", "power")
+	if err != nil || property.Value.Bool == nil || *property.Value.Bool {
+		t.Fatalf("ReadProperty() = %#v, %v", property, err)
+	}
+	withoutReader := application.NewDeviceService(&silentProvider{inner: virtual.NewProvider()})
+	defer withoutReader.Close()
+	if _, err := withoutReader.ReadProperty(context.Background(), "virtual-switch-1", "main", "switch", "power"); !errors.Is(err, application.ErrPropertyUnsupported) {
+		t.Fatalf("unsupported reader error = %v", err)
 	}
 }
 

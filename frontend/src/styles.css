@@ -29,6 +29,8 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .top-nav button.is-active { background: #343931; color: #f7f5ee; }
 .live-indicator { padding: 5px 8px; border: 1px solid #d0b8a9; color: #8b6653; font-size: 10px; letter-spacing: .08em; }
 .live-indicator.is-live { border-color: #b4c6b4; color: #52705a; }
+.runtime-meta { display: flex; align-items: center; gap: 7px; }
+.version-badge { color: #898d85; font: 10px ui-monospace, monospace; }
 .hero { display: flex; justify-content: space-between; align-items: end; padding: 0 0 72px; border-bottom: 1px solid #c9c7be; }
 .eyebrow { margin: 0 0 18px; color: #73786d; font-size: 12px; font-weight: 600; letter-spacing: .18em; }
 .hero h1 { margin: 0; max-width: 700px; font-size: clamp(54px, 8vw, 104px); line-height: .98; letter-spacing: -.055em; font-weight: 600; }

@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,6 +26,7 @@ var (
 type DeviceService struct {
 	provider       providersdk.Provider
 	discoverer     providersdk.Discoverer
+	reader         providersdk.PropertyReader
 	writer         providersdk.PropertyWriter
 	registry       *registry.DeviceRegistry
 	dispatcher     *eventbus.Dispatcher
@@ -86,17 +88,21 @@ type DeviceMetrics struct {
 	DeviceSubscribers       int     `json:"deviceSubscribers"`
 	StateSubscribers        int     `json:"stateSubscribers"`
 	CommandAverageLatencyMS float64 `json:"commandAverageLatencyMs"`
+	Goroutines              int     `json:"goroutines"`
+	HeapAllocBytes          uint64  `json:"heapAllocBytes"`
+	HeapObjects             uint64  `json:"heapObjects"`
 }
 
 func NewDeviceService(provider providersdk.Provider) *DeviceService {
 	discoverer, _ := provider.(providersdk.Discoverer)
+	reader, _ := provider.(providersdk.PropertyReader)
 	writer, _ := provider.(providersdk.PropertyWriter)
 	items := make([]device.Device, 0)
 	if discoverer != nil {
 		items, _ = discoverer.DiscoverDevices(context.Background())
 	}
 	service := &DeviceService{
-		provider: provider, discoverer: discoverer, writer: writer,
+		provider: provider, discoverer: discoverer, reader: reader, writer: writer,
 		registry: registry.NewDeviceRegistry(items),
 		states:   statestore.NewStore(), commands: commandtracker.NewTracker(5 * time.Second),
 		listeners: make(map[uint64]*deviceSubscription), stateListeners: make(map[uint64]*stateSubscription),
@@ -182,6 +188,8 @@ func (s *DeviceService) Metrics() DeviceMetrics {
 	if terminalCount > 0 {
 		averageLatency = float64(latency.Nanoseconds()) / float64(time.Millisecond) / float64(terminalCount)
 	}
+	var memory runtime.MemStats
+	runtime.ReadMemStats(&memory)
 	return DeviceMetrics{
 		EventsReceived: s.metrics.eventsReceived.Load(), EventsProcessed: s.metrics.eventsProcessed.Load(),
 		EventsDropped: s.metrics.eventsDropped.Load(), EventQueuePending: s.dispatcher.Pending(), EventQueueCapacity: s.dispatcher.Capacity(),
@@ -190,6 +198,7 @@ func (s *DeviceService) Metrics() DeviceMetrics {
 		CommandsRejected: s.metrics.commandsRejected.Load(), CommandsTimedOut: s.metrics.commandsTimedOut.Load(), CommandsSuperseded: s.metrics.commandsSuperseded.Load(),
 		OnlineDevices: online, OfflineDevices: len(items) - online, ProvidersRunning: providersRunning, ProviderRetries: providerRetries, DeviceSubscribers: subscribers, StateSubscribers: stateSubscribers,
 		CommandAverageLatencyMS: averageLatency,
+		Goroutines:              runtime.NumGoroutine(), HeapAllocBytes: memory.HeapAlloc, HeapObjects: memory.HeapObjects,
 	}
 }
 
@@ -203,6 +212,15 @@ func (s *DeviceService) SetPower(ctx context.Context, id string, power bool) (de
 	}
 	return s.writer.WriteProperty(ctx, providersdk.PropertyWriteRequest{
 		DeviceID: id, EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Value: device.BoolValue(power),
+	})
+}
+
+func (s *DeviceService) ReadProperty(ctx context.Context, deviceID, endpointID, capabilityID, propertyID string) (device.Property, error) {
+	if s.reader == nil {
+		return device.Property{}, ErrPropertyUnsupported
+	}
+	return s.reader.ReadProperty(ctx, providersdk.PropertyReadRequest{
+		DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID, PropertyID: propertyID,
 	})
 }
 

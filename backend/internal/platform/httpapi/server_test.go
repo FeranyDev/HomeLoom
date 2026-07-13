@@ -70,6 +70,29 @@ func TestListTargetsAndPairingQR(t *testing.T) {
 	}
 }
 
+func TestVersionEndpoint(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/system/version", nil)
+	response := httptest.NewRecorder()
+	newTestServer().Handler().ServeHTTP(response, request)
+	for _, expected := range []string{`"version":"dev"`, `"commit":"unknown"`, `"goVersion":"go`} {
+		if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(expected)) {
+			t.Fatalf("response = %d %s", response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestErrorsUseStableEnvelopeAndRequestID(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/commands/missing", nil)
+	request.Header.Set(echo.HeaderXRequestID, "request-123")
+	response := httptest.NewRecorder()
+	newTestServer().Handler().ServeHTTP(response, request)
+	for _, expected := range []string{`"code":"not_found"`, `"message":"command not found"`, `"requestId":"request-123"`} {
+		if response.Code != http.StatusNotFound || response.Header().Get(echo.HeaderXRequestID) != "request-123" || !bytes.Contains(response.Body.Bytes(), []byte(expected)) {
+			t.Fatalf("response = %d %s, request id = %q", response.Code, response.Body.String(), response.Header().Get(echo.HeaderXRequestID))
+		}
+	}
+}
+
 func TestListDevices(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/devices", nil)
 	response := httptest.NewRecorder()
@@ -86,6 +109,9 @@ func TestListDevices(t *testing.T) {
 	}
 	if len(body.Data) != 2 {
 		t.Fatalf("device count = %d, want 2", len(body.Data))
+	}
+	if !bytes.Contains(response.Body.Bytes(), []byte(`"schemaVersion":1`)) || bytes.Contains(response.Body.Bytes(), []byte(`"state":`)) {
+		t.Fatalf("device response does not follow schema v1: %s", response.Body.String())
 	}
 }
 
@@ -147,7 +173,7 @@ func TestSetPower(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
 	}
-	if !bytes.Contains(response.Body.Bytes(), []byte(`"power":true`)) {
+	if !bytes.Contains(response.Body.Bytes(), []byte(`"id":"power"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"bool":true`)) {
 		t.Fatalf("response does not contain updated power: %s", response.Body.String())
 	}
 }
@@ -248,20 +274,35 @@ func TestGenericPropertyWrite(t *testing.T) {
 	}
 }
 
+func TestGenericPropertyRead(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/devices/virtual-temperature-1/endpoints/main/capabilities/temperature/properties/current-temperature", nil)
+	response := httptest.NewRecorder()
+	newTestServer().Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"id":"current-temperature"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"number":23.6`)) {
+		t.Fatalf("response = %d %s", response.Code, response.Body.String())
+	}
+	missing := httptest.NewRequest(http.MethodGet, "/api/v1/devices/missing/endpoints/main/capabilities/temperature/properties/current-temperature", nil)
+	missingResponse := httptest.NewRecorder()
+	newTestServer().Handler().ServeHTTP(missingResponse, missing)
+	if missingResponse.Code != http.StatusNotFound {
+		t.Fatalf("missing status = %d", missingResponse.Code)
+	}
+}
+
 func TestSimulateVirtualDevice(t *testing.T) {
 	server := newTestServer()
 	request := httptest.NewRequest(http.MethodPatch, "/api/v1/devices/virtual-temperature-1/simulation", bytes.NewBufferString(`{"online":false,"temperature":17.5}`))
 	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)
-	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"online":false`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"temperature":17.5`)) {
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"online":false`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"id":"current-temperature"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"number":17.5`)) {
 		t.Fatalf("response = %d %s", response.Code, response.Body.String())
 	}
 	time.Sleep(20 * time.Millisecond)
 	devicesRequest := httptest.NewRequest(http.MethodGet, "/api/v1/devices", nil)
 	devicesResponse := httptest.NewRecorder()
 	server.Handler().ServeHTTP(devicesResponse, devicesRequest)
-	if !bytes.Contains(devicesResponse.Body.Bytes(), []byte(`"temperature":17.5`)) {
+	if !bytes.Contains(devicesResponse.Body.Bytes(), []byte(`"id":"current-temperature"`)) || !bytes.Contains(devicesResponse.Body.Bytes(), []byte(`"number":17.5`)) {
 		t.Fatalf("registry was not updated: %s", devicesResponse.Body.String())
 	}
 	invalid := httptest.NewRequest(http.MethodPatch, "/api/v1/devices/virtual-temperature-1/simulation", bytes.NewBufferString(`{}`))
@@ -331,7 +372,7 @@ func TestDeviceEventStreamPublishesSnapshots(t *testing.T) {
 	found := false
 	for scanner.Scan() {
 		line := scanner.Text()
-		if strings.HasPrefix(line, "data: ") && strings.Contains(line, `"id":"virtual-switch-1"`) && strings.Contains(line, `"power":true`) {
+		if strings.HasPrefix(line, "data: ") && strings.Contains(line, `"id":"virtual-switch-1"`) && strings.Contains(line, `"id":"power"`) && strings.Contains(line, `"bool":true`) {
 			found = true
 			break
 		}

@@ -1,4 +1,4 @@
-import type { Device, StateValue } from '../types/device'
+import type { Device, Property, StateValue } from '../types/device'
 import { requestData } from './client'
 
 export async function listDevices(signal?: AbortSignal): Promise<Device[]> {
@@ -7,6 +7,10 @@ export async function listDevices(signal?: AbortSignal): Promise<Device[]> {
 
 export async function getDeviceStates(id: string, signal?: AbortSignal): Promise<StateValue[]> {
   return requestData<StateValue[]>(`/api/v1/devices/${encodeURIComponent(id)}/states`, { signal })
+}
+
+export async function getDeviceProperty(id: string, endpointId: string, capabilityId: string, propertyId: string, signal?: AbortSignal): Promise<Property> {
+  return requestData<Property>(`/api/v1/devices/${encodeURIComponent(id)}/endpoints/${encodeURIComponent(endpointId)}/capabilities/${encodeURIComponent(capabilityId)}/properties/${encodeURIComponent(propertyId)}`, { signal })
 }
 
 export function subscribeDeviceStates(id: string, onState: (state: StateValue) => void): () => void {

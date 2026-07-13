@@ -57,6 +57,9 @@ func NewProviderFromConfig(item providerconfig.Config) (*Provider, error) {
 		if err != nil {
 			return nil, err
 		}
+		if err := created.Validate(); err != nil {
+			return nil, fmt.Errorf("device %q: %w", definition.ID, err)
+		}
 		devices[created.ID] = created
 	}
 	return newProvider(item.ID, item.Name, config, devices), nil

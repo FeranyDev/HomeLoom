@@ -49,8 +49,21 @@ HomeKit Bridge 同时监听 `51826`，配对码为 `001-02-003`。HAP 身份和�
 ## 验证
 
 ```bash
-./scripts/dev-env.sh sh -c 'cd backend && go test ./...'
-./scripts/dev-env.sh sh -c 'cd frontend && npm run lint && npm run build'
+./scripts/check.sh
+# CI 同级验证，额外执行 race detector
+./scripts/check.sh --race
+```
+
+构建带版本信息的后端二进制和前端产物：
+
+```bash
+./scripts/build.sh
+```
+
+默认版本由 Git tag/commit 生成，可使用 `HOMELOOM_VERSION`、`HOMELOOM_COMMIT` 和 `HOMELOOM_BUILD_TIME` 覆盖。运行时可通过 `GET /api/v1/system/version` 查看实际后端版本。
+
+```bash
+backend/bin/homeloom -version
 ```
 
 ## 当前 Demo 链路
@@ -74,6 +87,8 @@ GET /api/v1/devices/:id/states
 ```
 
 返回当前值、Provider、来源、质量、设备观察时间、服务接收时间、sequence 和内部 version。
+
+HTTP 成功/错误包装、请求 ID 和诊断入口见 [HTTP API 约定](docs/http-api.md)。
 
 实时设备状态只保存在内存。服务重启后 State Store 为空，由各 Provider 重新发现、订阅并读取设备状态；SQLite 只保存桥配置、设备绑定和稳定身份。
 

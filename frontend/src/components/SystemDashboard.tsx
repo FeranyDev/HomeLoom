@@ -1,6 +1,7 @@
 import type { DeviceCommand, Diagnostics } from '../types/diagnostics'
 
 function expectedValue(command: DeviceCommand): string { const value = command.expected; if (value.bool !== undefined) return String(value.bool); if (value.number !== undefined) return String(value.number); return value.string ?? '—' }
+function megabytes(bytes: number): string { return `${(bytes / 1024 / 1024).toFixed(1)}MB` }
 
 export function SystemDashboard({ diagnostics, commands }: { diagnostics: Diagnostics | null; commands: DeviceCommand[] }) {
   if (!diagnostics) return <div className="empty-state">正在加载诊断数据…</div>
@@ -12,6 +13,9 @@ export function SystemDashboard({ diagnostics, commands }: { diagnostics: Diagno
 	['平均命令耗时', `${diagnostics.commandAverageLatencyMs.toFixed(1)}ms`],
 	['Provider 重试', diagnostics.providerRetries],
 	['被替代命令', diagnostics.commandsSuperseded],
+	['Goroutine', diagnostics.goroutines],
+	['Go Heap', megabytes(diagnostics.heapAllocBytes)],
+	['Heap 对象', diagnostics.heapObjects],
   ]
   return <section className="system-dashboard"><div className="metric-grid">{metrics.map(([label, value]) => <article key={label}><span>{label}</span><strong>{value}</strong></article>)}</div>
     <div className="queue-card"><div><span>事件队列</span><strong>{diagnostics.eventQueuePending} / {diagnostics.eventQueueCapacity}</strong></div><div className="queue-track"><span style={{ width: `${Math.min(queueRate, 100)}%` }} /></div><small>当前占用 {queueRate}% · 核心队列满时会丢弃并计数，不阻塞 Provider 线程。</small></div>

@@ -63,6 +63,10 @@ func TestManagerDiscoversRoutesEventsAndWrites(t *testing.T) {
 	if updated.ProviderID != "virtual-main" {
 		t.Fatalf("provider id = %q", updated.ProviderID)
 	}
+	property, err := manager.ReadProperty(ctx, providersdk.PropertyReadRequest{DeviceID: "virtual-switch-1", EndpointID: "main", CapabilityID: "switch", PropertyID: "power"})
+	if err != nil || property.Value.Bool == nil || !*property.Value.Bool {
+		t.Fatalf("ReadProperty() = %#v, %v", property, err)
+	}
 	select {
 	case event := <-events:
 		if event.ProviderID != "virtual-main" {

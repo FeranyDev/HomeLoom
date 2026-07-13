@@ -1,6 +1,9 @@
 package device
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestPropertyLookupAndUpdate(t *testing.T) {
 	item := Device{Endpoints: []Endpoint{{ID: "main", Capabilities: []Capability{{
@@ -25,16 +28,21 @@ func TestPropertyLookupAndUpdate(t *testing.T) {
 func TestTypedValues(t *testing.T) {
 	boolean := BoolValue(true)
 	number := NumberValue(23.5)
+	text := StringValue("hello")
+	enumerated := EnumValue("auto")
 	if boolean.Type != ValueTypeBool || boolean.Bool == nil || !*boolean.Bool {
 		t.Fatalf("BoolValue() = %#v", boolean)
 	}
 	if number.Type != ValueTypeNumber || number.Number == nil || *number.Number != 23.5 {
 		t.Fatalf("NumberValue() = %#v", number)
 	}
+	if text.String == nil || *text.String != "hello" || enumerated.Type != ValueTypeEnum || enumerated.String == nil || *enumerated.String != "auto" {
+		t.Fatalf("string values = %#v, %#v", text, enumerated)
+	}
 }
 
 func TestCloneDoesNotShareMutableState(t *testing.T) {
-	original := Device{State: State{Power: BoolValue(true).Bool}, Endpoints: []Endpoint{{
+	original := Device{Endpoints: []Endpoint{{
 		ID: "main", Capabilities: []Capability{{ID: "switch", Properties: []Property{{
 			Definition: PropertyDefinition{ID: "power", Enum: []string{"on"}}, Value: BoolValue(true),
 		}}}},
@@ -48,5 +56,29 @@ func TestCloneDoesNotShareMutableState(t *testing.T) {
 	}
 	if property.Definition.Enum[0] != "on" {
 		t.Fatal("clone shared enum storage")
+	}
+}
+
+func TestValidateModelContract(t *testing.T) {
+	minimum, maximum := 0.0, 100.0
+	valid := Device{SchemaVersion: SchemaVersion, ID: "room-sensor.1", ProviderID: "virtual-main", Endpoints: []Endpoint{{ID: "main", Capabilities: []Capability{{ID: "mode", Properties: []Property{{Definition: PropertyDefinition{ID: "operating-mode", Type: ValueTypeEnum, Enum: []string{"auto", "manual"}}, Value: EnumValue("auto")}, {Definition: PropertyDefinition{ID: "humidity", Type: ValueTypeNumber, Min: &minimum, Max: &maximum}, Value: NumberValue(50)}}}}}}}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid model rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*Device){
+		"schema":             func(item *Device) { item.SchemaVersion = 99 },
+		"id":                 func(item *Device) { item.ID = "Invalid ID" },
+		"duplicate endpoint": func(item *Device) { item.Endpoints = append(item.Endpoints, item.Endpoints[0]) },
+		"wrong value type":   func(item *Device) { item.Endpoints[0].Capabilities[0].Properties[0].Value = StringValue("auto") },
+		"invalid enum":       func(item *Device) { item.Endpoints[0].Capabilities[0].Properties[0].Value = EnumValue("invalid") },
+		"out of range":       func(item *Device) { item.Endpoints[0].Capabilities[0].Properties[1].Value = NumberValue(101) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			item := valid.Clone()
+			mutate(&item)
+			if err := item.Validate(); !errors.Is(err, ErrInvalidModel) {
+				t.Fatalf("error = %v", err)
+			}
+		})
 	}
 }

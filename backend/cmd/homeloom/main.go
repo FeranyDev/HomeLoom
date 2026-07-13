@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/application"
+	"github.com/feranydev/homeloom/backend/internal/buildinfo"
 	"github.com/feranydev/homeloom/backend/internal/config"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	"github.com/feranydev/homeloom/backend/internal/persistence/sqlite"
@@ -22,7 +24,13 @@ import (
 
 func main() {
 	configPath := flag.String("config", "", "path to a YAML configuration file")
+	showVersion := flag.Bool("version", false, "print build version and exit")
 	flag.Parse()
+	if *showVersion {
+		info := buildinfo.Current()
+		fmt.Printf("HomeLoom %s (%s) built %s with %s\n", info.Version, info.Commit, info.BuildTime, info.GoVersion)
+		return
+	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	settings, err := config.Load(*configPath)
@@ -105,7 +113,8 @@ func main() {
 			stop()
 		}
 	}()
-	logger.Info("HomeLoom demo started", "address", server.Address())
+	version := buildinfo.Current()
+	logger.Info("HomeLoom demo started", "address", server.Address(), "version", version.Version, "commit", version.Commit, "build_time", version.BuildTime)
 	<-ctx.Done()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

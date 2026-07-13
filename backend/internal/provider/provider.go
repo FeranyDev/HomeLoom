@@ -41,6 +41,17 @@ type Discoverer interface {
 	DiscoverDevices(context.Context) ([]device.Device, error)
 }
 
+type PropertyReadRequest struct {
+	DeviceID     string
+	EndpointID   string
+	CapabilityID string
+	PropertyID   string
+}
+
+type PropertyReader interface {
+	ReadProperty(context.Context, PropertyReadRequest) (device.Property, error)
+}
+
 type PropertyWriteRequest struct {
 	DeviceID     string
 	EndpointID   string
