@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { pairingQRUrl } from '../api/targets'
 import type { Target } from '../types/target'
 
@@ -5,6 +6,8 @@ interface TargetCardProps {
   target: Target
 	onEdit: (target: Target) => void
 	onDelete: (target: Target) => void
+	onRegeneratePairing: (target: Target) => void
+	onClearPairingIdentity: (target: Target) => void
 }
 
 const statusLabels = {
@@ -14,7 +17,7 @@ const statusLabels = {
   error: '异常',
 }
 
-export function TargetCard({ target, onEdit, onDelete }: TargetCardProps) {
+export function TargetCard({ target, onEdit, onDelete, onRegeneratePairing, onClearPairingIdentity }: TargetCardProps) {
 	const [showQR, setShowQR] = useState(false)
   const canPair = target.type === 'apple-hap' && target.enabled && Boolean(target.setupUri)
 
@@ -35,6 +38,8 @@ export function TargetCard({ target, onEdit, onDelete }: TargetCardProps) {
         </dl>
 		<div className="target-actions">
 		  <button onClick={() => onEdit(target)}>编辑配置</button>
+		  {target.type === 'apple-hap' && <button onClick={() => onRegeneratePairing(target)}>重新生成配对参数</button>}
+		  {target.type === 'apple-hap' && <button className="is-danger" onClick={() => onClearPairingIdentity(target)}>清除配对身份</button>}
 		  <button className="is-danger" onClick={() => onDelete(target)}>删除</button>
 		</div>
       </div>
@@ -65,4 +70,3 @@ export function TargetCard({ target, onEdit, onDelete }: TargetCardProps) {
     </article>
   )
 }
-import { useState } from 'react'

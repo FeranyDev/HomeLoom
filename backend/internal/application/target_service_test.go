@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -11,6 +12,21 @@ import (
 type targetStoreStub struct {
 	saved   []target.Config
 	deleted []string
+}
+
+type targetRuntimeStub struct {
+	applied []target.Config
+	reset   []target.Config
+}
+
+func (s *targetRuntimeStub) Apply(_ context.Context, item target.Config) (TargetRegistration, error) {
+	s.applied = append(s.applied, item)
+	return TargetRegistration{Info: TargetInfo{ID: item.ID, Type: item.Type, Name: item.Name, Enabled: item.Enabled, Status: "running", Address: item.Address, SetupID: item.SetupID, PairingCode: item.Pin, DeviceIDs: item.DeviceIDs}, QR: []byte("qr")}, nil
+}
+func (s *targetRuntimeStub) Remove(context.Context, string) error { return nil }
+func (s *targetRuntimeStub) ResetPairing(_ context.Context, item target.Config) (TargetRegistration, error) {
+	s.reset = append(s.reset, item)
+	return TargetRegistration{Info: TargetInfo{ID: item.ID, Type: item.Type, Name: item.Name, Enabled: item.Enabled, Status: "running", Address: item.Address, SetupID: item.SetupID, PairingCode: item.Pin, DeviceIDs: item.DeviceIDs}, QR: []byte("new-qr")}, nil
 }
 
 func (s *targetStoreStub) SaveTarget(_ context.Context, item target.Config) error {
@@ -87,6 +103,29 @@ func TestTargetSaveRejectsInvalidConfiguration(t *testing.T) {
 		if _, err := service.Save(context.Background(), item); err == nil {
 			t.Fatalf("Save() accepted %#v", item)
 		}
+	}
+}
+
+func TestTargetPairingMaintenancePreservesConfiguration(t *testing.T) {
+	ctx := context.Background()
+	config := target.Config{ID: "apple-main", Type: "apple-hap", Name: "Main", Enabled: true, Address: ":51826", Pin: "12345678", SetupID: "OLD1", StorePath: "data/hap/apple-main", DeviceIDs: []string{"switch-1"}}
+	store := &targetStoreStub{}
+	runtime := &targetRuntimeStub{}
+	service := NewTargetService([]TargetRegistration{{Info: TargetInfo{ID: config.ID, Type: config.Type, Name: config.Name, Status: "running"}}}, store, config)
+	service.SetRuntime(runtime)
+	regenerated, err := service.RegeneratePairing(ctx, config.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if regenerated.SetupID == config.SetupID || len(store.saved) != 1 || store.saved[0].Pin == config.Pin || store.saved[0].Address != config.Address || len(store.saved[0].DeviceIDs) != 1 {
+		t.Fatalf("regenerated = %#v, saved = %#v", regenerated, store.saved)
+	}
+	cleared, err := service.ClearPairingIdentity(ctx, config.ID)
+	if err != nil || cleared.Status != "running" || len(runtime.reset) != 1 || runtime.reset[0].SetupID != regenerated.SetupID {
+		t.Fatalf("cleared = %#v, reset = %#v, error = %v", cleared, runtime.reset, err)
+	}
+	if _, err := service.RegeneratePairing(ctx, "missing"); !errors.Is(err, ErrTargetNotFound) {
+		t.Fatalf("missing target error = %v", err)
 	}
 }
 

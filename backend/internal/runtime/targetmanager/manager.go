@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -109,6 +111,19 @@ func (m *Manager) Apply(ctx context.Context, config target.Config) (application.
 
 func (m *Manager) Remove(ctx context.Context, id string) error { return m.stop(ctx, id) }
 
+func (m *Manager) ResetPairing(ctx context.Context, config target.Config) (application.TargetRegistration, error) {
+	if config.Type != "apple-hap" {
+		return application.TargetRegistration{}, fmt.Errorf("target type %q does not support pairing reset", config.Type)
+	}
+	if err := m.stop(ctx, config.ID); err != nil {
+		return application.TargetRegistration{}, err
+	}
+	if err := removePairingIdentity(config.ID, config.StorePath); err != nil {
+		return application.TargetRegistration{}, err
+	}
+	return m.Apply(ctx, config)
+}
+
 func (m *Manager) Close(ctx context.Context) error {
 	m.mu.Lock()
 	ids := make([]string, 0, len(m.running))
@@ -160,4 +175,32 @@ func infoFromConfig(config target.Config, status string) application.TargetInfo 
 		Status: status, Address: config.Address, SetupID: config.SetupID,
 		DeviceIDs: append([]string{}, config.DeviceIDs...),
 	}
+}
+
+func removePairingIdentity(id, path string) error {
+	clean := filepath.Clean(path)
+	if clean == "." || filepath.Base(clean) != id || filepath.Base(filepath.Dir(clean)) != "hap" {
+		return fmt.Errorf("refuse unsafe HomeKit identity path %q", path)
+	}
+	absolute, err := filepath.Abs(clean)
+	if err != nil {
+		return fmt.Errorf("resolve HomeKit identity path: %w", err)
+	}
+	root := filepath.Dir(filepath.Dir(absolute))
+	for _, current := range []string{root, filepath.Dir(absolute), absolute} {
+		info, err := os.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("inspect HomeKit identity path: %w", err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("HomeKit identity path contains symlink %q", current)
+		}
+	}
+	if err := os.RemoveAll(absolute); err != nil {
+		return fmt.Errorf("clear HomeKit pairing identity: %w", err)
+	}
+	return nil
 }

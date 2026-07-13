@@ -136,6 +136,14 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .artifact-card p { margin: 0; color: #686b65; line-height: 1.6; }
 .artifact-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .artifact-actions a { padding: 10px 14px; border: 1px solid #747970; color: #343931; text-decoration: none; }
+.maintenance-card p { margin: 0; color: #686b65; line-height: 1.65; }
+.maintenance-actions { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
+.maintenance-actions label { display: grid; gap: 6px; color: #777b73; font-size: 11px; }
+.maintenance-actions input { max-width: 280px; padding: 8px; border: 1px solid #c5c6be; background: #f8f7f1; }
+.maintenance-actions button { padding: 10px 14px; border: 1px solid #747970; background: transparent; color: #343931; cursor: pointer; }
+.maintenance-actions button.is-danger { border-color: #aa786c; color: #8a4d40; }
+.maintenance-actions button:disabled { opacity: .5; cursor: not-allowed; }
+.maintenance-message { color: #52705a !important; }
 .mapping-preview { display: grid; gap: 18px; }
 .mapping-page { display: grid; gap: 32px; }
 .binding-manager { display: grid; gap: 18px; padding: 28px; border: 1px solid #d2d0c7; background: rgba(250, 249, 245, .72); }
@@ -223,7 +231,7 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .target-card__content { padding: 30px; }
 .target-id { margin: 38px 0 8px; color: #94978f; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .target-card h2 { margin: 0; font-size: 30px; }
-.target-actions { display: flex; gap: 12px; margin-top: 28px; }
+.target-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
 .target-actions button, .show-qr, .hide-qr { padding: 9px 13px; border: 1px solid #bfc1b8; background: transparent; color: #545950; cursor: pointer; }
 .target-actions .is-danger { color: #945a4b; }
 .target-details { display: grid; gap: 12px; margin: 42px 0 0; }

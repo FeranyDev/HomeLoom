@@ -153,6 +153,10 @@ func validateRestoreCandidate(ctx context.Context, path string) error {
 	if err != nil {
 		return fmt.Errorf("validate restore compatibility and secrets: %w", err)
 	}
+	if _, err := validated.database.ExecContext(ctx, "DELETE FROM admin_sessions"); err != nil {
+		_ = validated.Close()
+		return fmt.Errorf("invalidate restored administrator sessions: %w", err)
+	}
 	if _, err := validated.database.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
 		_ = validated.Close()
 		return fmt.Errorf("checkpoint restored database: %w", err)

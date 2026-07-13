@@ -319,6 +319,8 @@ storage:
 
 Provider、Target、设备绑定、映射和运行时开关统一存入 SQLite，由管理 API 修改。YAML 不得覆盖这些数据库配置。
 
+Web 只提供一个管理员身份，不建设普通用户或角色系统。日常家庭设备控制、成员共享和使用权限由 Apple Home 承担；HomeLoom Web 聚焦接入、桥接、映射、诊断与运维。
+
 安全要求：
 
 - 凭据、Token、pairing 信息和私钥不得记录到日志；

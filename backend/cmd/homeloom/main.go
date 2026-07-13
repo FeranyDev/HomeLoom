@@ -60,6 +60,10 @@ func main() {
 			logger.Error("database restore failed", "source", *restorePath, "destination", settings.Storage.Database, "error", restoreErr)
 			os.Exit(1)
 		}
+		if discardErr := sqlite.DiscardPendingRestore(settings.Storage.Database); discardErr != nil {
+			logger.Error("database restored but stale pending restore cleanup failed", "error", discardErr)
+			os.Exit(1)
+		}
 		logger.Info("database restore completed", "source", *restorePath, "destination", settings.Storage.Database, "pre_restore_backup", recoveryPath)
 		return
 	}
@@ -77,6 +81,17 @@ func main() {
 		version, _ := store.SchemaVersion(ctx)
 		logger.Info("database backup completed", "source", settings.Storage.Database, "destination", *backupPath, "schema_version", version)
 		return
+	}
+	recoveryPath, pendingApplied, pendingErr := sqlite.ApplyPendingRestore(ctx, settings.Storage.Database)
+	if pendingErr != nil && !pendingApplied {
+		logger.Error("pending database restore failed", "destination", settings.Storage.Database, "error", pendingErr)
+		os.Exit(1)
+	}
+	if pendingErr != nil {
+		logger.Warn("pending database restore applied with staging cleanup warning", "destination", settings.Storage.Database, "error", pendingErr)
+	}
+	if pendingApplied {
+		logger.Info("pending database restore applied", "destination", settings.Storage.Database, "pre_restore_backup", recoveryPath)
 	}
 	store, err := sqlite.Open(ctx, settings.Storage.Database)
 	if err != nil {
@@ -177,11 +192,12 @@ func main() {
 		}
 		registrations = append(registrations, registration)
 	}
-	targetService := application.NewTargetService(registrations, store)
+	targetService := application.NewTargetService(registrations, store, targetConfigs...)
 	targetService.SetRuntime(manager)
 	manager.SetStatusHandler(targetService.SetStatus)
 	server := httpapi.NewServer(settings.Server.Address, service, targetService, logger, providerService)
 	server.SetAuthService(application.NewAuthService(store))
+	server.SetMaintenanceService(application.NewMaintenanceService(store, settings.Storage.Database, sqlite.ValidateRestoreCandidate, sqlite.PendingRestorePaths, sqlite.WritePendingRestoreMarker))
 	server.SetSettingsService(settingsService)
 	auditService := application.NewAuditService(store)
 	server.SetAuditService(auditService)

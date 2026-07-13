@@ -29,14 +29,15 @@ import (
 )
 
 type Server struct {
-	address  string
-	echo     *echo.Echo
-	settings *application.SettingsService
-	audit    *application.AuditService
-	exports  *application.ExportService
-	profiles *application.ProfileService
-	auth     *application.AuthService
-	logins   *loginLimiter
+	address     string
+	echo        *echo.Echo
+	settings    *application.SettingsService
+	audit       *application.AuditService
+	exports     *application.ExportService
+	profiles    *application.ProfileService
+	auth        *application.AuthService
+	maintenance *application.MaintenanceService
+	logins      *loginLimiter
 }
 
 const apiVersionHeader = "HomeLoom-API-Version"
@@ -51,6 +52,10 @@ const (
 type authRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
+}
+
+type confirmationRequest struct {
+	Confirmation string `json:"confirmation"`
 }
 
 type loginAttempt struct {
@@ -144,6 +149,8 @@ func errorCode(status int) string {
 		return "too_many_requests"
 	case http.StatusRequestTimeout:
 		return "request_timeout"
+	case http.StatusRequestEntityTooLarge:
+		return "payload_too_large"
 	case http.StatusUnprocessableEntity:
 		return "unprocessable_entity"
 	case http.StatusServiceUnavailable:
@@ -616,6 +623,50 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "failed to create diagnostic bundle").SetInternal(err)
 		}
 		return writeJSONDownload(c, "homeloom-diagnostics-"+time.Now().UTC().Format("20060102T150405Z")+".json", bundle)
+	})
+	e.POST("/api/v1/system/backup", func(c echo.Context) error {
+		if server.maintenance == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "database maintenance is unavailable")
+		}
+		var input confirmationRequest
+		if err := c.Bind(&input); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid backup confirmation")
+		}
+		artifact, err := server.maintenance.Backup(c.Request().Context(), input.Confirmation)
+		if err != nil {
+			return err
+		}
+		defer artifact.Cleanup()
+		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+		c.Response().Header().Set("X-Content-Type-Options", "nosniff")
+		return c.Attachment(artifact.Path, artifact.Filename)
+	})
+	e.POST("/api/v1/system/restore", func(c echo.Context) error {
+		if server.maintenance == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "database maintenance is unavailable")
+		}
+		c.Request().Body = http.MaxBytesReader(c.Response(), c.Request().Body, (256<<20)+(1<<20))
+		fileHeader, err := c.FormFile("file")
+		if err != nil {
+			var maxBytesError *http.MaxBytesError
+			if errors.As(err, &maxBytesError) {
+				return echo.NewHTTPError(http.StatusRequestEntityTooLarge, "restore archive is too large")
+			}
+			return application.NewValidationError("restore archive is required", map[string]string{"file": "required"})
+		}
+		file, err := fileHeader.Open()
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "failed to open restore archive").SetInternal(err)
+		}
+		defer file.Close()
+		result, err := server.maintenance.StageRestore(c.Request().Context(), file, c.FormValue("confirmation"))
+		if err != nil {
+			if strings.Contains(err.Error(), "already pending") {
+				return echo.NewHTTPError(http.StatusConflict, err.Error())
+			}
+			return err
+		}
+		return c.JSON(http.StatusAccepted, map[string]any{"data": result})
 	})
 	e.GET("/api/v1/audit-events", func(c echo.Context) error {
 		if server.audit == nil {
@@ -1104,6 +1155,36 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 	}
 	e.POST("/api/v1/targets", func(c echo.Context) error { return saveTarget(c, "") })
 	e.PUT("/api/v1/targets/:id", func(c echo.Context) error { return saveTarget(c, c.Param("id")) })
+	e.POST("/api/v1/targets/:id/pairing/regenerate", func(c echo.Context) error {
+		id := c.Param("id")
+		var input confirmationRequest
+		if err := c.Bind(&input); err != nil || input.Confirmation != "REGENERATE "+id {
+			return application.NewValidationError("pairing regeneration confirmation required", map[string]string{"confirmation": "type REGENERATE " + id + " to confirm"})
+		}
+		info, err := targets.RegeneratePairing(c.Request().Context(), id)
+		if errors.Is(err, application.ErrTargetNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "target not found")
+		}
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": info})
+	})
+	e.DELETE("/api/v1/targets/:id/pairing-identity", func(c echo.Context) error {
+		id := c.Param("id")
+		var input confirmationRequest
+		if err := c.Bind(&input); err != nil || input.Confirmation != "CLEAR "+id {
+			return application.NewValidationError("pairing identity confirmation required", map[string]string{"confirmation": "type CLEAR " + id + " to confirm"})
+		}
+		info, err := targets.ClearPairingIdentity(c.Request().Context(), id)
+		if errors.Is(err, application.ErrTargetNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "target not found")
+		}
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": info})
+	})
 	e.DELETE("/api/v1/targets/:id", func(c echo.Context) error {
 		if err := targets.Delete(c.Request().Context(), c.Param("id")); err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
@@ -1253,6 +1334,10 @@ func (s *Server) SetExportService(exports *application.ExportService) { s.export
 func (s *Server) SetProfileService(profiles *application.ProfileService) { s.profiles = profiles }
 
 func (s *Server) SetAuthService(auth *application.AuthService) { s.auth = auth }
+
+func (s *Server) SetMaintenanceService(maintenance *application.MaintenanceService) {
+	s.maintenance = maintenance
+}
 
 func requiresAuthentication(request *http.Request) bool {
 	path := request.URL.Path

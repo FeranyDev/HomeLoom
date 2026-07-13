@@ -11,6 +11,8 @@ describe('SystemDashboard', () => {
 		expect(screen.getByRole('link', { name: '导出脱敏配置' })).toHaveAttribute('href', '/api/v1/system/config-export')
 		expect(screen.getByRole('link', { name: '下载诊断包' })).toHaveAttribute('href', '/api/v1/system/diagnostic-bundle')
 		expect(screen.getByText('已自动脱敏')).toBeInTheDocument()
+		expect(screen.getByRole('button', { name: '下载完整备份' })).toBeInTheDocument()
+		expect(screen.getByLabelText('恢复压缩包')).toBeInTheDocument()
 	})
 	it('shows persistent audit events and correlation IDs', () => {
 		const diagnostics = { eventsReceived: 0, eventsProcessed: 0, eventsDropped: 0, eventQueuePending: 0, eventQueueCapacity: 1, targetEventsDropped: 0, stateEventsDropped: 0, statesMarkedStale: 0, commandsStarted: 0, commandsConfirmed: 0, commandsRejected: 0, commandsTimedOut: 0, commandsSuperseded: 0, commandsOutcomeUnknown: 0, homeKitPushes: 0, onlineDevices: 0, offlineDevices: 0, unknownDevices: 0, providersRunning: 0, providerRetries: 0, deviceSubscribers: 0, stateSubscribers: 0, commandAverageLatencyMs: 0, commandQueuePending: 0, commandQueueMaxPending: 0, eventAverageLatencyMs: 0, eventMaxLatencyMs: 0, slowEventHandlers: 0, databaseOperations: 0, databaseAverageLatencyMs: 0, databaseMaxLatencyMs: 0, providerClockSkewEvents: 0, providerMaxClockSkewMs: 0, goroutines: 1, heapAllocBytes: 0, heapObjects: 0 }

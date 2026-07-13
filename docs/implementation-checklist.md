@@ -81,9 +81,9 @@
 - [x] PIN 使用数据库旁主密钥进行 AES-256-GCM 加密存储；
 - [x] 管理 API 使用数据库 Session 认证，健康检查和版本发现保持公开；
 - [x] 配对资料和二维码查看受管理员 Session 权限保护；
-- [ ] 重新生成 PIN/Setup ID 增加二次确认；
-- [ ] 删除已配对桥时默认保留身份目录；
-- [ ] 增加“清除配对身份”独立高风险操作；
+- [x] 重新生成 PIN/Setup ID 使用 `REGENERATE {id}` 二次确认；
+- [x] 删除已配对桥时默认保留身份目录；
+- [x] 增加“清除配对身份”独立高风险操作并校验身份路径；
 - [x] 启动前检测 HAP 端口是否被外部进程占用；
 - [ ] 改善 mDNS/netlink 错误信息；
 - [ ] 评估 `brutella/hap` 长期维护和并发行为。
@@ -506,7 +506,7 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [~] 实时日志（审计事件已支持 SQLite 历史和 SSE，进程运行日志流待实现）；
 - [x] Mapping 预览；
 - [x] Profile 管理；
-- [ ] 备份恢复；
+- [x] 完整备份下载、恢复包校验暂存和下次启动前原子应用；
 - [x] 错误边界；
 - [x] Toast/通知系统；
 - [x] Provider/Target 表单服务端字段错误定位；
@@ -523,7 +523,7 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [x] SQLite Session（24 小时，数据库仅存令牌哈希）；
 - [x] CSRF 防护；
 - [x] 登录限速；
-- [!] 敏感操作二次确认；
+- [x] 备份、整库恢复、配对参数再生成和配对身份清理使用精确短语二次确认；
 - [x] 审计日志；
 - [ ] 可信代理配置；
 - [x] 默认仅监听 `127.0.0.1`。
@@ -673,16 +673,13 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 
 下一批建议严格按以下顺序推进：
 
-1. `[!]` HomeKit 配对身份清理与配对参数再生成的高风险确认；
-2. 统一 `Endpoint/Capability/Property` 模型；
-3. 将 Virtual Provider 和 HomeKit Target 迁移到统一模型；
-4. Provider SDK 和 Provider Manager；
-5. stale、unknown 和 optimistic 状态生命周期；
-6. 通用命令值、幂等和同设备顺序；
-7. `/metrics` 和基础可观测性；
-8. Docker、ARM64 和 HomeKit 实机验收；
-9. MQTT Provider；
-10. Mapping Engine。
+1. `[!]` Apple Home 实机配对、双向控制、多桥和三次重启验收；
+2. Docker、ARM64、mDNS 与数据卷部署验收；
+3. 可信代理、HTTPS 部署说明与安全回退；
+4. 进程运行日志流、前端覆盖率报告与运维可观测性；
+5. MQTT Broker 中断恢复与 MQTT ↔ HomeKit 实机链路验收；
+6. Provider 优先级、逻辑设备聚合和剩余 Mapping 场景；
+7. Matter Target 与 Zigbee2MQTT/Tuya/ESPHome 接入评估。
 
 每完成一个步骤都应：
 

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
@@ -28,6 +29,13 @@ func TestRestoreValidatesSecretsAndPreservesPreviousDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := store.SaveMappingBinding(ctx, mapping.Binding{ID: "restored-binding", ProfileID: "restored-profile", ProviderID: "virtual-main", DeviceID: "virtual-switch-1", EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := store.CreateAdmin(ctx, "admin", "password-hash", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveAdminSession(ctx, "old-session-hash", "old-csrf-hash", now, now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	backup := filepath.Join(directory, "backup.db")
@@ -75,6 +83,9 @@ func TestRestoreValidatesSecretsAndPreservesPreviousDatabase(t *testing.T) {
 	bindings, err := restored.ListMappingBindings(ctx)
 	if err != nil || len(bindings) != 1 || bindings[0].ID != "restored-binding" {
 		t.Fatalf("bindings = %#v, error = %v", bindings, err)
+	}
+	if _, _, _, found, err := restored.AdminSession(ctx, "old-session-hash", now); err != nil || found {
+		t.Fatalf("restored session found = %v, error = %v", found, err)
 	}
 	_ = restored.Close()
 

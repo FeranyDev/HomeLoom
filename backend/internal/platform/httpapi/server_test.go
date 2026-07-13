@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -149,6 +150,66 @@ func TestManagementAuthenticationLifecycleAndCSRF(t *testing.T) {
 	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("read after logout = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestDatabaseBackupAndRestoreStagingAPI(t *testing.T) {
+	ctx := context.Background()
+	directory := t.TempDir()
+	databasePath := filepath.Join(directory, "maintenance-api.db")
+	store, err := sqlite.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	server := newTestServer()
+	server.SetMaintenanceService(application.NewMaintenanceService(store, databasePath, sqlite.ValidateRestoreCandidate, sqlite.PendingRestorePaths, sqlite.WritePendingRestoreMarker))
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/system/backup", bytes.NewBufferString(`{"confirmation":"BACKUP"}`))
+	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !bytes.HasPrefix(response.Body.Bytes(), []byte("PK")) || !strings.Contains(response.Header().Get(echo.HeaderContentDisposition), "homeloom-backup-") {
+		t.Fatalf("backup = %d, headers = %#v, bytes = %d", response.Code, response.Header(), response.Body.Len())
+	}
+
+	var body bytes.Buffer
+	form := multipart.NewWriter(&body)
+	part, err := form.CreateFormFile("file", "backup.zip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(response.Body.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	if err := form.WriteField("confirmation", "RESTORE"); err != nil {
+		t.Fatal(err)
+	}
+	if err := form.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/system/restore", &body)
+	request.Header.Set(echo.HeaderContentType, form.FormDataContentType())
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted || !strings.Contains(response.Body.String(), `"requiresRestart":true`) {
+		t.Fatalf("restore stage = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestPairingMaintenanceRequiresExactConfirmation(t *testing.T) {
+	server := newTestServer()
+	for _, item := range []struct{ method, path, body string }{
+		{http.MethodPost, "/api/v1/targets/apple-main/pairing/regenerate", `{"confirmation":"REGENERATE"}`},
+		{http.MethodDelete, "/api/v1/targets/apple-main/pairing-identity", `{"confirmation":"CLEAR"}`},
+	} {
+		request := httptest.NewRequest(item.method, item.path, bytes.NewBufferString(item.body))
+		request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "confirmation") {
+			t.Fatalf("%s = %d %s", item.path, response.Code, response.Body.String())
+		}
 	}
 }
 

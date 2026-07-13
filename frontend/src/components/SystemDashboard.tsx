@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { AuditEvent, DeviceCommand, Diagnostics, RuntimeSettings } from '../types/diagnostics'
+import { downloadDatabaseBackup, stageDatabaseRestore } from '../api/maintenance'
+import { confirmExactPhrase } from '../confirmations'
 
 function expectedValue(command: DeviceCommand): string { if (command.kind === 'action') return Object.entries(command.parameters ?? {}).map(([key, value]) => `${key}=${value.bool ?? value.int ?? value.number ?? value.string ?? '—'}`).join(', ') || '无参数'; const value = command.expected; if (!value) return '—'; if (value.bool !== undefined) return String(value.bool); if (value.int !== undefined) return String(value.int); if (value.number !== undefined) return String(value.number); return value.string ?? '—' }
 function megabytes(bytes: number): string { return `${(bytes / 1024 / 1024).toFixed(1)}MB` }
@@ -12,6 +14,40 @@ function RuntimeSettingsCard({ settings, onSave }: { settings: RuntimeSettings |
   useEffect(() => { if (settings) { setSeconds(settings.commandTimeoutSeconds); setHistoryLimit(settings.commandHistoryLimit) } }, [settings])
   const save = async () => { if (seconds < 1 || seconds > 300) { setError('超时请输入 1–300 秒'); return }; if (historyLimit < 100 || historyLimit > 10000) { setError('历史上限请输入 100–10000'); return }; setSaving(true); setError(null); try { await onSave({ commandTimeoutSeconds: seconds, commandHistoryLimit: historyLimit }) } catch (cause) { setError(cause instanceof Error ? cause.message : '保存失败') } finally { setSaving(false) } }
   return <div className="queue-card settings-card"><div><span>命令运行时设置</span><strong>{settings?.commandTimeoutSeconds ?? seconds}s / {settings?.commandHistoryLimit ?? historyLimit} 条</strong></div><label>确认超时秒数<input aria-label="命令确认超时秒数" type="number" min="1" max="300" value={seconds} onChange={(event) => setSeconds(Number(event.target.value))} /></label><label>历史保留上限<input aria-label="命令历史保留上限" type="number" min="100" max="10000" value={historyLimit} onChange={(event) => setHistoryLimit(Number(event.target.value))} /></label><button disabled={saving || !settings} onClick={() => void save()}>{saving ? '保存中…' : '保存并实时应用'}</button>{error && <small className="field-error" role="alert">{error}</small>}<small>存储于 SQLite。超时仅影响之后创建的命令；降低历史上限会立即清理最旧的终态记录，不删除执行中的命令。</small></div>
+}
+
+function DatabaseMaintenanceCard() {
+	const [restoreFile, setRestoreFile] = useState<File | null>(null)
+	const [busy, setBusy] = useState<'backup' | 'restore' | null>(null)
+	const [message, setMessage] = useState<string | null>(null)
+	const [error, setError] = useState<string | null>(null)
+
+	async function backup() {
+		const confirmation = confirmExactPhrase('完整备份包含数据库主密钥、Provider 凭据和桥 PIN，请按敏感文件保管。', 'BACKUP')
+		if (!confirmation) return
+		setBusy('backup'); setError(null); setMessage(null)
+		try {
+			const result = await downloadDatabaseBackup(confirmation)
+			const url = URL.createObjectURL(result.blob)
+			const anchor = document.createElement('a')
+			anchor.href = url; anchor.download = result.filename; anchor.click()
+			URL.revokeObjectURL(url)
+			setMessage('完整 SQLite 备份已生成。HomeKit 控制器配对文件不在此压缩包内。')
+		} catch (cause) { setError(cause instanceof Error ? cause.message : '生成备份失败') } finally { setBusy(null) }
+	}
+
+	async function restore() {
+		if (!restoreFile) { setError('请先选择 HomeLoom 备份压缩包'); return }
+		const confirmation = confirmExactPhrase('恢复会在下次启动前替换整库，并保留当前数据库的恢复前快照。', 'RESTORE')
+		if (!confirmation) return
+		setBusy('restore'); setError(null); setMessage(null)
+		try {
+			const result = await stageDatabaseRestore(restoreFile, confirmation)
+			setMessage(`备份已验证并暂存（schema v${result.schemaVersion}）。请正常重启 HomeLoom 以应用恢复。`)
+		} catch (cause) { setError(cause instanceof Error ? cause.message : '暂存恢复失败') } finally { setBusy(null) }
+	}
+
+	return <div className="maintenance-card queue-card"><div><span>数据库备份与恢复</span><strong>单管理员运维</strong></div><p>完整备份包含 SQLite、管理员密码哈希、加密配置以及数据库主密钥。恢复包会先进行完整性、Schema 和密钥校验，运行中的数据库不会被直接替换。</p><div className="maintenance-actions"><button disabled={busy !== null} onClick={() => void backup()}>{busy === 'backup' ? '生成中…' : '下载完整备份'}</button><label>恢复压缩包<input aria-label="恢复压缩包" type="file" accept=".zip,application/zip" onChange={(event) => setRestoreFile(event.target.files?.[0] ?? null)} /></label><button className="is-danger" disabled={busy !== null || !restoreFile} onClick={() => void restore()}>{busy === 'restore' ? '校验中…' : '校验并暂存恢复'}</button></div>{message && <small className="maintenance-message" role="status">{message}</small>}{error && <small className="field-error" role="alert">{error}</small>}<small>整库恢复需要一次正常进程重启；Provider、桥和映射的日常配置保存仍会实时生效。</small></div>
 }
 
 export function SystemDashboard({ diagnostics, commands, auditEvents = [], settings, onSettingsSave }: { diagnostics: Diagnostics | null; commands: DeviceCommand[]; auditEvents?: AuditEvent[]; settings: RuntimeSettings | null; onSettingsSave: (settings: RuntimeSettings) => Promise<void> }) {
@@ -63,6 +99,7 @@ export function SystemDashboard({ diagnostics, commands, auditEvents = [], setti
     <div className="queue-card"><div><span>事件队列</span><strong>{diagnostics.eventQueuePending} / {diagnostics.eventQueueCapacity}</strong></div><div className="queue-track"><span style={{ width: `${Math.min(queueRate, 100)}%` }} /></div><small>当前占用 {queueRate}% · 核心队列满时会丢弃并计数，不阻塞 Provider 线程。</small></div>
     <RuntimeSettingsCard settings={settings} onSave={onSettingsSave} />
 	<div className="artifact-card queue-card"><div><span>支持资料</span><strong>已自动脱敏</strong></div><p>配置导出不包含桥 PIN、Setup URI 或本地存储路径；Provider 凭据会替换为星号。诊断包额外包含版本、运行指标和最近审计记录。</p><div className="artifact-actions"><a href="/api/v1/system/config-export" download>导出脱敏配置</a><a href="/api/v1/system/diagnostic-bundle" download>下载诊断包</a></div><small>下载响应禁止浏览器缓存，分享前仍建议检查设备名称等非凭据数据。</small></div>
+	<DatabaseMaintenanceCard />
 	<div className="audit-section command-section"><div className="command-heading"><h3>实时审计日志</h3><span>SQLite 持久化最近 5000 条 · 页面显示最近 200 条</span></div><div className="command-filters"><input aria-label="搜索审计日志" value={auditQuery} onChange={(event) => setAuditQuery(event.target.value)} placeholder="搜索资源、动作、路由或 correlation ID" /><span>{filteredAuditEvents.length} / {auditEvents.length}</span></div>{auditEvents.length === 0 ? <div className="command-empty">还没有管理操作记录</div> : filteredAuditEvents.length === 0 ? <div className="command-empty">没有匹配的审计记录</div> : <div className="audit-table"><div className="audit-row command-header"><span>资源 / 动作</span><span>结果</span><span>Correlation ID</span><span>时间</span></div>{filteredAuditEvents.map((event) => <div className="audit-row" key={event.id}><span><b>{event.resourceType}{event.resourceId ? ` · ${event.resourceId}` : ''}</b><small>{event.method} {event.route} · {event.action}</small></span><span><i className={`command-status is-${event.outcome === 'succeeded' ? 'confirmed' : 'rejected'}`}>{event.status}</i><small>{event.outcome}</small></span><code title={event.correlationId}>{event.correlationId}</code><time>{new Date(event.createdAt).toLocaleString()}</time></div>)}</div>}</div>
     <div className="command-section"><div className="command-heading"><h3>命令历史</h3><span>内存中最多保留 {settings?.commandHistoryLimit ?? 1000} 条记录</span></div><div className="command-filters"><input aria-label="搜索命令" value={commandQuery} onChange={(event) => setCommandQuery(event.target.value)} placeholder="搜索设备、属性、动作、错误或命令 ID" /><select aria-label="命令状态" value={commandStatus} onChange={(event) => setCommandStatus(event.target.value)}><option value="all">全部状态</option><option value="queued">queued</option><option value="sent">sent</option><option value="accepted">accepted</option><option value="confirmed">confirmed</option><option value="rejected">rejected</option><option value="timeout">timeout</option><option value="superseded">superseded</option><option value="unknown">outcome unknown</option></select><span>{filteredCommands.length} / {commands.length}</span></div>{commands.length === 0 ? <div className="command-empty">还没有控制命令</div> : filteredCommands.length === 0 ? <div className="command-empty">没有匹配的命令</div> : <div className="command-table"><div className="command-row command-header"><span>设备 / 属性或动作</span><span>期望值 / 参数</span><span>状态 / 结果</span><span>更新时间</span></div>{filteredCommands.map((command) => <div className="command-row" key={command.id}><span><b>{command.deviceId}</b><small>{command.capabilityId}.{command.commandId ?? command.propertyId}</small><small>{command.id}</small>{command.correlationId && <small>trace: {command.correlationId}</small>}{Boolean(command.coalescedRequests) && <small>合并重复请求 × {command.coalescedRequests}</small>}</span><code>{expectedValue(command)}</code><span><i className={`command-status is-${command.status}`}>{command.status}</i>{command.outcome && <small>outcome: {command.outcome}</small>}{command.error && <small>{command.error}</small>}</span><time>{new Date(command.updatedAt).toLocaleString()}</time></div>)}</div>}</div>
   </section>

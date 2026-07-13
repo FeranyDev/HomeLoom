@@ -130,6 +130,33 @@ paths:
           content:
             application/json: { schema: { $ref: "#/components/schemas/DiagnosticBundle" } }
         "503": { $ref: "#/components/responses/Unavailable" }
+  /api/v1/system/backup:
+    post:
+      operationId: downloadDatabaseBackup
+      description: Creates a consistent SQLite backup plus its master key as a sensitive ZIP archive. Requires X-CSRF-Token and the exact BACKUP confirmation phrase.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ConfirmationRequest" } } } }
+      responses:
+        "200": { description: No-store ZIP attachment containing homeloom.db and homeloom.db.key, content: { application/zip: { schema: { type: string, format: binary } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/v1/system/restore:
+    post:
+      operationId: stageDatabaseRestore
+      description: Validates and stages a complete backup for atomic application before the next process startup. The current database is preserved as a pre-restore snapshot and restored browser sessions are invalidated.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, confirmation]
+              properties:
+                file: { type: string, format: binary }
+                confirmation: { type: string, const: RESTORE }
+      responses:
+        "202": { description: Restore validated and staged, content: { application/json: { schema: { $ref: "#/components/schemas/PendingRestoreResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { description: Another restore is already pending }
+        "413": { description: Restore archive exceeds 256 MiB }
   /api/v1/diagnostics:
     get:
       operationId: getDiagnostics
@@ -362,6 +389,20 @@ paths:
     delete:
       operationId: deleteTarget
       responses: { "204": { description: Target deleted }, "400": { $ref: "#/components/responses/BadRequest" } }
+  /api/v1/targets/{targetId}/pairing/regenerate:
+    parameters: [{ name: targetId, in: path, required: true, schema: { type: string } }]
+    post:
+      operationId: regenerateTargetPairing
+      description: Generates a new HomeKit PIN and Setup ID while preserving the existing HAP controller identity. Confirmation must equal REGENERATE followed by the target ID.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ConfirmationRequest" } } } }
+      responses: { "200": { description: Updated Target }, "400": { $ref: "#/components/responses/BadRequest" }, "404": { $ref: "#/components/responses/NotFound" } }
+  /api/v1/targets/{targetId}/pairing-identity:
+    parameters: [{ name: targetId, in: path, required: true, schema: { type: string } }]
+    delete:
+      operationId: clearTargetPairingIdentity
+      description: Stops the bridge, safely removes HAP keys and controller pairings, then rebuilds it. Confirmation must equal CLEAR followed by the target ID.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ConfirmationRequest" } } } }
+      responses: { "200": { description: Target rebuilt with a fresh pairing identity }, "400": { $ref: "#/components/responses/BadRequest" }, "404": { $ref: "#/components/responses/NotFound" } }
   /api/v1/commands:
     get:
       operationId: listCommands
@@ -405,6 +446,22 @@ components:
             initialized: { type: boolean }
             authenticated: { type: boolean }
             username: { type: string }
+    ConfirmationRequest:
+      type: object
+      required: [confirmation]
+      properties: { confirmation: { type: string } }
+    PendingRestoreResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [staged, requiresRestart, createdAt, schemaVersion]
+          properties:
+            staged: { type: boolean, const: true }
+            requiresRestart: { type: boolean, const: true }
+            createdAt: { type: string, format: date-time }
+            schemaVersion: { type: integer, minimum: 1 }
     Status:
       type: object
       required: [status]

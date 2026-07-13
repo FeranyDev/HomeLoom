@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { executeDeviceCommand, listDevices, setDeviceEnabled, setDevicePower, setDeviceProperty, simulateDevice, subscribeDevices } from './api/devices'
-import { deleteTarget, listTargets, saveTarget, subscribeTargets } from './api/targets'
+import { clearTargetPairingIdentity, deleteTarget, listTargets, regenerateTargetPairing, saveTarget, subscribeTargets } from './api/targets'
 import { deleteProvider, listProviders, restartProvider, saveProvider, testProviderConnection } from './api/providers'
 import { getDiagnostics, getRuntimeSettings, listAuditEvents, listCommands, saveRuntimeSettings, subscribeAuditEvents, subscribeCommands } from './api/diagnostics'
 import { getSystemVersion } from './api/system'
@@ -20,7 +20,7 @@ import type { Target, TargetInput } from './types/target'
 import type { Provider, ProviderInput } from './types/provider'
 import type { AuditEvent, DeviceCommand, Diagnostics, RuntimeSettings, SystemVersion } from './types/diagnostics'
 import { usePageRoute } from './routing'
-import { confirmProviderDeletion, confirmTargetDeletion } from './confirmations'
+import { confirmExactPhrase, confirmProviderDeletion, confirmTargetDeletion } from './confirmations'
 import { getAuthStatus, login, logout, setupAdministrator, type AuthStatus } from './api/auth'
 import { AuthScreen } from './components/AuthScreen'
 
@@ -148,6 +148,16 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
 		if (!confirmTargetDeletion(target.name)) return
 		try { await deleteTarget(target.id); await refresh(); notify('success', `桥“${target.name}”已删除`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '删除桥失败') }
 	}
+	async function handleTargetPairingRegenerate(target: Target) {
+		const confirmation = confirmExactPhrase('这会更换新设备加入 Apple Home 时使用的 PIN 和 Setup ID；已有配对身份会保留。', `REGENERATE ${target.id}`)
+		if (!confirmation) return
+		try { await regenerateTargetPairing(target.id, confirmation); await refresh(); notify('success', `桥“${target.name}”的配对参数已重新生成`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '重新生成配对参数失败') }
+	}
+	async function handleTargetPairingIdentityClear(target: Target) {
+		const confirmation = confirmExactPhrase('这会清除 HomeKit 密钥和所有控制器配对，必须在 Apple Home 中删除旧配件并重新添加。', `CLEAR ${target.id}`)
+		if (!confirmation) return
+		try { await clearTargetPairingIdentity(target.id, confirmation); await refresh(); notify('success', `桥“${target.name}”的配对身份已清除并重建`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '清除配对身份失败') }
+	}
 	async function handleProviderSave(input: ProviderInput, editing: boolean) { try { await saveProvider(input, editing); setProviderForm({ open: false, provider: null }); await refresh(); notify('success', editing ? 'Provider 配置已更新' : 'Provider 已创建') } catch (cause) { notify('error', cause instanceof Error ? cause.message : '保存 Provider 失败'); throw cause } }
 	async function handleProviderTest(input: ProviderInput) { try { await testProviderConnection(input); notify('success', 'Provider 连接测试成功') } catch (cause) { notify('error', cause instanceof Error ? cause.message : 'Provider 连接测试失败'); throw cause } }
 	async function handleProviderDelete(provider: Provider) { if (!confirmProviderDeletion(provider.name)) return; try { await deleteProvider(provider.id); await refresh(); notify('success', `Provider“${provider.name}”已删除`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '删除 Provider 失败') } }
@@ -216,7 +226,7 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
 		    <strong>SQLite · targets</strong>
 		    <p>桥配置、设备绑定和配对参数统一保存在数据库中；YAML 只负责进程启动。</p>
 		  </div>
-		  {targets.map((target) => <TargetCard key={target.id} target={target} onEdit={(item) => setTargetForm({ open: true, target: item })} onDelete={(item) => void handleTargetDelete(item)} />)}
+		  {targets.map((target) => <TargetCard key={target.id} target={target} onEdit={(item) => setTargetForm({ open: true, target: item })} onDelete={(item) => void handleTargetDelete(item)} onRegeneratePairing={(item) => void handleTargetPairingRegenerate(item)} onClearPairingIdentity={(item) => void handleTargetPairingIdentityClear(item)} />)}
 		  {targets.length === 0 && <CollectionEmpty title="还没有桥" description="新建桥并绑定设备后，即可接入 HomeKit 等目标平台。" />}
 		</section>
       )}

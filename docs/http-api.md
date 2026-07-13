@@ -12,6 +12,8 @@
 
 首次运行时，前端通过 `POST /api/v1/auth/setup` 创建数据库中唯一的管理员。密码要求 12–128 个字符，只保存 bcrypt 哈希。之后使用 `POST /api/v1/auth/login` 登录；Session 的随机令牌只通过 `HttpOnly`、`SameSite=Strict` Cookie 传递，数据库只保存令牌的 SHA-256 哈希，会话有效期为 24 小时且重启后仍有效。HTTPS 直连或反向代理通过 `X-Forwarded-Proto: https` 明确原始协议时，Cookie 会附带 `Secure`。
 
+Web 管理面只有这一个管理员身份，不实现普通用户、角色或按设备授权。HomeLoom Web 用于接入、桥接、映射、诊断和运维；家庭成员的日常设备控制与共享由 Apple Home 管理。
+
 `/health`、`/ready`、`/api/versions`、`/api/v1/system/version` 和认证初始化入口保持公开。其余 v1 管理接口、`/metrics` 和 HomeKit 配对二维码均要求登录。所有 `POST`、`PUT`、`PATCH`、`DELETE` 请求还必须把 `homeloom_csrf` Cookie 的值放入 `X-CSRF-Token` 请求头；前端 API Client 会自动完成此操作。
 
 同一直连客户端在五分钟窗口内连续登录失败 5 次后会锁定 5 分钟。限速不读取 `X-Forwarded-For`，避免在尚未配置可信代理时被伪造来源绕过。认证响应禁止缓存，退出会立即从 SQLite 删除 Session。
@@ -55,6 +57,7 @@
 | 400 | `bad_request` | JSON 或参数不合法 |
 | 404 | `not_found` | 资源不存在 |
 | 408 | `request_timeout` | Provider 操作取消或超时 |
+| 413 | `payload_too_large` | 上传的恢复包超过 256 MiB 限制 |
 | 422 | `unprocessable_entity` | 设备不支持该属性或操作 |
 | 503 | `service_unavailable` | Provider 当前不可用 |
 | 500 | `internal_error` | 未预期的服务端错误 |
@@ -67,6 +70,8 @@
 - `GET/PUT /api/v1/system/settings`：读取或实时更新 SQLite 中的运行时设置；
 - `GET /api/v1/system/config-export`：下载脱敏后的数据库配置快照；
 - `GET /api/v1/system/diagnostic-bundle`：下载版本、指标、脱敏配置和最近审计事件组成的诊断包；
+- `POST /api/v1/system/backup`：输入精确确认短语 `BACKUP` 后下载 SQLite 与数据库主密钥组成的 ZIP 完整备份；
+- `POST /api/v1/system/restore`：上传完整备份并输入 `RESTORE`，完成完整性、Schema 和密钥校验后暂存；下次进程启动前原子替换、保留恢复前快照，并清空备份中的旧浏览器 Session；
 - `GET /api/v1/diagnostics`：设备、事件、命令、订阅及 Go runtime 快照；
 - `GET /metrics`：Prometheus 文本指标；
 - `GET /api/v1/devices/{id}/states`：内存状态、来源和质量；
@@ -86,6 +91,8 @@
 属性写入会在创建命令和调用 Provider 之前按模型校验 typed payload、`min`、`max` 与整数约束。类型不匹配、包含多个 payload 或越界统一返回 `400 bad_request`；不存在或不可写的属性返回 422。校验失败不会产生虚假的命令历史。
 
 命令确认超时由 `system_settings.command_timeout_seconds` 保存，允许范围为 1–300 秒，默认 5 秒；历史上限由 `command_history_limit` 保存，允许 100–10000 条，默认 1000 条。两项设置通过同一事务保存并实时应用。新超时只用于之后创建的命令；降低历史上限会立即清理最旧的终态记录，但不删除执行中的命令。
+
+HomeKit 桥提供两个独立高风险入口：`POST /api/v1/targets/{id}/pairing/regenerate` 要求 `REGENERATE {id}`，只更换 PIN 与 Setup ID 并保留既有控制器身份；`DELETE /api/v1/targets/{id}/pairing-identity` 要求 `CLEAR {id}`，会先停止对应桥、拒绝符号链接或越界身份路径、清除 HAP 密钥及控制器配对文件，再按原配置重建桥。删除普通 Target 配置仍默认保留身份目录。
 
 Provider 上报时间与接收时间相差超过 5 分钟时，Core 会记录时钟漂移指标，并将 State Store 的 `observedAt` 钳制为接收时间，避免错误的未来时间戳长期阻止正常状态合并。原始设备快照时间仍保留用于排查。
 
@@ -142,6 +149,6 @@ Provider 配置仍以完整值保存在 SQLite 中，但管理 API 会递归识�
 
 进程结构化日志统一经过敏感属性过滤器。敏感键直接替换为 `********`，错误文本或 URL 中常见的 `token=...`、`api_key=...`、`password=...` 等赋值也会在输出前清理。调用方仍不应把完整请求体作为无语义字符串写入日志。
 
-HomeKit PIN 在 SQLite 中使用 AES-256-GCM 加密，主密钥自动保存为数据库旁的 `<database>.key` 文件并强制使用 `0600` 权限。已有明文 PIN 会在升级后的首次启动自动加密；数据库包含密文但密钥缺失时服务会拒绝启动，避免静默生成错误密钥。数据库备份会同时生成同名 `.key` 配套文件，两者必须一起保管和恢复。
+HomeKit PIN 在 SQLite 中使用 AES-256-GCM 加密，主密钥自动保存为数据库旁的 `<database>.key` 文件并强制使用 `0600` 权限。已有明文 PIN 会在升级后的首次启动自动加密；数据库包含密文但密钥缺失时服务会拒绝启动，避免静默生成错误密钥。Web 完整备份把数据库和配套密钥封装为一个 ZIP；该文件可解密 Provider 凭据与桥 PIN，必须按敏感文件保管。HAP 控制器配对目录不在 SQLite 备份中。
 
 SQLite 主数据库文件在打开后强制设置为 `0600`。HomeKit 身份目录由 HomeLoom 自己实现的安全 Store 管理：目录为 `0700`、身份与配对文件为 `0600`，启动时会修复已有权限并拒绝身份目录中的符号链接。

@@ -13,6 +13,14 @@ export async function deleteTarget(id: string): Promise<void> {
 	await requestJSON<void>(`/api/v1/targets/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
+export function regenerateTargetPairing(id: string, confirmation: string): Promise<Target> {
+	return requestData<Target>(`/api/v1/targets/${encodeURIComponent(id)}/pairing/regenerate`, { method: 'POST', body: JSON.stringify({ confirmation }) })
+}
+
+export function clearTargetPairingIdentity(id: string, confirmation: string): Promise<Target> {
+	return requestData<Target>(`/api/v1/targets/${encodeURIComponent(id)}/pairing-identity`, { method: 'DELETE', body: JSON.stringify({ confirmation }) })
+}
+
 export async function listTargets(signal?: AbortSignal): Promise<Target[]> {
   return requestData<Target[]>('/api/v1/targets', { signal })
 }

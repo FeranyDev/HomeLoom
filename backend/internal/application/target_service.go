@@ -16,6 +16,8 @@ import (
 	homekitqr "github.com/kradalby/homekit-qr"
 )
 
+var ErrTargetNotFound = errors.New("target not found")
+
 type TargetInfo struct {
 	ID          string   `json:"id"`
 	Type        string   `json:"type"`
@@ -39,6 +41,7 @@ type TargetService struct {
 	mu           sync.RWMutex
 	order        []string
 	targets      map[string]TargetRegistration
+	configs      map[string]domaintarget.Config
 	store        TargetStore
 	runtime      TargetRuntime
 	nextListener uint64
@@ -58,13 +61,17 @@ type TargetStore interface {
 type TargetRuntime interface {
 	Apply(context.Context, domaintarget.Config) (TargetRegistration, error)
 	Remove(context.Context, string) error
+	ResetPairing(context.Context, domaintarget.Config) (TargetRegistration, error)
 }
 
-func NewTargetService(registrations []TargetRegistration, store TargetStore) *TargetService {
-	service := &TargetService{targets: make(map[string]TargetRegistration), store: store, listeners: make(map[uint64]*targetSubscription)}
+func NewTargetService(registrations []TargetRegistration, store TargetStore, configs ...domaintarget.Config) *TargetService {
+	service := &TargetService{targets: make(map[string]TargetRegistration), configs: make(map[string]domaintarget.Config), store: store, listeners: make(map[uint64]*targetSubscription)}
 	for _, registration := range registrations {
 		service.order = append(service.order, registration.Info.ID)
 		service.targets[registration.Info.ID] = registration
+	}
+	for _, config := range configs {
+		service.configs[config.ID] = config
 	}
 	return service
 }
@@ -122,6 +129,7 @@ func (s *TargetService) Save(ctx context.Context, item domaintarget.Config) (Tar
 		s.order = append(s.order, item.ID)
 	}
 	s.targets[item.ID] = registration
+	s.configs[item.ID] = item
 	s.mu.Unlock()
 	s.notify(registration.Info)
 	return registration.Info, nil
@@ -215,6 +223,7 @@ func (s *TargetService) Delete(ctx context.Context, id string) error {
 	}
 	s.mu.Lock()
 	delete(s.targets, id)
+	delete(s.configs, id)
 	for index, current := range s.order {
 		if current == id {
 			s.order = append(s.order[:index], s.order[index+1:]...)
@@ -223,6 +232,53 @@ func (s *TargetService) Delete(ctx context.Context, id string) error {
 	}
 	s.mu.Unlock()
 	return nil
+}
+
+func (s *TargetService) RegeneratePairing(ctx context.Context, id string) (TargetInfo, error) {
+	s.mu.RLock()
+	config, ok := s.configs[id]
+	s.mu.RUnlock()
+	if !ok {
+		return TargetInfo{}, fmt.Errorf("%w: %s", ErrTargetNotFound, id)
+	}
+	if config.Type != "apple-hap" {
+		return TargetInfo{}, fmt.Errorf("target %q does not support HomeKit pairing", id)
+	}
+	pin, err := randomString("0123456789", 8)
+	if err != nil {
+		return TargetInfo{}, fmt.Errorf("generate target pin: %w", err)
+	}
+	setupID, err := randomString("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", 4)
+	if err != nil {
+		return TargetInfo{}, fmt.Errorf("generate target setup id: %w", err)
+	}
+	config.Pin, config.SetupID = pin, setupID
+	return s.Save(ctx, config)
+}
+
+func (s *TargetService) ClearPairingIdentity(ctx context.Context, id string) (TargetInfo, error) {
+	s.mu.RLock()
+	config, ok := s.configs[id]
+	s.mu.RUnlock()
+	if !ok {
+		return TargetInfo{}, fmt.Errorf("%w: %s", ErrTargetNotFound, id)
+	}
+	if config.Type != "apple-hap" {
+		return TargetInfo{}, fmt.Errorf("target %q does not support HomeKit pairing", id)
+	}
+	if s.runtime == nil {
+		return TargetInfo{}, errors.New("target runtime is unavailable")
+	}
+	registration, err := s.runtime.ResetPairing(ctx, config)
+	if err != nil {
+		s.SetStatus(id, "error")
+		return TargetInfo{}, err
+	}
+	s.mu.Lock()
+	s.targets[id] = registration
+	s.mu.Unlock()
+	s.notify(registration.Info)
+	return registration.Info, nil
 }
 
 func validateTarget(item domaintarget.Config) error {

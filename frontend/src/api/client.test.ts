@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, requestData, requestJSON } from './client'
+import { ApiError, requestData, requestFile, requestJSON } from './client'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -33,6 +33,18 @@ describe('API client', () => {
 		const init = fetchMock.mock.calls[0][1] as RequestInit
 		expect(init.credentials).toBe('same-origin')
 		expect(new Headers(init.headers).get('X-CSRF-Token')).toBe('csrf-token')
+		document.cookie = 'homeloom_csrf=; Max-Age=0; Path=/'
+	})
+
+	it('preserves multipart boundaries and reads attachment filenames', async () => {
+		document.cookie = 'homeloom_csrf=csrf-token; Path=/'
+		const fetchMock = vi.fn().mockResolvedValue(new Response(new Blob(['zip']), { status: 200, headers: { 'Content-Disposition': 'attachment; filename="homeloom-backup.zip"' } }))
+		vi.stubGlobal('fetch', fetchMock)
+		const form = new FormData(); form.set('confirmation', 'RESTORE')
+		await expect(requestFile('/api/v1/system/restore', { method: 'POST', body: form })).resolves.toMatchObject({ filename: 'homeloom-backup.zip' })
+		const headers = new Headers((fetchMock.mock.calls[0][1] as RequestInit).headers)
+		expect(headers.has('Content-Type')).toBe(false)
+		expect(headers.get('X-CSRF-Token')).toBe('csrf-token')
 		document.cookie = 'homeloom_csrf=; Max-Age=0; Path=/'
 	})
 })
