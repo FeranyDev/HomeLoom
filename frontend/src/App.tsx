@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { executeDeviceCommand, listDevices, setDeviceEnabled, setDevicePower, setDeviceProperty, simulateDevice, subscribeDevices } from './api/devices'
 import { deleteTarget, listTargets, saveTarget, subscribeTargets } from './api/targets'
-import { deleteProvider, listProviders, restartProvider, saveProvider } from './api/providers'
+import { deleteProvider, listProviders, restartProvider, saveProvider, testProviderConnection } from './api/providers'
 import { getDiagnostics, getRuntimeSettings, listAuditEvents, listCommands, saveRuntimeSettings, subscribeAuditEvents, subscribeCommands } from './api/diagnostics'
 import { getSystemVersion } from './api/system'
 import { DeviceCard } from './components/DeviceCard'
@@ -120,6 +120,7 @@ export function App() {
 		try { await deleteTarget(target.id); await refresh(); notify('success', `桥“${target.name}”已删除`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '删除桥失败') }
 	}
 	async function handleProviderSave(input: ProviderInput, editing: boolean) { try { await saveProvider(input, editing); setProviderForm({ open: false, provider: null }); await refresh(); notify('success', editing ? 'Provider 配置已更新' : 'Provider 已创建') } catch (cause) { notify('error', cause instanceof Error ? cause.message : '保存 Provider 失败'); throw cause } }
+	async function handleProviderTest(input: ProviderInput) { try { await testProviderConnection(input); notify('success', 'Provider 连接测试成功') } catch (cause) { notify('error', cause instanceof Error ? cause.message : 'Provider 连接测试失败'); throw cause } }
 	async function handleProviderDelete(provider: Provider) { if (!confirmProviderDeletion(provider.name)) return; try { await deleteProvider(provider.id); await refresh(); notify('success', `Provider“${provider.name}”已删除`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '删除 Provider 失败') } }
 	async function handleProviderRestart(provider: Provider) { try { await restartProvider(provider.id); await refresh(); setError(null); notify('success', `Provider“${provider.name}”已重新启动`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : 'Provider 重新启动失败'); throw cause } }
 	async function handleSimulation(device: Device, values: { availability?: DeviceAvailability; online?: boolean; power?: boolean; temperature?: number; humidity?: number; contact?: boolean; motion?: boolean; sequence?: number; repeat?: number }) { try { const updated = await simulateDevice(device.id, values); setDevices((current) => current.map((item) => item.id === updated.id ? updated : item)); setError(null); notify('info', `${device.name}模拟状态已更新`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '模拟状态失败'); throw cause } }
@@ -191,7 +192,7 @@ export function App() {
 		</section>
       )}
 	  {targetForm.open && <TargetForm target={targetForm.target} devices={devices.filter((item) => !item.removed)} onCancel={() => setTargetForm({ open: false, target: null })} onSave={handleTargetSave} />}
-	  {providerForm.open && <ProviderForm provider={providerForm.provider} onCancel={() => setProviderForm({ open: false, provider: null })} onSave={handleProviderSave} />}
+	  {providerForm.open && <ProviderForm provider={providerForm.provider} onCancel={() => setProviderForm({ open: false, provider: null })} onSave={handleProviderSave} onTest={handleProviderTest} />}
 	  {selectedDevice && <DeviceDetails device={selectedDevice} onClose={() => setSelectedDeviceID(null)} onPropertyWrite={(endpointId, capabilityId, propertyId, value) => handlePropertyWrite(selectedDevice, endpointId, capabilityId, propertyId, value)} onCommandExecute={(endpointId, capabilityId, commandId, parameters, idempotencyKey) => handleCommandExecute(selectedDevice, endpointId, capabilityId, commandId, parameters, idempotencyKey)} />}
 	  <ToastCenter toasts={toasts} dismiss={dismiss} />
     </main>

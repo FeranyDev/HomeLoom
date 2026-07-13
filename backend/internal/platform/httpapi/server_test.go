@@ -343,6 +343,16 @@ func TestProviderAPIConfigIsRedacted(t *testing.T) {
 	}
 }
 
+func TestProviderConnectionTestAPI(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/providers/test", bytes.NewBufferString(`{"type":"virtual","config":{}}`))
+	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response := httptest.NewRecorder()
+	newProviderManagementTestServer(t).Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"reachable":true`)) {
+		t.Fatalf("response = %d %s", response.Code, response.Body.String())
+	}
+}
+
 func TestListDevices(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/devices", nil)
 	response := httptest.NewRecorder()

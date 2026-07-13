@@ -4,6 +4,7 @@ go 1.26
 
 require (
 	github.com/brutella/hap v0.0.35
+	github.com/eclipse/paho.golang v0.23.0
 	github.com/kradalby/homekit-qr v0.0.0-20251117145710-0ea350a04eaa
 	github.com/labstack/echo/v4 v4.13.4
 	gopkg.in/yaml.v3 v3.0.1
@@ -15,6 +16,7 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/go-chi/chi v1.5.4 // indirect
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/labstack/gommon v0.4.2 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect

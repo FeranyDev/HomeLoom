@@ -24,6 +24,7 @@ export interface Provider extends ProviderConfig {
   retryCount: number
   nextRetryAt?: string
   transitionedAt?: string
+	metrics?: Record<string, number>
 }
 
 export type ProviderInput = ProviderConfig

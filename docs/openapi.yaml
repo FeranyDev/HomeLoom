@@ -239,6 +239,14 @@ paths:
       operationId: createProvider
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ProviderInput" } } } }
       responses: { "200": { description: Provider created, content: { application/json: { schema: { $ref: "#/components/schemas/ObjectResponse" } } } }, "400": { $ref: "#/components/responses/BadRequest" } }
+  /api/v1/providers/test:
+    post:
+      operationId: testProviderConnection
+      description: Validates configuration and connects a short-lived provider without persisting or replacing runtime state.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ProviderInput" } } } }
+      responses:
+        "200": { description: Connection and subscription succeeded, content: { application/json: { schema: { type: object, required: [data], properties: { data: { type: object, required: [reachable], properties: { reachable: { type: boolean, const: true } } } } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
   /api/v1/providers/{providerId}:
     parameters: [{ name: providerId, in: path, required: true, schema: { type: string } }]
     put:

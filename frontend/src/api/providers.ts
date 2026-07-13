@@ -17,3 +17,7 @@ export async function deleteProvider(id: string): Promise<void> {
 export async function restartProvider(id: string): Promise<Provider> {
   return requestData<Provider>(`/api/v1/providers/${encodeURIComponent(id)}/restart`, { method: 'POST' })
 }
+
+export async function testProviderConnection(input: ProviderInput): Promise<void> {
+  await requestData<{ reachable: boolean }>('/api/v1/providers/test', { method: 'POST', body: JSON.stringify(input) })
+}

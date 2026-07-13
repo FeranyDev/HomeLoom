@@ -22,6 +22,7 @@ export function ProviderCard({ provider, devices, onEdit, onDelete, onRestart, o
     <div className="device-card__topline"><span className={`status-dot ${provider.status === 'running' ? 'is-online' : ''}`} />{provider.status}<span className="provider">{provider.type}</span></div>
     <p className="target-id">{provider.id}</p><h2>{provider.name}</h2>
     <div className="capability-list">{features.length ? features.map((item) => <span key={item}>{item}</span>) : <span>未运行</span>}</div>
+	{provider.type === 'mqtt' && <div className="provider-runtime"><span>消息 {provider.metrics?.messagesReceived ?? 0}</span><span>无效 {provider.metrics?.messagesInvalid ?? 0}</span><span>丢弃 {provider.metrics?.messagesDropped ?? 0}</span><span>命令 {provider.metrics?.commandsPublished ?? 0}</span></div>}
     {provider.type === 'virtual' && devices.length > 0 && <div className="simulation-panel"><div><strong>运行时模拟</strong><small>状态只保存在内存中</small></div>{devices.map((item) => {
 			const powered = item.type === 'switch' || item.type === 'lightbulb' || item.type === 'outlet'
 			const power = propertyBool(item, 'switch', 'power'); const contact = propertyBool(item, 'contact', 'contact-detected'); const motion = propertyBool(item, 'motion', 'motion-detected')

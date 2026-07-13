@@ -560,7 +560,11 @@ func (m *Manager) ProviderInfos() []providersdk.RuntimeInfo {
 			value := current.nextRetryAt
 			nextRetryAt = &value
 		}
-		result = append(result, providersdk.RuntimeInfo{Manifest: current.provider.Manifest(), Capabilities: current.provider.Capabilities(), Status: current.status, Error: current.err, RetryCount: current.retryCount, NextRetryAt: nextRetryAt, TransitionedAt: current.transitionedAt})
+		info := providersdk.RuntimeInfo{Manifest: current.provider.Manifest(), Capabilities: current.provider.Capabilities(), Status: current.status, Error: current.err, RetryCount: current.retryCount, NextRetryAt: nextRetryAt, TransitionedAt: current.transitionedAt}
+		if reporter, ok := current.provider.(providersdk.MetricsReporter); ok {
+			info.Metrics = reporter.ProviderMetrics()
+		}
+		result = append(result, info)
 	}
 	return result
 }

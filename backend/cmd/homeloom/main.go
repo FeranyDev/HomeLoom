@@ -18,6 +18,7 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/platform/httpapi"
 	"github.com/feranydev/homeloom/backend/internal/platform/safelog"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
+	mqttprovider "github.com/feranydev/homeloom/backend/internal/providers/mqtt"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
 	"github.com/feranydev/homeloom/backend/internal/runtime/providermanager"
 	"github.com/feranydev/homeloom/backend/internal/runtime/targetmanager"
@@ -92,6 +93,12 @@ func main() {
 		return virtual.NewProviderFromConfig(config)
 	}); err != nil {
 		logger.Error("provider factory registration failed", "error", err)
+		os.Exit(1)
+	}
+	if err := factory.Register("mqtt", func(config providerconfig.Config) (providersdk.Provider, error) {
+		return mqttprovider.NewProviderFromConfig(config)
+	}); err != nil {
+		logger.Error("mqtt provider factory registration failed", "error", err)
 		os.Exit(1)
 	}
 	providerInstances := make([]providersdk.Provider, 0, len(providerConfigs))

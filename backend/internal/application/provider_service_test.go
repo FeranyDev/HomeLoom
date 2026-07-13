@@ -116,6 +116,24 @@ func TestProviderServiceValidatesConfiguration(t *testing.T) {
 	}
 }
 
+func TestProviderServiceConnectionTestDoesNotPersistOrApply(t *testing.T) {
+	store := &providerStore{items: make(map[string]providerconfig.Config)}
+	factory := providersdk.NewFactory()
+	if err := factory.Register("virtual", func(item providerconfig.Config) (providersdk.Provider, error) {
+		return virtual.NewProviderFromConfig(item)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime, _ := providermanager.New()
+	service := application.NewProviderService(nil, store, factory, runtime)
+	if err := service.TestConnection(context.Background(), providerconfig.Config{Type: "virtual", Config: []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.items) != 0 || len(service.List()) != 0 || len(runtime.ProviderInfos()) != 0 {
+		t.Fatalf("connection test changed desired or runtime state: store=%#v list=%#v runtime=%#v", store.items, service.List(), runtime.ProviderInfos())
+	}
+}
+
 func TestProviderServiceRestartsEnabledProvider(t *testing.T) {
 	ctx := context.Background()
 	config := providerconfig.Config{ID: "virtual-main", Type: "virtual", Name: "Virtual", Enabled: true, Config: []byte(`{}`)}

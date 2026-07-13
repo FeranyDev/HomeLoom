@@ -132,6 +132,102 @@ func TestTargetPINIsEncryptedAndSurvivesRestart(t *testing.T) {
 	}
 }
 
+func TestProviderSecretsAreEncryptedAndSurviveRestart(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "homeloom.db")
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := providerconfig.Config{ID: "mqtt-encrypted", Type: "mqtt", Name: "Encrypted MQTT", Enabled: true, Config: []byte(`{"brokerUrl":"mqtt://localhost:1883","username":"reader","password":"broker-password","tls":{"certFile":"client.pem","privateKey":"key-material"}}`)}
+	if err := store.SaveProvider(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+	var stored string
+	if err := store.database.QueryRowContext(ctx, "SELECT config_json FROM providers WHERE id = ?", item.ID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stored, "broker-password") || strings.Contains(stored, "key-material") || !strings.Contains(stored, encryptedPrefix) || !strings.Contains(stored, "client.pem") {
+		t.Fatalf("stored provider config = %s", stored)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	items, err := reopened.ListProviders(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, current := range items {
+		if current.ID == item.ID {
+			config := string(current.Config)
+			if !strings.Contains(config, `"password":"broker-password"`) || !strings.Contains(config, `"privateKey":"key-material"`) || !strings.Contains(config, `"certFile":"client.pem"`) {
+				t.Fatalf("decrypted provider config = %s", config)
+			}
+			return
+		}
+	}
+	t.Fatalf("decrypted provider not found: %#v", items)
+}
+
+func TestOpenEncryptsLegacyPlaintextProviderSecrets(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "homeloom.db")
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.database.ExecContext(ctx, `UPDATE providers SET config_json = '{"password":"legacy-password","public":"visible"}' WHERE id = 'virtual-main'`); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	reopened, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	var raw string
+	if err := reopened.database.QueryRowContext(ctx, "SELECT config_json FROM providers WHERE id = 'virtual-main'").Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(raw, "legacy-password") || !strings.Contains(raw, encryptedPrefix) || !strings.Contains(raw, `"public":"visible"`) {
+		t.Fatalf("migrated provider config = %s", raw)
+	}
+	items, err := reopened.ListProviders(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		if item.ID == "virtual-main" && strings.Contains(string(item.Config), `"password":"legacy-password"`) {
+			return
+		}
+	}
+	t.Fatalf("decrypted migrated provider missing: %#v", items)
+}
+
+func TestOpenRejectsMissingMasterKeyForEncryptedProviderSecret(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "homeloom.db")
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveProvider(ctx, providerconfig.Config{ID: "mqtt-secret", Type: "mqtt", Config: []byte(`{"password":"secret"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	if err := os.Remove(path + ".key"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(ctx, path); err == nil || !strings.Contains(err.Error(), "master key is missing") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestOpenRejectsMissingMasterKeyForEncryptedPIN(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "homeloom.db")

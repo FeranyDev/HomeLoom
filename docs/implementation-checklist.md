@@ -330,7 +330,7 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 
 - [x] 自动创建或加载 master key，缺失或损坏时拒绝解密；
 - [x] PIN 加密存储及明文原位升级；
-- [!] MQTT 密码加密存储；
+- [x] MQTT 密码及 Provider 嵌套敏感字段加密存储；
 - [!] OAuth Token 加密存储；
 - [x] 密钥文件权限检查；
 - [x] 敏感字段日志过滤；
@@ -385,48 +385,48 @@ M2 性能验收：
 
 ### 9.1 配置与生命周期
 
-- [ ] MQTT Provider 数据库配置；
-- [ ] 前端新增 MQTT Provider；
-- [ ] Broker 地址；
-- [ ] TLS；
-- [ ] 用户名和密码；
-- [ ] Client ID；
-- [ ] Topic prefix；
-- [ ] QoS；
-- [ ] Retained 配置；
-- [ ] Keep Alive；
-- [ ] 自动重连；
-- [ ] 指数退避；
-- [ ] 在线状态；
-- [ ] 连接测试按钮。
+- [x] MQTT Provider 数据库配置；
+- [x] 前端新增 MQTT Provider；
+- [x] Broker 地址；
+- [x] TLS/mTLS；
+- [x] 用户名和密码；
+- [x] Client ID；
+- [x] Topic prefix；
+- [x] QoS；
+- [x] Retained 状态最大年龄配置；
+- [x] Keep Alive；
+- [x] 自动重连；
+- [x] 指数退避；
+- [x] 在线状态；
+- [x] 不落库、不替换运行实例的连接测试按钮。
 
 ### 9.2 消息协议
 
-- [ ] 定义 Discovery Topic；
-- [ ] 定义 Device Schema；
-- [ ] 定义 State Topic；
-- [ ] 定义 Command Topic；
-- [ ] 定义 Availability Topic；
-- [ ] 定义 correlation/command ID；
-- [ ] 定义 schema version；
-- [ ] JSON Schema；
-- [ ] 无效消息错误处理；
-- [ ] 重复消息去重；
-- [ ] Retained Discovery 恢复；
-- [ ] Retained State 策略。
+- [x] 定义 Discovery Topic；
+- [x] 定义 Device Schema；
+- [x] 定义 State Topic；
+- [x] 定义 Command Topic；
+- [x] 定义 Availability Topic；
+- [x] 定义 correlation/command ID；
+- [x] 定义 schema version；
+- [x] JSON Schema；
+- [x] 无效消息错误处理与计数；
+- [x] 重复消息 sequence 去重；
+- [x] Retained Discovery 恢复；
+- [x] Retained State 最大年龄策略。
 
 ### 9.3 集成测试
 
-- [ ] Compose 启动 Mosquitto；
-- [ ] 自动发现设备；
-- [ ] MQTT 状态同步至 Registry；
+- [x] Compose 启动 Mosquitto 开发服务；
+- [x] 自动发现设备（Provider 单元测试）；
+- [x] MQTT 状态同步至 Registry（跨层 race 测试）；
 - [ ] MQTT 状态同步至 Apple Home；
 - [ ] Apple Home 命令发布 MQTT；
-- [ ] MQTT 回报确认命令；
+- [x] MQTT 回报确认命令（跨层 race 测试）；
 - [ ] Broker 重启恢复；
 - [ ] 网络中断恢复；
-- [ ] 不重复创建设备；
-- [ ] 不恢复过期实时状态；
+- [x] 不重复创建设备（remote sequence 去重）；
+- [x] 不恢复过期实时状态；
 - [ ] ARM64 构建。
 
 M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。

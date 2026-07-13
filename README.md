@@ -161,3 +161,5 @@ POST     /api/v1/mapping/preview
 Provider 由 Provider Manager 聚合管理。Core 只依赖标准 Provider SDK；Manager 负责初始化、发现、事件转发以及 `Device ID → Provider ID` 写入路由，为后续同时运行 MQTT、米家和其他 Provider 保留统一边界。
 
 Provider 配置保存在 SQLite `providers` 表，启动时由 Provider Factory 按 `type` 构造实例。Migration 会创建默认启用的 `virtual-main`；YAML 不包含 Provider 配置。
+
+MQTT Provider 已支持数据库/前端结构化配置、TLS/mTLS、认证、QoS、retained 恢复、自动重连、状态去重和命令确认。密码及嵌套的 token/secret/private-key 类字段使用数据库主密钥加密，API 只返回脱敏占位符。Topic 与 payload 契约见 [MQTT Provider 协议](docs/mqtt-protocol.md)。本地可用 `docker compose up -d mosquitto` 启动开发 Broker。

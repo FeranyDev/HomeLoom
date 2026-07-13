@@ -535,6 +535,12 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		writeMetric("provider_clock_skew_events_total", metrics.ProviderClockSkewEvents)
 		writeMetric("provider_max_clock_skew_milliseconds", metrics.ProviderMaxClockSkewMS)
 		writeMetric("provider_events_ignored_total", metrics.ProviderEventsIgnored)
+		writeMetric("provider_messages_received_total", metrics.ProviderMessagesReceived)
+		writeMetric("provider_messages_invalid_total", metrics.ProviderMessagesInvalid)
+		writeMetric("provider_messages_dropped_total", metrics.ProviderMessagesDropped)
+		writeMetric("provider_commands_published_total", metrics.ProviderCommandsPublished)
+		writeMetric("mapping_applied_total", metrics.MappingApplied)
+		writeMetric("mapping_errors_total", metrics.MappingErrors)
 		writeMetric("go_goroutines", metrics.Goroutines)
 		writeMetric("go_heap_alloc_bytes", metrics.HeapAllocBytes)
 		writeMetric("go_heap_objects", metrics.HeapObjects)
@@ -733,6 +739,23 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 	}
 	e.POST("/api/v1/providers", func(c echo.Context) error { return saveProvider(c, "") })
 	e.PUT("/api/v1/providers/:id", func(c echo.Context) error { return saveProvider(c, c.Param("id")) })
+	e.POST("/api/v1/providers/test", func(c echo.Context) error {
+		if providers == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "provider management is unavailable")
+		}
+		var request providerconfig.Config
+		if err := c.Bind(&request); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid provider configuration")
+		}
+		if err := providers.TestConnection(c.Request().Context(), request); err != nil {
+			var validationError *application.ValidationError
+			if errors.As(err, &validationError) {
+				return validationError
+			}
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": map[string]bool{"reachable": true}})
+	})
 	e.DELETE("/api/v1/providers/:id", func(c echo.Context) error {
 		if providers == nil {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "provider management is unavailable")

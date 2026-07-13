@@ -30,7 +30,12 @@
 - 统一 API 错误包装、Request ID、OpenAPI 与 runtime 指标；
 - 前后端独立容器、Linux host-network Compose 和数据卷；
 - 项目级 Go/npm 缓存；
-- Go 测试、ESLint 和前端生产构建。
+- Go 测试、ESLint 和前端生产构建；
+- MQTT v1 discovery/state/availability/command 协议与 JSON Schema；
+- MQTT TLS/mTLS、认证、QoS、retained 年龄、自动重连和指数退避；
+- MQTT 命令发布与设备状态回报确认的跨层测试；
+- Provider 嵌套敏感字段数据库加密及旧明文自动升级；
+- MQTT 配置连接测试（不落库、不替换运行实例）。
 
 ## 本机验证
 
@@ -56,4 +61,5 @@
 - 完成 Apple Home 实机配对、双向控制和三次重启验收；
 - 加入管理员认证、CSRF 防护和敏感操作二次确认；
 - 将已完成的 SQLite 一致性备份/离线安全恢复接入管理员认证后的 Web 运维入口；
-- 开始 MQTT Provider 与 discovery/state/command 协议实现。
+- 使用真实 Mosquitto 验收 Broker 重启和网络中断恢复；
+- 完成 MQTT → Apple Home 与 Apple Home → MQTT 实机双向验收；

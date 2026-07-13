@@ -101,15 +101,20 @@ type Simulator interface {
 }
 
 type RuntimeInfo struct {
-	Manifest       Manifest     `json:"manifest"`
-	Capabilities   Capabilities `json:"capabilities"`
-	Status         string       `json:"status"`
-	Error          string       `json:"error,omitempty"`
-	RetryCount     int          `json:"retryCount"`
-	NextRetryAt    *time.Time   `json:"nextRetryAt,omitempty"`
-	TransitionedAt time.Time    `json:"transitionedAt"`
+	Manifest       Manifest          `json:"manifest"`
+	Capabilities   Capabilities      `json:"capabilities"`
+	Status         string            `json:"status"`
+	Error          string            `json:"error,omitempty"`
+	RetryCount     int               `json:"retryCount"`
+	NextRetryAt    *time.Time        `json:"nextRetryAt,omitempty"`
+	TransitionedAt time.Time         `json:"transitionedAt"`
+	Metrics        map[string]uint64 `json:"metrics,omitempty"`
 }
 
 type Inspector interface {
 	ProviderInfos() []RuntimeInfo
+}
+
+type MetricsReporter interface {
+	ProviderMetrics() map[string]uint64
 }

@@ -26,6 +26,14 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  mosquitto:
+    image: eclipse-mosquitto:2
+    network_mode: host
+    volumes:
+      - ./deploy/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto-data:/mosquitto/data
+    restart: unless-stopped
+
 volumes:
   homeloom-data:
-
+  mosquitto-data:

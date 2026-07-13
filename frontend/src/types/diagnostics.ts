@@ -16,6 +16,7 @@ export interface Diagnostics {
 	databaseOperations: number; databaseAverageLatencyMs: number; databaseMaxLatencyMs: number
 	providerClockSkewEvents: number; providerMaxClockSkewMs: number
 	providerEventsIgnored?: number
+	providerMessagesReceived?: number; providerMessagesInvalid?: number; providerMessagesDropped?: number; providerCommandsPublished?: number
 	mappingApplied?: number; mappingErrors?: number
 	// Runtime metrics are sampled when diagnostics are requested.
 	goroutines: number; heapAllocBytes: number; heapObjects: number

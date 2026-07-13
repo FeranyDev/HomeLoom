@@ -24,7 +24,11 @@ func (s *Store) ListProviders(ctx context.Context) ([]providerconfig.Config, err
 		if err := rows.Scan(&item.ID, &item.Type, &item.Name, &item.Enabled, &raw); err != nil {
 			return nil, fmt.Errorf("scan provider: %w", err)
 		}
-		item.Config = []byte(raw)
+		decoded, _, err := s.transformProviderConfigSecrets(item.ID, []byte(raw), false)
+		if err != nil {
+			return nil, err
+		}
+		item.Config = decoded
 		result = append(result, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -39,8 +43,13 @@ func (s *Store) SaveProvider(ctx context.Context, item providerconfig.Config) er
 	if len(configJSON) == 0 {
 		configJSON = []byte("{}")
 	}
+	encrypted, _, err := s.transformProviderConfigSecrets(item.ID, configJSON, true)
+	if err != nil {
+		return err
+	}
+	configJSON = encrypted
 	now := time.Now().UTC().UnixMilli()
-	_, err := s.database.ExecContext(ctx, `
+	_, err = s.database.ExecContext(ctx, `
         INSERT INTO providers(id, type, name, enabled, config_json, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET

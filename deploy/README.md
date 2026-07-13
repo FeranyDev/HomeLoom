@@ -33,3 +33,13 @@ docker compose exec backend homeloom -backup /data/backups/homeloom.db
 恢复数据库前应保留当前卷副本，停止 backend，替换 `.db` 后移除旧的 `-wal`/`-shm` 临时文件再启动。程序会拒绝打开高于自身支持版本的数据库，不应绕过该检查强制回滚。
 
 当前管理 API 尚未实现认证。不要直接暴露到公网；如需开放到局域网，应配合主机防火墙或可信反向代理限制来源。
+
+## MQTT 开发服务
+
+Compose 中的 `mosquitto` 是可选开发 Broker，使用 host network 监听 `1883`：
+
+```bash
+docker compose up -d mosquitto
+```
+
+其配置允许匿名连接，仅适合本机或可信隔离网络。生产环境必须改用账号、ACL 与 TLS，并在 HomeLoom 的 MQTT Provider 页面中保存对应凭据；Provider 密码会在 SQLite 中加密。

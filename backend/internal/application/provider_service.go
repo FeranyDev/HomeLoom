@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
@@ -30,10 +31,14 @@ type ProviderRuntime interface {
 
 type ProviderInfo struct {
 	providerconfig.Config
-	Status       string                   `json:"status"`
-	Error        string                   `json:"error,omitempty"`
-	Manifest     *providersdk.Manifest    `json:"manifest,omitempty"`
-	Capabilities providersdk.Capabilities `json:"capabilities"`
+	Status         string                   `json:"status"`
+	Error          string                   `json:"error,omitempty"`
+	Manifest       *providersdk.Manifest    `json:"manifest,omitempty"`
+	Capabilities   providersdk.Capabilities `json:"capabilities"`
+	RetryCount     int                      `json:"retryCount"`
+	NextRetryAt    *time.Time               `json:"nextRetryAt,omitempty"`
+	TransitionedAt time.Time                `json:"transitionedAt,omitempty"`
+	Metrics        map[string]uint64        `json:"metrics,omitempty"`
 }
 
 type ProviderService struct {
@@ -69,6 +74,7 @@ func (s *ProviderService) List() []ProviderInfo {
 		if live, ok := runtimes[item.ID]; ok {
 			manifest := live.Manifest
 			info.Manifest, info.Capabilities, info.Status, info.Error = &manifest, live.Capabilities, live.Status, live.Error
+			info.RetryCount, info.NextRetryAt, info.TransitionedAt, info.Metrics = live.RetryCount, live.NextRetryAt, live.TransitionedAt, live.Metrics
 		}
 		result = append(result, info)
 	}
@@ -219,4 +225,51 @@ func (s *ProviderService) Restart(ctx context.Context, id string) (ProviderInfo,
 		}
 	}
 	return ProviderInfo{}, fmt.Errorf("provider %q was not restarted", id)
+}
+
+// TestConnection validates a provider configuration and starts a short-lived
+// instance without persisting it or changing the active runtime.
+func (s *ProviderService) TestConnection(ctx context.Context, item providerconfig.Config) error {
+	item.ID = strings.TrimSpace(item.ID)
+	item.Type = strings.TrimSpace(item.Type)
+	if item.Type == "" {
+		item.Type = "virtual"
+	}
+	if item.ID == "" {
+		item.ID = item.Type + "-connection-test"
+	}
+	s.mu.RLock()
+	previous := s.configs[item.ID]
+	s.mu.RUnlock()
+	if len(item.Config) == 0 {
+		item.Config = json.RawMessage(`{}`)
+	}
+	var object map[string]any
+	if err := json.Unmarshal(item.Config, &object); err != nil || object == nil {
+		return NewValidationError("invalid provider configuration", map[string]string{"config": "must be a JSON object"})
+	}
+	if err := restoreProviderSecrets(object, previous.Config); err != nil {
+		return NewValidationError("invalid provider configuration", map[string]string{"config": err.Error()})
+	}
+	encoded, err := json.Marshal(object)
+	if err != nil {
+		return NewValidationError("invalid provider configuration", map[string]string{"config": "could not be encoded"})
+	}
+	item.Config = encoded
+	if s.factory == nil {
+		return errors.New("provider management is unavailable")
+	}
+	instance, err := s.factory.Create(item)
+	if err != nil {
+		return NewValidationError("invalid provider configuration", map[string]string{"config": err.Error()})
+	}
+	if err := instance.Initialize(ctx); err != nil {
+		closeContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = instance.Close(closeContext)
+		cancel()
+		return err
+	}
+	closeContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return instance.Close(closeContext)
 }

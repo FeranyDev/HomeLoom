@@ -126,48 +126,52 @@ type deviceMetrics struct {
 }
 
 type DeviceMetrics struct {
-	EventsReceived           uint64  `json:"eventsReceived"`
-	EventsProcessed          uint64  `json:"eventsProcessed"`
-	EventsDropped            uint64  `json:"eventsDropped"`
-	EventQueuePending        int     `json:"eventQueuePending"`
-	EventQueueCapacity       int     `json:"eventQueueCapacity"`
-	TargetEventsDropped      uint64  `json:"targetEventsDropped"`
-	StateEventsDropped       uint64  `json:"stateEventsDropped"`
-	StatesMarkedStale        uint64  `json:"statesMarkedStale"`
-	CommandsStarted          uint64  `json:"commandsStarted"`
-	CommandsConfirmed        uint64  `json:"commandsConfirmed"`
-	CommandsRejected         uint64  `json:"commandsRejected"`
-	CommandsTimedOut         uint64  `json:"commandsTimedOut"`
-	CommandsSuperseded       uint64  `json:"commandsSuperseded"`
-	CommandsCoalesced        uint64  `json:"commandsCoalesced"`
-	CommandsOutcomeUnknown   uint64  `json:"commandsOutcomeUnknown"`
-	HomeKitPushes            uint64  `json:"homeKitPushes"`
-	OnlineDevices            int     `json:"onlineDevices"`
-	OfflineDevices           int     `json:"offlineDevices"`
-	UnknownDevices           int     `json:"unknownDevices"`
-	DisabledDevices          int     `json:"disabledDevices"`
-	RemovedDevices           int     `json:"removedDevices"`
-	ProvidersRunning         int     `json:"providersRunning"`
-	ProviderRetries          int     `json:"providerRetries"`
-	DeviceSubscribers        int     `json:"deviceSubscribers"`
-	StateSubscribers         int     `json:"stateSubscribers"`
-	CommandAverageLatencyMS  float64 `json:"commandAverageLatencyMs"`
-	CommandQueuePending      int64   `json:"commandQueuePending"`
-	CommandQueueMaxPending   int64   `json:"commandQueueMaxPending"`
-	EventAverageLatencyMS    float64 `json:"eventAverageLatencyMs"`
-	EventMaxLatencyMS        float64 `json:"eventMaxLatencyMs"`
-	SlowEventHandlers        uint64  `json:"slowEventHandlers"`
-	DatabaseOperations       uint64  `json:"databaseOperations"`
-	DatabaseAverageLatencyMS float64 `json:"databaseAverageLatencyMs"`
-	DatabaseMaxLatencyMS     float64 `json:"databaseMaxLatencyMs"`
-	ProviderClockSkewEvents  uint64  `json:"providerClockSkewEvents"`
-	ProviderMaxClockSkewMS   float64 `json:"providerMaxClockSkewMs"`
-	ProviderEventsIgnored    uint64  `json:"providerEventsIgnored"`
-	MappingApplied           uint64  `json:"mappingApplied"`
-	MappingErrors            uint64  `json:"mappingErrors"`
-	Goroutines               int     `json:"goroutines"`
-	HeapAllocBytes           uint64  `json:"heapAllocBytes"`
-	HeapObjects              uint64  `json:"heapObjects"`
+	EventsReceived            uint64  `json:"eventsReceived"`
+	EventsProcessed           uint64  `json:"eventsProcessed"`
+	EventsDropped             uint64  `json:"eventsDropped"`
+	EventQueuePending         int     `json:"eventQueuePending"`
+	EventQueueCapacity        int     `json:"eventQueueCapacity"`
+	TargetEventsDropped       uint64  `json:"targetEventsDropped"`
+	StateEventsDropped        uint64  `json:"stateEventsDropped"`
+	StatesMarkedStale         uint64  `json:"statesMarkedStale"`
+	CommandsStarted           uint64  `json:"commandsStarted"`
+	CommandsConfirmed         uint64  `json:"commandsConfirmed"`
+	CommandsRejected          uint64  `json:"commandsRejected"`
+	CommandsTimedOut          uint64  `json:"commandsTimedOut"`
+	CommandsSuperseded        uint64  `json:"commandsSuperseded"`
+	CommandsCoalesced         uint64  `json:"commandsCoalesced"`
+	CommandsOutcomeUnknown    uint64  `json:"commandsOutcomeUnknown"`
+	HomeKitPushes             uint64  `json:"homeKitPushes"`
+	OnlineDevices             int     `json:"onlineDevices"`
+	OfflineDevices            int     `json:"offlineDevices"`
+	UnknownDevices            int     `json:"unknownDevices"`
+	DisabledDevices           int     `json:"disabledDevices"`
+	RemovedDevices            int     `json:"removedDevices"`
+	ProvidersRunning          int     `json:"providersRunning"`
+	ProviderRetries           int     `json:"providerRetries"`
+	DeviceSubscribers         int     `json:"deviceSubscribers"`
+	StateSubscribers          int     `json:"stateSubscribers"`
+	CommandAverageLatencyMS   float64 `json:"commandAverageLatencyMs"`
+	CommandQueuePending       int64   `json:"commandQueuePending"`
+	CommandQueueMaxPending    int64   `json:"commandQueueMaxPending"`
+	EventAverageLatencyMS     float64 `json:"eventAverageLatencyMs"`
+	EventMaxLatencyMS         float64 `json:"eventMaxLatencyMs"`
+	SlowEventHandlers         uint64  `json:"slowEventHandlers"`
+	DatabaseOperations        uint64  `json:"databaseOperations"`
+	DatabaseAverageLatencyMS  float64 `json:"databaseAverageLatencyMs"`
+	DatabaseMaxLatencyMS      float64 `json:"databaseMaxLatencyMs"`
+	ProviderClockSkewEvents   uint64  `json:"providerClockSkewEvents"`
+	ProviderMaxClockSkewMS    float64 `json:"providerMaxClockSkewMs"`
+	ProviderEventsIgnored     uint64  `json:"providerEventsIgnored"`
+	ProviderMessagesReceived  uint64  `json:"providerMessagesReceived"`
+	ProviderMessagesInvalid   uint64  `json:"providerMessagesInvalid"`
+	ProviderMessagesDropped   uint64  `json:"providerMessagesDropped"`
+	ProviderCommandsPublished uint64  `json:"providerCommandsPublished"`
+	MappingApplied            uint64  `json:"mappingApplied"`
+	MappingErrors             uint64  `json:"mappingErrors"`
+	Goroutines                int     `json:"goroutines"`
+	HeapAllocBytes            uint64  `json:"heapAllocBytes"`
+	HeapObjects               uint64  `json:"heapObjects"`
 }
 
 func (s *DeviceService) Readiness(ctx context.Context) Readiness {
@@ -423,11 +427,16 @@ func (s *DeviceService) Metrics() DeviceMetrics {
 		}
 	}
 	providersRunning, providerRetries := 0, 0
+	var providerMessagesReceived, providerMessagesInvalid, providerMessagesDropped, providerCommandsPublished uint64
 	for _, item := range s.ProviderInfos() {
 		providerRetries += item.RetryCount
 		if item.Status == "running" {
 			providersRunning++
 		}
+		providerMessagesReceived += item.Metrics["messagesReceived"]
+		providerMessagesInvalid += item.Metrics["messagesInvalid"]
+		providerMessagesDropped += item.Metrics["messagesDropped"]
+		providerCommandsPublished += item.Metrics["commandsPublished"]
 	}
 	s.mu.RLock()
 	subscribers, stateSubscribers := len(s.listeners), len(s.stateListeners)
@@ -468,6 +477,7 @@ func (s *DeviceService) Metrics() DeviceMetrics {
 		EventAverageLatencyMS: float64(eventStats.AverageLatency.Nanoseconds()) / float64(time.Millisecond), EventMaxLatencyMS: float64(eventStats.MaxLatency.Nanoseconds()) / float64(time.Millisecond), SlowEventHandlers: eventStats.SlowHandlers,
 		DatabaseOperations: databaseOperations, DatabaseAverageLatencyMS: float64(databaseAverage.Nanoseconds()) / float64(time.Millisecond), DatabaseMaxLatencyMS: float64(databaseMaximum.Nanoseconds()) / float64(time.Millisecond),
 		ProviderClockSkewEvents: s.metrics.providerClockSkews.Load(), ProviderMaxClockSkewMS: float64(s.metrics.maxClockSkewNanos.Load()) / float64(time.Millisecond), ProviderEventsIgnored: s.metrics.providerEventsIgnored.Load(),
+		ProviderMessagesReceived: providerMessagesReceived, ProviderMessagesInvalid: providerMessagesInvalid, ProviderMessagesDropped: providerMessagesDropped, ProviderCommandsPublished: providerCommandsPublished,
 		MappingApplied: s.metrics.mappingApplied.Load(), MappingErrors: s.metrics.mappingErrors.Load(),
 		Goroutines: runtime.NumGoroutine(), HeapAllocBytes: memory.HeapAlloc, HeapObjects: memory.HeapObjects,
 	}
