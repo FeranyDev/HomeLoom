@@ -31,4 +31,14 @@ describe('ProviderCard simulation', () => {
     expect(onSimulate).toHaveBeenCalledWith(expect.objectContaining({ id: 'door' }), { contact: true })
     expect(onSimulate).toHaveBeenCalledWith(expect.objectContaining({ id: 'motion' }), { motion: true })
   })
+
+	it('simulates air purifier and filter state', async () => {
+		const onSimulate = vi.fn().mockResolvedValue(undefined)
+		const purifier = { schemaVersion: 1, id: 'air', providerId: provider.id, name: '净化器', type: 'air-purifier' as const, availability: 'online' as const, online: true, lastUpdateAt: '', endpoints: [{ id: 'main', name: 'Main', type: 'air-purifier', capabilities: [{ id: 'air-purifier', type: 'air-purifier', properties: [{ definition: { id: 'active', name: '启用', type: 'bool' as const, readable: true, writable: true, notifiable: true }, value: { type: 'bool' as const, bool: true } }, { definition: { id: 'target-state', name: '模式', type: 'enum' as const, readable: true, writable: true, notifiable: true, enum: ['manual', 'auto'] }, value: { type: 'enum' as const, string: 'auto' } }, { definition: { id: 'rotation-speed', name: '速度', type: 'number' as const, readable: true, writable: true, notifiable: true }, value: { type: 'number' as const, number: 60 } }] }, { id: 'filter', type: 'filter-maintenance', properties: [{ definition: { id: 'life-level', name: '寿命', type: 'number' as const, readable: true, writable: false, notifiable: true }, value: { type: 'number' as const, number: 8 } }, { definition: { id: 'change-indication', name: '更换', type: 'bool' as const, readable: true, writable: false, notifiable: true }, value: { type: 'bool' as const, bool: true } }] }] }] }
+		render(<ProviderCard provider={provider} devices={[purifier]} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={onSimulate} />)
+		await userEvent.click(screen.getByRole('button', { name: '停止' })); await userEvent.click(screen.getByRole('button', { name: '手动模式' })); await userEvent.click(screen.getByRole('button', { name: '标记滤芯正常' }))
+		expect(onSimulate).toHaveBeenCalledWith(expect.objectContaining({ id: 'air' }), { active: false })
+		expect(onSimulate).toHaveBeenCalledWith(expect.objectContaining({ id: 'air' }), { mode: 'manual' })
+		expect(onSimulate).toHaveBeenCalledWith(expect.objectContaining({ id: 'air' }), { filterChange: false })
+	})
 })

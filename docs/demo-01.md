@@ -35,7 +35,9 @@
 - MQTT TLS/mTLS、认证、QoS、retained 年龄、自动重连和指数退避；
 - MQTT 命令发布与设备状态回报确认的跨层测试；
 - Provider 嵌套敏感字段数据库加密及旧明文自动升级；
-- MQTT 配置连接测试（不落库、不替换运行实例）。
+- MQTT 配置连接测试（不落库、不替换运行实例）；
+- Fan、Air Purifier、Filter Maintenance 和 Window Covering 完整 HAP 映射；
+- 100 附件构建及 2,000 轮 HAP 属性 burst 稳定性测试。
 
 ## 本机验证
 

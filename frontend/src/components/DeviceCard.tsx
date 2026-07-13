@@ -10,12 +10,17 @@ interface DeviceCardProps {
 
 export function DeviceCard({ device, pending, onPowerChange, onDetails, onEnabledChange }: DeviceCardProps) {
   const hasPower = device.type === 'switch' || device.type === 'lightbulb' || device.type === 'outlet'
-  const kind = device.type === 'lightbulb' ? '灯泡' : device.type === 'outlet' ? '插座' : device.type === 'switch' ? '开关' : device.type === 'humidity-sensor' ? '湿度传感器' : device.type === 'contact-sensor' ? '接触传感器' : device.type === 'motion-sensor' ? '活动传感器' : '温度传感器'
+  const kind = { switch: '开关', lightbulb: '灯泡', outlet: '插座', 'temperature-sensor': '温度传感器', 'humidity-sensor': '湿度传感器', 'contact-sensor': '接触传感器', 'motion-sensor': '活动传感器', fan: '风扇', 'air-purifier': '空气净化器', 'window-covering': '窗帘' }[device.type]
   const power = deviceProperty(device, 'switch', 'power')?.bool ?? false
   const temperature = deviceProperty(device, 'temperature', 'current-temperature')?.number
   const humidity = deviceProperty(device, 'humidity', 'current-humidity')?.number
   const contact = deviceProperty(device, 'contact', 'contact-detected')?.bool
   const motion = deviceProperty(device, 'motion', 'motion-detected')?.bool
+  const advancedCapability = device.type === 'fan' ? 'fan' : 'air-purifier'
+  const active = deviceProperty(device, advancedCapability, 'active')?.bool
+  const speed = deviceProperty(device, advancedCapability, 'rotation-speed')?.number
+  const filterLife = deviceProperty(device, 'filter', 'life-level')?.number
+  const position = deviceProperty(device, 'window-covering', 'current-position')?.int
 
   return (
     <article className="device-card">
@@ -42,6 +47,8 @@ export function DeviceCard({ device, pending, onPowerChange, onDetails, onEnable
           <span>°C</span>
         </div>
       ) : device.type === 'humidity-sensor' ? <div className="temperature"><strong>{device.online ? humidity?.toFixed(1) : '—'}</strong><span>%</span></div>
+        : device.type === 'fan' || device.type === 'air-purifier' ? <div className={`sensor-state ${device.online && active ? 'is-active' : ''}`}><strong>{!device.online ? '不可用' : `${active ? '运行中' : '已停止'} · ${speed?.toFixed(0) ?? 0}%`}</strong><span>{device.type === 'fan' ? 'FAN' : `AIR · 滤芯 ${filterLife?.toFixed(0) ?? '—'}%`}</span></div>
+        : device.type === 'window-covering' ? <div className="temperature"><strong>{device.online ? position ?? '—' : '—'}</strong><span>%</span></div>
         : <div className={`sensor-state ${device.online && (contact || motion) ? 'is-active' : ''}`}><strong>{!device.online ? '不可用' : device.type === 'contact-sensor' ? (contact ? '已闭合' : '已打开') : (motion ? '检测到活动' : '无活动')}</strong><span>{device.type === 'contact-sensor' ? 'CONTACT' : 'MOTION'}</span></div>
       }
 

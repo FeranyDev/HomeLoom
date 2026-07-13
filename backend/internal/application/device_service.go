@@ -651,7 +651,7 @@ func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointI
 
 func (s *DeviceService) beginPropertyOperation(ctx context.Context, key domainstate.Key, value device.PropertyValue) (*propertyOperation, bool) {
 	s.propertyMu.Lock()
-	var supersededCommandID string
+	var superseded *domaincommand.Command
 	if existing := s.propertyOps[key]; existing != nil {
 		if propertyValuesEqual(existing.expected, value) {
 			existing.coalesced++
@@ -663,19 +663,24 @@ func (s *DeviceService) beginPropertyOperation(ctx context.Context, key domainst
 			}
 			return existing, true
 		}
-		supersededCommandID = existing.command.ID
+		if existing.command.ID != "" {
+			if current, changed := s.commands.Supersede(existing.command.ID, "replaced by a newer property write"); changed {
+				superseded = &current
+			}
+		}
+		// The terminal state must be recorded before cancellation wakes the
+		// provider write; otherwise the old operation can race ahead and turn
+		// a deliberate replacement into a generic context-canceled rejection.
 		existing.cancel()
 	}
 	operationContext, cancel := context.WithCancel(ctx)
 	operation := &propertyOperation{expected: value, ctx: operationContext, cancel: cancel, done: make(chan struct{})}
 	s.propertyOps[key] = operation
 	s.propertyMu.Unlock()
-	if supersededCommandID != "" {
-		if superseded, changed := s.commands.Supersede(supersededCommandID, "replaced by a newer property write"); changed {
-			s.metrics.commandsSuperseded.Add(1)
-			if stale, stateChanged := s.states.ResolveOptimistic(superseded.ID, nil); stateChanged {
-				s.publishState(stale)
-			}
+	if superseded != nil {
+		s.metrics.commandsSuperseded.Add(1)
+		if stale, stateChanged := s.states.ResolveOptimistic(superseded.ID, nil); stateChanged {
+			s.publishState(stale)
 		}
 	}
 	return operation, false

@@ -2,6 +2,7 @@ package virtual
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -87,6 +88,66 @@ func TestProviderSupportsHumidityContactAndMotionSensors(t *testing.T) {
 	property, ok := updated.Property("main", "humidity", "current-humidity")
 	if !ok || property.Value.Number == nil || *property.Value.Number != humidity {
 		t.Fatalf("humidity = %#v", updated)
+	}
+}
+
+func TestProviderSupportsFanAirPurifierFilterAndWindowCovering(t *testing.T) {
+	provider, err := NewProviderFromConfig(providerconfig.Config{ID: "advanced", Config: []byte(`{"devices":[{"id":"fan","type":"fan","active":true,"speed":35,"mode":"auto"},{"id":"purifier","type":"air-purifier","active":true,"speed":60,"filterLife":8},{"id":"shade","type":"window-covering","position":25}]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, _ := provider.List(context.Background())
+	if len(items) != 3 || items[0].Type != device.TypeFan || items[1].Type != device.TypeAirPurifier || items[2].Type != device.TypeWindowCovering {
+		t.Fatalf("items = %#v", items)
+	}
+	updated, err := provider.WriteProperty(context.Background(), providersdk.PropertyWriteRequest{DeviceID: "fan", EndpointID: "main", CapabilityID: "fan", PropertyID: "rotation-speed", Value: device.NumberValue(0)})
+	if err != nil || enumPropertyValue(updated, "fan", "current-state") != stateIdle {
+		t.Fatalf("fan update = %#v, %v", updated, err)
+	}
+	updated, err = provider.WriteProperty(context.Background(), providersdk.PropertyWriteRequest{DeviceID: "shade", EndpointID: "main", CapabilityID: "window-covering", PropertyID: "target-position", Value: device.IntValue(80)})
+	if err != nil || intProperty(updated, "window-covering", "current-position") != 80 || enumPropertyValue(updated, "window-covering", "position-state") != positionStopped {
+		t.Fatalf("window update = %#v, %v", updated, err)
+	}
+	updated, err = provider.ExecuteCommand(context.Background(), providersdk.CommandRequest{DeviceID: "purifier", EndpointID: "main", CapabilityID: "filter", CommandID: "reset-filter"})
+	if err != nil || numberProperty(updated, "filter", "life-level") != 100 || boolProperty(updated, "filter", "change-indication") {
+		t.Fatalf("filter reset = %#v, %v", updated, err)
+	}
+	if _, err := provider.WriteProperty(context.Background(), providersdk.PropertyWriteRequest{DeviceID: "fan", EndpointID: "main", CapabilityID: "fan", PropertyID: "rotation-speed", Value: device.NumberValue(101)}); !errors.Is(err, providersdk.ErrPropertyInvalid) {
+		t.Fatalf("invalid speed error = %v", err)
+	}
+}
+
+func TestAllModelDemoDevicesPublishCompleteStandardContracts(t *testing.T) {
+	raw, err := json.Marshal(Config{Devices: AllModelDeviceConfigs()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := NewProviderFromConfig(providerconfig.Config{ID: "virtual-main", Config: raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := provider.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != len(device.ModelContracts()) {
+		t.Fatalf("device count = %d, contracts = %d", len(items), len(device.ModelContracts()))
+	}
+	for _, item := range items {
+		contract, ok := device.ModelContractFor(item.Type)
+		if !ok {
+			t.Fatalf("missing contract for %q", item.Type)
+		}
+		for _, parameter := range contract.Parameters {
+			property, found := item.Property(parameter.Path.EndpointID, parameter.Path.CapabilityID, parameter.Path.PropertyID)
+			if !found {
+				t.Errorf("%s is missing standard parameter %s", item.ID, parameter.Path)
+				continue
+			}
+			if property.Definition.ParameterLevel != parameter.Level {
+				t.Errorf("%s parameter %s level = %q, want %q", item.ID, parameter.Path, property.Definition.ParameterLevel, parameter.Level)
+			}
+		}
 	}
 }
 
@@ -310,4 +371,20 @@ func numberProperty(item device.Device, capabilityID, propertyID string) float64
 		return 0
 	}
 	return *property.Value.Number
+}
+
+func intProperty(item device.Device, capabilityID, propertyID string) int64 {
+	property, ok := item.Property("main", capabilityID, propertyID)
+	if !ok || property.Value.Int == nil {
+		return 0
+	}
+	return *property.Value.Int
+}
+
+func enumPropertyValue(item device.Device, capabilityID, propertyID string) string {
+	property, ok := item.Property("main", capabilityID, propertyID)
+	if !ok || property.Value.String == nil {
+		return ""
+	}
+	return *property.Value.String
 }

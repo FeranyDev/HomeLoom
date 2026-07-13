@@ -30,6 +30,7 @@ func main() {
 	backupPath := flag.String("backup", "", "create a consistent SQLite backup and exit")
 	restorePath := flag.String("restore", "", "restore a validated SQLite backup and exit")
 	restoreReplace := flag.Bool("restore-replace", false, "explicitly allow restore to replace the configured database")
+	initializeVirtualModels := flag.Bool("init-all-virtual-models", false, "initialize one demo device for every supported Virtual Provider model")
 	flag.Parse()
 	if *showVersion {
 		info := buildinfo.Current()
@@ -83,6 +84,16 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
+	if *initializeVirtualModels {
+		changed, initializeErr := initializeAllVirtualModels(ctx, store)
+		if initializeErr != nil {
+			logger.Error("virtual model device initialization failed", "error", initializeErr)
+			os.Exit(1)
+		}
+		if changed {
+			logger.Info("virtual model demo devices initialized", "provider_id", "virtual-main", "device_count", len(virtual.AllModelDeviceConfigs()))
+		}
+	}
 	providerConfigs, err := store.ListProviders(ctx)
 	if err != nil {
 		logger.Error("provider configuration load failed", "error", err)

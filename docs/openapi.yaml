@@ -41,6 +41,20 @@ paths:
       operationId: getVersion
       responses:
         "200": { description: Build information, content: { application/json: { schema: { $ref: "#/components/schemas/VersionResponse" } } } }
+  /api/v1/device-models:
+    get:
+      operationId: listDeviceModelContracts
+      description: Lists versioned unified-model parameters and publisher/consumer grading policies.
+      responses:
+        "200":
+          description: Device model contracts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/DeviceModelContract" } }
   /api/v1/system/settings:
     get:
       operationId: getRuntimeSettings
@@ -189,6 +203,38 @@ paths:
       responses:
         "200": { description: Persisted device preference applied immediately, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/Device" } } } } } }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/devices/{deviceId}/simulation:
+    parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+    patch:
+      operationId: simulateVirtualDevice
+      description: Changes ephemeral Virtual Provider state; values are never persisted.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                availability: { type: string, enum: [online, offline, unknown] }
+                online: { type: boolean }
+                power: { type: boolean }
+                temperature: { type: number, minimum: -100, maximum: 200 }
+                humidity: { type: number, minimum: 0, maximum: 100 }
+                contact: { type: boolean }
+                motion: { type: boolean }
+                active: { type: boolean }
+                speed: { type: number, minimum: 0, maximum: 100 }
+                mode: { type: string, enum: [manual, auto] }
+                filterLife: { type: number, minimum: 0, maximum: 100 }
+                filterChange: { type: boolean }
+                position: { type: integer, minimum: 0, maximum: 100 }
+                sequence: { type: integer, minimum: 0 }
+                repeat: { type: integer, minimum: 1, maximum: 10 }
+              minProperties: 1
+      responses:
+        "200": { description: Updated ephemeral device snapshot, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/Device" } } } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
   /api/v1/devices/{deviceId}/endpoints/{endpointId}/capabilities/{capabilityId}/properties/{propertyId}:
     parameters:
       - { $ref: "#/components/parameters/DeviceId" }
@@ -480,6 +526,46 @@ components:
       properties:
         definition: { type: object, additionalProperties: true }
         value: { $ref: "#/components/schemas/PropertyValue" }
+    ParameterRole:
+      type: object
+      required: [level, behavior]
+      properties:
+        level: { type: string, enum: [required, optional, custom] }
+        behavior: { type: string }
+    ModelParameter:
+      type: object
+      required: [path, name, level, type, readable, writable, notifiable, publisher, consumer]
+      properties:
+        path:
+          type: object
+          required: [endpointId, capabilityId, propertyId]
+          properties:
+            endpointId: { type: string }
+            capabilityId: { type: string }
+            propertyId: { type: string }
+        name: { type: string }
+        level: { type: string, enum: [required, optional] }
+        type: { type: string, enum: [bool, int, number, string, enum] }
+        unit: { type: string }
+        readable: { type: boolean }
+        writable: { type: boolean }
+        notifiable: { type: boolean }
+        enum: { type: array, items: { type: string } }
+        publisher: { $ref: "#/components/schemas/ParameterRole" }
+        consumer: { $ref: "#/components/schemas/ParameterRole" }
+    DeviceModelContract:
+      type: object
+      required: [deviceType, version, parameters, custom]
+      properties:
+        deviceType: { type: string }
+        version: { type: integer, minimum: 1 }
+        parameters: { type: array, items: { $ref: "#/components/schemas/ModelParameter" } }
+        custom:
+          type: object
+          required: [publisher, consumer]
+          properties:
+            publisher: { $ref: "#/components/schemas/ParameterRole" }
+            consumer: { $ref: "#/components/schemas/ParameterRole" }
     Device:
       type: object
       required: [schemaVersion, id, providerId, name, type, availability, online, endpoints, lastUpdateAt]

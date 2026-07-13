@@ -2,6 +2,8 @@
 
 HomeLoom 的设备快照使用统一的 Endpoint / Capability / Property 模型。实时状态由 Provider 在启动和重连后重新上报，SQLite 不保存设备实时值。
 
+标准属性按 `required`、`optional` 和 `custom` 分级，并分别约束 Provider 发布和 Consumer 映射。完整规则与 10 种模型目录见 [统一模型参数分级与角色映射](unified-model-parameters.md)。
+
 ## 版本和兼容性
 
 - 每个设备快照必须包含 `"schemaVersion": 1`。

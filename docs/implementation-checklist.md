@@ -169,6 +169,8 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 ### 3.3 Virtual Provider 重构
 
 - [x] 使用正式 Provider SDK；
+- [x] 程序初始化时可选为每种受支持模型各生成一个虚拟设备，配置持久化到 SQLite 且幂等；
+- [x] 统一模型参数按必须、可选、自定义分级，并实现 Provider 发布校验与 Consumer 显式映射；
 - [x] 支持配置虚拟设备；
 - [x] 支持动态新增和删除虚拟设备；
 - [x] 支持模拟离线；
@@ -350,36 +352,36 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 - [x] HomeKit 温度事件实时推送；
 - [x] HomeKit 离线 StatusFault 映射；
 
-### 8.2 待支持
+### 8.2 已补齐
 
 - [x] Outlet；
 - [x] Lightbulb；
 - [x] Humidity Sensor；
 - [x] Contact Sensor；
 - [x] Motion Sensor；
-- [ ] Fan；
-- [ ] Air Purifier；
-- [ ] Filter Maintenance；
-- [ ] Window Covering。
+- [x] Fan；
+- [x] Air Purifier；
+- [x] Filter Maintenance（Air Purifier 链接服务）；
+- [x] Window Covering。
 
 每种设备必须完成：
 
-- [ ] 统一 Capability 定义；
-- [ ] HAP Service 映射；
-- [ ] 可读属性；
-- [ ] 可写属性；
-- [ ] 事件通知；
-- [ ] 离线表现；
-- [ ] 单元测试；
-- [ ] 虚拟设备集成测试；
+- [x] 统一 Capability 定义；
+- [x] HAP Service 映射；
+- [x] 可读属性；
+- [x] 可写属性及 Filter 标准重置命令；
+- [x] 事件通知；
+- [x] 离线 StatusFault 表现；
+- [x] 单元测试；
+- [x] 虚拟设备集成测试；
 - [ ] Apple Home 实机记录。
 
 M2 性能验收：
 
-- [ ] 100 个模拟附件；
-- [ ] 高频事件稳定；
-- [ ] 无无界 goroutine 境长；
-- [ ] 重启后附件和自动化身份不变。
+- [x] 100 个模拟附件构建测试；
+- [x] 2,000 轮 HAP 属性 burst 更新稳定；
+- [x] burst 更新无额外 goroutine 增长；
+- [x] 重建后 AID/IID 与已有 Characteristic 身份不变。
 
 ## 9. M3：MQTT Provider
 

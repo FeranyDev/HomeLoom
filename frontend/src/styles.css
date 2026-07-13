@@ -251,6 +251,12 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .property-control input { width: 150px; }
 .property-control button { cursor: pointer; }
 .property-control small { align-self: center; color: #9a5545; }
+.parameter-level { align-self: center; justify-self: start; padding: 3px 7px; border-radius: 999px; background: #e8e6de; color: #696d66; font-size: 9px; letter-spacing: .04em; }
+.parameter-level.is-required { background: #e8d8d1; color: #884d3e; }
+.parameter-level.is-optional { background: #dfe8dc; color: #4d6848; }
+.parameter-level.is-custom { background: #dedfea; color: #555b7b; }
+.property-node > .parameter-level { grid-column: 1 / -1; }
+.property-control > .parameter-level { margin-right: auto; color: inherit; }
 .command-controls { display: grid; grid-column: 1 / -1; gap: 8px; margin-top: 8px; }
 .command-control { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; padding: 12px; border: 1px solid #c9c9c1; background: #e9e9e2; }
 .command-control > div { display: grid; margin-right: auto; }

@@ -90,6 +90,12 @@ type simulationRequest struct {
 	Humidity     *float64             `json:"humidity"`
 	Contact      *bool                `json:"contact"`
 	Motion       *bool                `json:"motion"`
+	Active       *bool                `json:"active"`
+	Speed        *float64             `json:"speed"`
+	Mode         *string              `json:"mode"`
+	FilterLife   *float64             `json:"filterLife"`
+	FilterChange *bool                `json:"filterChange"`
+	Position     *int64               `json:"position"`
 	Sequence     *uint64              `json:"sequence"`
 	Repeat       int                  `json:"repeat"`
 }
@@ -235,6 +241,9 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 	})
 	e.GET("/api/v1/system/version", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"data": buildinfo.Current()})
+	})
+	e.GET("/api/v1/device-models", func(c echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]any{"data": device.ModelContracts()})
 	})
 	e.GET("/api/v1/system/settings", func(c echo.Context) error {
 		if server.settings == nil {
@@ -780,7 +789,7 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 	})
 	e.PATCH("/api/v1/devices/:id/simulation", func(c echo.Context) error {
 		var input simulationRequest
-		if err := c.Bind(&input); err != nil || (input.Availability == nil && input.Online == nil && input.Power == nil && input.Temperature == nil && input.Humidity == nil && input.Contact == nil && input.Motion == nil && input.Sequence == nil && input.Repeat == 0) {
+		if err := c.Bind(&input); err != nil || (input.Availability == nil && input.Online == nil && input.Power == nil && input.Temperature == nil && input.Humidity == nil && input.Contact == nil && input.Motion == nil && input.Active == nil && input.Speed == nil && input.Mode == nil && input.FilterLife == nil && input.FilterChange == nil && input.Position == nil && input.Sequence == nil && input.Repeat == 0) {
 			return echo.NewHTTPError(http.StatusBadRequest, "at least one simulation value is required")
 		}
 		request := providersdk.SimulationRequest{DeviceID: c.Param("id"), Online: input.Online, Availability: input.Availability, Sequence: input.Sequence, Repeat: input.Repeat}
@@ -798,6 +807,38 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		}
 		if input.Motion != nil {
 			request.Properties = append(request.Properties, providersdk.PropertyWriteRequest{EndpointID: "main", CapabilityID: "motion", PropertyID: "motion-detected", Value: device.BoolValue(*input.Motion)})
+		}
+		var simulatedType device.Type
+		if input.Active != nil || input.Speed != nil || input.Mode != nil || input.FilterLife != nil || input.FilterChange != nil || input.Position != nil {
+			items, _ := devices.List(c.Request().Context())
+			for _, item := range items {
+				if item.ID == request.DeviceID {
+					simulatedType = item.Type
+					break
+				}
+			}
+		}
+		advancedCapability := "fan"
+		if simulatedType == device.TypeAirPurifier {
+			advancedCapability = "air-purifier"
+		}
+		if input.Active != nil {
+			request.Properties = append(request.Properties, providersdk.PropertyWriteRequest{EndpointID: "main", CapabilityID: advancedCapability, PropertyID: "active", Value: device.BoolValue(*input.Active)})
+		}
+		if input.Speed != nil {
+			request.Properties = append(request.Properties, providersdk.PropertyWriteRequest{EndpointID: "main", CapabilityID: advancedCapability, PropertyID: "rotation-speed", Value: device.NumberValue(*input.Speed)})
+		}
+		if input.Mode != nil {
+			request.Properties = append(request.Properties, providersdk.PropertyWriteRequest{EndpointID: "main", CapabilityID: advancedCapability, PropertyID: "target-state", Value: device.EnumValue(*input.Mode)})
+		}
+		if input.FilterLife != nil {
+			request.Properties = append(request.Properties, providersdk.PropertyWriteRequest{EndpointID: "main", CapabilityID: "filter", PropertyID: "life-level", Value: device.NumberValue(*input.FilterLife)})
+		}
+		if input.FilterChange != nil {
+			request.Properties = append(request.Properties, providersdk.PropertyWriteRequest{EndpointID: "main", CapabilityID: "filter", PropertyID: "change-indication", Value: device.BoolValue(*input.FilterChange)})
+		}
+		if input.Position != nil {
+			request.Properties = append(request.Properties, providersdk.PropertyWriteRequest{EndpointID: "main", CapabilityID: "window-covering", PropertyID: "current-position", Value: device.IntValue(*input.Position)})
 		}
 		item, err := devices.Simulate(c.Request().Context(), request)
 		if errors.Is(err, application.ErrDeviceNotFound) {

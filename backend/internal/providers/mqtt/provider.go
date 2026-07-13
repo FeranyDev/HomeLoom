@@ -358,7 +358,7 @@ func (p *Provider) handleDiscovery(deviceID string, message inboundMessage) erro
 	}
 	p.nextSequence++
 	item.Sequence = p.nextSequence
-	if err := item.Validate(); err != nil {
+	if err := item.NormalizeModelParameters(); err != nil {
 		p.mu.Unlock()
 		return fmt.Errorf("validate discovery %q: %w", deviceID, err)
 	}

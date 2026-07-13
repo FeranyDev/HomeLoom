@@ -2,11 +2,15 @@ package homekit
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/brutella/hap/characteristic"
@@ -120,8 +124,8 @@ func TestAccessoryBindingsUpdateTemperatureAndOfflineFault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pushes := bindings.update(updated); pushes != 2 {
-		t.Fatalf("temperature pushes = %d, want fault + value", pushes)
+	if pushes := bindings.update(updated); pushes != 5 {
+		t.Fatalf("temperature pushes = %d, want fault + value + battery/tamper", pushes)
 	}
 	if value := bindings.temperatures[updated.ID].Value(); value != 0 {
 		t.Fatalf("clamped temperature = %v", value)
@@ -208,7 +212,7 @@ func TestAccessoryBindingsMapSupportedDeviceTypes(t *testing.T) {
 	items, _ := service.List(context.Background())
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	bindings := newAccessoryBindings(items, map[string]bool{}, nil, service, logger)
-	if len(bindings.accessories) != 7 || len(bindings.switches) != 3 || len(bindings.outletInUse) != 1 || len(bindings.temperatures) != 1 || len(bindings.humidities) != 1 || len(bindings.contacts) != 1 || len(bindings.motions) != 1 {
+	if len(bindings.accessories) != 7 || len(bindings.switches) != 3 || len(bindings.outletInUse) != 1 || len(bindings.temperatures) != 1 || len(bindings.humidities) != 1 || len(bindings.contacts) != 1 || len(bindings.motions) != 1 || len(bindings.brightness) != 1 || len(bindings.colorTemps) != 1 || len(bindings.hues) != 1 || len(bindings.saturations) != 1 || len(bindings.batteryLevels) != 4 || len(bindings.lowBatteries) != 4 || len(bindings.tampered) != 4 {
 		t.Fatalf("bindings = %#v", bindings)
 	}
 	if !bindings.switches["lamp"].Value() || !bindings.outletInUse["socket"].Value() {
@@ -216,6 +220,17 @@ func TestAccessoryBindingsMapSupportedDeviceTypes(t *testing.T) {
 	}
 	if bindings.humidities["humidity"].Value() != 42.5 || bindings.contacts["door"].Value() != characteristic.ContactSensorStateContactDetected || !bindings.motions["motion"].Value() {
 		t.Fatal("sensor values were not mapped")
+	}
+	if bindings.batteryLevels["door"].Value() != 100 || bindings.lowBatteries["door"].Value() != characteristic.StatusLowBatteryBatteryLevelNormal || bindings.tampered["door"].Value() != characteristic.StatusTamperedNotTampered {
+		t.Fatal("sensor battery and tamper values were not mapped")
+	}
+	request := &http.Request{}
+	if _, status := bindings.brightness["lamp"].SetValueRequest(42, request); status != 0 {
+		t.Fatalf("brightness write status = %d", status)
+	}
+	property, err := provider.ReadProperty(context.Background(), providersdk.PropertyReadRequest{DeviceID: "lamp", EndpointID: "main", CapabilityID: "light", PropertyID: "brightness"})
+	if err != nil || property.Value.Number == nil || *property.Value.Number != 42 {
+		t.Fatalf("brightness was not written back: %#v, %v", property, err)
 	}
 	off := false
 	updated, err := service.Simulate(context.Background(), providersdk.SimulationRequest{DeviceID: "socket", Properties: []providersdk.PropertyWriteRequest{{EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Value: device.BoolValue(off)}}})
@@ -225,5 +240,91 @@ func TestAccessoryBindingsMapSupportedDeviceTypes(t *testing.T) {
 	bindings.update(updated)
 	if bindings.switches["socket"].Value() || bindings.outletInUse["socket"].Value() {
 		t.Fatal("outlet power was not updated")
+	}
+}
+
+func TestAccessoryBindingsMapAndWriteAdvancedDeviceTypes(t *testing.T) {
+	provider, err := virtual.NewProviderFromConfig(providerconfig.Config{ID: "advanced", Config: []byte(`{"devices":[{"id":"fan","type":"fan","speed":20},{"id":"purifier","type":"air-purifier","active":true,"speed":60,"mode":"auto","filterLife":5},{"id":"shade","type":"window-covering","position":30}]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := application.NewDeviceService(provider)
+	defer service.Close()
+	items, _ := service.List(context.Background())
+	bindings := newAccessoryBindings(items, map[string]bool{}, nil, service, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if len(bindings.accessories) != 3 || len(bindings.actives) != 2 || len(bindings.fanCurrent) != 1 || len(bindings.airCurrent) != 1 || len(bindings.filterLife) != 1 || len(bindings.positions) != 1 || len(bindings.swingModes) != 2 || len(bindings.directions) != 1 || len(bindings.controlLocks) != 2 || len(bindings.airQualities) != 1 || len(bindings.pm25) != 1 || len(bindings.voc) != 1 || len(bindings.obstructions) != 1 {
+		t.Fatalf("advanced bindings = %#v", bindings)
+	}
+	if bindings.fanCurrent["fan"].Value() != characteristic.CurrentFanStateInactive || bindings.airCurrent["purifier"].Value() != characteristic.CurrentAirPurifierStatePurifyingAir || bindings.filterChange["purifier"].Value() != characteristic.FilterChangeIndicationChangeFilter || bindings.positions["shade"].Value() != 30 || bindings.airQualities["purifier"].Value() != characteristic.AirQualityGood || bindings.pm25["purifier"].Value() != 12 || bindings.voc["purifier"].Value() != 80 {
+		t.Fatal("initial advanced values were not mapped")
+	}
+	request := &http.Request{}
+	if _, status := bindings.actives["fan"].SetValueRequest(characteristic.ActiveActive, request); status != 0 {
+		t.Fatalf("fan write status = %d", status)
+	}
+	property, _ := provider.ReadProperty(context.Background(), providersdk.PropertyReadRequest{DeviceID: "fan", EndpointID: "main", CapabilityID: "fan", PropertyID: "active"})
+	if property.Value.Bool == nil || !*property.Value.Bool {
+		t.Fatal("fan active was not written back")
+	}
+	if _, status := bindings.positionTargets["shade"].SetValueRequest(75, request); status != 0 {
+		t.Fatalf("window write status = %d", status)
+	}
+	property, _ = provider.ReadProperty(context.Background(), providersdk.PropertyReadRequest{DeviceID: "shade", EndpointID: "main", CapabilityID: "window-covering", PropertyID: "current-position"})
+	if property.Value.Int == nil || *property.Value.Int != 75 {
+		t.Fatal("window target was not written back")
+	}
+	if _, status := bindings.filterResets["purifier"].SetValueRequest(1, request); status != 0 {
+		t.Fatalf("filter reset status = %d", status)
+	}
+	property, _ = provider.ReadProperty(context.Background(), providersdk.PropertyReadRequest{DeviceID: "purifier", EndpointID: "main", CapabilityID: "filter", PropertyID: "life-level"})
+	if property.Value.Number == nil || *property.Value.Number != 100 {
+		t.Fatal("filter reset was not written back")
+	}
+	offline := false
+	item, err := provider.Simulate(context.Background(), providersdk.SimulationRequest{DeviceID: "purifier", Online: &offline})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pushes := bindings.update(item); pushes != 3 || bindings.faults["purifier"].Value() != characteristic.StatusFaultGeneralFault || len(bindings.extraFaults["purifier"]) != 2 || bindings.extraFaults["purifier"][0].Value() != characteristic.StatusFaultGeneralFault || bindings.extraFaults["purifier"][1].Value() != characteristic.StatusFaultGeneralFault {
+		t.Fatalf("air purifier offline faults were not mapped, pushes=%d", pushes)
+	}
+	if _, status := bindings.actives["purifier"].SetValueRequest(characteristic.ActiveInactive, request); status != -70402 || bindings.actives["purifier"].Value() != characteristic.ActiveActive {
+		t.Fatalf("offline HomeKit write status=%d value=%d", status, bindings.actives["purifier"].Value())
+	}
+}
+
+func TestAccessoryBindingsHandleOneHundredAccessoriesAndBurstUpdates(t *testing.T) {
+	definitions := make([]virtual.DeviceConfig, 0, 100)
+	types := []string{"switch", "fan", "air-purifier", "window-covering", "temperature-sensor"}
+	for index := 0; index < 100; index++ {
+		definitions = append(definitions, virtual.DeviceConfig{ID: fmt.Sprintf("load-%03d", index), Name: fmt.Sprintf("Load %d", index), Type: types[index%len(types)]})
+	}
+	raw, err := json.Marshal(virtual.Config{Devices: definitions})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := virtual.NewProviderFromConfig(providerconfig.Config{ID: "load", Config: raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := application.NewDeviceService(provider)
+	defer service.Close()
+	items, _ := service.List(context.Background())
+	bindings := newAccessoryBindings(items, map[string]bool{}, nil, service, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if len(bindings.accessories) != 100 || len(bindings.faults) != 100 {
+		t.Fatalf("accessories=%d faults=%d", len(bindings.accessories), len(bindings.faults))
+	}
+	before := runtime.NumGoroutine()
+	var pushes uint64
+	for round := 0; round < 20; round++ {
+		for _, item := range items {
+			pushes += bindings.update(item)
+		}
+	}
+	if pushes < 4000 {
+		t.Fatalf("burst pushes = %d", pushes)
+	}
+	if after := runtime.NumGoroutine(); after > before+2 {
+		t.Fatalf("goroutines grew during burst: %d -> %d", before, after)
 	}
 }

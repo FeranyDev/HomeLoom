@@ -211,6 +211,21 @@ func TestVersionEndpoint(t *testing.T) {
 	}
 }
 
+func TestDeviceModelContractsExposePublisherAndConsumerLevels(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/device-models", nil)
+	response := httptest.NewRecorder()
+	newTestServer().Handler().ServeHTTP(response, request)
+	for _, expected := range []string{
+		`"deviceType":"lightbulb"`, `"propertyId":"power"`, `"level":"required"`,
+		`"propertyId":"brightness"`, `"level":"optional"`, `"behavior":"must-publish"`,
+		`"behavior":"must-map"`, `"behavior":"explicit-path-mapping-only"`,
+	} {
+		if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(expected)) {
+			t.Fatalf("model contracts response = %d %s", response.Code, response.Body.String())
+		}
+	}
+}
+
 func TestAPIVersionDiscoveryAndResponseHeader(t *testing.T) {
 	server := newTestServer()
 	request := httptest.NewRequest(http.MethodGet, "/api/versions", nil)
@@ -841,6 +856,29 @@ func TestSimulateVirtualSensorProperties(t *testing.T) {
 		{deviceID: "humidity", body: `{"humidity":72.5}`, want: `"number":72.5`},
 		{deviceID: "door", body: `{"contact":true}`, want: `"bool":true`},
 		{deviceID: "motion", body: `{"motion":true}`, want: `"bool":true`},
+	} {
+		t.Run(test.deviceID, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPatch, "/api/v1/devices/"+test.deviceID+"/simulation", bytes.NewBufferString(test.body))
+			request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			response := httptest.NewRecorder()
+			server.Handler().ServeHTTP(response, request)
+			if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(test.want)) {
+				t.Fatalf("response = %d %s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestSimulateAdvancedHomeKitProperties(t *testing.T) {
+	provider, err := virtual.NewProviderFromConfig(providerconfig.Config{ID: "advanced", Config: []byte(`{"devices":[{"id":"fan","type":"fan"},{"id":"air","type":"air-purifier"},{"id":"shade","type":"window-covering"}]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := newTestServerWithProvider(provider)
+	for _, test := range []struct{ deviceID, body, want string }{
+		{deviceID: "fan", body: `{"active":true,"speed":45,"mode":"auto"}`, want: `"string":"blowing-air"`},
+		{deviceID: "air", body: `{"filterLife":7,"filterChange":true}`, want: `"id":"change-indication"`},
+		{deviceID: "shade", body: `{"position":65}`, want: `"int":65`},
 	} {
 		t.Run(test.deviceID, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodPatch, "/api/v1/devices/"+test.deviceID+"/simulation", bytes.NewBufferString(test.body))

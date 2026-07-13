@@ -11,9 +11,10 @@ describe('ProviderForm', () => {
     expect(screen.getByText('扩展配置必须是 JSON 对象')).toBeInTheDocument(); expect(onSave).not.toHaveBeenCalled()
   })
 
-  it('loads the sensor example', async () => {
-    const { container } = render(<ProviderForm provider={null} onCancel={() => {}} onSave={vi.fn()} />); await userEvent.click(screen.getByRole('button', { name: '载入传感器示例' })); const editor = container.querySelector('textarea') as HTMLTextAreaElement
-    expect(editor.value).toContain('"type": "humidity-sensor"'); expect(editor.value).toContain('"type": "contact-sensor"'); expect(editor.value).toContain('"type": "motion-sensor"')
+  it('loads one complete example for every model', async () => {
+    const { container } = render(<ProviderForm provider={null} onCancel={() => {}} onSave={vi.fn()} />); await userEvent.click(screen.getByRole('button', { name: '载入完整模型示例' })); const editor = container.querySelector('textarea') as HTMLTextAreaElement
+    const parsed = JSON.parse(editor.value) as { devices: Array<{ type: string }> }
+    expect(new Set(parsed.devices.map((item) => item.type)).size).toBe(10); expect(editor.value).toContain('"airQuality": "good"'); expect(editor.value).toContain('"obstruction": false')
   })
 
   it('shows server validation beside the matching field', async () => {

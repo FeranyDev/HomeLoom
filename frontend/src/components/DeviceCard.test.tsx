@@ -35,4 +35,10 @@ describe('DeviceCard device types', () => {
     expect(screen.getByText(value)).toBeInTheDocument()
     expect(screen.getByText(unit)).toBeInTheDocument()
   })
+
+	it('renders advanced HomeKit device summaries', () => {
+		const purifier: Device = { schemaVersion: 1, id: 'air', providerId: 'virtual', name: '净化器', type: 'air-purifier', availability: 'online', online: true, lastUpdateAt: new Date().toISOString(), endpoints: [{ id: 'main', name: 'Main', type: 'air-purifier', capabilities: [{ id: 'air-purifier', type: 'air-purifier', properties: [{ definition: { id: 'active', name: '启用', type: 'bool', readable: true, writable: true, notifiable: true }, value: { type: 'bool', bool: true } }, { definition: { id: 'rotation-speed', name: '速度', type: 'number', readable: true, writable: true, notifiable: true }, value: { type: 'number', number: 60 } }] }, { id: 'filter', type: 'filter-maintenance', properties: [{ definition: { id: 'life-level', name: '寿命', type: 'number', readable: true, writable: false, notifiable: true }, value: { type: 'number', number: 82 } }] }] }] }
+		render(<DeviceCard device={purifier} pending={false} onPowerChange={() => {}} onDetails={() => {}} />)
+		expect(screen.getByText('空气净化器')).toBeInTheDocument(); expect(screen.getByText('运行中 · 60%')).toBeInTheDocument(); expect(screen.getByText('AIR · 滤芯 82%')).toBeInTheDocument()
+	})
 })

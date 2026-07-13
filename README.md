@@ -18,6 +18,14 @@ docs/      项目计划与设计文档
 ./scripts/dev-env.sh sh -c 'cd backend && go run ./cmd/homeloom'
 ```
 
+首次体验时可以选择为当前支持的每种模型各生成一个虚拟设备：
+
+```bash
+./scripts/dev-env.sh sh -c 'cd backend && go run ./cmd/homeloom -init-all-virtual-models'
+```
+
+该选项会把 10 个设备的显式配置写入 SQLite 中的 `virtual-main` Provider，后续启动不再需要携带该参数。重复执行不会重复生成，也不会覆盖已有的自定义设备列表。
+
 前端：
 
 ```bash
@@ -104,6 +112,8 @@ Web Console ──REST──┐
 ```
 
 Web 和 Apple Home 对开关的写入都会进入同一个 Device Service。Provider 更新先进入有界分片事件队列，再写入 Device Registry 并通知 Target，避免前端与 HomeKit 各自维护一份状态，同时保证同一设备的事件顺序。
+
+HomeKit 基础设备现覆盖 Switch、Lightbulb、Outlet、温湿度、接触、活动、Fan、Air Purifier（含 Filter Maintenance）和 Window Covering。统一 Capability 与 HAP Characteristic 对照见 [HomeKit 基础设备契约](docs/homekit-device-contracts.md)。
 
 属性状态诊断：
 

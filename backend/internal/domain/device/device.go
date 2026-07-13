@@ -11,6 +11,7 @@ import (
 type Type string
 type ValueType string
 type Availability string
+type ParameterLevel string
 
 const (
 	SchemaVersion = 1
@@ -22,6 +23,15 @@ const (
 	TypeHumiditySensor    Type = "humidity-sensor"
 	TypeContactSensor     Type = "contact-sensor"
 	TypeMotionSensor      Type = "motion-sensor"
+	TypeFan               Type = "fan"
+	TypeAirPurifier       Type = "air-purifier"
+	TypeWindowCovering    Type = "window-covering"
+)
+
+const (
+	ParameterRequired ParameterLevel = "required"
+	ParameterOptional ParameterLevel = "optional"
+	ParameterCustom   ParameterLevel = "custom"
 )
 
 const (
@@ -63,18 +73,19 @@ func EnumValue(value string) PropertyValue {
 }
 
 type PropertyDefinition struct {
-	ID                string    `json:"id"`
-	Name              string    `json:"name"`
-	Type              ValueType `json:"type"`
-	Unit              string    `json:"unit,omitempty"`
-	Readable          bool      `json:"readable"`
-	Writable          bool      `json:"writable"`
-	Notifiable        bool      `json:"notifiable"`
-	Min               *float64  `json:"min,omitempty"`
-	Max               *float64  `json:"max,omitempty"`
-	Step              *float64  `json:"step,omitempty"`
-	Enum              []string  `json:"enum,omitempty"`
-	StaleAfterSeconds int       `json:"staleAfterSeconds,omitempty"`
+	ID                string         `json:"id"`
+	Name              string         `json:"name"`
+	Type              ValueType      `json:"type"`
+	ParameterLevel    ParameterLevel `json:"parameterLevel,omitempty"`
+	Unit              string         `json:"unit,omitempty"`
+	Readable          bool           `json:"readable"`
+	Writable          bool           `json:"writable"`
+	Notifiable        bool           `json:"notifiable"`
+	Min               *float64       `json:"min,omitempty"`
+	Max               *float64       `json:"max,omitempty"`
+	Step              *float64       `json:"step,omitempty"`
+	Enum              []string       `json:"enum,omitempty"`
+	StaleAfterSeconds int            `json:"staleAfterSeconds,omitempty"`
 }
 
 type Property struct {
@@ -236,6 +247,9 @@ func (d Device) Validate() error {
 			}
 		}
 	}
+	if err := validatePublisherModel(d); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidModel, err)
+	}
 	return nil
 }
 
@@ -256,6 +270,9 @@ func validValueType(value ValueType) bool {
 
 func (p Property) Validate() error {
 	value := p.Value
+	if p.Definition.ParameterLevel != "" && p.Definition.ParameterLevel != ParameterRequired && p.Definition.ParameterLevel != ParameterOptional && p.Definition.ParameterLevel != ParameterCustom {
+		return fmt.Errorf("unsupported parameter level %q", p.Definition.ParameterLevel)
+	}
 	if p.Definition.Min != nil && p.Definition.Max != nil && *p.Definition.Min > *p.Definition.Max {
 		return errors.New("minimum exceeds maximum")
 	}

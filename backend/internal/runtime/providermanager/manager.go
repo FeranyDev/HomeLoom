@@ -121,7 +121,8 @@ providerLoop:
 		currentIDs := make(map[string]struct{}, len(items))
 		for _, item := range items {
 			item.ProviderID = id
-			if err := item.Validate(); err != nil {
+			item.NormalizeAvailability()
+			if err := item.NormalizeModelParameters(); err != nil {
 				m.mu.Lock()
 				m.markFailureLocked(current, fmt.Errorf("invalid device snapshot: %w", err))
 				m.mu.Unlock()
@@ -167,7 +168,8 @@ func (m *Manager) Apply(ctx context.Context, item providersdk.Provider) error {
 		}
 		for index := range items {
 			items[index].ProviderID = id
-			if err := items[index].Validate(); err != nil {
+			items[index].NormalizeAvailability()
+			if err := items[index].NormalizeModelParameters(); err != nil {
 				_ = item.Close(ctx)
 				return fmt.Errorf("provider %q returned invalid device snapshot: %w", id, err)
 			}
@@ -269,7 +271,7 @@ func (m *Manager) attach(id string, current *managedProvider) {
 	unsubscribe := subscriber.Subscribe(func(item device.Device) {
 		item.ProviderID = id
 		item.NormalizeAvailability()
-		if err := item.Validate(); err != nil {
+		if err := item.NormalizeModelParameters(); err != nil {
 			m.mu.Lock()
 			if m.providers[id] == current {
 				m.markFailureLocked(current, fmt.Errorf("invalid device event: %w", err))
@@ -329,7 +331,8 @@ func (m *Manager) WriteProperty(ctx context.Context, request providersdk.Propert
 		return device.Device{}, err
 	}
 	item.ProviderID = id
-	if err := item.Validate(); err != nil {
+	item.NormalizeAvailability()
+	if err := item.NormalizeModelParameters(); err != nil {
 		return device.Device{}, fmt.Errorf("provider %q returned invalid device snapshot: %w", id, err)
 	}
 	return item, nil
@@ -367,7 +370,8 @@ func (m *Manager) ExecuteCommand(ctx context.Context, request providersdk.Comman
 		return device.Device{}, err
 	}
 	item.ProviderID = id
-	if err := item.Validate(); err != nil {
+	item.NormalizeAvailability()
+	if err := item.NormalizeModelParameters(); err != nil {
 		return device.Device{}, fmt.Errorf("provider %q returned invalid device snapshot: %w", id, err)
 	}
 	return item, nil
@@ -390,7 +394,8 @@ func (m *Manager) Simulate(ctx context.Context, request providersdk.SimulationRe
 		return device.Device{}, err
 	}
 	item.ProviderID = id
-	if err := item.Validate(); err != nil {
+	item.NormalizeAvailability()
+	if err := item.NormalizeModelParameters(); err != nil {
 		return device.Device{}, fmt.Errorf("provider %q returned invalid device snapshot: %w", id, err)
 	}
 	return item, nil
