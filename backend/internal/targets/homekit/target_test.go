@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net"
 	"testing"
 
 	"github.com/brutella/hap/characteristic"
@@ -13,6 +14,26 @@ import (
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
 )
+
+func TestHomeKitAddressPreflightDetectsOccupiedPort(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	if err := CheckAddressAvailable(listener.Addr().String()); err == nil {
+		t.Fatal("occupied address was accepted")
+	}
+	available, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := available.Addr().String()
+	available.Close()
+	if err := CheckAddressAvailable(address); err != nil {
+		t.Fatalf("available address rejected: %v", err)
+	}
+}
 
 type memoryIdentityStore struct {
 	values map[string]uint64

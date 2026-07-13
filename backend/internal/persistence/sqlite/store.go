@@ -6,13 +6,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
 
 type Store struct {
-	database *sql.DB
-	path     string
+	database          *sql.DB
+	path              string
+	operationCount    atomic.Uint64
+	totalLatencyNanos atomic.Uint64
+	maxLatencyNanos   atomic.Uint64
 }
 
 func Open(ctx context.Context, path string) (*Store, error) {
@@ -37,11 +42,18 @@ func Open(ctx context.Context, path string) (*Store, error) {
 // OpenForBackup opens an existing HomeLoom database without running migrations.
 // This preserves the pre-upgrade schema in the resulting snapshot.
 func OpenForBackup(ctx context.Context, path string) (*Store, error) {
-	if _, err := os.Stat(path); err != nil { return nil, fmt.Errorf("open backup source: %w", err) }
+	if _, err := os.Stat(path); err != nil {
+		return nil, fmt.Errorf("open backup source: %w", err)
+	}
 	database, err := sql.Open("sqlite", path)
-	if err != nil { return nil, fmt.Errorf("open database for backup: %w", err) }
+	if err != nil {
+		return nil, fmt.Errorf("open database for backup: %w", err)
+	}
 	database.SetMaxOpenConns(1)
-	if _, err := database.ExecContext(ctx, "PRAGMA busy_timeout = 5000"); err != nil { database.Close(); return nil, fmt.Errorf("initialize backup connection: %w", err) }
+	if _, err := database.ExecContext(ctx, "PRAGMA busy_timeout = 5000"); err != nil {
+		database.Close()
+		return nil, fmt.Errorf("initialize backup connection: %w", err)
+	}
 	return &Store{database: database, path: path}, nil
 }
 
@@ -64,6 +76,7 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) SchemaVersion(ctx context.Context) (int, error) {
+	defer s.observe(time.Now())
 	var version int
 	if err := s.database.QueryRowContext(ctx, "SELECT COALESCE(MAX(version), 0) FROM schema_migrations").Scan(&version); err != nil {
 		return 0, fmt.Errorf("read schema version: %w", err)
@@ -72,6 +85,7 @@ func (s *Store) SchemaVersion(ctx context.Context) (int, error) {
 }
 
 func (s *Store) Backup(ctx context.Context, destination string) error {
+	defer s.observe(time.Now())
 	if destination == "" {
 		return fmt.Errorf("backup destination is required")
 	}
@@ -95,4 +109,25 @@ func (s *Store) Backup(ctx context.Context, destination string) error {
 		return fmt.Errorf("secure backup permissions: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) observe(started time.Time) {
+	elapsed := uint64(time.Since(started))
+	s.operationCount.Add(1)
+	s.totalLatencyNanos.Add(elapsed)
+	for {
+		current := s.maxLatencyNanos.Load()
+		if elapsed <= current || s.maxLatencyNanos.CompareAndSwap(current, elapsed) {
+			break
+		}
+	}
+}
+
+func (s *Store) DatabaseOperationMetrics() (uint64, time.Duration, time.Duration) {
+	count := s.operationCount.Load()
+	average := time.Duration(0)
+	if count > 0 {
+		average = time.Duration(s.totalLatencyNanos.Load() / count)
+	}
+	return count, average, time.Duration(s.maxLatencyNanos.Load())
 }

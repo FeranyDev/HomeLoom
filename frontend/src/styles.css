@@ -104,6 +104,8 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .simulation-actions button, .simulation-actions input { min-width: 0; padding: 6px 8px; border: 1px solid #c4c5bd; background: #f7f6f0; color: #555a52; font-size: 11px; }
 .simulation-actions input { width: 72px; }
 .inline-error { color: #944f3f; font-size: 13px; }
+.field-error { color: #944f3f !important; font-size: 10px !important; }
+[aria-invalid="true"] { border-color: #a86655 !important; outline-color: #a86655; }
 .provider-error { margin-top: 15px; padding: 10px; background: #f0e1da; }
 .provider-error p { margin: 0 0 5px; }
 .provider-error small { color: #8b6a5f; font-size: 10px; }

@@ -8,6 +8,7 @@ import (
 )
 
 func (s *Store) HomeKitAccessoryAID(ctx context.Context, targetID, deviceID string) (uint64, error) {
+	defer s.observe(time.Now())
 	tx, err := s.database.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin accessory id transaction: %w", err)
@@ -37,6 +38,7 @@ func (s *Store) HomeKitAccessoryAID(ctx context.Context, targetID, deviceID stri
 }
 
 func (s *Store) HomeKitIID(ctx context.Context, targetID, deviceID, resourceKey string) (uint64, error) {
+	defer s.observe(time.Now())
 	tx, err := s.database.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin IID transaction: %w", err)

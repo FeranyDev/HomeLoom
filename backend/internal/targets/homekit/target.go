@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 
 	"github.com/brutella/hap"
 	"github.com/brutella/hap/accessory"
@@ -291,6 +292,17 @@ func New(ctx context.Context, config Config, devices *application.DeviceService,
 		bindings.update(item)
 	})
 	return target, nil
+}
+
+func CheckAddressAvailable(address string) error {
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		return fmt.Errorf("HomeKit address %q is unavailable: %w", address, err)
+	}
+	if err := listener.Close(); err != nil {
+		return fmt.Errorf("release HomeKit address %q probe: %w", address, err)
+	}
+	return nil
 }
 
 func (t *Target) ID() string { return t.id }

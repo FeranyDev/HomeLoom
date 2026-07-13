@@ -113,8 +113,13 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 			return
 		}
 		status, message := http.StatusInternalServerError, "internal server error"
+		var fields map[string]string
+		var validationError *application.ValidationError
+		if errors.As(err, &validationError) {
+			status, message, fields = http.StatusBadRequest, validationError.Message, validationError.Fields
+		}
 		var httpError *echo.HTTPError
-		if errors.As(err, &httpError) {
+		if validationError == nil && errors.As(err, &httpError) {
 			status = httpError.Code
 			if text, ok := httpError.Message.(string); ok && status < http.StatusInternalServerError {
 				message = text
@@ -126,7 +131,7 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		if requestID == "" {
 			requestID = c.Request().Header.Get(echo.HeaderXRequestID)
 		}
-		if writeErr := c.JSON(status, errorResponse{Code: errorCode(status), Message: message, RequestID: requestID}); writeErr != nil {
+		if writeErr := c.JSON(status, errorResponse{Code: errorCode(status), Message: message, RequestID: requestID, Fields: fields}); writeErr != nil {
 			logger.Error("http error response failed", "request_id", requestID, "error", writeErr)
 		}
 	}
@@ -180,6 +185,12 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		writeMetric("device_subscribers", metrics.DeviceSubscribers)
 		writeMetric("state_subscribers", metrics.StateSubscribers)
 		writeMetric("command_average_latency_milliseconds", metrics.CommandAverageLatencyMS)
+		writeMetric("event_average_latency_milliseconds", metrics.EventAverageLatencyMS)
+		writeMetric("event_max_latency_milliseconds", metrics.EventMaxLatencyMS)
+		writeMetric("slow_event_handlers_total", metrics.SlowEventHandlers)
+		writeMetric("database_operations_total", metrics.DatabaseOperations)
+		writeMetric("database_average_latency_milliseconds", metrics.DatabaseAverageLatencyMS)
+		writeMetric("database_max_latency_milliseconds", metrics.DatabaseMaxLatencyMS)
 		writeMetric("go_goroutines", metrics.Goroutines)
 		writeMetric("go_heap_alloc_bytes", metrics.HeapAllocBytes)
 		writeMetric("go_heap_objects", metrics.HeapObjects)
@@ -354,6 +365,10 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		}
 		info, err := providers.Save(c.Request().Context(), request)
 		if err != nil {
+			var validationError *application.ValidationError
+			if errors.As(err, &validationError) {
+				return validationError
+			}
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
 		return c.JSON(http.StatusOK, map[string]any{"data": info})
@@ -477,6 +492,10 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		}
 		info, err := targets.Save(c.Request().Context(), request.domain(id))
 		if err != nil {
+			var validationError *application.ValidationError
+			if errors.As(err, &validationError) {
+				return validationError
+			}
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
 		return c.JSON(http.StatusOK, map[string]any{"data": info})

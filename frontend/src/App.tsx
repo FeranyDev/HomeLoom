@@ -19,6 +19,7 @@ import type { Target, TargetInput } from './types/target'
 import type { Provider, ProviderInput } from './types/provider'
 import type { DeviceCommand, Diagnostics, SystemVersion } from './types/diagnostics'
 import { usePageRoute } from './routing'
+import { confirmProviderDeletion, confirmTargetDeletion } from './confirmations'
 
 export function App() {
   const [devices, setDevices] = useState<Device[]>([])
@@ -106,11 +107,11 @@ export function App() {
 	}
 
 	async function handleTargetDelete(target: Target) {
-		if (!window.confirm(`确定删除“${target.name}”吗？配对资料目录不会自动删除。`)) return
+		if (!confirmTargetDeletion(target.name)) return
 		try { await deleteTarget(target.id); await refresh(); notify('success', `桥“${target.name}”已删除`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '删除桥失败') }
 	}
 	async function handleProviderSave(input: ProviderInput, editing: boolean) { try { await saveProvider(input, editing); setProviderForm({ open: false, provider: null }); await refresh(); notify('success', editing ? 'Provider 配置已更新' : 'Provider 已创建') } catch (cause) { notify('error', cause instanceof Error ? cause.message : '保存 Provider 失败'); throw cause } }
-	async function handleProviderDelete(provider: Provider) { if (!window.confirm(`确定删除“${provider.name}”吗？其设备将立即离线。`)) return; try { await deleteProvider(provider.id); await refresh(); notify('success', `Provider“${provider.name}”已删除`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '删除 Provider 失败') } }
+	async function handleProviderDelete(provider: Provider) { if (!confirmProviderDeletion(provider.name)) return; try { await deleteProvider(provider.id); await refresh(); notify('success', `Provider“${provider.name}”已删除`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '删除 Provider 失败') } }
 	async function handleProviderRestart(provider: Provider) { try { await restartProvider(provider.id); await refresh(); setError(null); notify('success', `Provider“${provider.name}”已重新启动`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : 'Provider 重新启动失败'); throw cause } }
 	async function handleSimulation(device: Device, values: { online?: boolean; power?: boolean; temperature?: number; humidity?: number; contact?: boolean; motion?: boolean }) { try { const updated = await simulateDevice(device.id, values); setDevices((current) => current.map((item) => item.id === updated.id ? updated : item)); setError(null); notify('info', `${device.name}模拟状态已更新`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '模拟状态失败'); throw cause } }
 	async function handlePropertyWrite(device: Device, endpointId: string, capabilityId: string, propertyId: string, value: PropertyValue) { try { const updated = await setDeviceProperty(device.id, endpointId, capabilityId, propertyId, value); setDevices((current) => current.map((item) => item.id === updated.id ? updated : item)); const [diagnosticData, commandData] = await Promise.all([getDiagnostics(), listCommands()]); setDiagnostics(diagnosticData); setCommands(commandData); setError(null); notify('success', `${device.name}.${propertyId} 写入成功`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '属性写入失败'); throw cause } }

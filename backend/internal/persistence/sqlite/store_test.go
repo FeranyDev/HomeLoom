@@ -79,11 +79,25 @@ func TestOpenRejectsDatabaseFromNewerVersion(t *testing.T) {
 }
 
 func TestOpenForBackupDoesNotRunMigrations(t *testing.T) {
-	ctx := context.Background(); path := filepath.Join(t.TempDir(), "old.db")
-	database, err := sql.Open("sqlite", path); if err != nil { t.Fatal(err) }
-	if _, err := database.ExecContext(ctx, "CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL); INSERT INTO schema_migrations VALUES(1, 0)"); err != nil { t.Fatal(err) }; database.Close()
-	store, err := OpenForBackup(ctx, path); if err != nil { t.Fatal(err) }; defer store.Close()
-	version, err := store.SchemaVersion(ctx); if err != nil || version != 1 { t.Fatalf("version = %d, %v", version, err) }
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "old.db")
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, "CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL); INSERT INTO schema_migrations VALUES(1, 0)"); err != nil {
+		t.Fatal(err)
+	}
+	database.Close()
+	store, err := OpenForBackup(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	version, err := store.SchemaVersion(ctx)
+	if err != nil || version != 1 {
+		t.Fatalf("version = %d, %v", version, err)
+	}
 }
 
 func TestRuntimeStateTableIsRemoved(t *testing.T) {
@@ -99,6 +113,23 @@ func TestRuntimeStateTableIsRemoved(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatal("property_states should not exist")
+	}
+}
+
+func TestDatabaseOperationMetrics(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "metrics.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	before, _, _ := store.DatabaseOperationMetrics()
+	if _, err := store.ListProviders(ctx); err != nil {
+		t.Fatal(err)
+	}
+	after, average, maximum := store.DatabaseOperationMetrics()
+	if after <= before || average <= 0 || maximum < average {
+		t.Fatalf("metrics = %d -> %d, %v, %v", before, after, average, maximum)
 	}
 }
 

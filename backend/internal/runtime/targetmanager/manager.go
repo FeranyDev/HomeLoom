@@ -14,8 +14,9 @@ import (
 )
 
 type runningTarget struct {
-	cancel context.CancelFunc
-	done   chan error
+	cancel  context.CancelFunc
+	done    chan error
+	address string
 }
 
 type Manager struct {
@@ -52,6 +53,15 @@ func (m *Manager) Apply(ctx context.Context, config target.Config) (application.
 	if config.Type != "apple-hap" {
 		return application.TargetRegistration{}, fmt.Errorf("target type %q is not implemented", config.Type)
 	}
+	m.mu.Lock()
+	current, exists := m.running[config.ID]
+	sameAddress := exists && current.address == config.Address
+	m.mu.Unlock()
+	if !sameAddress {
+		if err := homekit.CheckAddressAvailable(config.Address); err != nil {
+			return application.TargetRegistration{}, err
+		}
+	}
 
 	next, err := homekit.New(ctx, homekit.Config{
 		ID: config.ID, Name: config.Name, Address: config.Address, Pin: config.Pin,
@@ -67,7 +77,7 @@ func (m *Manager) Apply(ctx context.Context, config target.Config) (application.
 	runCtx, cancel := context.WithCancel(m.root)
 	done := make(chan error, 1)
 	m.mu.Lock()
-	m.running[config.ID] = runningTarget{cancel: cancel, done: done}
+	m.running[config.ID] = runningTarget{cancel: cancel, done: done, address: config.Address}
 	m.mu.Unlock()
 	go func() {
 		err := next.Start(runCtx)

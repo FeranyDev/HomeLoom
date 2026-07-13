@@ -141,7 +141,7 @@ func (s *TargetService) withDefaults(item domaintarget.Config) (domaintarget.Con
 		item.ID = "apple-" + suffix
 	}
 	if !validTargetID.MatchString(item.ID) {
-		return item, errors.New("id may contain only letters, numbers, underscores and hyphens")
+		return item, NewValidationError("invalid target configuration", map[string]string{"id": "may contain only letters, numbers, underscores and hyphens"})
 	}
 	if item.Name == "" {
 		item.Name = "HomeLoom Bridge"
@@ -226,21 +226,40 @@ func (s *TargetService) Delete(ctx context.Context, id string) error {
 }
 
 func validateTarget(item domaintarget.Config) error {
+	fields := make(map[string]string)
 	if strings.TrimSpace(item.ID) == "" || strings.TrimSpace(item.Name) == "" {
-		return errors.New("id and name are required")
+		if strings.TrimSpace(item.ID) == "" {
+			fields["id"] = "required"
+		}
+		if strings.TrimSpace(item.Name) == "" {
+			fields["name"] = "required"
+		}
 	}
 	if item.Type != "apple-hap" && item.Type != "matter" {
-		return fmt.Errorf("unsupported target type %q", item.Type)
+		fields["type"] = fmt.Sprintf("unsupported target type %q", item.Type)
 	}
 	if item.Type == "apple-hap" {
-		if item.Address == "" || len(item.Pin) != 8 || len(item.SetupID) != 4 || item.StorePath == "" {
-			return errors.New("apple-hap requires address, 8-digit pin, 4-character setupId and storePath")
+		if item.Address == "" {
+			fields["address"] = "required"
+		}
+		if len(item.Pin) != 8 {
+			fields["pin"] = "must contain 8 digits"
+		}
+		if len(item.SetupID) != 4 {
+			fields["setupId"] = "must contain 4 characters"
+		}
+		if item.StorePath == "" {
+			fields["storePath"] = "required"
 		}
 		for _, char := range item.Pin {
 			if char < '0' || char > '9' {
-				return errors.New("pin must contain only digits")
+				fields["pin"] = "must contain only digits"
+				break
 			}
 		}
+	}
+	if len(fields) > 0 {
+		return NewValidationError("invalid target configuration", fields)
 	}
 	return nil
 }

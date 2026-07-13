@@ -60,3 +60,19 @@ func TestDispatcherReportsFullAndClosed(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestDispatcherReportsLatencyAndSlowHandlers(t *testing.T) {
+	dispatcher := NewDispatcher(1, 2, func(Event) { time.Sleep(110 * time.Millisecond) })
+	if err := dispatcher.Publish(Event{DeviceID: "slow"}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := dispatcher.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	stats := dispatcher.Stats()
+	if stats.Handled != 1 || stats.AverageLatency < 100*time.Millisecond || stats.MaxLatency < stats.AverageLatency || stats.SlowHandlers != 1 {
+		t.Fatalf("stats = %#v", stats)
+	}
+}

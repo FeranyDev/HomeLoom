@@ -52,7 +52,7 @@
 - `GET /api/v1/devices/{id}/states`：内存状态、来源和质量；
 - `GET /api/v1/commands`：命令生命周期历史。
 
-`/metrics` 中的 runtime 指标包括 `homeloom_go_goroutines`、`homeloom_go_heap_alloc_bytes` 和 `homeloom_go_heap_objects`。
+`/metrics` 中的 runtime 指标包括 `homeloom_go_goroutines`、`homeloom_go_heap_alloc_bytes` 和 `homeloom_go_heap_objects`。事件指标包含入队到处理完成的平均/最大延迟及超过 100ms 的慢 Handler 计数；SQLite 指标包含配置、身份、schema 和备份操作数以及平均/最大延迟。
 
 ## Action / Command
 

@@ -9,6 +9,7 @@ import (
 )
 
 func (s *Store) ListProviders(ctx context.Context) ([]providerconfig.Config, error) {
+	defer s.observe(time.Now())
 	rows, err := s.database.QueryContext(ctx, `
         SELECT id, type, name, enabled, config_json
         FROM providers ORDER BY created_at, id`)
@@ -33,6 +34,7 @@ func (s *Store) ListProviders(ctx context.Context) ([]providerconfig.Config, err
 }
 
 func (s *Store) SaveProvider(ctx context.Context, item providerconfig.Config) error {
+	defer s.observe(time.Now())
 	configJSON := item.Config
 	if len(configJSON) == 0 {
 		configJSON = []byte("{}")
@@ -53,6 +55,7 @@ func (s *Store) SaveProvider(ctx context.Context, item providerconfig.Config) er
 }
 
 func (s *Store) DeleteProvider(ctx context.Context, id string) error {
+	defer s.observe(time.Now())
 	result, err := s.database.ExecContext(ctx, "DELETE FROM providers WHERE id = ?", id)
 	if err != nil {
 		return fmt.Errorf("delete provider: %w", err)

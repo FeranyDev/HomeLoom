@@ -7,6 +7,8 @@ export interface Diagnostics {
   onlineDevices: number; offlineDevices: number; providersRunning: number; deviceSubscribers: number; stateSubscribers: number
   providerRetries: number
   commandAverageLatencyMs: number
+	eventAverageLatencyMs: number; eventMaxLatencyMs: number; slowEventHandlers: number
+	databaseOperations: number; databaseAverageLatencyMs: number; databaseMaxLatencyMs: number
 	// Runtime metrics are sampled when diagnostics are requested.
 	goroutines: number; heapAllocBytes: number; heapObjects: number
 }

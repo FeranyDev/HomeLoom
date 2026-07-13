@@ -9,6 +9,7 @@ import (
 )
 
 func (s *Store) SaveTarget(ctx context.Context, item target.Config) error {
+	defer s.observe(time.Now())
 	transaction, err := s.database.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin target save: %w", err)
@@ -44,6 +45,7 @@ func (s *Store) SaveTarget(ctx context.Context, item target.Config) error {
 }
 
 func (s *Store) DeleteTarget(ctx context.Context, id string) error {
+	defer s.observe(time.Now())
 	result, err := s.database.ExecContext(ctx, "DELETE FROM targets WHERE id = ?", id)
 	if err != nil {
 		return fmt.Errorf("delete target: %w", err)
@@ -59,6 +61,7 @@ func (s *Store) DeleteTarget(ctx context.Context, id string) error {
 }
 
 func (s *Store) ListTargets(ctx context.Context) ([]target.Config, error) {
+	defer s.observe(time.Now())
 	rows, err := s.database.QueryContext(ctx, `
         SELECT id, type, name, enabled, address, pin, setup_id, store_path
         FROM targets ORDER BY created_at, id`)

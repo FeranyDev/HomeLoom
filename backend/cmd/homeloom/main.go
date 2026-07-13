@@ -43,9 +43,15 @@ func main() {
 	defer stop()
 	if *backupPath != "" {
 		store, openErr := sqlite.OpenForBackup(ctx, settings.Storage.Database)
-		if openErr != nil { logger.Error("database backup source failed", "error", openErr); os.Exit(1) }
+		if openErr != nil {
+			logger.Error("database backup source failed", "error", openErr)
+			os.Exit(1)
+		}
 		defer store.Close()
-		if err := store.Backup(ctx, *backupPath); err != nil { logger.Error("database backup failed", "destination", *backupPath, "error", err); os.Exit(1) }
+		if err := store.Backup(ctx, *backupPath); err != nil {
+			logger.Error("database backup failed", "destination", *backupPath, "error", err)
+			os.Exit(1)
+		}
 		version, _ := store.SchemaVersion(ctx)
 		logger.Info("database backup completed", "source", settings.Storage.Database, "destination", *backupPath, "schema_version", version)
 		return
@@ -89,7 +95,7 @@ func main() {
 		logger.Error("provider initialization failed", "error", err)
 		os.Exit(1)
 	}
-	service := application.NewDeviceService(providerManager)
+	service := application.NewDeviceService(providerManager, store)
 	defer service.Close()
 	providerService := application.NewProviderService(providerConfigs, store, factory, providerManager)
 	targetConfigs, err := store.ListTargets(ctx)

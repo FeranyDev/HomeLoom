@@ -93,6 +93,48 @@ func TestErrorsUseStableEnvelopeAndRequestID(t *testing.T) {
 	}
 }
 
+func TestValidationErrorsIncludeFieldLocations(t *testing.T) {
+	providerRequest := httptest.NewRequest(http.MethodPost, "/api/v1/providers", bytes.NewBufferString(`{"id":"bad id","type":"virtual","name":"Bad","enabled":true,"config":{}}`))
+	providerRequest.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	providerResponse := httptest.NewRecorder()
+	newProviderManagementTestServer(t).Handler().ServeHTTP(providerResponse, providerRequest)
+	if providerResponse.Code != http.StatusBadRequest || !bytes.Contains(providerResponse.Body.Bytes(), []byte(`"fields":{"id":`)) {
+		t.Fatalf("provider response = %d %s", providerResponse.Code, providerResponse.Body.String())
+	}
+	targetRequest := httptest.NewRequest(http.MethodPost, "/api/v1/targets", bytes.NewBufferString(`{"id":"bad id","type":"apple-hap","enabled":true}`))
+	targetRequest.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	targetResponse := httptest.NewRecorder()
+	newTestServer().Handler().ServeHTTP(targetResponse, targetRequest)
+	if targetResponse.Code != http.StatusBadRequest || !bytes.Contains(targetResponse.Body.Bytes(), []byte(`"fields":{"id":`)) {
+		t.Fatalf("target response = %d %s", targetResponse.Code, targetResponse.Body.String())
+	}
+}
+
+func newProviderManagementTestServer(t *testing.T) *Server {
+	t.Helper()
+	ctx := context.Background()
+	config := providerconfig.Config{ID: "virtual-main", Type: "virtual", Name: "Virtual", Enabled: true, Config: []byte(`{}`)}
+	factory := providersdk.NewFactory()
+	if err := factory.Register("virtual", func(item providerconfig.Config) (providersdk.Provider, error) {
+		return virtual.NewProviderFromConfig(item)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := providermanager.New(virtual.NewProvider())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	devices := application.NewDeviceService(manager)
+	t.Cleanup(func() { _ = devices.Close() })
+	providers := application.NewProviderService([]providerconfig.Config{config}, &apiProviderStore{items: map[string]providerconfig.Config{config.ID: config}}, factory, manager)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	targets := application.NewTargetService(nil, nil)
+	return NewServer(":0", devices, targets, logger, providers)
+}
+
 func TestListDevices(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/devices", nil)
 	response := httptest.NewRecorder()
@@ -141,6 +183,13 @@ func TestDiagnosticsAndPrometheusMetrics(t *testing.T) {
 		}
 		if path == "/metrics" && !bytes.Contains(response.Body.Bytes(), []byte("homeloom_devices_online 2")) {
 			t.Fatalf("metrics missing device counts: %s", response.Body.String())
+		}
+		if path == "/metrics" {
+			for _, name := range []string{"homeloom_event_average_latency_milliseconds", "homeloom_slow_event_handlers_total", "homeloom_database_operations_total"} {
+				if !bytes.Contains(response.Body.Bytes(), []byte(name)) {
+					t.Fatalf("metrics missing %s: %s", name, response.Body.String())
+				}
+			}
 		}
 	}
 }

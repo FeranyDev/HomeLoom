@@ -42,6 +42,11 @@ type DeviceService struct {
 	staleCancel    context.CancelFunc
 	staleDone      chan struct{}
 	metrics        deviceMetrics
+	storageMetrics DatabaseMetricsProvider
+}
+
+type DatabaseMetricsProvider interface {
+	DatabaseOperationMetrics() (operations uint64, average time.Duration, maximum time.Duration)
 }
 
 type deviceSubscription struct {
@@ -69,32 +74,38 @@ type deviceMetrics struct {
 }
 
 type DeviceMetrics struct {
-	EventsReceived          uint64  `json:"eventsReceived"`
-	EventsProcessed         uint64  `json:"eventsProcessed"`
-	EventsDropped           uint64  `json:"eventsDropped"`
-	EventQueuePending       int     `json:"eventQueuePending"`
-	EventQueueCapacity      int     `json:"eventQueueCapacity"`
-	TargetEventsDropped     uint64  `json:"targetEventsDropped"`
-	StateEventsDropped      uint64  `json:"stateEventsDropped"`
-	StatesMarkedStale       uint64  `json:"statesMarkedStale"`
-	CommandsStarted         uint64  `json:"commandsStarted"`
-	CommandsConfirmed       uint64  `json:"commandsConfirmed"`
-	CommandsRejected        uint64  `json:"commandsRejected"`
-	CommandsTimedOut        uint64  `json:"commandsTimedOut"`
-	CommandsSuperseded      uint64  `json:"commandsSuperseded"`
-	OnlineDevices           int     `json:"onlineDevices"`
-	OfflineDevices          int     `json:"offlineDevices"`
-	ProvidersRunning        int     `json:"providersRunning"`
-	ProviderRetries         int     `json:"providerRetries"`
-	DeviceSubscribers       int     `json:"deviceSubscribers"`
-	StateSubscribers        int     `json:"stateSubscribers"`
-	CommandAverageLatencyMS float64 `json:"commandAverageLatencyMs"`
-	Goroutines              int     `json:"goroutines"`
-	HeapAllocBytes          uint64  `json:"heapAllocBytes"`
-	HeapObjects             uint64  `json:"heapObjects"`
+	EventsReceived           uint64  `json:"eventsReceived"`
+	EventsProcessed          uint64  `json:"eventsProcessed"`
+	EventsDropped            uint64  `json:"eventsDropped"`
+	EventQueuePending        int     `json:"eventQueuePending"`
+	EventQueueCapacity       int     `json:"eventQueueCapacity"`
+	TargetEventsDropped      uint64  `json:"targetEventsDropped"`
+	StateEventsDropped       uint64  `json:"stateEventsDropped"`
+	StatesMarkedStale        uint64  `json:"statesMarkedStale"`
+	CommandsStarted          uint64  `json:"commandsStarted"`
+	CommandsConfirmed        uint64  `json:"commandsConfirmed"`
+	CommandsRejected         uint64  `json:"commandsRejected"`
+	CommandsTimedOut         uint64  `json:"commandsTimedOut"`
+	CommandsSuperseded       uint64  `json:"commandsSuperseded"`
+	OnlineDevices            int     `json:"onlineDevices"`
+	OfflineDevices           int     `json:"offlineDevices"`
+	ProvidersRunning         int     `json:"providersRunning"`
+	ProviderRetries          int     `json:"providerRetries"`
+	DeviceSubscribers        int     `json:"deviceSubscribers"`
+	StateSubscribers         int     `json:"stateSubscribers"`
+	CommandAverageLatencyMS  float64 `json:"commandAverageLatencyMs"`
+	EventAverageLatencyMS    float64 `json:"eventAverageLatencyMs"`
+	EventMaxLatencyMS        float64 `json:"eventMaxLatencyMs"`
+	SlowEventHandlers        uint64  `json:"slowEventHandlers"`
+	DatabaseOperations       uint64  `json:"databaseOperations"`
+	DatabaseAverageLatencyMS float64 `json:"databaseAverageLatencyMs"`
+	DatabaseMaxLatencyMS     float64 `json:"databaseMaxLatencyMs"`
+	Goroutines               int     `json:"goroutines"`
+	HeapAllocBytes           uint64  `json:"heapAllocBytes"`
+	HeapObjects              uint64  `json:"heapObjects"`
 }
 
-func NewDeviceService(provider providersdk.Provider) *DeviceService {
+func NewDeviceService(provider providersdk.Provider, storageMetrics ...DatabaseMetricsProvider) *DeviceService {
 	discoverer, _ := provider.(providersdk.Discoverer)
 	reader, _ := provider.(providersdk.PropertyReader)
 	writer, _ := provider.(providersdk.PropertyWriter)
@@ -108,6 +119,9 @@ func NewDeviceService(provider providersdk.Provider) *DeviceService {
 		registry: registry.NewDeviceRegistry(items),
 		states:   statestore.NewStore(), commands: commandtracker.NewTracker(5 * time.Second),
 		listeners: make(map[uint64]*deviceSubscription), stateListeners: make(map[uint64]*stateSubscription),
+	}
+	if len(storageMetrics) > 0 {
+		service.storageMetrics = storageMetrics[0]
 	}
 	for _, item := range items {
 		service.applySnapshot(item)
@@ -192,6 +206,12 @@ func (s *DeviceService) Metrics() DeviceMetrics {
 	}
 	var memory runtime.MemStats
 	runtime.ReadMemStats(&memory)
+	eventStats := s.dispatcher.Stats()
+	var databaseOperations uint64
+	var databaseAverage, databaseMaximum time.Duration
+	if s.storageMetrics != nil {
+		databaseOperations, databaseAverage, databaseMaximum = s.storageMetrics.DatabaseOperationMetrics()
+	}
 	return DeviceMetrics{
 		EventsReceived: s.metrics.eventsReceived.Load(), EventsProcessed: s.metrics.eventsProcessed.Load(),
 		EventsDropped: s.metrics.eventsDropped.Load(), EventQueuePending: s.dispatcher.Pending(), EventQueueCapacity: s.dispatcher.Capacity(),
@@ -200,7 +220,9 @@ func (s *DeviceService) Metrics() DeviceMetrics {
 		CommandsRejected: s.metrics.commandsRejected.Load(), CommandsTimedOut: s.metrics.commandsTimedOut.Load(), CommandsSuperseded: s.metrics.commandsSuperseded.Load(),
 		OnlineDevices: online, OfflineDevices: len(items) - online, ProvidersRunning: providersRunning, ProviderRetries: providerRetries, DeviceSubscribers: subscribers, StateSubscribers: stateSubscribers,
 		CommandAverageLatencyMS: averageLatency,
-		Goroutines:              runtime.NumGoroutine(), HeapAllocBytes: memory.HeapAlloc, HeapObjects: memory.HeapObjects,
+		EventAverageLatencyMS:   float64(eventStats.AverageLatency.Nanoseconds()) / float64(time.Millisecond), EventMaxLatencyMS: float64(eventStats.MaxLatency.Nanoseconds()) / float64(time.Millisecond), SlowEventHandlers: eventStats.SlowHandlers,
+		DatabaseOperations: databaseOperations, DatabaseAverageLatencyMS: float64(databaseAverage.Nanoseconds()) / float64(time.Millisecond), DatabaseMaxLatencyMS: float64(databaseMaximum.Nanoseconds()) / float64(time.Millisecond),
+		Goroutines: runtime.NumGoroutine(), HeapAllocBytes: memory.HeapAlloc, HeapObjects: memory.HeapObjects,
 	}
 }
 

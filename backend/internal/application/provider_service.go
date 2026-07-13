@@ -102,14 +102,14 @@ func (s *ProviderService) Save(ctx context.Context, item providerconfig.Config) 
 		item.Name = item.ID
 	}
 	if !validProviderID.MatchString(item.ID) {
-		return ProviderInfo{}, errors.New("id may contain only letters, numbers, underscores and hyphens")
+		return ProviderInfo{}, NewValidationError("invalid provider configuration", map[string]string{"id": "may contain only letters, numbers, underscores and hyphens"})
 	}
 	if len(item.Config) == 0 {
 		item.Config = json.RawMessage(`{}`)
 	}
 	var object map[string]any
 	if err := json.Unmarshal(item.Config, &object); err != nil || object == nil {
-		return ProviderInfo{}, errors.New("config must be a JSON object")
+		return ProviderInfo{}, NewValidationError("invalid provider configuration", map[string]string{"config": "must be a JSON object"})
 	}
 	if s.store == nil || s.factory == nil || s.runtime == nil {
 		return ProviderInfo{}, errors.New("provider management is unavailable")
@@ -118,7 +118,11 @@ func (s *ProviderService) Save(ctx context.Context, item providerconfig.Config) 
 	// rejected before an invalid desired state reaches durable storage.
 	instance, err := s.factory.Create(item)
 	if err != nil {
-		return ProviderInfo{}, err
+		field := "config"
+		if strings.Contains(err.Error(), "not registered") {
+			field = "type"
+		}
+		return ProviderInfo{}, NewValidationError("invalid provider configuration", map[string]string{field: err.Error()})
 	}
 	s.mu.RLock()
 	previous, existed := s.configs[item.ID]

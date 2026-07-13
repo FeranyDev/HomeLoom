@@ -16,6 +16,12 @@ export function SystemDashboard({ diagnostics, commands }: { diagnostics: Diagno
 	['Goroutine', diagnostics.goroutines],
 	['Go Heap', megabytes(diagnostics.heapAllocBytes)],
 	['Heap 对象', diagnostics.heapObjects],
+	['事件平均延迟', `${diagnostics.eventAverageLatencyMs.toFixed(1)}ms`],
+	['事件最大延迟', `${diagnostics.eventMaxLatencyMs.toFixed(1)}ms`],
+	['慢 Handler', diagnostics.slowEventHandlers],
+	['SQLite 操作', diagnostics.databaseOperations],
+	['SQLite 平均延迟', `${diagnostics.databaseAverageLatencyMs.toFixed(1)}ms`],
+	['SQLite 最大延迟', `${diagnostics.databaseMaxLatencyMs.toFixed(1)}ms`],
   ]
   return <section className="system-dashboard"><div className="metric-grid">{metrics.map(([label, value]) => <article key={label}><span>{label}</span><strong>{value}</strong></article>)}</div>
     <div className="queue-card"><div><span>事件队列</span><strong>{diagnostics.eventQueuePending} / {diagnostics.eventQueueCapacity}</strong></div><div className="queue-track"><span style={{ width: `${Math.min(queueRate, 100)}%` }} /></div><small>当前占用 {queueRate}% · 核心队列满时会丢弃并计数，不阻塞 Provider 线程。</small></div>
