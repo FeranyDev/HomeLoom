@@ -30,6 +30,7 @@
 - 500 错误不向客户端暴露内部错误内容。
 
 客户端可以传入 `X-Request-Id` 以关联一次跨服务调用；未传入时由 HomeLoom 自动生成。
+该值也会作为写操作的 `correlationId` 写入审计事件，并附加到由该请求创建的命令历史中，因此可以从前端操作一路定位到 HTTP 日志、审计记录和 Provider 命令。服务端会去除首尾空白并将 correlation ID 限制为 128 字符。
 
 ## 常用状态码
 
@@ -53,6 +54,10 @@
 - `GET /api/v1/devices/{id}/states`：内存状态、来源和质量；
 - `PUT /api/v1/devices/{id}/enabled`：持久禁用或重新启用设备；
 - `GET /api/v1/commands`：命令生命周期历史。
+- `GET /api/v1/audit-events?limit=200`：按时间倒序读取持久化审计事件，`limit` 范围为 1–500；
+- `GET /api/v1/events/audit`：通过 SSE 实时接收 `audit` 事件。
+
+所有 `/api/v1` 下的 POST、PUT、PATCH 和 DELETE 都记录审计事件，包括失败的操作。审计表只保存 actor、方法、模板化路由、资源 ID、状态码、结果和 correlation ID，不保存请求体或配置值，避免 Provider 凭据和 HomeKit PIN 进入日志。记录保存在 SQLite 的 `audit_events` 表中，当前自动保留最近 5000 条；写请求会在返回前同步尝试持久化，审计失败会写入结构化错误日志，但不会把已经完成的业务操作伪装成失败。SSE 订阅使用有界缓冲，慢客户端只会漏掉实时通知，不影响已经落库的历史。
 
 `/metrics` 中的 runtime 指标包括 `homeloom_go_goroutines`、`homeloom_go_heap_alloc_bytes` 和 `homeloom_go_heap_objects`。事件指标包含入队到处理完成的平均/最大延迟及超过 100ms 的慢 Handler 计数；SQLite 指标包含配置、身份、schema、健康检查和备份操作数以及平均/最大延迟；`homeloom_homekit_pushes_total` 统计运行期间应用到 HomeKit Characteristic 的状态更新次数。命令协调指标 `homeloom_command_queue_pending` 和 `homeloom_command_queue_max_pending` 分别表示当前等待 Provider 执行槽的命令数及进程生命周期内的最大等待数。
 
@@ -85,7 +90,7 @@ Content-Type: application/json
 
 Core 会根据 Capability 中的 `CommandDefinition` 校验必填参数、未声明参数和 typed payload。动作会记入统一命令历史，`kind` 为 `action`。命令定义通过 `idempotent` 明确声明是否可安全重放；Core 当前不会自动重试 Provider 调用，非幂等动作必须由上层使用同一个 `Idempotency-Key` 重放原 HTTP 请求。
 
-命令的传输状态和执行结果分开表达：`confirmed` 对应 `outcome=succeeded`，`rejected` 对应 `outcome=failed`，`timeout` 或已发送后被替代对应 `outcome=unknown`。超时只说明在期限内没有获得可靠确认，不表示设备一定没有执行。由于普通 Provider 状态事件缺少可靠的 command correlation ID，后续恰好出现相同属性值也不会擅自改写该命令的未知结果。
+命令的传输状态和执行结果分开表达：`confirmed` 对应 `outcome=succeeded`，`rejected` 对应 `outcome=failed`，`timeout` 或已发送后被替代对应 `outcome=unknown`。命令中的 `correlationId` 对应创建它的 HTTP `X-Request-Id`；它用于追踪请求而不是确认设备状态。超时只说明在期限内没有获得可靠确认，不表示设备一定没有执行。由于普通 Provider 状态事件缺少可靠的 command ID，后续恰好出现相同属性值也不会擅自改写该命令的未知结果。
 
 动作请求建议携带最长 128 字符的 `Idempotency-Key` header。在命令历史保留期内，相同设备、Capability、Command、参数和 key 只执行一次；重复请求返回原命令。同一作用域的 key 如果被复用为不同参数，返回 409 `conflict`。
 

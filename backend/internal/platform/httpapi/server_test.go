@@ -126,6 +126,57 @@ func TestDeviceEnabledAPIIsPersisted(t *testing.T) {
 	}
 }
 
+func TestMutationAuditAndCommandCorrelationID(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "audit-api.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	devices := application.NewDeviceService(virtual.NewProvider(), store)
+	defer devices.Close()
+	server := NewServer(":0", devices, application.NewTargetService(nil, nil), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server.SetAuditService(application.NewAuditService(store))
+
+	write := httptest.NewRequest(http.MethodPut, "/api/v1/devices/virtual-switch-1/endpoints/main/capabilities/switch/properties/power", bytes.NewBufferString(`{"type":"bool","bool":true}`))
+	write.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	write.Header.Set(echo.HeaderXRequestID, "trace-command-1")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, write)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"correlationId":"trace-command-1"`)) {
+		t.Fatalf("write response = %d %s", response.Code, response.Body.String())
+	}
+
+	list := httptest.NewRequest(http.MethodGet, "/api/v1/audit-events?limit=20", nil)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, list)
+	for _, expected := range []string{`"correlationId":"trace-command-1"`, `"resourceType":"device"`, `"resourceId":"virtual-switch-1"`, `"outcome":"succeeded"`} {
+		if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(expected)) {
+			t.Fatalf("audit response = %d %s", response.Code, response.Body.String())
+		}
+	}
+
+	invalid := httptest.NewRequest(http.MethodPatch, "/api/v1/devices/virtual-switch-1/simulation", bytes.NewBufferString(`{}`))
+	invalid.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	invalid.Header.Set(echo.HeaderXRequestID, "trace-failed-1")
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, invalid)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid response = %d %s", response.Code, response.Body.String())
+	}
+	events, err := store.ListAuditEvents(ctx, 10)
+	if err != nil || len(events) != 2 || events[0].CorrelationID != "trace-failed-1" || events[0].Status != http.StatusBadRequest || events[0].Outcome != "failed" {
+		t.Fatalf("audit events = %#v, %v", events, err)
+	}
+
+	badLimit := httptest.NewRequest(http.MethodGet, "/api/v1/audit-events?limit=501", nil)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, badLimit)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("bad limit response = %d %s", response.Code, response.Body.String())
+	}
+}
+
 func TestVersionEndpoint(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/system/version", nil)
 	response := httptest.NewRecorder()
@@ -669,6 +720,55 @@ func TestCommandEventStreamPublishesLifecycle(t *testing.T) {
 	if len(statuses) < 4 || statuses[0] != "queued" || statuses[len(statuses)-1] != "confirmed" {
 		t.Fatalf("statuses = %#v", statuses)
 	}
+}
+
+func TestAuditEventStreamPublishesPersistedMutation(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "audit-stream.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	devices := application.NewDeviceService(virtual.NewProvider(), store)
+	defer devices.Close()
+	server := NewServer(":0", devices, application.NewTargetService(nil, nil), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server.SetAuditService(application.NewAuditService(store))
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	response, err := http.Get(httpServer.URL + "/api/v1/events/audit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	scanner := bufio.NewScanner(response.Body)
+	if !scanner.Scan() || scanner.Text() != "event: ready" {
+		t.Fatalf("ready = %q", scanner.Text())
+	}
+	for scanner.Scan() {
+		if scanner.Text() == "" {
+			break
+		}
+	}
+
+	mutation, _ := http.NewRequest(http.MethodPatch, httpServer.URL+"/api/v1/devices/virtual-switch-1/simulation", bytes.NewBufferString(`{"power":true}`))
+	mutation.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	mutation.Header.Set(echo.HeaderXRequestID, "trace-stream-1")
+	mutationResponse, err := http.DefaultClient.Do(mutation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutationResponse.Body.Close()
+	if mutationResponse.StatusCode != http.StatusOK {
+		t.Fatalf("mutation status = %d", mutationResponse.StatusCode)
+	}
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "data: ") && strings.Contains(line, `"correlationId":"trace-stream-1"`) && strings.Contains(line, `"outcome":"succeeded"`) {
+			return
+		}
+	}
+	t.Fatalf("audit event not received: %v", scanner.Err())
 }
 
 func TestStateEventStreamPublishesQualityChanges(t *testing.T) {

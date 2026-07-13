@@ -59,12 +59,17 @@ func (t *Tracker) Begin(deviceID, endpointID, capabilityID, propertyID string, v
 }
 
 func (t *Tracker) BeginReplacing(deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) (domaincommand.Command, *domaincommand.Command) {
+	return t.BeginReplacingCorrelated(deviceID, endpointID, capabilityID, propertyID, value, "")
+}
+
+func (t *Tracker) BeginReplacingCorrelated(deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue, correlationID string) (domaincommand.Command, *domaincommand.Command) {
 	now := time.Now().UTC()
 	key := pendingKey(deviceID, endpointID, capabilityID, propertyID)
 	command := domaincommand.Command{
 		ID: commandID(), DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID,
 		Kind: domaincommand.KindProperty, PropertyID: propertyID, Expected: value,
-		Status: domaincommand.StatusQueued, CreatedAt: now, UpdatedAt: now, Deadline: now.Add(t.Timeout()),
+		CorrelationID: correlationID,
+		Status:        domaincommand.StatusQueued, CreatedAt: now, UpdatedAt: now, Deadline: now.Add(t.Timeout()),
 	}
 	t.mu.Lock()
 	t.pruneLocked()
@@ -94,8 +99,12 @@ func (t *Tracker) BeginAction(deviceID, endpointID, capabilityID, actionID strin
 }
 
 func (t *Tracker) BeginActionIdempotent(deviceID, endpointID, capabilityID, actionID string, parameters map[string]device.PropertyValue, idempotencyKey string) (domaincommand.Command, bool, error) {
+	return t.BeginActionIdempotentCorrelated(deviceID, endpointID, capabilityID, actionID, parameters, idempotencyKey, "")
+}
+
+func (t *Tracker) BeginActionIdempotentCorrelated(deviceID, endpointID, capabilityID, actionID string, parameters map[string]device.PropertyValue, idempotencyKey, correlationID string) (domaincommand.Command, bool, error) {
 	now := time.Now().UTC()
-	command := domaincommand.Command{ID: commandID(), Kind: domaincommand.KindAction, DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID, CommandID: actionID, Parameters: cloneParameters(parameters), IdempotencyKey: idempotencyKey, Status: domaincommand.StatusQueued, CreatedAt: now, UpdatedAt: now, Deadline: now.Add(t.Timeout())}
+	command := domaincommand.Command{ID: commandID(), Kind: domaincommand.KindAction, DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID, CommandID: actionID, Parameters: cloneParameters(parameters), IdempotencyKey: idempotencyKey, CorrelationID: correlationID, Status: domaincommand.StatusQueued, CreatedAt: now, UpdatedAt: now, Deadline: now.Add(t.Timeout())}
 	t.mu.Lock()
 	if idempotencyKey != "" {
 		scope := actionIdempotencyScope(deviceID, endpointID, capabilityID, actionID, idempotencyKey)

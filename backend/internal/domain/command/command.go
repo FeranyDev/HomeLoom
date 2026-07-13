@@ -38,6 +38,7 @@ type Command struct {
 	Expected       device.PropertyValue            `json:"expected,omitempty"`
 	Parameters     map[string]device.PropertyValue `json:"parameters,omitempty"`
 	IdempotencyKey string                          `json:"idempotencyKey,omitempty"`
+	CorrelationID  string                          `json:"correlationId,omitempty"`
 	Status         Status                          `json:"status"`
 	Outcome        Outcome                         `json:"outcome,omitempty"`
 	Error          string                          `json:"error,omitempty"`

@@ -441,7 +441,7 @@ func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointI
 	defer release()
 	key := domainstate.Key{DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID, PropertyID: propertyID}
 	previous, hadPrevious := s.states.Get(key)
-	command, superseded := s.commands.BeginReplacing(deviceID, endpointID, capabilityID, propertyID, value)
+	command, superseded := s.commands.BeginReplacingCorrelated(deviceID, endpointID, capabilityID, propertyID, value, CorrelationID(ctx))
 	if superseded != nil {
 		s.metrics.commandsSuperseded.Add(1)
 		if stale, changed := s.states.ResolveOptimistic(superseded.ID, nil); changed {
@@ -506,7 +506,7 @@ func (s *DeviceService) ExecuteCommand(ctx context.Context, request providersdk.
 		return device.Device{}, domaincommand.Command{}, err
 	}
 	defer release()
-	command, replayed, err := s.commands.BeginActionIdempotent(request.DeviceID, request.EndpointID, request.CapabilityID, request.CommandID, request.Parameters, request.IdempotencyKey)
+	command, replayed, err := s.commands.BeginActionIdempotentCorrelated(request.DeviceID, request.EndpointID, request.CapabilityID, request.CommandID, request.Parameters, request.IdempotencyKey, CorrelationID(ctx))
 	if err != nil {
 		return device.Device{}, domaincommand.Command{}, err
 	}

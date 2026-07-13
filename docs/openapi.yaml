@@ -38,6 +38,29 @@ paths:
       operationId: getDiagnostics
       responses:
         "200": { description: Runtime metrics snapshot, content: { application/json: { schema: { $ref: "#/components/schemas/ObjectResponse" } } } }
+  /api/v1/audit-events:
+    get:
+      operationId: listAuditEvents
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+      responses:
+        "200":
+          description: Persisted audit events, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties: { data: { type: array, items: { $ref: "#/components/schemas/AuditEvent" } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/v1/events/audit:
+    get:
+      operationId: streamAuditEvents
+      responses:
+        "200":
+          description: Server-sent events named audit; heartbeat comments are emitted every 15 seconds
+          content: { text/event-stream: { schema: { type: string } } }
   /api/v1/devices:
     get:
       operationId: listDevices
@@ -233,7 +256,40 @@ components:
       required: [data, command]
       properties:
         data: { $ref: "#/components/schemas/Device" }
-        command: { type: object, additionalProperties: true }
+        command: { $ref: "#/components/schemas/Command" }
+    Command:
+      type: object
+      required: [id, deviceId, endpointId, capabilityId, status, createdAt, updatedAt, deadline]
+      properties:
+        id: { type: string }
+        kind: { type: string, enum: [property, action] }
+        deviceId: { type: string }
+        endpointId: { type: string }
+        capabilityId: { type: string }
+        propertyId: { type: string }
+        commandId: { type: string }
+        correlationId: { type: string, maxLength: 128, description: HTTP X-Request-Id that created the command. }
+        status: { type: string, enum: [queued, sent, accepted, confirmed, rejected, timeout, superseded] }
+        outcome: { type: string, enum: [succeeded, failed, unknown] }
+        error: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        deadline: { type: string, format: date-time }
+    AuditEvent:
+      type: object
+      required: [id, correlationId, actor, action, resourceType, method, route, status, outcome, createdAt]
+      properties:
+        id: { type: integer, format: int64 }
+        correlationId: { type: string, maxLength: 128 }
+        actor: { type: string, example: local-api }
+        action: { type: string }
+        resourceType: { type: string }
+        resourceId: { type: string }
+        method: { type: string }
+        route: { type: string, description: Templated route; request bodies are never recorded. }
+        status: { type: integer }
+        outcome: { type: string, enum: [succeeded, failed] }
+        createdAt: { type: string, format: date-time }
     ProviderInput:
       type: object
       required: [type, name, enabled, config]

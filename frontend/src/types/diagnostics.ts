@@ -28,5 +28,20 @@ export interface DeviceCommand {
   expected?: CommandValue; parameters?: Record<string, CommandValue>; status: 'queued' | 'sent' | 'accepted' | 'confirmed' | 'rejected' | 'timeout' | 'superseded'
 	outcome?: 'succeeded' | 'failed' | 'unknown'
 	idempotencyKey?: string
+	correlationId?: string
   error?: string; createdAt: string; updatedAt: string; deadline: string
+}
+
+export interface AuditEvent {
+	id: number
+	correlationId: string
+	actor: string
+	action: string
+	resourceType: string
+	resourceId?: string
+	method: string
+	route: string
+	status: number
+	outcome: 'succeeded' | 'failed'
+	createdAt: string
 }

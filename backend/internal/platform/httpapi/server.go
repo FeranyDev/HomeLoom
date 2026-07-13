@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/buildinfo"
 	commandtracker "github.com/feranydev/homeloom/backend/internal/command"
+	domainaudit "github.com/feranydev/homeloom/backend/internal/domain/audit"
 	domaincommand "github.com/feranydev/homeloom/backend/internal/domain/command"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
@@ -27,6 +29,7 @@ type Server struct {
 	address  string
 	echo     *echo.Echo
 	settings *application.SettingsService
+	audit    *application.AuditService
 }
 
 type errorResponse struct {
@@ -145,6 +148,16 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		}
 	}
 	e.Use(middleware.RequestID())
+	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			requestID := c.Response().Header().Get(echo.HeaderXRequestID)
+			if requestID == "" {
+				requestID = c.Request().Header.Get(echo.HeaderXRequestID)
+			}
+			c.SetRequest(c.Request().WithContext(application.WithCorrelationID(c.Request().Context(), requestID)))
+			return next(c)
+		}
+	})
 	e.Use(middleware.Recover())
 	e.Use(middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
 		LogMethod:    true,
@@ -157,6 +170,44 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 			return nil
 		},
 	}))
+	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			err := next(c)
+			if server.audit == nil || !auditMethod(c.Request().Method) || !strings.HasPrefix(c.Request().URL.Path, "/api/v1/") {
+				return err
+			}
+			status := c.Response().Status
+			if err != nil {
+				status = http.StatusInternalServerError
+				var httpError *echo.HTTPError
+				if errors.As(err, &httpError) {
+					status = httpError.Code
+				}
+				var validationError *application.ValidationError
+				if errors.As(err, &validationError) {
+					status = http.StatusBadRequest
+				}
+			}
+			action, resourceType, resourceID := auditResource(c)
+			outcome := domainaudit.OutcomeSucceeded
+			if status >= http.StatusBadRequest {
+				outcome = domainaudit.OutcomeFailed
+			}
+			route := c.Path()
+			if route == "" {
+				route = c.Request().URL.Path
+			}
+			event := domainaudit.Event{
+				CorrelationID: application.CorrelationID(c.Request().Context()), Actor: "local-api",
+				Action: action, ResourceType: resourceType, ResourceID: resourceID,
+				Method: c.Request().Method, Route: route, Status: status, Outcome: outcome,
+			}
+			if _, auditErr := server.audit.Record(c.Request().Context(), event); auditErr != nil {
+				logger.Error("audit event persistence failed", "request_id", event.CorrelationID, "method", event.Method, "route", event.Route, "error", auditErr)
+			}
+			return err
+		}
+	})
 
 	e.GET("/health", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
@@ -194,6 +245,72 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 	})
 	e.GET("/api/v1/diagnostics", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"data": devices.Metrics()})
+	})
+	e.GET("/api/v1/audit-events", func(c echo.Context) error {
+		if server.audit == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "audit log is unavailable")
+		}
+		limit := 100
+		if raw := c.QueryParam("limit"); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed < 1 || parsed > 500 {
+				return echo.NewHTTPError(http.StatusBadRequest, "limit must be between 1 and 500")
+			}
+			limit = parsed
+		}
+		items, err := server.audit.List(c.Request().Context(), limit)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "failed to list audit events").SetInternal(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": items})
+	})
+	e.GET("/api/v1/events/audit", func(c echo.Context) error {
+		if server.audit == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "audit log is unavailable")
+		}
+		response := c.Response()
+		response.Header().Set(echo.HeaderContentType, "text/event-stream")
+		response.Header().Set(echo.HeaderCacheControl, "no-cache")
+		response.Header().Set("X-Accel-Buffering", "no")
+		response.WriteHeader(http.StatusOK)
+		flusher, ok := response.Writer.(http.Flusher)
+		if !ok {
+			return echo.NewHTTPError(http.StatusInternalServerError, "streaming is unsupported")
+		}
+		events := make(chan domainaudit.Event, 32)
+		unsubscribe := server.audit.Subscribe(func(item domainaudit.Event) {
+			select {
+			case events <- item:
+			default:
+			}
+		})
+		defer unsubscribe()
+		if _, err := response.Write([]byte("event: ready\ndata: {}\n\n")); err != nil {
+			return nil
+		}
+		flusher.Flush()
+		heartbeat := time.NewTicker(15 * time.Second)
+		defer heartbeat.Stop()
+		for {
+			select {
+			case item := <-events:
+				payload, err := json.Marshal(item)
+				if err != nil {
+					continue
+				}
+				if _, err := fmt.Fprintf(response, "event: audit\ndata: %s\n\n", payload); err != nil {
+					return nil
+				}
+				flusher.Flush()
+			case <-heartbeat.C:
+				if _, err := response.Write([]byte(": keepalive\n\n")); err != nil {
+					return nil
+				}
+				flusher.Flush()
+			case <-c.Request().Context().Done():
+				return nil
+			}
+		}
 	})
 	e.GET("/metrics", func(c echo.Context) error {
 		metrics := devices.Metrics()
@@ -695,6 +812,32 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 }
 
 func (s *Server) SetSettingsService(settings *application.SettingsService) { s.settings = settings }
+
+func (s *Server) SetAuditService(audit *application.AuditService) { s.audit = audit }
+
+func auditMethod(method string) bool {
+	return method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch || method == http.MethodDelete
+}
+
+func auditResource(c echo.Context) (action, resourceType, resourceID string) {
+	route := c.Path()
+	if route == "" {
+		route = c.Request().URL.Path
+	}
+	segments := strings.Split(strings.TrimPrefix(route, "/api/v1/"), "/")
+	resourceType = strings.TrimSuffix(segments[0], "s")
+	resourceID = c.Param("id")
+	if resourceID == "" && len(segments) > 1 && !strings.HasPrefix(segments[1], ":") {
+		resourceID = segments[1]
+	}
+	action = strings.ToLower(c.Request().Method)
+	if len(segments) > 2 && !strings.HasPrefix(segments[len(segments)-1], ":") {
+		action = segments[len(segments)-1]
+	} else if resourceID == "" && len(segments) > 1 && !strings.HasPrefix(segments[1], ":") {
+		action = segments[1]
+	}
+	return action, resourceType, resourceID
+}
 
 func (s *Server) Address() string { return s.address }
 

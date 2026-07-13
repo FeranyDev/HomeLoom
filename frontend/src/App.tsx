@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { executeDeviceCommand, listDevices, setDeviceEnabled, setDevicePower, setDeviceProperty, simulateDevice, subscribeDevices } from './api/devices'
 import { deleteTarget, listTargets, saveTarget, subscribeTargets } from './api/targets'
 import { deleteProvider, listProviders, restartProvider, saveProvider } from './api/providers'
-import { getDiagnostics, getRuntimeSettings, listCommands, saveRuntimeSettings, subscribeCommands } from './api/diagnostics'
+import { getDiagnostics, getRuntimeSettings, listAuditEvents, listCommands, saveRuntimeSettings, subscribeAuditEvents, subscribeCommands } from './api/diagnostics'
 import { getSystemVersion } from './api/system'
 import { DeviceCard } from './components/DeviceCard'
 import { TargetCard } from './components/TargetCard'
@@ -17,7 +17,7 @@ import { CollectionEmpty, LoadingState } from './components/PageState'
 import type { Device, DeviceAvailability, PropertyValue } from './types/device'
 import type { Target, TargetInput } from './types/target'
 import type { Provider, ProviderInput } from './types/provider'
-import type { DeviceCommand, Diagnostics, RuntimeSettings, SystemVersion } from './types/diagnostics'
+import type { AuditEvent, DeviceCommand, Diagnostics, RuntimeSettings, SystemVersion } from './types/diagnostics'
 import { usePageRoute } from './routing'
 import { confirmProviderDeletion, confirmTargetDeletion } from './confirmations'
 
@@ -28,6 +28,7 @@ export function App() {
 	const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null)
 	const [version, setVersion] = useState<SystemVersion | null>(null)
 	const [commands, setCommands] = useState<DeviceCommand[]>([])
+	const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([])
 	const [runtimeSettings, setRuntimeSettings] = useState<RuntimeSettings | null>(null)
 	const commandHistoryLimit = useRef(1000)
 	const [page, setPage] = usePageRoute()
@@ -44,13 +45,14 @@ export function App() {
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
-	  const [deviceData, targetData, providerData, diagnosticData, commandData, versionData, settingsData] = await Promise.all([listDevices(signal), listTargets(signal), listProviders(signal), getDiagnostics(signal), listCommands(signal), getSystemVersion(signal).catch(() => null), getRuntimeSettings(signal).catch(() => null)])
+	  const [deviceData, targetData, providerData, diagnosticData, commandData, auditData, versionData, settingsData] = await Promise.all([listDevices(signal), listTargets(signal), listProviders(signal), getDiagnostics(signal), listCommands(signal), listAuditEvents(signal).catch(() => []), getSystemVersion(signal).catch(() => null), getRuntimeSettings(signal).catch(() => null)])
 	  setDevices(deviceData)
 	  setTargets(targetData)
 	  setProviders(providerData)
 	  setDiagnostics(diagnosticData)
 	  if (settingsData) commandHistoryLimit.current = settingsData.commandHistoryLimit
 	  setCommands(commandData.slice(0, commandHistoryLimit.current))
+	  setAuditEvents(auditData)
 	  setVersion(versionData)
 	  setRuntimeSettings(settingsData)
       setError(null)
@@ -68,12 +70,14 @@ export function App() {
     const timer = window.setInterval(() => void refresh(), 30000)
     const unsubscribe = subscribeDevices((updated) => setDevices((current) => { const exists = current.some((item) => item.id === updated.id); return exists ? current.map((item) => item.id === updated.id ? updated : item) : [...current, updated] }), setLive)
 	const unsubscribeCommands = subscribeCommands((updated) => setCommands((current) => { const exists = current.some((item) => item.id === updated.id); const next = exists ? current.map((item) => item.id === updated.id ? updated : item) : [updated, ...current]; return next.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()).slice(0, commandHistoryLimit.current) }))
+	const unsubscribeAudit = subscribeAuditEvents((updated) => setAuditEvents((current) => [updated, ...current.filter((item) => item.id !== updated.id)].slice(0, 200)))
 	const unsubscribeTargets = subscribeTargets((updated) => setTargets((current) => current.map((item) => item.id === updated.id ? updated : item)))
     return () => {
       controller.abort()
       window.clearInterval(timer)
       unsubscribe()
 	  unsubscribeCommands()
+	  unsubscribeAudit()
 	  unsubscribeTargets()
     }
   }, [refresh])
@@ -173,7 +177,7 @@ export function App() {
             />
           ))}
 		  {filteredDevices.length === 0 && <CollectionEmpty title="没有匹配的设备" description={devices.length ? '请调整搜索文字或在线状态筛选。' : '启用 Provider 后，发现的设备会显示在这里。'} />}
-		</section> : page === 'providers' ? <section className="provider-grid"><div className="config-note"><span>配置来源</span><strong>SQLite · providers</strong><p>保存后运行时立即应用；单个 Provider 失败不会影响其他实例，可独立重新启动。</p></div>{providers.map((provider) => <ProviderCard key={provider.id} provider={provider} devices={devices.filter((item) => item.providerId === provider.id && !item.removed)} onEdit={(item) => setProviderForm({ open: true, provider: item })} onDelete={(item) => void handleProviderDelete(item)} onRestart={handleProviderRestart} onSimulate={handleSimulation} />)}{providers.length === 0 && <CollectionEmpty title="还没有 Provider" description="创建 Provider 后，HomeLoom 会立即初始化并发现设备。" />}</section> : page === 'system' ? <SystemDashboard diagnostics={diagnostics} commands={commands} settings={runtimeSettings} onSettingsSave={handleRuntimeSettingsSave} /> : <section className="target-list">
+		</section> : page === 'providers' ? <section className="provider-grid"><div className="config-note"><span>配置来源</span><strong>SQLite · providers</strong><p>保存后运行时立即应用；单个 Provider 失败不会影响其他实例，可独立重新启动。</p></div>{providers.map((provider) => <ProviderCard key={provider.id} provider={provider} devices={devices.filter((item) => item.providerId === provider.id && !item.removed)} onEdit={(item) => setProviderForm({ open: true, provider: item })} onDelete={(item) => void handleProviderDelete(item)} onRestart={handleProviderRestart} onSimulate={handleSimulation} />)}{providers.length === 0 && <CollectionEmpty title="还没有 Provider" description="创建 Provider 后，HomeLoom 会立即初始化并发现设备。" />}</section> : page === 'system' ? <SystemDashboard diagnostics={diagnostics} commands={commands} auditEvents={auditEvents} settings={runtimeSettings} onSettingsSave={handleRuntimeSettingsSave} /> : <section className="target-list">
 		  <div className="config-note">
 		    <span>配置来源</span>
 		    <strong>SQLite · targets</strong>

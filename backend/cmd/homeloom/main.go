@@ -132,6 +132,7 @@ func main() {
 	manager.SetStatusHandler(targetService.SetStatus)
 	server := httpapi.NewServer(settings.Server.Address, service, targetService, logger, providerService)
 	server.SetSettingsService(settingsService)
+	server.SetAuditService(application.NewAuditService(store))
 
 	go func() {
 		if err := server.Start(); err != nil {
