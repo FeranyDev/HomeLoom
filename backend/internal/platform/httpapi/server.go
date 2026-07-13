@@ -30,6 +30,7 @@ type Server struct {
 	echo     *echo.Echo
 	settings *application.SettingsService
 	audit    *application.AuditService
+	exports  *application.ExportService
 }
 
 const apiVersionHeader = "HomeLoom-API-Version"
@@ -255,6 +256,22 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 	})
 	e.GET("/api/v1/diagnostics", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"data": devices.Metrics()})
+	})
+	e.GET("/api/v1/system/config-export", func(c echo.Context) error {
+		if server.exports == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "configuration export is unavailable")
+		}
+		return writeJSONDownload(c, "homeloom-config-"+time.Now().UTC().Format("20060102T150405Z")+".json", server.exports.Configuration())
+	})
+	e.GET("/api/v1/system/diagnostic-bundle", func(c echo.Context) error {
+		if server.exports == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "diagnostic bundle is unavailable")
+		}
+		bundle, err := server.exports.Diagnostics(c.Request().Context())
+		if err != nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "failed to create diagnostic bundle").SetInternal(err)
+		}
+		return writeJSONDownload(c, "homeloom-diagnostics-"+time.Now().UTC().Format("20060102T150405Z")+".json", bundle)
 	})
 	e.GET("/api/v1/audit-events", func(c echo.Context) error {
 		if server.audit == nil {
@@ -831,6 +848,15 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 func (s *Server) SetSettingsService(settings *application.SettingsService) { s.settings = settings }
 
 func (s *Server) SetAuditService(audit *application.AuditService) { s.audit = audit }
+
+func (s *Server) SetExportService(exports *application.ExportService) { s.exports = exports }
+
+func writeJSONDownload(c echo.Context, filename string, value any) error {
+	c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+	c.Response().Header().Set(echo.HeaderContentDisposition, fmt.Sprintf("attachment; filename=%q", filename))
+	c.Response().Header().Set("X-Content-Type-Options", "nosniff")
+	return c.JSON(http.StatusOK, value)
+}
 
 func auditMethod(method string) bool {
 	return method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch || method == http.MethodDelete

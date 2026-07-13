@@ -16,6 +16,7 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	"github.com/feranydev/homeloom/backend/internal/persistence/sqlite"
 	"github.com/feranydev/homeloom/backend/internal/platform/httpapi"
+	"github.com/feranydev/homeloom/backend/internal/platform/safelog"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
 	"github.com/feranydev/homeloom/backend/internal/runtime/providermanager"
@@ -33,7 +34,7 @@ func main() {
 		return
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{ReplaceAttr: safelog.ReplaceAttr}))
 	settings, err := config.Load(*configPath)
 	if err != nil {
 		logger.Error("configuration failed", "error", err)
@@ -132,7 +133,9 @@ func main() {
 	manager.SetStatusHandler(targetService.SetStatus)
 	server := httpapi.NewServer(settings.Server.Address, service, targetService, logger, providerService)
 	server.SetSettingsService(settingsService)
-	server.SetAuditService(application.NewAuditService(store))
+	auditService := application.NewAuditService(store)
+	server.SetAuditService(auditService)
+	server.SetExportService(application.NewExportService(service, providerService, targetService, settingsService, auditService))
 
 	go func() {
 		if err := server.Start(); err != nil {

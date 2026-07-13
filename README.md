@@ -128,6 +128,15 @@ GET /metrics
 
 包含 Core 事件接收/处理/丢弃、队列深度、慢 Target 丢弃、stale 状态、命令开始/确认/拒绝/超时计数。每个 Target 使用独立的 64 条有界队列，慢 Target 不会阻塞设备事件 shard。
 
+支持资料可在系统页按需下载，也可以直接请求：
+
+```text
+GET /api/v1/system/config-export
+GET /api/v1/system/diagnostic-bundle
+```
+
+两者都使用独立的脱敏模型并禁止浏览器缓存：Provider 凭据替换为占位符，桥 PIN、Setup URI 和本地身份存储路径不会进入文件。
+
 Provider 由 Provider Manager 聚合管理。Core 只依赖标准 Provider SDK；Manager 负责初始化、发现、事件转发以及 `Device ID → Provider ID` 写入路由，为后续同时运行 MQTT、米家和其他 Provider 保留统一边界。
 
 Provider 配置保存在 SQLite `providers` 表，启动时由 Provider Factory 按 `type` 构造实例。Migration 会创建默认启用的 `virtual-main`；YAML 不包含 Provider 配置。

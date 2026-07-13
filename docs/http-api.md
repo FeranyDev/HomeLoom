@@ -57,6 +57,8 @@
 - `GET /ready`：检查必要运行依赖；SQLite 可访问时返回 200，否则返回 503 和分项原因；
 - `GET /api/v1/system/version`：版本、commit、构建时间和 Go 版本；
 - `GET/PUT /api/v1/system/settings`：读取或实时更新 SQLite 中的运行时设置；
+- `GET /api/v1/system/config-export`：下载脱敏后的数据库配置快照；
+- `GET /api/v1/system/diagnostic-bundle`：下载版本、指标、脱敏配置和最近审计事件组成的诊断包；
 - `GET /api/v1/diagnostics`：设备、事件、命令、订阅及 Go runtime 快照；
 - `GET /metrics`：Prometheus 文本指标；
 - `GET /api/v1/devices/{id}/states`：内存状态、来源和质量；
@@ -107,6 +109,10 @@ Core 会根据 Capability 中的 `CommandDefinition` 校验必填参数、未声
 ## Provider 敏感配置
 
 Provider 配置仍以完整值保存在 SQLite 中，但管理 API 会递归识别 password、secret、token、API key、private key 和 credential 类字段，并以 `********` 返回。编辑时保留该占位符会沿用数据库中的原值；输入新值会替换原值。新建 Provider 时不能把占位符当作真实密钥提交。数组对象优先按稳定 `id` 恢复密钥，避免配置重排后发生错配。
+
+配置导出使用独立 DTO，不复用包含运行时配对资料的 Target 页面响应。它保留排障所需的 Target ID、类型、名称、地址、Setup ID 和设备绑定，但始终排除 PIN、Setup URI 与本地身份存储路径；Provider 配置沿用递归凭据脱敏。诊断包只在此安全快照之上增加构建信息、当前聚合指标和不含请求体的审计元数据。两个下载响应均携带 `Cache-Control: no-store` 与 `Content-Disposition: attachment`。
+
+进程结构化日志统一经过敏感属性过滤器。敏感键直接替换为 `********`，错误文本或 URL 中常见的 `token=...`、`api_key=...`、`password=...` 等赋值也会在输出前清理。调用方仍不应把完整请求体作为无语义字符串写入日志。
 
 HomeKit PIN 在 SQLite 中使用 AES-256-GCM 加密，主密钥自动保存为数据库旁的 `<database>.key` 文件并强制使用 `0600` 权限。已有明文 PIN 会在升级后的首次启动自动加密；数据库包含密文但密钥缺失时服务会拒绝启动，避免静默生成错误密钥。数据库备份会同时生成同名 `.key` 配套文件，两者必须一起保管和恢复。
 

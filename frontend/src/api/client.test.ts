@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, requestData } from './client'
+import { ApiError, requestData, requestJSON } from './client'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -15,4 +15,13 @@ describe('API client', () => {
     expect(error).toBeInstanceOf(ApiError); if (!(error instanceof ApiError)) throw error
 		expect(error.status).toBe(400); expect(error.message).toBe('invalid config'); expect(error.fields).toEqual({ name: 'required' }); expect(error.code).toBe('bad_request'); expect(error.requestId).toBe('request-123')
   })
+
+	it('handles empty success responses and malformed error bodies', async () => {
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response(null, { status: 204 })).mockResolvedValueOnce(new Response('gateway unavailable', { status: 502 })))
+		await expect(requestJSON<void>('/empty')).resolves.toBeUndefined()
+		const error = await requestJSON('/broken').catch((cause) => cause)
+		expect(error).toBeInstanceOf(ApiError)
+		expect(error).toMatchObject({ status: 502, code: 'unknown_error', requestId: '' })
+		expect((error as Error).message).toBe('请求失败 (502)')
+	})
 })

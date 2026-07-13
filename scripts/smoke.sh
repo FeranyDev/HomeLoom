@@ -38,9 +38,15 @@ if [ "$ready" != true ]; then cat "$TEMP/server.log" >&2; exit 1; fi
 health=$(curl -fsS "$BASE_URL/health")
 version=$(curl -fsS "$BASE_URL/api/v1/system/version")
 devices=$(curl -fsS "$BASE_URL/api/v1/devices")
+config_export=$(curl -fsS "$BASE_URL/api/v1/system/config-export")
+diagnostic_bundle=$(curl -fsS "$BASE_URL/api/v1/system/diagnostic-bundle")
 case "$health" in *'"status":"ok"'*) ;; *) echo "unexpected health response: $health" >&2; exit 1;; esac
 case "$version" in *'"version"'*) ;; *) echo "unexpected version response: $version" >&2; exit 1;; esac
 case "$devices" in *'"schemaVersion":1'*) ;; *) echo "unexpected devices response: $devices" >&2; exit 1;; esac
+case "$config_export" in *'"formatVersion":1'*'"providers"'*'"targets"'*) ;; *) echo "unexpected config export: $config_export" >&2; exit 1;; esac
+case "$diagnostic_bundle" in *'"formatVersion":1'*) ;; *) echo "unexpected diagnostic bundle version: $diagnostic_bundle" >&2; exit 1;; esac
+case "$diagnostic_bundle" in *'"configuration"'*) ;; *) echo "diagnostic bundle has no configuration: $diagnostic_bundle" >&2; exit 1;; esac
+case "$diagnostic_bundle" in *'"metrics"'*) ;; *) echo "diagnostic bundle has no metrics: $diagnostic_bundle" >&2; exit 1;; esac
 
 kill -TERM "$PID"
 wait "$PID"

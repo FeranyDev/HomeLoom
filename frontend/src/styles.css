@@ -11,6 +11,9 @@
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; min-height: 100vh; }
 button { font: inherit; }
+:focus-visible { outline: 3px solid #4f7256; outline-offset: 3px; }
+.skip-link { position: fixed; z-index: 100; top: 12px; left: 12px; padding: 10px 14px; color: white; background: #242722; transform: translateY(-160%); transition: transform .15s ease; }
+.skip-link:focus { transform: translateY(0); }
 
 body::before {
   content: '';
@@ -119,6 +122,9 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .queue-card { display: grid; gap: 13px; padding: 24px; border: 1px solid #d2d0c7; background: rgba(250, 249, 245, .72); }
 .queue-card > div:first-child { display: flex; justify-content: space-between; }
 .queue-card small, .command-heading span { color: #898d85; font-size: 11px; }
+.artifact-card p { margin: 0; color: #686b65; line-height: 1.6; }
+.artifact-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.artifact-actions a { padding: 10px 14px; border: 1px solid #747970; color: #343931; text-decoration: none; }
 .settings-card label { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: 12px; color: #5f625d; }
 .settings-card input { width: 120px; }
 .settings-card > button { justify-self: start; }

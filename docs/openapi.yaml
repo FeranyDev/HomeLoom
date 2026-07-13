@@ -52,6 +52,32 @@ paths:
       responses:
         "200": { description: Settings persisted and applied without restart, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/RuntimeSettings" } } } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
+  /api/v1/system/config-export:
+    get:
+      operationId: exportConfiguration
+      description: Downloads a no-store configuration snapshot. Provider credentials are recursively redacted and Target PIN, setup URI, and storage path are omitted.
+      responses:
+        "200":
+          description: Redacted configuration attachment
+          headers:
+            Content-Disposition: { schema: { type: string } }
+            Cache-Control: { schema: { type: string, enum: [no-store] } }
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/ConfigurationExport" } }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/v1/system/diagnostic-bundle:
+    get:
+      operationId: downloadDiagnosticBundle
+      description: Downloads a no-store support bundle containing build data, metrics, the redacted configuration snapshot, and body-free audit metadata.
+      responses:
+        "200":
+          description: Redacted diagnostic attachment
+          headers:
+            Content-Disposition: { schema: { type: string } }
+            Cache-Control: { schema: { type: string, enum: [no-store] } }
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/DiagnosticBundle" } }
+        "503": { $ref: "#/components/responses/Unavailable" }
   /api/v1/diagnostics:
     get:
       operationId: getDiagnostics
@@ -239,6 +265,36 @@ components:
       properties:
         commandTimeoutSeconds: { type: integer, minimum: 1, maximum: 300, description: Applied only to commands created after the update. }
         commandHistoryLimit: { type: integer, minimum: 100, maximum: 10000, description: Maximum in-memory command records; lowering it immediately removes the oldest terminal records. }
+    ExportTargetConfig:
+      type: object
+      required: [id, type, name, enabled, deviceIds]
+      properties:
+        id: { type: string }
+        type: { type: string }
+        name: { type: string }
+        enabled: { type: boolean }
+        address: { type: string }
+        setupId: { type: string }
+        deviceIds: { type: array, items: { type: string } }
+    ConfigurationExport:
+      type: object
+      required: [formatVersion, generatedAt, providers, targets, settings]
+      properties:
+        formatVersion: { type: integer, enum: [1] }
+        generatedAt: { type: string, format: date-time }
+        providers: { type: array, items: { type: object, additionalProperties: true } }
+        targets: { type: array, items: { $ref: "#/components/schemas/ExportTargetConfig" } }
+        settings: { $ref: "#/components/schemas/RuntimeSettings" }
+    DiagnosticBundle:
+      type: object
+      required: [formatVersion, generatedAt, build, metrics, configuration, recentAudit]
+      properties:
+        formatVersion: { type: integer, enum: [1] }
+        generatedAt: { type: string, format: date-time }
+        build: { type: object, additionalProperties: true }
+        metrics: { type: object, additionalProperties: true }
+        configuration: { $ref: "#/components/schemas/ConfigurationExport" }
+        recentAudit: { type: array, items: { $ref: "#/components/schemas/AuditEvent" } }
     PropertyValue:
       type: object
       required: [type]

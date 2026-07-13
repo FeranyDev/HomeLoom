@@ -177,6 +177,29 @@ func TestMutationAuditAndCommandCorrelationID(t *testing.T) {
 	}
 }
 
+func TestSystemArtifactsAreDownloadsAndDoNotExposeSecrets(t *testing.T) {
+	devices := application.NewDeviceService(virtual.NewProvider())
+	defer devices.Close()
+	providers := application.NewProviderService([]providerconfig.Config{{ID: "mqtt-main", Type: "mqtt", Name: "MQTT", Config: json.RawMessage(`{"password":"provider-secret"}`)}}, nil, nil, nil)
+	targets := application.NewTargetService([]application.TargetRegistration{{Info: application.TargetInfo{ID: "apple-main", Type: "apple-hap", Name: "Bridge", PairingCode: "111-22-333", SetupURI: "X-HM://secret"}}}, nil)
+	server := NewServer(":0", devices, targets, slog.New(slog.NewTextHandler(io.Discard, nil)), providers)
+	server.SetExportService(application.NewExportService(devices, providers, targets, nil, nil))
+
+	for _, path := range []string{"/api/v1/system/config-export", "/api/v1/system/diagnostic-bundle"} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusOK || !strings.Contains(response.Header().Get("Content-Disposition"), "attachment;") || response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("%s: status=%d headers=%v body=%s", path, response.Code, response.Header(), response.Body.String())
+		}
+		for _, secret := range []string{"provider-secret", "111-22-333", "X-HM://secret"} {
+			if strings.Contains(response.Body.String(), secret) {
+				t.Fatalf("%s contains %q: %s", path, secret, response.Body.String())
+			}
+		}
+	}
+}
+
 func TestVersionEndpoint(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/system/version", nil)
 	response := httptest.NewRecorder()
@@ -523,6 +546,28 @@ func TestGenericPropertyWrite(t *testing.T) {
 	newTestServer().Handler().ServeHTTP(nullResponse, nullValue)
 	if nullResponse.Code != http.StatusBadRequest || !bytes.Contains(nullResponse.Body.Bytes(), []byte(`"code":"bad_request"`)) {
 		t.Fatalf("null response = %d %s", nullResponse.Code, nullResponse.Body.String())
+	}
+}
+
+func TestGenericPropertyWritePropagatesRequestTimeoutToVirtualProvider(t *testing.T) {
+	provider, err := virtual.NewProviderFromConfig(providerconfig.Config{ID: "slow", Name: "Slow", Config: json.RawMessage(`{"latencyMs":1000}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := newTestServerWithProvider(provider)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	defer cancel()
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/devices/slow-switch-1/endpoints/main/capabilities/switch/properties/power", bytes.NewBufferString(`{"type":"bool","bool":true}`)).WithContext(ctx)
+	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response := httptest.NewRecorder()
+	started := time.Now()
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusRequestTimeout || !bytes.Contains(response.Body.Bytes(), []byte(`"code":"request_timeout"`)) {
+		t.Fatalf("response = %d %s", response.Code, response.Body.String())
+	}
+	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
+		t.Fatalf("request cancellation took %s", elapsed)
 	}
 }
 

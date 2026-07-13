@@ -131,17 +131,18 @@ export function App() {
 	const filteredDevices = devices.filter((item) => { const matchesText = `${item.name} ${item.id} ${item.providerId}`.toLowerCase().includes(deviceQuery.trim().toLowerCase()); const matchesStatus = deviceStatus === 'all' || (deviceStatus === 'disabled' ? item.disabled : deviceStatus === 'removed' ? item.removed : item.availability === deviceStatus && !item.disabled && !item.removed); return matchesText && matchesStatus })
 	const selectedDevice = selectedDeviceID ? devices.find((item) => item.id === selectedDeviceID) ?? null : null
 
-  return (
-    <main>
-	  <nav className="top-nav">
+  return (<>
+	<a className="skip-link" href="#main-content">跳到主要内容</a>
+    <main id="main-content" tabIndex={-1}>
+	  <nav className="top-nav" aria-label="主要导航">
 	    <a className="wordmark" href="#/devices">HomeLoom</a>
 	    <div>
-	      <button className={page === 'devices' ? 'is-active' : ''} onClick={() => setPage('devices')}>设备</button>
-	      <button className={page === 'providers' ? 'is-active' : ''} onClick={() => setPage('providers')}>Provider</button>
-	      <button className={page === 'targets' ? 'is-active' : ''} onClick={() => setPage('targets')}>桥接中心</button>
-	      <button className={page === 'system' ? 'is-active' : ''} onClick={() => setPage('system')}>系统</button>
+	      <button aria-current={page === 'devices' ? 'page' : undefined} className={page === 'devices' ? 'is-active' : ''} onClick={() => setPage('devices')}>设备</button>
+	      <button aria-current={page === 'providers' ? 'page' : undefined} className={page === 'providers' ? 'is-active' : ''} onClick={() => setPage('providers')}>Provider</button>
+	      <button aria-current={page === 'targets' ? 'page' : undefined} className={page === 'targets' ? 'is-active' : ''} onClick={() => setPage('targets')}>桥接中心</button>
+	      <button aria-current={page === 'system' ? 'page' : undefined} className={page === 'system' ? 'is-active' : ''} onClick={() => setPage('system')}>系统</button>
 	    </div>
-	    <span className="runtime-meta"><span className="version-badge" title={version ? `${version.commit} · ${version.buildTime}` : '版本读取中'}>{version?.version ?? '…'}</span><span className={`live-indicator ${live ? 'is-live' : ''}`}>{live ? '实时' : '重连中'}</span></span>
+	    <span className="runtime-meta"><span className="version-badge" title={version ? `${version.commit} · ${version.buildTime}` : '版本读取中'}>{version?.version ?? '…'}</span><span aria-live="polite" className={`live-indicator ${live ? 'is-live' : ''}`}>{live ? '实时' : '重连中'}</span></span>
 	  </nav>
       <header className="hero">
         <div>
@@ -161,7 +162,7 @@ export function App() {
       </section>
 	  {page === 'devices' && <div className="device-filters"><input aria-label="搜索设备" value={deviceQuery} onChange={(event) => setDeviceQuery(event.target.value)} placeholder="搜索名称、ID 或 Provider" /><select aria-label="设备状态" value={deviceStatus} onChange={(event) => setDeviceStatus(event.target.value as typeof deviceStatus)}><option value="all">全部状态</option><option value="online">仅在线</option><option value="offline">暂时离线</option><option value="unknown">可用性未知</option><option value="disabled">人工禁用</option><option value="removed">来源已删除</option></select><span>{filteredDevices.length} / {devices.length}</span></div>}
 
-      {error && <div className="error-banner">{error}，请确认后端已在 8090 端口运行。</div>}
+      {error && <div className="error-banner" role="alert">{error}，请确认后端已在 8090 端口运行。</div>}
       {loading ? (
         <LoadingState />
       ) : (
@@ -192,5 +193,5 @@ export function App() {
 	  {selectedDevice && <DeviceDetails device={selectedDevice} onClose={() => setSelectedDeviceID(null)} onPropertyWrite={(endpointId, capabilityId, propertyId, value) => handlePropertyWrite(selectedDevice, endpointId, capabilityId, propertyId, value)} onCommandExecute={(endpointId, capabilityId, commandId, parameters, idempotencyKey) => handleCommandExecute(selectedDevice, endpointId, capabilityId, commandId, parameters, idempotencyKey)} />}
 	  <ToastCenter toasts={toasts} dismiss={dismiss} />
     </main>
-  )
+	</>)
 }

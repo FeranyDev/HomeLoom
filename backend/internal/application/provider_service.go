@@ -53,13 +53,7 @@ func NewProviderService(configs []providerconfig.Config, store ProviderStore, fa
 }
 
 func (s *ProviderService) List() []ProviderInfo {
-	s.mu.RLock()
-	configs := make([]providerconfig.Config, 0, len(s.configs))
-	for _, item := range s.configs {
-		item.Config = redactProviderConfig(item.Config)
-		configs = append(configs, item)
-	}
-	s.mu.RUnlock()
+	configs := s.ExportConfigs()
 	runtimes := make(map[string]providersdk.RuntimeInfo)
 	if s.runtime != nil {
 		for _, item := range s.runtime.ProviderInfos() {
@@ -80,6 +74,20 @@ func (s *ProviderService) List() []ProviderInfo {
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result
+}
+
+// ExportConfigs returns a stable, detached snapshot that is safe to include in
+// support artifacts. Secret values are replaced at every nesting level.
+func (s *ProviderService) ExportConfigs() []providerconfig.Config {
+	s.mu.RLock()
+	configs := make([]providerconfig.Config, 0, len(s.configs))
+	for _, item := range s.configs {
+		item.Config = redactProviderConfig(item.Config)
+		configs = append(configs, item)
+	}
+	s.mu.RUnlock()
+	sort.Slice(configs, func(i, j int) bool { return configs[i].ID < configs[j].ID })
+	return configs
 }
 
 var validProviderID = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
