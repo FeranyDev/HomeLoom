@@ -27,6 +27,11 @@ export interface MappingProfile {
 
 export interface MappingProfileInfo extends MappingProfile { builtIn: boolean }
 
+export interface MappingBinding {
+  id: string; profileId: string; providerId: string; deviceId: string
+  endpointId: string; capabilityId: string; propertyId: string; enabled: boolean
+}
+
 export interface MappingPreviewRequest { profileId?: string; profile?: MappingProfile; direction: MappingDirection; value: PropertyValue | null }
 export interface MappingStep { index: number; transform: string; input: PropertyValue | null; output: PropertyValue }
 export interface MappingPreviewResult { profileId: string; profileVersion: number; direction: MappingDirection; value: PropertyValue; steps: MappingStep[] }

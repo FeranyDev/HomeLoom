@@ -115,8 +115,20 @@ func main() {
 		logger.Error("provider initialization failed", "error", err)
 		os.Exit(1)
 	}
-	service := application.NewDeviceService(providerManager, store)
+	profileService, err := application.NewProfileService(ctx, store)
+	if err != nil {
+		logger.Error("mapping profile load failed", "error", err)
+		os.Exit(1)
+	}
+	service := application.NewDeviceService(providerManager, store, profileService)
 	defer service.Close()
+	profileService.SetChangeHandler(func(changeCtx context.Context) {
+		refreshCtx, cancelRefresh := context.WithTimeout(context.WithoutCancel(changeCtx), 10*time.Second)
+		defer cancelRefresh()
+		if refreshErr := service.RefreshDevices(refreshCtx); refreshErr != nil {
+			logger.Error("mapping hot reload failed", "error", refreshErr)
+		}
+	})
 	if err := service.LoadDevicePreferences(ctx); err != nil {
 		logger.Error("device preference load failed", "error", err)
 		os.Exit(1)
@@ -127,11 +139,6 @@ func main() {
 		os.Exit(1)
 	}
 	providerService := application.NewProviderService(providerConfigs, store, factory, providerManager)
-	profileService, err := application.NewProfileService(ctx, store)
-	if err != nil {
-		logger.Error("mapping profile load failed", "error", err)
-		os.Exit(1)
-	}
 	targetConfigs, err := store.ListTargets(ctx)
 	if err != nil {
 		logger.Error("target configuration load failed", "error", err)

@@ -122,6 +122,10 @@ Profile 管理入口为 `GET/POST /api/v1/mapping/profiles` 和 `GET/PUT/DELETE 
 
 HomeLoom 随程序提供 provider、capability 和 target 三类内置示例 Profile。内置 ID 只读且不能被用户配置覆盖。`POST /api/v1/mapping/profiles/import` 会先验证完整批次，再使用单个 SQLite 事务写入，任何一项错误都不会产生部分导入。`GET /api/v1/mapping/profiles/export` 只导出用户 Profile，生成的文件可以直接重新导入；全局脱敏配置导出和诊断包则包含内置与用户 Profile，便于还原排障上下文。
 
+运行时属性绑定入口为 `GET/POST /api/v1/mapping/bindings` 和 `GET/PUT/DELETE /api/v1/mapping/bindings/{id}`。绑定存储于 SQLite `mapping_bindings`，精确指定 Provider、设备、Endpoint、Capability 和 Property 路径；ID 可以省略并由后端生成。启用后，Provider 快照和读取结果执行 `forward` 转换，属性控制执行 `reverse` 转换。保存、启停或删除会同步重新发现并处理当前 Provider 快照，不重启 Provider 或 Target。首版运行时绑定要求 Profile 不是 target kind、输入输出类型一致且每一步可逆；因此 `clamp` 不能绑定到真实读写链路。正在被绑定引用的用户 Profile 不能删除，也不能更新为不兼容流水线。
+
+诊断响应的 `mappingApplied` 和 `mappingErrors` 分别统计运行时转换命中与失败。转换失败的 Provider 事件不会覆盖内存中的上一份有效设备状态；错误配置仍保存在数据库中，便于管理员修正而不会触发服务重启循环。全局脱敏配置导出和 SQLite 备份均包含属性绑定。
+
 ## Provider 敏感配置
 
 Provider 配置仍以完整值保存在 SQLite 中，但管理 API 会递归识别 password、secret、token、API key、private key 和 credential 类字段，并以 `********` 返回。编辑时保留该占位符会沿用数据库中的原值；输入新值会替换原值。新建 Provider 时不能把占位符当作真实密钥提交。数组对象优先按稳定 `id` 恢复密钥，避免配置重排后发生错配。

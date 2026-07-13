@@ -27,6 +27,9 @@ func TestRestoreValidatesSecretsAndPreservesPreviousDatabase(t *testing.T) {
 	if err := store.SaveMappingProfile(ctx, mapping.Profile{SchemaVersion: 1, ID: "restored-profile", Version: 1, Kind: mapping.KindProvider, InputType: device.ValueTypeBool, OutputType: device.ValueTypeBool, Transforms: []mapping.Transform{{Type: mapping.TransformInvert}}}); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.SaveMappingBinding(ctx, mapping.Binding{ID: "restored-binding", ProfileID: "restored-profile", ProviderID: "virtual-main", DeviceID: "virtual-switch-1", EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
 	backup := filepath.Join(directory, "backup.db")
 	if err := store.Backup(ctx, backup); err != nil {
 		t.Fatal(err)
@@ -68,6 +71,10 @@ func TestRestoreValidatesSecretsAndPreservesPreviousDatabase(t *testing.T) {
 	profiles, err := restored.ListMappingProfiles(ctx)
 	if err != nil || !hasProfile(profiles, "restored-profile") {
 		t.Fatalf("profiles = %#v, error = %v", profiles, err)
+	}
+	bindings, err := restored.ListMappingBindings(ctx)
+	if err != nil || len(bindings) != 1 || bindings[0].ID != "restored-binding" {
+		t.Fatalf("bindings = %#v, error = %v", bindings, err)
 	}
 	_ = restored.Close()
 

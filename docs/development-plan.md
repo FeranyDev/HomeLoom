@@ -286,6 +286,7 @@ device_capabilities
 property_states
 pending_commands
 mapping_profiles
+mapping_bindings
 hap_bridges
 hap_accessories
 hap_instances

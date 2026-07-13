@@ -359,6 +359,59 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		}
 		return c.NoContent(http.StatusNoContent)
 	})
+	e.GET("/api/v1/mapping/bindings", func(c echo.Context) error {
+		if server.profiles == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "mapping bindings are unavailable")
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": server.profiles.ListBindings()})
+	})
+	e.POST("/api/v1/mapping/bindings", func(c echo.Context) error {
+		if server.profiles == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "mapping bindings are unavailable")
+		}
+		var item mapping.Binding
+		if err := c.Bind(&item); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid mapping binding")
+		}
+		created, err := server.profiles.CreateBinding(c.Request().Context(), item)
+		if err != nil {
+			return profileHTTPError(err)
+		}
+		return c.JSON(http.StatusCreated, map[string]any{"data": created})
+	})
+	e.GET("/api/v1/mapping/bindings/:id", func(c echo.Context) error {
+		if server.profiles == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "mapping bindings are unavailable")
+		}
+		item, err := server.profiles.GetBinding(c.Param("id"))
+		if err != nil {
+			return profileHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": item})
+	})
+	e.PUT("/api/v1/mapping/bindings/:id", func(c echo.Context) error {
+		if server.profiles == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "mapping bindings are unavailable")
+		}
+		var item mapping.Binding
+		if err := c.Bind(&item); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid mapping binding")
+		}
+		updated, err := server.profiles.UpdateBinding(c.Request().Context(), c.Param("id"), item)
+		if err != nil {
+			return profileHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": updated})
+	})
+	e.DELETE("/api/v1/mapping/bindings/:id", func(c echo.Context) error {
+		if server.profiles == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "mapping bindings are unavailable")
+		}
+		if err := server.profiles.DeleteBinding(c.Request().Context(), c.Param("id")); err != nil {
+			return profileHTTPError(err)
+		}
+		return c.NoContent(http.StatusNoContent)
+	})
 	e.GET("/api/v1/system/config-export", func(c echo.Context) error {
 		if server.exports == nil {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "configuration export is unavailable")
@@ -959,7 +1012,10 @@ func profileHTTPError(err error) error {
 	if errors.Is(err, application.ErrProfileNotFound) {
 		return echo.NewHTTPError(http.StatusNotFound, "mapping profile not found")
 	}
-	if errors.Is(err, application.ErrProfileExists) || errors.Is(err, application.ErrProfileBuiltIn) {
+	if errors.Is(err, application.ErrBindingNotFound) {
+		return echo.NewHTTPError(http.StatusNotFound, "mapping binding not found")
+	}
+	if errors.Is(err, application.ErrProfileExists) || errors.Is(err, application.ErrProfileBuiltIn) || errors.Is(err, application.ErrProfileInUse) || errors.Is(err, application.ErrBindingExists) {
 		return echo.NewHTTPError(http.StatusConflict, err.Error())
 	}
 	var validation *application.ValidationError
@@ -985,10 +1041,17 @@ func auditResource(c echo.Context) (action, resourceType, resourceID string) {
 	if route == "" {
 		route = c.Request().URL.Path
 	}
+	if strings.HasPrefix(route, "/api/v1/mapping/bindings") {
+		resourceType, resourceID = "mapping-binding", c.Param("id")
+		action = strings.ToLower(c.Request().Method)
+		return action, resourceType, resourceID
+	}
 	if strings.HasPrefix(route, "/api/v1/mapping/profiles") {
 		resourceType, resourceID = "mapping-profile", c.Param("id")
 		action = strings.ToLower(c.Request().Method)
-		if strings.HasSuffix(route, "/import") { action = "import" }
+		if strings.HasSuffix(route, "/import") {
+			action = "import"
+		}
 		return action, resourceType, resourceID
 	}
 	segments := strings.Split(strings.TrimPrefix(route, "/api/v1/"), "/")

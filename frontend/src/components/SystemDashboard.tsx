@@ -51,6 +51,8 @@ export function SystemDashboard({ diagnostics, commands, auditEvents = [], setti
 	['SQLite 最大延迟', `${diagnostics.databaseMaxLatencyMs.toFixed(1)}ms`],
 	['Provider 时钟漂移', diagnostics.providerClockSkewEvents],
 	['忽略乱序/重复事件', diagnostics.providerEventsIgnored ?? 0],
+	['属性映射命中', diagnostics.mappingApplied ?? 0],
+	['属性映射失败', diagnostics.mappingErrors ?? 0],
 	['最大时钟偏差', `${diagnostics.providerMaxClockSkewMs.toFixed(0)}ms`],
   ]
   return <section className="system-dashboard"><div className="metric-grid">{metrics.map(([label, value]) => <article key={label}><span>{label}</span><strong>{value}</strong></article>)}</div>

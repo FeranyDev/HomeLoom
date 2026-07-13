@@ -624,6 +624,34 @@ func TestMappingProfileCRUDHotReloadAndExport(t *testing.T) {
 		t.Fatalf("preview = %d %s", response.Code, response.Body.String())
 	}
 
+	createBinding := httptest.NewRequest(http.MethodPost, "/api/v1/mapping/bindings", bytes.NewBufferString(`{"profileId":"custom-invert","providerId":"virtual-main","deviceId":"virtual-switch-1","endpointId":"main","capabilityId":"switch","propertyId":"power","enabled":true}`))
+	createBinding.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, createBinding)
+	if response.Code != http.StatusCreated || !bytes.Contains(response.Body.Bytes(), []byte(`"profileId":"custom-invert"`)) {
+		t.Fatalf("create binding = %d %s", response.Code, response.Body.String())
+	}
+	var bindingResponse struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &bindingResponse); err != nil || bindingResponse.Data.ID == "" {
+		t.Fatalf("decode binding = %#v, %v", bindingResponse, err)
+	}
+	removeInUse := httptest.NewRequest(http.MethodDelete, "/api/v1/mapping/profiles/custom-invert", nil)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, removeInUse)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("delete in-use profile = %d %s", response.Code, response.Body.String())
+	}
+	removeBinding := httptest.NewRequest(http.MethodDelete, "/api/v1/mapping/bindings/"+bindingResponse.Data.ID, nil)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, removeBinding)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("delete binding = %d %s", response.Code, response.Body.String())
+	}
+
 	sameVersion := httptest.NewRequest(http.MethodPut, "/api/v1/mapping/profiles/custom-invert", bytes.NewBufferString(`{"schemaVersion":1,"version":1,"kind":"provider","inputType":"bool","outputType":"bool","transforms":[{"type":"invert"}]}`))
 	sameVersion.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	response = httptest.NewRecorder()

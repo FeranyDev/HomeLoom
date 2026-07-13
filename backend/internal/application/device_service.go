@@ -14,6 +14,7 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	domainstate "github.com/feranydev/homeloom/backend/internal/domain/state"
 	"github.com/feranydev/homeloom/backend/internal/eventbus"
+	"github.com/feranydev/homeloom/backend/internal/mapping"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	"github.com/feranydev/homeloom/backend/internal/registry"
 	statestore "github.com/feranydev/homeloom/backend/internal/state"
@@ -45,6 +46,7 @@ type DeviceService struct {
 	stateListeners map[uint64]*stateSubscription
 	snapshotMu     sync.Mutex
 	snapshotSeq    map[string]uint64
+	refreshMu      sync.Mutex
 	staleCancel    context.CancelFunc
 	staleDone      chan struct{}
 	metrics        deviceMetrics
@@ -54,6 +56,7 @@ type DeviceService struct {
 	disabled       map[string]struct{}
 	propertyMu     sync.Mutex
 	propertyOps    map[domainstate.Key]*propertyOperation
+	propertyMapper PropertyMapper
 }
 
 type propertyOperation struct {
@@ -78,6 +81,11 @@ type DatabaseHealthProvider interface {
 type DevicePreferenceStore interface {
 	ListDisabledDeviceIDs(context.Context) ([]string, error)
 	SetDeviceDisabled(context.Context, string, bool) error
+}
+
+type PropertyMapper interface {
+	TransformProperty(providerID, deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue, direction mapping.Direction) (device.PropertyValue, string, bool, error)
+	TransformPropertyDefinition(providerID, deviceID, endpointID, capabilityID, propertyID string, definition device.PropertyDefinition) (device.PropertyDefinition, string, bool, error)
 }
 
 type Readiness struct {
@@ -112,6 +120,8 @@ type deviceMetrics struct {
 	homeKitPushes         atomic.Uint64
 	providerClockSkews    atomic.Uint64
 	providerEventsIgnored atomic.Uint64
+	mappingApplied        atomic.Uint64
+	mappingErrors         atomic.Uint64
 	maxClockSkewNanos     atomic.Uint64
 }
 
@@ -153,6 +163,8 @@ type DeviceMetrics struct {
 	ProviderClockSkewEvents  uint64  `json:"providerClockSkewEvents"`
 	ProviderMaxClockSkewMS   float64 `json:"providerMaxClockSkewMs"`
 	ProviderEventsIgnored    uint64  `json:"providerEventsIgnored"`
+	MappingApplied           uint64  `json:"mappingApplied"`
+	MappingErrors            uint64  `json:"mappingErrors"`
 	Goroutines               int     `json:"goroutines"`
 	HeapAllocBytes           uint64  `json:"heapAllocBytes"`
 	HeapObjects              uint64  `json:"heapObjects"`
@@ -176,27 +188,39 @@ func (s *DeviceService) SetCommandTimeout(timeout time.Duration) { s.commands.Se
 
 func (s *DeviceService) SetCommandHistoryLimit(limit int) { s.commands.SetMaxItems(limit) }
 
-func NewDeviceService(provider providersdk.Provider, storageMetrics ...DatabaseMetricsProvider) *DeviceService {
+func NewDeviceService(provider providersdk.Provider, dependencies ...any) *DeviceService {
 	discoverer, _ := provider.(providersdk.Discoverer)
 	reader, _ := provider.(providersdk.PropertyReader)
 	writer, _ := provider.(providersdk.PropertyWriter)
 	executor, _ := provider.(providersdk.CommandExecutor)
+	service := &DeviceService{
+		provider: provider, discoverer: discoverer, reader: reader, writer: writer, executor: executor,
+		registry: registry.NewDeviceRegistry(nil),
+		states:   statestore.NewStore(), commands: commandtracker.NewTracker(5 * time.Second), commandQueue: newCommandCoordinator(),
+		listeners: make(map[uint64]*deviceSubscription), stateListeners: make(map[uint64]*stateSubscription), snapshotSeq: make(map[string]uint64), disabled: make(map[string]struct{}), propertyOps: make(map[domainstate.Key]*propertyOperation),
+	}
+	for _, dependency := range dependencies {
+		if metrics, ok := dependency.(DatabaseMetricsProvider); ok && service.storageMetrics == nil {
+			service.storageMetrics = metrics
+		}
+		if preferences, ok := dependency.(DevicePreferenceStore); ok && service.preferences == nil {
+			service.preferences = preferences
+		}
+		if mapper, ok := dependency.(PropertyMapper); ok && service.propertyMapper == nil {
+			service.propertyMapper = mapper
+		}
+	}
 	items := make([]device.Device, 0)
 	if discoverer != nil {
 		items, _ = discoverer.DiscoverDevices(context.Background())
 	}
-	service := &DeviceService{
-		provider: provider, discoverer: discoverer, reader: reader, writer: writer, executor: executor,
-		registry: registry.NewDeviceRegistry(items),
-		states:   statestore.NewStore(), commands: commandtracker.NewTracker(5 * time.Second), commandQueue: newCommandCoordinator(),
-		listeners: make(map[uint64]*deviceSubscription), stateListeners: make(map[uint64]*stateSubscription), snapshotSeq: make(map[string]uint64), disabled: make(map[string]struct{}), propertyOps: make(map[domainstate.Key]*propertyOperation),
-	}
-	if len(storageMetrics) > 0 {
-		service.storageMetrics = storageMetrics[0]
-		service.preferences, _ = any(storageMetrics[0]).(DevicePreferenceStore)
-	}
 	for _, item := range items {
+		mapped, err := service.mapSnapshot(item)
+		if err == nil {
+			item = mapped
+		}
 		item.NormalizeAvailability()
+		service.registry.Upsert(item)
 		if item.IsOnline() {
 			service.acceptSnapshotSequence(item)
 			service.applySnapshot(item, "")
@@ -347,7 +371,34 @@ func (s *DeviceService) Simulate(ctx context.Context, request providersdk.Simula
 	if errors.Is(err, providersdk.ErrSimulationInvalid) {
 		return device.Device{}, ErrPropertyUnsupported
 	}
-	return item, err
+	if err != nil {
+		return item, err
+	}
+	mapped, mapErr := s.mapSnapshot(item)
+	if mapErr != nil {
+		return device.Device{}, mapErr
+	}
+	return mapped, nil
+}
+
+// RefreshDevices reconciles current raw provider snapshots through the latest
+// mapping bindings. It is safe to call after configuration changes and does not
+// restart providers or target bridges.
+func (s *DeviceService) RefreshDevices(ctx context.Context) error {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+	if s.discoverer == nil {
+		return nil
+	}
+	items, err := s.discoverer.DiscoverDevices(ctx)
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		s.resetSnapshotSequence(item.ID)
+		s.handleEvent(eventbus.Event{DeviceID: item.ID, Payload: item, TraceID: CorrelationID(ctx)})
+	}
+	return nil
 }
 
 func (s *DeviceService) Metrics() DeviceMetrics {
@@ -417,6 +468,7 @@ func (s *DeviceService) Metrics() DeviceMetrics {
 		EventAverageLatencyMS: float64(eventStats.AverageLatency.Nanoseconds()) / float64(time.Millisecond), EventMaxLatencyMS: float64(eventStats.MaxLatency.Nanoseconds()) / float64(time.Millisecond), SlowEventHandlers: eventStats.SlowHandlers,
 		DatabaseOperations: databaseOperations, DatabaseAverageLatencyMS: float64(databaseAverage.Nanoseconds()) / float64(time.Millisecond), DatabaseMaxLatencyMS: float64(databaseMaximum.Nanoseconds()) / float64(time.Millisecond),
 		ProviderClockSkewEvents: s.metrics.providerClockSkews.Load(), ProviderMaxClockSkewMS: float64(s.metrics.maxClockSkewNanos.Load()) / float64(time.Millisecond), ProviderEventsIgnored: s.metrics.providerEventsIgnored.Load(),
+		MappingApplied: s.metrics.mappingApplied.Load(), MappingErrors: s.metrics.mappingErrors.Load(),
 		Goroutines: runtime.NumGoroutine(), HeapAllocBytes: memory.HeapAlloc, HeapObjects: memory.HeapObjects,
 	}
 }
@@ -426,15 +478,27 @@ func (s *DeviceService) List(ctx context.Context) ([]device.Device, error) {
 }
 
 func (s *DeviceService) SetPower(ctx context.Context, id string, power bool) (device.Device, error) {
-	if item, ok := s.registry.Get(id); ok && (item.Disabled || item.Removed) {
+	item, ok := s.registry.Get(id)
+	if ok && (item.Disabled || item.Removed) {
 		return device.Device{}, ErrDeviceDisabled
+	}
+	if !ok {
+		return device.Device{}, ErrDeviceNotFound
 	}
 	if s.writer == nil {
 		return device.Device{}, ErrPropertyUnsupported
 	}
-	return s.writer.WriteProperty(ctx, providersdk.PropertyWriteRequest{
-		DeviceID: id, EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Value: device.BoolValue(power),
+	value, _, _, err := s.mapProperty(item.ProviderID, id, "main", "switch", "power", device.BoolValue(power), mapping.DirectionReverse)
+	if err != nil {
+		return device.Device{}, err
+	}
+	updated, err := s.writer.WriteProperty(ctx, providersdk.PropertyWriteRequest{
+		DeviceID: id, EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Value: value,
 	})
+	if err != nil {
+		return device.Device{}, err
+	}
+	return s.mapSnapshot(updated)
 }
 
 func (s *DeviceService) ReadProperty(ctx context.Context, deviceID, endpointID, capabilityID, propertyID string) (device.Property, error) {
@@ -444,9 +508,30 @@ func (s *DeviceService) ReadProperty(ctx context.Context, deviceID, endpointID, 
 	if s.reader == nil {
 		return device.Property{}, ErrPropertyUnsupported
 	}
-	return s.reader.ReadProperty(ctx, providersdk.PropertyReadRequest{
+	property, err := s.reader.ReadProperty(ctx, providersdk.PropertyReadRequest{
 		DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID, PropertyID: propertyID,
 	})
+	if err != nil {
+		return device.Property{}, err
+	}
+	item, ok := s.registry.Get(deviceID)
+	if !ok {
+		return device.Property{}, ErrDeviceNotFound
+	}
+	if s.propertyMapper != nil {
+		definition, _, _, definitionErr := s.propertyMapper.TransformPropertyDefinition(item.ProviderID, deviceID, endpointID, capabilityID, propertyID, property.Definition)
+		if definitionErr != nil {
+			s.metrics.mappingErrors.Add(1)
+			return device.Property{}, definitionErr
+		}
+		property.Definition = definition
+	}
+	mapped, _, _, err := s.mapProperty(item.ProviderID, deviceID, endpointID, capabilityID, propertyID, property.Value, mapping.DirectionForward)
+	if err != nil {
+		return device.Property{}, err
+	}
+	property.Value = mapped
+	return property, nil
 }
 
 func (s *DeviceService) ExecutePower(ctx context.Context, id string, power bool) (device.Device, domaincommand.Command, error) {
@@ -511,8 +596,25 @@ func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointI
 		current, _ := s.commands.Get(command.ID)
 		return device.Device{}, current, err
 	}
+	registered, ok := s.registry.Get(deviceID)
+	if !ok {
+		err := ErrDeviceNotFound
+		s.commands.Rejected(command.ID, err)
+		s.rollbackOptimistic(command.ID, previous, hadPrevious)
+		s.metrics.commandsRejected.Add(1)
+		current, _ := s.commands.Get(command.ID)
+		return device.Device{}, current, err
+	}
+	providerValue, _, _, mapErr := s.mapProperty(registered.ProviderID, deviceID, endpointID, capabilityID, propertyID, value, mapping.DirectionReverse)
+	if mapErr != nil {
+		s.commands.Rejected(command.ID, mapErr)
+		s.rollbackOptimistic(command.ID, previous, hadPrevious)
+		s.metrics.commandsRejected.Add(1)
+		current, _ := s.commands.Get(command.ID)
+		return device.Device{}, current, mapErr
+	}
 	item, err := s.writer.WriteProperty(operation.ctx, providersdk.PropertyWriteRequest{
-		DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID, PropertyID: propertyID, Value: value,
+		DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID, PropertyID: propertyID, Value: providerValue,
 	})
 	if err != nil {
 		if current, ok := s.commands.Get(command.ID); ok && current.Status == domaincommand.StatusSuperseded {
@@ -530,6 +632,9 @@ func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointI
 		return device.Device{}, current, ErrCommandSuperseded
 	}
 	s.commands.Accepted(command.ID)
+	if mapped, mapErr := s.mapSnapshot(item); mapErr == nil {
+		item = mapped
+	}
 	current, _ := s.commands.Get(command.ID)
 	return item, current, nil
 }
@@ -862,6 +967,11 @@ func (s *DeviceService) handleEvent(event eventbus.Event) {
 		return
 	}
 	s.metrics.eventsProcessed.Add(1)
+	mapped, err := s.mapSnapshot(item)
+	if err != nil {
+		return
+	}
+	item = mapped
 	item.NormalizeAvailability()
 	if s.isDeviceDisabled(item.ID) {
 		item.Disabled = true
@@ -900,6 +1010,52 @@ func (s *DeviceService) handleEvent(event eventbus.Event) {
 		}
 	}
 	s.publishDevice(item)
+}
+
+func (s *DeviceService) mapSnapshot(item device.Device) (device.Device, error) {
+	if s.propertyMapper == nil {
+		return item, nil
+	}
+	result := item
+	result.Endpoints = append([]device.Endpoint(nil), item.Endpoints...)
+	for endpointIndex := range result.Endpoints {
+		endpoint := &result.Endpoints[endpointIndex]
+		endpoint.Capabilities = append([]device.Capability(nil), endpoint.Capabilities...)
+		for capabilityIndex := range endpoint.Capabilities {
+			capability := &endpoint.Capabilities[capabilityIndex]
+			capability.Properties = append([]device.Property(nil), capability.Properties...)
+			for propertyIndex := range capability.Properties {
+				property := &capability.Properties[propertyIndex]
+				definition, _, _, definitionErr := s.propertyMapper.TransformPropertyDefinition(item.ProviderID, item.ID, endpoint.ID, capability.ID, property.Definition.ID, property.Definition)
+				if definitionErr != nil {
+					s.metrics.mappingErrors.Add(1)
+					return device.Device{}, definitionErr
+				}
+				value, _, _, err := s.mapProperty(item.ProviderID, item.ID, endpoint.ID, capability.ID, property.Definition.ID, property.Value, mapping.DirectionForward)
+				if err != nil {
+					return device.Device{}, err
+				}
+				property.Definition = definition
+				property.Value = value
+			}
+		}
+	}
+	return result, nil
+}
+
+func (s *DeviceService) mapProperty(providerID, deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue, direction mapping.Direction) (device.PropertyValue, string, bool, error) {
+	if s.propertyMapper == nil {
+		return value, "", false, nil
+	}
+	mapped, bindingID, applied, err := s.propertyMapper.TransformProperty(providerID, deviceID, endpointID, capabilityID, propertyID, value, direction)
+	if err != nil {
+		s.metrics.mappingErrors.Add(1)
+		return device.PropertyValue{}, bindingID, applied, err
+	}
+	if applied {
+		s.metrics.mappingApplied.Add(1)
+	}
+	return mapped, bindingID, applied, nil
 }
 
 func (s *DeviceService) publishDevice(item device.Device) {

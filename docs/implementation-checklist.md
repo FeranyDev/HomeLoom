@@ -435,8 +435,8 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 
 ### 10.1 Profile 模型
 
-- [~] Provider Profile（模型、内置样例和管理已完成，Provider 运行时绑定待实现）；
-- [~] Capability Profile（模型、内置样例和管理已完成，Capability 生成绑定待实现）；
+- [x] Provider Profile（模型、内置样例、数据库管理和精确属性运行时绑定）；
+- [~] Capability Profile（可用于精确属性运行时绑定，Capability 自动生成规则待实现）；
 - [~] Target Profile（模型、内置样例和管理已完成，Target 发布绑定待实现）；
 - [x] Profile ID 和版本；
 - [x] Profile schema；
@@ -466,8 +466,10 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [ ] Capability 结果预览；
 - [ ] HAP Target 结果预览；
 - [x] 前端 Profile 管理；
+- [x] 前端设备属性绑定管理；
 - [x] 映射调试页面；
-- [~] 热重载（管理 API 与预览快照实时更新，运行时映射绑定待接入）；
+- [x] Profile 与属性绑定热重载（刷新 Provider 原始快照，不重启 Provider/Target）；
+- [x] 运行时映射命中和失败诊断计数；
 - [x] 表驱动转换测试。
 
 退出条件：新增普通 MQTT 设备类型不需要修改 Go 代码。

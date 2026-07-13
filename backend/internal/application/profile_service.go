@@ -16,6 +16,9 @@ var (
 	ErrProfileNotFound = errors.New("mapping profile not found")
 	ErrProfileExists   = errors.New("mapping profile already exists")
 	ErrProfileBuiltIn  = errors.New("built-in mapping profile is read-only")
+	ErrProfileInUse    = errors.New("mapping profile is used by a binding")
+	ErrBindingNotFound = errors.New("mapping binding not found")
+	ErrBindingExists   = errors.New("mapping binding already exists for this property")
 )
 
 type ProfileStore interface {
@@ -23,6 +26,9 @@ type ProfileStore interface {
 	SaveMappingProfile(context.Context, mapping.Profile) error
 	SaveMappingProfiles(context.Context, []mapping.Profile) error
 	DeleteMappingProfile(context.Context, string) error
+	ListMappingBindings(context.Context) ([]mapping.Binding, error)
+	SaveMappingBinding(context.Context, mapping.Binding) error
+	DeleteMappingBinding(context.Context, string) error
 }
 
 type ProfileInfo struct {
@@ -31,14 +37,17 @@ type ProfileInfo struct {
 }
 
 type ProfileService struct {
-	mu       sync.RWMutex
-	profiles map[string]mapping.Profile
-	builtIns map[string]mapping.Profile
-	store    ProfileStore
+	mu            sync.RWMutex
+	profiles      map[string]mapping.Profile
+	builtIns      map[string]mapping.Profile
+	bindings      map[string]mapping.Binding
+	bindingsByKey map[string]string
+	store         ProfileStore
+	changeHandler func(context.Context)
 }
 
 func NewProfileService(ctx context.Context, store ProfileStore) (*ProfileService, error) {
-	service := &ProfileService{profiles: make(map[string]mapping.Profile), builtIns: make(map[string]mapping.Profile), store: store}
+	service := &ProfileService{profiles: make(map[string]mapping.Profile), builtIns: make(map[string]mapping.Profile), bindings: make(map[string]mapping.Binding), bindingsByKey: make(map[string]string), store: store}
 	for _, item := range BuiltInProfiles() {
 		if err := mapping.Validate(item); err != nil {
 			return nil, fmt.Errorf("validate built-in mapping profile %q: %w", item.ID, err)
@@ -57,6 +66,20 @@ func NewProfileService(ctx context.Context, store ProfileStore) (*ProfileService
 			return nil, fmt.Errorf("validate stored mapping profile %q: %w", item.ID, err)
 		}
 		service.profiles[item.ID] = cloneProfile(item)
+	}
+	bindings, err := store.ListMappingBindings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range bindings {
+		if err := service.validateBindingLocked(item); err != nil {
+			return nil, fmt.Errorf("validate stored mapping binding %q: %w", item.ID, err)
+		}
+		if _, duplicate := service.bindingsByKey[item.Key()]; duplicate {
+			return nil, fmt.Errorf("stored mapping binding %q duplicates property path %s", item.ID, mapping.BindingPath(item))
+		}
+		service.bindings[item.ID] = item
+		service.bindingsByKey[item.Key()] = item.ID
 	}
 	return service, nil
 }
@@ -138,21 +161,33 @@ func (s *ProfileService) Update(ctx context.Context, id string, item mapping.Pro
 		return ProfileInfo{}, err
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if _, exists := s.builtIns[id]; exists {
+		s.mu.Unlock()
 		return ProfileInfo{}, ErrProfileBuiltIn
 	}
 	current, exists := s.profiles[id]
 	if !exists {
+		s.mu.Unlock()
 		return ProfileInfo{}, ErrProfileNotFound
 	}
 	if item.Version <= current.Version {
+		s.mu.Unlock()
 		return ProfileInfo{}, NewValidationError("invalid mapping profile", map[string]string{"version": fmt.Sprintf("must be greater than current version %d", current.Version)})
 	}
-	if err := s.store.SaveMappingProfile(ctx, item); err != nil {
+	if err := validateRuntimeProfileUpdate(item, s.bindings, id); err != nil {
+		s.mu.Unlock()
 		return ProfileInfo{}, err
 	}
+	if err := s.store.SaveMappingProfile(ctx, item); err != nil {
+		s.mu.Unlock()
+		return ProfileInfo{}, err
+	}
+	usedByBinding := profileUsedByBinding(s.bindings, id)
 	s.profiles[id] = cloneProfile(item)
+	s.mu.Unlock()
+	if usedByBinding {
+		s.notifyChanged(ctx)
+	}
 	return ProfileInfo{Profile: cloneProfile(item)}, nil
 }
 
@@ -164,6 +199,11 @@ func (s *ProfileService) Delete(ctx context.Context, id string) error {
 	}
 	if _, exists := s.profiles[id]; !exists {
 		return ErrProfileNotFound
+	}
+	for _, binding := range s.bindings {
+		if binding.ProfileID == id {
+			return ErrProfileInUse
+		}
 	}
 	if err := s.store.DeleteMappingProfile(ctx, id); err != nil {
 		return err
@@ -187,24 +227,54 @@ func (s *ProfileService) Import(ctx context.Context, items []mapping.Profile) ([
 		seen[item.ID] = struct{}{}
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	for index, item := range items {
 		if _, exists := s.builtIns[item.ID]; exists {
+			s.mu.Unlock()
 			return nil, NewValidationError("invalid mapping profile import", map[string]string{fmt.Sprintf("profiles.%d.id", index): "conflicts with a built-in profile"})
 		}
 		if current, exists := s.profiles[item.ID]; exists && item.Version <= current.Version {
+			s.mu.Unlock()
 			return nil, NewValidationError("invalid mapping profile import", map[string]string{fmt.Sprintf("profiles.%d.version", index): fmt.Sprintf("must be greater than current version %d", current.Version)})
+		}
+		if err := validateRuntimeProfileUpdate(item, s.bindings, item.ID); err != nil {
+			s.mu.Unlock()
+			return nil, err
 		}
 	}
 	if err := s.store.SaveMappingProfiles(ctx, items); err != nil {
+		s.mu.Unlock()
 		return nil, err
 	}
 	result := make([]ProfileInfo, 0, len(items))
+	refreshRuntime := false
 	for _, item := range items {
+		refreshRuntime = refreshRuntime || profileUsedByBinding(s.bindings, item.ID)
 		s.profiles[item.ID] = cloneProfile(item)
 		result = append(result, ProfileInfo{Profile: cloneProfile(item)})
 	}
+	s.mu.Unlock()
+	if refreshRuntime {
+		s.notifyChanged(ctx)
+	}
 	return result, nil
+}
+
+func validateRuntimeProfileUpdate(item mapping.Profile, bindings map[string]mapping.Binding, id string) error {
+	for _, binding := range bindings {
+		if binding.ProfileID == id {
+			return validateRuntimeProfile(item)
+		}
+	}
+	return nil
+}
+
+func profileUsedByBinding(bindings map[string]mapping.Binding, id string) bool {
+	for _, binding := range bindings {
+		if binding.ProfileID == id && binding.Enabled {
+			return true
+		}
+	}
+	return false
 }
 
 func validateProfile(item mapping.Profile) error {

@@ -1,0 +1,154 @@
+package application_test
+
+import (
+	"context"
+	"errors"
+	"path/filepath"
+	"testing"
+
+	"github.com/feranydev/homeloom/backend/internal/application"
+	"github.com/feranydev/homeloom/backend/internal/domain/device"
+	"github.com/feranydev/homeloom/backend/internal/mapping"
+	"github.com/feranydev/homeloom/backend/internal/persistence/sqlite"
+	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
+	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
+)
+
+func TestPropertyBindingHotReloadsAndMapsBothDirections(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "bindings.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, err := application.NewProfileService(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := virtual.NewProvider()
+	service := application.NewDeviceService(provider, profiles)
+	defer service.Close()
+	profiles.SetChangeHandler(func(changeCtx context.Context) {
+		if err := service.RefreshDevices(changeCtx); err != nil {
+			t.Errorf("RefreshDevices() error = %v", err)
+		}
+	})
+
+	initial, _ := service.List(ctx)
+	assertPower(t, initial, false)
+	binding, err := profiles.CreateBinding(ctx, mapping.Binding{
+		ProfileID: "builtin-active-low", ProviderID: "virtual-main", DeviceID: "virtual-switch-1",
+		EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding.ID == "" {
+		t.Fatal("binding id was not generated")
+	}
+	mapped, _ := service.List(ctx)
+	assertPower(t, mapped, true)
+
+	result, err := service.SetPower(ctx, "virtual-switch-1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	property, _ := result.Property("main", "switch", "power")
+	if property.Value.Bool == nil || *property.Value.Bool {
+		t.Fatalf("normalized write result = %#v", property.Value)
+	}
+	raw, err := provider.ReadProperty(ctx, providersdk.PropertyReadRequest{DeviceID: "virtual-switch-1", EndpointID: "main", CapabilityID: "switch", PropertyID: "power"})
+	if err != nil || raw.Value.Bool == nil || !*raw.Value.Bool {
+		t.Fatalf("provider raw value = %#v, error = %v", raw.Value, err)
+	}
+	read, err := service.ReadProperty(ctx, "virtual-switch-1", "main", "switch", "power")
+	if err != nil || read.Value.Bool == nil || *read.Value.Bool {
+		t.Fatalf("normalized read = %#v, error = %v", read.Value, err)
+	}
+	metrics := service.Metrics()
+	if metrics.MappingApplied < 3 || metrics.MappingErrors != 0 {
+		t.Fatalf("mapping metrics = %#v", metrics)
+	}
+
+	if err := profiles.Delete(ctx, "custom-in-use"); !errors.Is(err, application.ErrProfileNotFound) {
+		t.Fatalf("unexpected profile delete error = %v", err)
+	}
+	if err := profiles.DeleteBinding(ctx, binding.ID); err != nil {
+		t.Fatal(err)
+	}
+	withoutBinding, _ := service.List(ctx)
+	assertPower(t, withoutBinding, true)
+
+	reloaded, err := application.NewProfileService(ctx, store)
+	if err != nil || len(reloaded.ListBindings()) != 0 {
+		t.Fatalf("reloaded bindings = %#v, error = %v", reloaded.ListBindings(), err)
+	}
+}
+
+func TestProfileInUseCannotBeDeletedOrMadeNonReversible(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "bindings.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, _ := application.NewProfileService(ctx, store)
+	custom := mapping.Profile{SchemaVersion: 1, ID: "runtime-invert", Version: 1, Kind: mapping.KindProvider, InputType: device.ValueTypeBool, OutputType: device.ValueTypeBool, Transforms: []mapping.Transform{{Type: mapping.TransformInvert}}}
+	if _, err := profiles.Create(ctx, custom); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := profiles.CreateBinding(ctx, mapping.Binding{ID: "binding-one", ProfileID: custom.ID, ProviderID: "virtual-main", DeviceID: "virtual-switch-1", EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := profiles.Delete(ctx, custom.ID); !errors.Is(err, application.ErrProfileInUse) {
+		t.Fatalf("delete error = %v", err)
+	}
+	minimum := 0.0
+	custom.Version = 2
+	custom.InputType, custom.OutputType = device.ValueTypeNumber, device.ValueTypeNumber
+	custom.Transforms = []mapping.Transform{{Type: mapping.TransformClamp, Min: &minimum}}
+	if _, err := profiles.Update(ctx, custom.ID, custom); err == nil {
+		t.Fatal("non-reversible bound profile update accepted")
+	}
+}
+
+func TestPropertyBindingTransformsNumericDefinition(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "definitions.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, _ := application.NewProfileService(ctx, store)
+	profile := mapping.Profile{SchemaVersion: 1, ID: "temperature-unit", Version: 1, Kind: mapping.KindProvider, InputType: device.ValueTypeNumber, OutputType: device.ValueTypeNumber, Transforms: []mapping.Transform{{Type: mapping.TransformUnit, FromUnit: "celsius", ToUnit: "fahrenheit"}}}
+	if _, err := profiles.Create(ctx, profile); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := profiles.CreateBinding(ctx, mapping.Binding{ID: "temperature-binding", ProfileID: profile.ID, ProviderID: "virtual-main", DeviceID: "virtual-temperature-1", EndpointID: "main", CapabilityID: "temperature", PropertyID: "current-temperature", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	minimum, maximum, step := -40.0, 100.0, 0.5
+	definition := device.PropertyDefinition{ID: "current-temperature", Name: "Temperature", Type: device.ValueTypeNumber, Unit: "celsius", Min: &minimum, Max: &maximum, Step: &step, Readable: true}
+	mapped, bindingID, applied, err := profiles.TransformPropertyDefinition("virtual-main", "virtual-temperature-1", "main", "temperature", "current-temperature", definition)
+	if err != nil || !applied || bindingID != "temperature-binding" {
+		t.Fatalf("transform = %#v, %q, %v, %v", mapped, bindingID, applied, err)
+	}
+	if mapped.Unit != "fahrenheit" || mapped.Min == nil || *mapped.Min != -40 || mapped.Max == nil || *mapped.Max != 212 || mapped.Step == nil || *mapped.Step < 0.899999 || *mapped.Step > 0.900001 {
+		t.Fatalf("mapped definition = %#v", mapped)
+	}
+}
+
+func assertPower(t *testing.T, items []device.Device, expected bool) {
+	t.Helper()
+	for _, item := range items {
+		if item.ID != "virtual-switch-1" {
+			continue
+		}
+		property, ok := item.Property("main", "switch", "power")
+		if !ok || property.Value.Bool == nil || *property.Value.Bool != expected {
+			t.Fatalf("power = %#v, expected %v", property.Value, expected)
+		}
+		return
+	}
+	t.Fatal("virtual switch not found")
+}

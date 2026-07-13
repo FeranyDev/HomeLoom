@@ -8,6 +8,7 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/buildinfo"
 	domainaudit "github.com/feranydev/homeloom/backend/internal/domain/audit"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
+	"github.com/feranydev/homeloom/backend/internal/mapping"
 )
 
 const exportFormatVersion = 1
@@ -29,6 +30,7 @@ type ConfigurationExport struct {
 	Targets       []ExportTargetConfig    `json:"targets"`
 	Settings      RuntimeSettings         `json:"settings"`
 	Profiles      []ProfileInfo           `json:"profiles"`
+	Bindings      []mapping.Binding       `json:"bindings"`
 }
 
 type DiagnosticBundle struct {
@@ -63,7 +65,7 @@ func (s *ExportService) Configuration() ConfigurationExport {
 }
 
 func (s *ExportService) configurationAt(generatedAt time.Time) ConfigurationExport {
-	result := ConfigurationExport{FormatVersion: exportFormatVersion, GeneratedAt: generatedAt, Providers: []providerconfig.Config{}, Targets: []ExportTargetConfig{}, Profiles: []ProfileInfo{}}
+	result := ConfigurationExport{FormatVersion: exportFormatVersion, GeneratedAt: generatedAt, Providers: []providerconfig.Config{}, Targets: []ExportTargetConfig{}, Profiles: []ProfileInfo{}, Bindings: []mapping.Binding{}}
 	if s.providers != nil {
 		result.Providers = s.providers.ExportConfigs()
 	}
@@ -78,6 +80,7 @@ func (s *ExportService) configurationAt(generatedAt time.Time) ConfigurationExpo
 	}
 	if s.profiles != nil {
 		result.Profiles = s.profiles.List()
+		result.Bindings = s.profiles.ListBindings()
 	}
 	return result
 }
