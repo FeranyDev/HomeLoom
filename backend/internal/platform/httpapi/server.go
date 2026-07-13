@@ -29,15 +29,16 @@ import (
 )
 
 type Server struct {
-	address     string
-	echo        *echo.Echo
-	settings    *application.SettingsService
-	audit       *application.AuditService
-	exports     *application.ExportService
-	profiles    *application.ProfileService
-	auth        *application.AuthService
-	maintenance *application.MaintenanceService
-	logins      *loginLimiter
+	address        string
+	echo           *echo.Echo
+	settings       *application.SettingsService
+	audit          *application.AuditService
+	exports        *application.ExportService
+	profiles       *application.ProfileService
+	auth           *application.AuthService
+	maintenance    *application.MaintenanceService
+	logins         *loginLimiter
+	trustedProxies []*net.IPNet
 }
 
 const apiVersionHeader = "HomeLoom-API-Version"
@@ -218,6 +219,7 @@ func (r targetRequest) domain(id string) domaintarget.Config {
 func NewServer(address string, devices *application.DeviceService, targets *application.TargetService, logger *slog.Logger, providerServices ...*application.ProviderService) *Server {
 	e := echo.New()
 	server := &Server{address: address, echo: e, logins: newLoginLimiter()}
+	e.IPExtractor = server.clientIP
 	e.HideBanner = true
 	e.HidePort = true
 	e.HTTPErrorHandler = func(err error, c echo.Context) {
@@ -268,8 +270,9 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		LogURI:       true,
 		LogError:     true,
 		LogRequestID: true,
+		LogRemoteIP:  true,
 		LogValuesFunc: func(_ echo.Context, values middleware.RequestLoggerValues) error {
-			logger.Info("http request", "request_id", values.RequestID, "method", values.Method, "uri", values.URI, "status", values.Status, "error", values.Error)
+			logger.Info("http request", "request_id", values.RequestID, "remote_ip", values.RemoteIP, "method", values.Method, "uri", values.URI, "status", values.Status, "error", values.Error)
 			return nil
 		},
 	}))
@@ -285,7 +288,7 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 			session, err := server.auth.Authenticate(c.Request().Context(), cookie.Value)
 			if err != nil {
 				if errors.Is(err, application.ErrInvalidSession) {
-					clearAuthCookies(c)
+					server.clearAuthCookies(c)
 					return echo.NewHTTPError(http.StatusUnauthorized, "administrator login required")
 				}
 				return echo.NewHTTPError(http.StatusServiceUnavailable, "authentication is unavailable").SetInternal(err)
@@ -372,7 +375,7 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		}
 		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
 		if token != "" && !status.Authenticated {
-			clearAuthCookies(c)
+			server.clearAuthCookies(c)
 		}
 		return c.JSON(http.StatusOK, map[string]any{"data": status})
 	})
@@ -391,14 +394,14 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		if err != nil {
 			return err
 		}
-		setAuthCookies(c, session)
+		server.setAuthCookies(c, session)
 		return c.JSON(http.StatusCreated, map[string]any{"data": application.AuthStatus{Initialized: true, Authenticated: true, Username: session.Username}})
 	})
 	e.POST("/api/v1/auth/login", func(c echo.Context) error {
 		if server.auth == nil {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "authentication is unavailable")
 		}
-		key := directClientIP(c.Request())
+		key := server.clientIP(c.Request())
 		if allowed, retryAfter := server.logins.allowed(key); !allowed {
 			c.Response().Header().Set("Retry-After", strconv.Itoa(max(1, int(retryAfter.Seconds()))))
 			return echo.NewHTTPError(http.StatusTooManyRequests, "too many login attempts; try again later")
@@ -416,7 +419,7 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "authentication is unavailable").SetInternal(err)
 		}
 		server.logins.succeeded(key)
-		setAuthCookies(c, session)
+		server.setAuthCookies(c, session)
 		return c.JSON(http.StatusOK, map[string]any{"data": application.AuthStatus{Initialized: true, Authenticated: true, Username: session.Username}})
 	})
 	e.POST("/api/v1/auth/logout", func(c echo.Context) error {
@@ -426,7 +429,7 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		if err := server.auth.Logout(c.Request().Context(), authCookieValue(c)); err != nil {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "authentication is unavailable").SetInternal(err)
 		}
-		clearAuthCookies(c)
+		server.clearAuthCookies(c)
 		return c.NoContent(http.StatusNoContent)
 	})
 	e.GET("/api/v1/device-models", func(c echo.Context) error {
@@ -1339,6 +1342,28 @@ func (s *Server) SetMaintenanceService(maintenance *application.MaintenanceServi
 	s.maintenance = maintenance
 }
 
+func (s *Server) SetTrustedProxies(values []string) error {
+	ranges := make([]*net.IPNet, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if ip := net.ParseIP(value); ip != nil {
+			bits := 128
+			if ip.To4() != nil {
+				ip, bits = ip.To4(), 32
+			}
+			ranges = append(ranges, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+			continue
+		}
+		_, network, err := net.ParseCIDR(value)
+		if err != nil {
+			return fmt.Errorf("invalid trusted proxy %q", value)
+		}
+		ranges = append(ranges, network)
+	}
+	s.trustedProxies = ranges
+	return nil
+}
+
 func requiresAuthentication(request *http.Request) bool {
 	path := request.URL.Path
 	if path == "/metrics" {
@@ -1366,6 +1391,39 @@ func directClientIP(request *http.Request) string {
 	return "unknown"
 }
 
+func (s *Server) clientIP(request *http.Request) string {
+	direct := directClientIP(request)
+	directIP := net.ParseIP(direct)
+	if directIP == nil || !s.isTrustedProxy(directIP) {
+		return direct
+	}
+	forwarded := request.Header.Values(echo.HeaderXForwardedFor)
+	if len(forwarded) == 0 {
+		return direct
+	}
+	values := append(strings.Split(strings.Join(forwarded, ","), ","), direct)
+	for index := len(values) - 1; index >= 0; index-- {
+		value := strings.TrimSpace(strings.Trim(values[index], "[]"))
+		ip := net.ParseIP(value)
+		if ip == nil {
+			return direct
+		}
+		if !s.isTrustedProxy(ip) {
+			return ip.String()
+		}
+	}
+	return strings.TrimSpace(values[0])
+}
+
+func (s *Server) isTrustedProxy(ip net.IP) bool {
+	for _, network := range s.trustedProxies {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 func authCookieValue(c echo.Context) string {
 	cookie, err := c.Cookie(sessionCookieName)
 	if err != nil {
@@ -1374,23 +1432,31 @@ func authCookieValue(c echo.Context) string {
 	return cookie.Value
 }
 
-func setAuthCookies(c echo.Context, session application.AuthSession) {
-	secure := secureCookieRequest(c.Request())
+func (s *Server) setAuthCookies(c echo.Context, session application.AuthSession) {
+	secure := s.secureCookieRequest(c.Request())
 	maxAge := max(1, int(time.Until(session.ExpiresAt).Seconds()))
 	c.SetCookie(&http.Cookie{Name: sessionCookieName, Value: session.Token, Path: "/", MaxAge: maxAge, Expires: session.ExpiresAt, HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode})
 	c.SetCookie(&http.Cookie{Name: csrfCookieName, Value: session.CSRFToken, Path: "/", MaxAge: maxAge, Expires: session.ExpiresAt, Secure: secure, SameSite: http.SameSiteStrictMode})
 	c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
 }
 
-func clearAuthCookies(c echo.Context) {
-	secure := secureCookieRequest(c.Request())
+func (s *Server) clearAuthCookies(c echo.Context) {
+	secure := s.secureCookieRequest(c.Request())
 	expired := time.Unix(1, 0).UTC()
 	c.SetCookie(&http.Cookie{Name: sessionCookieName, Path: "/", MaxAge: -1, Expires: expired, HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode})
 	c.SetCookie(&http.Cookie{Name: csrfCookieName, Path: "/", MaxAge: -1, Expires: expired, Secure: secure, SameSite: http.SameSiteStrictMode})
 }
 
-func secureCookieRequest(request *http.Request) bool {
-	return request.TLS != nil || strings.EqualFold(strings.TrimSpace(request.Header.Get("X-Forwarded-Proto")), "https")
+func (s *Server) secureCookieRequest(request *http.Request) bool {
+	if request.TLS != nil {
+		return true
+	}
+	directIP := net.ParseIP(directClientIP(request))
+	if directIP == nil || !s.isTrustedProxy(directIP) {
+		return false
+	}
+	protocols := strings.Split(request.Header.Get("X-Forwarded-Proto"), ",")
+	return len(protocols) > 0 && strings.EqualFold(strings.TrimSpace(protocols[len(protocols)-1]), "https")
 }
 
 func profileHTTPError(err error) error {

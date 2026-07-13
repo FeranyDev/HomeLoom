@@ -241,6 +241,33 @@ func TestDirectClientIPDoesNotTrustForwardedFor(t *testing.T) {
 	}
 }
 
+func TestTrustedProxyControlsClientIPAndSecureCookies(t *testing.T) {
+	server := newTestServer()
+	if err := server.SetTrustedProxies([]string{"192.0.2.0/24", "2001:db8::1"}); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
+	request.RemoteAddr = "192.0.2.10:4567"
+	request.Header.Set(echo.HeaderXForwardedFor, "198.51.100.7, 192.0.2.20")
+	request.Header.Set("X-Forwarded-Proto", "https")
+	if got := server.clientIP(request); got != "198.51.100.7" {
+		t.Fatalf("trusted proxy client ip = %q", got)
+	}
+	if !server.secureCookieRequest(request) {
+		t.Fatal("trusted HTTPS proxy did not produce secure cookies")
+	}
+	request.RemoteAddr = "203.0.113.9:4567"
+	if got := server.clientIP(request); got != "203.0.113.9" {
+		t.Fatalf("untrusted proxy client ip = %q", got)
+	}
+	if server.secureCookieRequest(request) {
+		t.Fatal("untrusted forwarded protocol produced secure cookies")
+	}
+	if err := server.SetTrustedProxies([]string{"invalid"}); err == nil {
+		t.Fatal("invalid trusted proxy was accepted")
+	}
+}
+
 func newTestServerWithProvider(provider providersdk.Provider) *Server {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	targets := application.NewTargetService([]application.TargetRegistration{{
@@ -267,6 +294,64 @@ func TestListTargetsAndPairingQR(t *testing.T) {
 	}
 	if qrResponse.Body.String() != "png-data" {
 		t.Fatalf("QR body = %q", qrResponse.Body.String())
+	}
+}
+
+func TestTargetCRUDAPIPersistsConfiguration(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "target-api.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	targets := application.NewTargetService(nil, store)
+	devices := application.NewDeviceService(virtual.NewProvider())
+	defer devices.Close()
+	server := NewServer(":0", devices, targets, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/targets", bytes.NewBufferString(`{"id":"api-bridge","type":"apple-hap","name":"API Bridge","enabled":true,"address":":51827","pin":"23456789","setupId":"API1"}`))
+	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"id":"api-bridge"`) || !strings.Contains(response.Body.String(), `"status":"disabled"`) {
+		t.Fatalf("create target = %d %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPut, "/api/v1/targets/api-bridge", bytes.NewBufferString(`{"type":"apple-hap","name":"Renamed Bridge","enabled":false,"address":":51827","pin":"23456789","setupId":"API1"}`))
+	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"name":"Renamed Bridge"`) {
+		t.Fatalf("update target = %d %s", response.Code, response.Body.String())
+	}
+	persisted, err := store.ListTargets(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, item := range persisted {
+		if item.ID == "api-bridge" {
+			found = item.Name == "Renamed Bridge" && !item.Enabled && item.StorePath == "data/hap/api-bridge"
+		}
+	}
+	if !found {
+		t.Fatalf("updated target was not persisted: %#v", persisted)
+	}
+
+	request = httptest.NewRequest(http.MethodDelete, "/api/v1/targets/api-bridge", nil)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("delete target = %d %s", response.Code, response.Body.String())
+	}
+	persisted, err = store.ListTargets(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range persisted {
+		if item.ID == "api-bridge" {
+			t.Fatalf("deleted target remains persisted: %#v", item)
+		}
 	}
 }
 

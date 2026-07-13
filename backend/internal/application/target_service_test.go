@@ -10,8 +10,10 @@ import (
 )
 
 type targetStoreStub struct {
-	saved   []target.Config
-	deleted []string
+	saved     []target.Config
+	deleted   []string
+	saveErr   error
+	deleteErr error
 }
 
 type targetRuntimeStub struct {
@@ -30,10 +32,16 @@ func (s *targetRuntimeStub) ResetPairing(_ context.Context, item target.Config) 
 }
 
 func (s *targetStoreStub) SaveTarget(_ context.Context, item target.Config) error {
+	if s.saveErr != nil {
+		return s.saveErr
+	}
 	s.saved = append(s.saved, item)
 	return nil
 }
 func (s *targetStoreStub) DeleteTarget(_ context.Context, id string) error {
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
 	s.deleted = append(s.deleted, id)
 	return nil
 }
@@ -103,6 +111,28 @@ func TestTargetSaveRejectsInvalidConfiguration(t *testing.T) {
 		if _, err := service.Save(context.Background(), item); err == nil {
 			t.Fatalf("Save() accepted %#v", item)
 		}
+	}
+}
+
+func TestTargetStoreFailureLeavesPublishedConfigurationUnchanged(t *testing.T) {
+	oldConfig := target.Config{ID: "one", Type: "apple-hap", Name: "Original", Enabled: false, Address: ":51826", Pin: "12345678", SetupID: "OLD1", StorePath: "data/hap/one"}
+	store := &targetStoreStub{saveErr: errors.New("database unavailable")}
+	service := NewTargetService([]TargetRegistration{{Info: TargetInfo{ID: oldConfig.ID, Type: oldConfig.Type, Name: oldConfig.Name, Status: "disabled", Address: oldConfig.Address, SetupID: oldConfig.SetupID}}}, store, oldConfig)
+	updated := oldConfig
+	updated.Name = "Updated"
+	if _, err := service.Save(context.Background(), updated); err == nil {
+		t.Fatal("Save() accepted a failed persistent write")
+	}
+	items := service.List()
+	if len(items) != 1 || items[0].Name != oldConfig.Name || items[0].SetupID != oldConfig.SetupID {
+		t.Fatalf("published target changed after failed save: %#v", items)
+	}
+	store.deleteErr = errors.New("database unavailable")
+	if err := service.Delete(context.Background(), oldConfig.ID); err == nil {
+		t.Fatal("Delete() accepted a failed persistent write")
+	}
+	if items := service.List(); len(items) != 1 || items[0].ID != oldConfig.ID {
+		t.Fatalf("published target was removed after failed delete: %#v", items)
 	}
 }
 

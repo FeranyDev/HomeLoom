@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 
@@ -15,7 +16,8 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Address string `yaml:"address"`
+	Address        string   `yaml:"address"`
+	TrustedProxies []string `yaml:"trusted_proxies,omitempty"`
 }
 
 type StorageConfig struct {
@@ -59,6 +61,17 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Storage.Database) == "" {
 		return errors.New("storage.database is required")
 	}
+	for _, value := range c.Server.TrustedProxies {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return errors.New("server.trusted_proxies cannot contain an empty value")
+		}
+		if net.ParseIP(value) == nil {
+			if _, _, err := net.ParseCIDR(value); err != nil {
+				return fmt.Errorf("server.trusted_proxies contains invalid IP or CIDR %q", value)
+			}
+		}
+	}
 	return nil
 }
 
@@ -68,6 +81,14 @@ func applyEnvironment(config *Config) error {
 	}
 	if value := os.Getenv("HOMELOOM_DATABASE"); value != "" {
 		config.Storage.Database = value
+	}
+	if value, present := os.LookupEnv("HOMELOOM_TRUSTED_PROXIES"); present {
+		config.Server.TrustedProxies = nil
+		for _, item := range strings.Split(value, ",") {
+			if trimmed := strings.TrimSpace(item); trimmed != "" {
+				config.Server.TrustedProxies = append(config.Server.TrustedProxies, trimmed)
+			}
+		}
 	}
 	return nil
 }

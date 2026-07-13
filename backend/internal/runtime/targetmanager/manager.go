@@ -21,6 +21,13 @@ type runningTarget struct {
 	address string
 }
 
+type managedTarget interface {
+	Start(context.Context) error
+	PairingInfo() homekit.PairingInfo
+}
+
+type targetFactory func(context.Context, homekit.Config, *application.DeviceService, *slog.Logger) (managedTarget, error)
+
 type Manager struct {
 	root       context.Context
 	devices    *application.DeviceService
@@ -29,10 +36,18 @@ type Manager struct {
 	running    map[string]runningTarget
 	onStatus   func(string, string)
 	identities homekit.AccessoryIdentityStore
+	factory    targetFactory
+	startGrace time.Duration
 }
 
 func New(root context.Context, devices *application.DeviceService, logger *slog.Logger, identityStores ...homekit.AccessoryIdentityStore) *Manager {
-	manager := &Manager{root: root, devices: devices, logger: logger, running: make(map[string]runningTarget)}
+	manager := &Manager{
+		root: root, devices: devices, logger: logger, running: make(map[string]runningTarget),
+		factory: func(ctx context.Context, config homekit.Config, devices *application.DeviceService, logger *slog.Logger) (managedTarget, error) {
+			return homekit.New(ctx, config, devices, logger)
+		},
+		startGrace: 200 * time.Millisecond,
+	}
 	if len(identityStores) > 0 {
 		manager.identities = identityStores[0]
 	}
@@ -65,7 +80,7 @@ func (m *Manager) Apply(ctx context.Context, config target.Config) (application.
 		}
 	}
 
-	next, err := homekit.New(ctx, homekit.Config{
+	next, err := m.factory(ctx, homekit.Config{
 		ID: config.ID, Name: config.Name, Address: config.Address, Pin: config.Pin,
 		SetupID: config.SetupID, StorePath: config.StorePath, DeviceIDs: config.DeviceIDs, IdentityStore: m.identities,
 	}, m.devices, m.logger)
@@ -100,7 +115,7 @@ func (m *Manager) Apply(ctx context.Context, config target.Config) (application.
 			startErr = errors.New("target stopped during startup")
 		}
 		return application.TargetRegistration{}, startErr
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(m.startGrace):
 	}
 
 	pairing := next.PairingInfo()

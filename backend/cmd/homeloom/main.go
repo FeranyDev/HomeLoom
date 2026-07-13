@@ -196,6 +196,10 @@ func main() {
 	targetService.SetRuntime(manager)
 	manager.SetStatusHandler(targetService.SetStatus)
 	server := httpapi.NewServer(settings.Server.Address, service, targetService, logger, providerService)
+	if err := server.SetTrustedProxies(settings.Server.TrustedProxies); err != nil {
+		logger.Error("trusted proxy configuration failed", "error", err)
+		os.Exit(1)
+	}
 	server.SetAuthService(application.NewAuthService(store))
 	server.SetMaintenanceService(application.NewMaintenanceService(store, settings.Storage.Database, sqlite.ValidateRestoreCandidate, sqlite.PendingRestorePaths, sqlite.WritePendingRestoreMarker))
 	server.SetSettingsService(settingsService)

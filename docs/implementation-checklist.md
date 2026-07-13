@@ -30,7 +30,7 @@
 ```bash
 ./scripts/dev-env.sh sh -c 'cd backend && go test ./...'
 ./scripts/dev-env.sh sh -c 'cd backend && go test -race ./internal/command ./internal/eventbus ./internal/state ./internal/application'
-./scripts/dev-env.sh sh -c 'cd frontend && npm test && npm run lint && npm run build'
+./scripts/dev-env.sh sh -c 'cd frontend && npm run test:coverage && npm run lint && npm run build'
 ```
 
 ## 1. M0：HomeKit 技术验证收尾
@@ -429,7 +429,7 @@ M2 性能验收：
 - [ ] 网络中断恢复；
 - [x] 不重复创建设备（remote sequence 去重）；
 - [x] 不恢复过期实时状态；
-- [ ] ARM64 构建。
+- [x] Linux ARM64 Go 交叉构建与容器构建。
 
 M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 
@@ -514,7 +514,7 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [~] 无障碍检查（已补键盘焦点、跳转主要内容、当前导航、状态与错误播报；正式 WCAG 审计待完成）；
 - [x] API Client 统一错误模型；
 - [x] WebSocket/SSE 实时更新；
-- [ ] 前端覆盖率报告。
+- [x] 前端覆盖率报告（HTML、JSON summary 和终端文本）。
 
 ### 11.3 管理认证
 
@@ -525,7 +525,7 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [x] 登录限速；
 - [x] 备份、整库恢复、配对参数再生成和配对身份清理使用精确短语二次确认；
 - [x] 审计日志；
-- [ ] 可信代理配置；
+- [x] 可信代理 IP/CIDR 配置、转发链解析和 Secure Cookie 判断；
 - [x] 默认仅监听 `127.0.0.1`。
 
 ## 12. API 和可观测性
@@ -583,12 +583,12 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 
 ### 13.2 待补测试
 
-- [ ] TargetManager 启用桥真实生命周期测试；
+- [x] TargetManager 启用桥真实生命周期测试（进程级冒烟测试启动真实 HAP 服务）；
 - [x] HAP Server 端口占用测试；
-- [ ] 多桥并发测试；
-- [ ] HAP 身份三次重启测试；
-- [ ] API Target CRUD 集成测试；
-- [ ] Target 保存失败回滚测试；
+- [x] 多桥并发测试；
+- [x] HAP 身份三次重启测试（Setup URI 和身份目录保持稳定）；
+- [x] API Target CRUD 集成测试；
+- [x] Target 保存失败回滚测试；
 - [x] Dispatcher 关闭超时测试；
 - [x] Command 多次覆盖测试；
 - [x] State stale/optimistic 测试；
@@ -599,7 +599,7 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [x] 前端 API 错误测试；
 - [x] 前端 Target/Provider 删除确认测试；
 - [x] 前端 Target 编辑回填测试；
-- [ ] 前端覆盖率阈值；
+- [x] 前端覆盖率阈值；
 - [ ] E2E 浏览器测试。
 
 ## 14. 部署
@@ -611,10 +611,10 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [x] 数据卷；
 - [x] host network HomeKit 示例；
 - [x] bridge network 限制说明；
-- [ ] amd64 镜像；
-- [ ] arm64 镜像；
+- [x] CI 构建 amd64 镜像；
+- [x] CI + Go 交叉构建 arm64 镜像/二进制；
 - [ ] Linux ARM64 实机；
-- [ ] NAS 部署文档；
+- [~] NAS 部署说明已补充，真实 Synology/QNAP 验收待完成；
 - [ ] OpenWrt 可行性验证；
 - [x] 进程级优雅停止烟雾验证；
 - [x] 容器健康检查；
@@ -675,11 +675,10 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 
 1. `[!]` Apple Home 实机配对、双向控制、多桥和三次重启验收；
 2. Docker、ARM64、mDNS 与数据卷部署验收；
-3. 可信代理、HTTPS 部署说明与安全回退；
-4. 进程运行日志流、前端覆盖率报告与运维可观测性；
-5. MQTT Broker 中断恢复与 MQTT ↔ HomeKit 实机链路验收；
-6. Provider 优先级、逻辑设备聚合和剩余 Mapping 场景；
-7. Matter Target 与 Zigbee2MQTT/Tuya/ESPHome 接入评估。
+3. 进程运行日志流与正式无障碍审计；
+4. MQTT Broker 中断恢复与 MQTT ↔ HomeKit 实机链路验收；
+5. Provider 优先级、逻辑设备聚合和剩余 Mapping 场景；
+6. Matter Target 与 Zigbee2MQTT/Tuya/ESPHome 接入评估。
 
 每完成一个步骤都应：
 

@@ -32,7 +32,30 @@ docker compose exec backend homeloom -backup /data/backups/homeloom.db
 
 恢复数据库前应保留当前卷副本，停止 backend，替换 `.db` 后移除旧的 `-wal`/`-shm` 临时文件再启动。程序会拒绝打开高于自身支持版本的数据库，不应绕过该检查强制回滚。
 
-当前管理 API 尚未实现认证。不要直接暴露到公网；如需开放到局域网，应配合主机防火墙或可信反向代理限制来源。
+管理 API 使用单管理员数据库 Session 和 CSRF 防护，Compose 中的后端仅信任来自 `127.0.0.1/32`、`::1/128` 的前端 Nginx 转发头。Nginx 会覆盖 `X-Forwarded-For` 和 `X-Forwarded-Proto`；直接访问 8090 的局域网客户端不能伪造来源来绕过登录限速。
+
+生产 HTTPS 代理应同时代理静态前端和 `/api`，覆盖而不是透传客户端提交的转发头，并将代理自身的精确 IP/CIDR 写入 `HOMELOOM_TRUSTED_PROXIES`。未配置可信代理时，HomeLoom 只使用 TCP 直连地址，且不会依据 `X-Forwarded-Proto` 设置 Secure Cookie。不要为了省事信任整个局域网网段。
+
+示例环境变量：
+
+```text
+HOMELOOM_TRUSTED_PROXIES=127.0.0.1/32,10.20.0.8/32
+```
+
+外层代理必须传递：
+
+```nginx
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
+```
+
+当可信代理声明原始协议为 HTTPS 时，Session 和 CSRF Cookie 会自动带上 `Secure`。
+
+## 架构与 NAS
+
+CI 会分别构建 `linux/amd64` 和 `linux/arm64` 的后端、前端镜像，并执行 Go 交叉编译。原生 Linux x86_64 与 ARM64 NAS 可以使用同一份 Compose；必须确认系统支持 host network、mDNS multicast 和 HAP 监听端口。Synology/QNAP 等 NAS 若通过自带反向代理提供管理页，HomeKit 后端仍需要 host network，不能只映射 8090。
+
+OpenWrt 的存储寿命、内存、Go 二进制体积和 mDNS 防火墙差异较大，目前只视为可行性评估目标，不列为受支持部署环境。
 
 ## MQTT 开发服务
 

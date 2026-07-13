@@ -37,7 +37,7 @@ docs/      项目计划与设计文档
 
 Web 端只有这个管理员账户，用于接入、桥接、映射、诊断和备份恢复，不提供普通家庭成员账户。设备的日常控制和成员共享应在 Apple Home 中完成。
 
-HomeKit Bridge 同时监听 `51826`，配对码为 `001-02-003`。HAP 身份和配对信息保存在 `backend/data/hap/`，该目录不会提交到版本库。
+新数据库会创建一个默认 HomeKit Bridge，初始监听 `51826`，配对码为 `001-02-003`。这些参数之后可在前端动态修改，并以数据库中的桥配置为准。HAP 身份和配对信息保存在 `backend/data/hap/`，该目录不会提交到版本库。
 
 桥配置保存在 SQLite，可同时运行多个 Apple HAP Bridge，并为 Matter 等其他 Target 类型预留统一入口。每个启用的 HAP 桥必须具有唯一的：
 
@@ -50,10 +50,11 @@ HomeKit Bridge 同时监听 `51826`，配对码为 `001-02-003`。HAP 身份和�
 
 前端“桥接中心”会显示所有 Target 的类型、状态、设备范围、配对码和二维码。二维码来自后端生成的标准 HomeKit Setup URI，并与桥的 Setup ID 保持一致。
 
-后端支持 `-config configs/config.example.yaml`。YAML 只包含 HTTP 地址和数据库路径，也可以使用以下环境变量覆盖：
+后端支持 `-config configs/config.example.yaml`。YAML 只包含进程启动所需的 HTTP 地址、可信代理范围和数据库路径，也可以使用以下环境变量覆盖：
 
 - `HOMELOOM_HTTP_ADDRESS`
 - `HOMELOOM_DATABASE`
+- `HOMELOOM_TRUSTED_PROXIES`（逗号分隔的代理 IP/CIDR；未配置时完全忽略转发来源头）
 
 `scripts/dev-env.sh` 会将 Go、Go module 和 npm 缓存统一放在根目录 `.cache/`，避免写入用户级缓存或触发不必要的权限请求。
 
@@ -69,6 +70,7 @@ HomeKit Bridge 同时监听 `51826`，配对码为 `001-02-003`。HAP 身份和�
 
 ```bash
 ./scripts/build.sh
+./scripts/cross-build.sh # 校验 linux/amd64 与 linux/arm64 后端构建
 ```
 
 默认版本由 Git tag/commit 生成，可使用 `HOMELOOM_VERSION`、`HOMELOOM_COMMIT` 和 `HOMELOOM_BUILD_TIME` 覆盖。运行时可通过 `GET /api/v1/system/version` 查看实际后端版本。
@@ -82,6 +84,8 @@ backend/bin/homeloom -version
 ```bash
 ./scripts/smoke.sh
 ```
+
+冒烟测试会使用临时数据库和动态 HAP 端口，验证双桥并行、Target API 增删改、三次连续重启、身份稳定以及备份恢复，不会占用或停止已经运行的 HomeLoom 实例。
 
 容器部署、host network 与数据卷说明见 [`deploy/README.md`](deploy/README.md)。
 

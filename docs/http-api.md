@@ -16,7 +16,7 @@ Web 管理面只有这一个管理员身份，不实现普通用户、角色或�
 
 `/health`、`/ready`、`/api/versions`、`/api/v1/system/version` 和认证初始化入口保持公开。其余 v1 管理接口、`/metrics` 和 HomeKit 配对二维码均要求登录。所有 `POST`、`PUT`、`PATCH`、`DELETE` 请求还必须把 `homeloom_csrf` Cookie 的值放入 `X-CSRF-Token` 请求头；前端 API Client 会自动完成此操作。
 
-同一直连客户端在五分钟窗口内连续登录失败 5 次后会锁定 5 分钟。限速不读取 `X-Forwarded-For`，避免在尚未配置可信代理时被伪造来源绕过。认证响应禁止缓存，退出会立即从 SQLite 删除 Session。
+同一客户端在五分钟窗口内连续登录失败 5 次后会锁定 5 分钟。默认只使用 TCP 直连地址；仅当直连来源位于 `server.trusted_proxies` / `HOMELOOM_TRUSTED_PROXIES` 明确列出的 IP/CIDR 时，才从右向左解析 `X-Forwarded-For` 并信任 `X-Forwarded-Proto`。认证响应禁止缓存，退出会立即从 SQLite 删除 Session。
 
 ## 错误响应
 

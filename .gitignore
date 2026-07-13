@@ -11,6 +11,7 @@ backend/.cache/
 
 frontend/node_modules/
 frontend/dist/
+frontend/coverage/
 frontend/.env.local
 frontend/.npm-cache/
 frontend/*.tsbuildinfo

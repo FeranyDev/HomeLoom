@@ -27,13 +27,19 @@ jobs:
       - run: ./scripts/check.sh --race
       - run: ./scripts/build.sh
       - run: ./scripts/smoke.sh
+      - run: ./scripts/cross-build.sh
 
   containers:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        platform: [linux/amd64, linux/arm64]
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
       - name: Build backend image
-        run: docker build --file deploy/backend.Dockerfile --tag homeloom-backend:ci --build-arg VERSION=ci --build-arg COMMIT=${GITHUB_SHA::12} --build-arg BUILD_TIME=ci .
+        run: docker buildx build --platform ${{ matrix.platform }} --file deploy/backend.Dockerfile --build-arg VERSION=ci --build-arg COMMIT=${GITHUB_SHA::12} --build-arg BUILD_TIME=ci .
       - name: Build frontend image
-        run: docker build --file deploy/frontend.Dockerfile --tag homeloom-frontend:ci .
+        run: docker buildx build --platform ${{ matrix.platform }} --file deploy/frontend.Dockerfile .
