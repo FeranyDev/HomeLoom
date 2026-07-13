@@ -22,7 +22,7 @@ export function deviceProperty(device: Device, capabilityId: string, propertyId:
 
 export interface StateValue {
   key: { deviceId: string; endpointId: string; capabilityId: string; propertyId: string }
-  value: { kind: 'bool' | 'int' | 'number'; bool?: boolean; int?: number; number?: number }
+  value: { kind: 'bool' | 'int' | 'number' | 'string' | 'enum'; bool?: boolean; int?: number; number?: number; string?: string } | null
   providerId: string; source: string; observedAt: string; receivedAt: string; expiresAt?: string
-  sequence: number; version: number; quality: string; pendingCommandId?: string
+  sequence: number; version: number; quality: string; known: boolean; available: boolean; unavailableReason?: string; traceId?: string; pendingCommandId?: string
 }

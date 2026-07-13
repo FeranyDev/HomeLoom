@@ -18,6 +18,7 @@ func NewStore() *Store {
 }
 
 func (s *Store) Apply(incoming domainstate.StateValue) (domainstate.StateValue, bool) {
+	incoming = normalize(incoming)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	current, exists := s.values[incoming.Key]
@@ -30,12 +31,28 @@ func (s *Store) Apply(incoming domainstate.StateValue) (domainstate.StateValue, 
 }
 
 func (s *Store) ApplyOptimistic(incoming domainstate.StateValue) domainstate.StateValue {
+	incoming = normalize(incoming)
 	s.mu.Lock()
 	current := s.values[incoming.Key]
 	incoming.Version = current.Version + 1
 	s.values[incoming.Key] = incoming
 	s.mu.Unlock()
 	return incoming
+}
+
+// EnsureUnknown creates a state identity only when no value has ever been
+// observed. It never replaces a retained last-known value.
+func (s *Store) EnsureUnknown(incoming domainstate.StateValue) (domainstate.StateValue, bool) {
+	incoming.Quality = domainstate.QualityUnknown
+	incoming = normalize(incoming)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if current, exists := s.values[incoming.Key]; exists {
+		return current, false
+	}
+	incoming.Version = 1
+	s.values[incoming.Key] = incoming
+	return incoming, true
 }
 
 func (s *Store) Device(deviceID string) []domainstate.StateValue {
@@ -75,6 +92,7 @@ func (s *Store) ResolveOptimistic(commandID string, fallback *domainstate.StateV
 			return restored, true
 		}
 		current.Quality, current.PendingCommandID, current.Version = domainstate.QualityStale, "", current.Version+1
+		current.Available, current.UnavailableReason = false, domainstate.UnavailableCommandUnconfirmed
 		s.values[key] = current
 		return current, true
 	}
@@ -90,6 +108,8 @@ func (s *Store) MarkStale(now time.Time) []domainstate.StateValue {
 			continue
 		}
 		value.Quality = domainstate.QualityStale
+		value.Available = false
+		value.UnavailableReason = domainstate.UnavailableExpired
 		value.PendingCommandID = ""
 		value.Version++
 		s.values[key] = value
@@ -101,20 +121,64 @@ func (s *Store) MarkStale(now time.Time) []domainstate.StateValue {
 // MarkDeviceStale invalidates the last known values without deleting them.
 // Repeated offline events are idempotent and do not inflate state versions.
 func (s *Store) MarkDeviceStale(deviceID string) []domainstate.StateValue {
+	return s.MarkDeviceUnavailable(deviceID, domainstate.UnavailableDeviceOffline)
+}
+
+func (s *Store) MarkDeviceUnavailable(deviceID string, reason domainstate.UnavailableReason, traceIDs ...string) []domainstate.StateValue {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	changed := make([]domainstate.StateValue, 0)
+	traceID := ""
+	if len(traceIDs) > 0 {
+		traceID = traceIDs[0]
+	}
 	for key, value := range s.values {
-		if key.DeviceID != deviceID || value.Quality == domainstate.QualityStale {
+		if key.DeviceID != deviceID {
 			continue
 		}
-		value.Quality = domainstate.QualityStale
+		quality := domainstate.QualityStale
+		if !value.Known {
+			quality = domainstate.QualityUnknown
+		}
+		if !value.Available && value.Quality == quality && value.UnavailableReason == reason {
+			continue
+		}
+		value.Quality = quality
+		value.Available = false
+		value.UnavailableReason = reason
+		value.TraceID = traceID
 		value.PendingCommandID = ""
 		value.Version++
 		s.values[key] = value
 		changed = append(changed, value)
 	}
 	return changed
+}
+
+func normalize(value domainstate.StateValue) domainstate.StateValue {
+	if value.Value.Kind != "" {
+		value.Known = true
+	}
+	switch value.Quality {
+	case domainstate.QualityConfirmed, domainstate.QualityReported, domainstate.QualityPolled, domainstate.QualityOptimistic:
+		value.Available = value.Known
+		if value.Available {
+			value.UnavailableReason = ""
+		} else if value.UnavailableReason == "" {
+			value.UnavailableReason = domainstate.UnavailableNeverReported
+		}
+	case domainstate.QualityUnknown:
+		value.Available = false
+		if value.UnavailableReason == "" {
+			value.UnavailableReason = domainstate.UnavailableNeverReported
+		}
+	case domainstate.QualityStale:
+		value.Available = false
+		if value.UnavailableReason == "" {
+			value.UnavailableReason = domainstate.UnavailableStale
+		}
+	}
+	return value
 }
 
 func preferIncoming(current, incoming domainstate.StateValue) bool {

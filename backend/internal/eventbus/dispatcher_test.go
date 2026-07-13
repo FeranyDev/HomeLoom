@@ -37,6 +37,24 @@ func TestDispatcherPreservesPerDeviceOrder(t *testing.T) {
 	}
 }
 
+func TestDispatcherAssignsAndPreservesTraceID(t *testing.T) {
+	traces := make(chan string, 2)
+	dispatcher := NewDispatcher(1, 2, func(event Event) { traces <- event.TraceID })
+	if err := dispatcher.Publish(Event{DeviceID: "generated"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := dispatcher.Publish(Event{DeviceID: "provided", TraceID: "trace-provided"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := dispatcher.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	generated, provided := <-traces, <-traces
+	if generated == "" || provided != "trace-provided" || generated == provided {
+		t.Fatalf("traces = %q, %q", generated, provided)
+	}
+}
+
 func TestDispatcherReportsFullAndClosed(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})

@@ -90,7 +90,7 @@ paths:
     get:
       operationId: listDeviceStates
       responses:
-        "200": { description: In-memory state with provenance, content: { application/json: { schema: { $ref: "#/components/schemas/ObjectResponse" } } } }
+        "200": { description: In-memory state with provenance and explicit unknown/unavailable semantics, content: { application/json: { schema: { type: object, required: [data], properties: { data: { type: array, items: { $ref: "#/components/schemas/StateValue" } } } } } } }
   /api/v1/devices/{deviceId}/enabled:
     parameters: [{ $ref: "#/components/parameters/DeviceId" }]
     put:
@@ -244,6 +244,44 @@ components:
       required: [type]
       properties:
         type: { type: string, enum: [bool, int, number, string, enum] }
+        bool: { type: boolean }
+        int: { type: integer, format: int64 }
+        number: { type: number }
+        string: { type: string }
+    StateValue:
+      type: object
+      required: [key, value, providerId, source, observedAt, receivedAt, sequence, version, quality, known, available]
+      properties:
+        key:
+          type: object
+          required: [deviceId, endpointId, capabilityId, propertyId]
+          properties:
+            deviceId: { type: string }
+            endpointId: { type: string }
+            capabilityId: { type: string }
+            propertyId: { type: string }
+        value:
+          oneOf:
+            - { type: "null", description: No trustworthy value has ever been observed. }
+            - { $ref: "#/components/schemas/StateTypedValue" }
+        providerId: { type: string }
+        source: { type: string, enum: [reported, polled, optimistic, persistent-cache, unknown] }
+        observedAt: { type: string, format: date-time }
+        receivedAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        sequence: { type: integer, minimum: 0 }
+        version: { type: integer, minimum: 1 }
+        quality: { type: string, enum: [confirmed, reported, polled, optimistic, stale, unknown] }
+        known: { type: boolean }
+        available: { type: boolean }
+        unavailableReason: { type: string, enum: [never-reported, device-offline, availability-unknown, disabled, removed, expired, command-unconfirmed, stale] }
+        traceId: { type: string, description: Core event trace ID or originating command correlation ID. }
+        pendingCommandId: { type: string }
+    StateTypedValue:
+      type: object
+      required: [kind]
+      properties:
+        kind: { type: string, enum: [bool, int, number, string, enum] }
         bool: { type: boolean }
         int: { type: integer, format: int64 }
         number: { type: number }

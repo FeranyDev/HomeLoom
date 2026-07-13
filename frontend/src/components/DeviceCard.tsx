@@ -33,16 +33,16 @@ export function DeviceCard({ device, pending, onPowerChange, onDetails, onEnable
           disabled={pending || !device.online}
           onClick={() => onPowerChange(device, !power)}
         >
-          <span>{pending ? '同步中' : power ? '已开启' : '已关闭'}</span>
+          <span>{pending ? '同步中' : !device.online ? '不可用' : power ? '已开启' : '已关闭'}</span>
           <span className="switch-track"><span /></span>
         </button>
       ) : device.type === 'temperature-sensor' ? (
         <div className="temperature">
-          <strong>{temperature?.toFixed(1)}</strong>
+          <strong>{device.online ? temperature?.toFixed(1) : '—'}</strong>
           <span>°C</span>
         </div>
-      ) : device.type === 'humidity-sensor' ? <div className="temperature"><strong>{humidity?.toFixed(1)}</strong><span>%</span></div>
-        : <div className={`sensor-state ${(contact || motion) ? 'is-active' : ''}`}><strong>{device.type === 'contact-sensor' ? (contact ? '已闭合' : '已打开') : (motion ? '检测到活动' : '无活动')}</strong><span>{device.type === 'contact-sensor' ? 'CONTACT' : 'MOTION'}</span></div>
+      ) : device.type === 'humidity-sensor' ? <div className="temperature"><strong>{device.online ? humidity?.toFixed(1) : '—'}</strong><span>%</span></div>
+        : <div className={`sensor-state ${device.online && (contact || motion) ? 'is-active' : ''}`}><strong>{!device.online ? '不可用' : device.type === 'contact-sensor' ? (contact ? '已闭合' : '已打开') : (motion ? '检测到活动' : '无活动')}</strong><span>{device.type === 'contact-sensor' ? 'CONTACT' : 'MOTION'}</span></div>
       }
 
       <footer><span>更新于 {new Date(device.lastUpdateAt).toLocaleTimeString('zh-CN')}</span><div><button onClick={() => onDetails(device)}>查看详情</button>{onEnabledChange && !device.removed && <button disabled={pending} onClick={() => onEnabledChange(device, Boolean(device.disabled))}>{device.disabled ? '重新启用' : '禁用设备'}</button>}</div></footer>

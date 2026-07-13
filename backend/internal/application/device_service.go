@@ -197,10 +197,11 @@ func NewDeviceService(provider providersdk.Provider, storageMetrics ...DatabaseM
 	}
 	for _, item := range items {
 		item.NormalizeAvailability()
-		service.acceptSnapshotSequence(item)
-		service.applySnapshot(item)
-		if !item.IsOnline() {
-			service.states.MarkDeviceStale(item.ID)
+		if item.IsOnline() {
+			service.acceptSnapshotSequence(item)
+			service.applySnapshot(item, "")
+		} else {
+			service.ensureUnknownStates(item, unavailableReason(item), "")
 		}
 	}
 	service.dispatcher = eventbus.NewDispatcher(8, 128, service.handleEvent)
@@ -238,7 +239,7 @@ func (s *DeviceService) LoadDevicePreferences(ctx context.Context) error {
 			item.Disabled = true
 			item.SetOnline(false)
 			s.registry.Upsert(item)
-			s.states.MarkDeviceStale(id)
+			s.states.MarkDeviceUnavailable(id, domainstate.UnavailableDisabled)
 			s.resetSnapshotSequence(id)
 		}
 	}
@@ -275,7 +276,7 @@ func (s *DeviceService) SetDeviceEnabled(ctx context.Context, id string, enabled
 		item.SetOnline(false)
 		s.resetSnapshotSequence(id)
 		s.registry.Upsert(item)
-		stale := s.states.MarkDeviceStale(id)
+		stale := s.states.MarkDeviceUnavailable(id, domainstate.UnavailableDisabled)
 		s.metrics.statesMarkedStale.Add(uint64(len(stale)))
 		for _, state := range stale {
 			s.publishState(state)
@@ -300,10 +301,16 @@ func (s *DeviceService) SetDeviceEnabled(ctx context.Context, id string, enabled
 	if item.Removed {
 		item.SetOnline(false)
 	}
-	s.acceptSnapshotSequence(item)
 	s.registry.Upsert(item)
 	if item.IsOnline() {
-		s.applySnapshot(item)
+		s.acceptSnapshotSequence(item)
+		s.applySnapshot(item, "")
+	} else {
+		s.ensureUnknownStates(item, unavailableReason(item), "")
+		stale := s.states.MarkDeviceUnavailable(id, unavailableReason(item))
+		for _, state := range stale {
+			s.publishState(state)
+		}
 	}
 	s.publishDevice(item)
 	return item, nil
@@ -744,7 +751,11 @@ func valueMatchesType(value device.PropertyValue, expected device.ValueType) boo
 }
 
 func (s *DeviceService) applyOptimisticState(key domainstate.Key, value device.PropertyValue, command domaincommand.Command, previous domainstate.StateValue, hadPrevious bool) {
-	optimistic := domainstate.StateValue{Key: key, ProviderID: previous.ProviderID, Source: domainstate.SourceOptimistic, Quality: domainstate.QualityOptimistic, ObservedAt: command.CreatedAt, ReceivedAt: command.CreatedAt, ExpiresAt: command.Deadline, PendingCommandID: command.ID}
+	traceID := command.CorrelationID
+	if traceID == "" {
+		traceID = command.ID
+	}
+	optimistic := domainstate.StateValue{Key: key, ProviderID: previous.ProviderID, Source: domainstate.SourceOptimistic, Quality: domainstate.QualityOptimistic, ObservedAt: command.CreatedAt, ReceivedAt: command.CreatedAt, ExpiresAt: command.Deadline, TraceID: traceID, PendingCommandID: command.ID}
 	switch value.Type {
 	case device.ValueTypeBool:
 		if value.Bool == nil {
@@ -761,6 +772,16 @@ func (s *DeviceService) applyOptimisticState(key domainstate.Key, value device.P
 			return
 		}
 		optimistic.Value = domainstate.NumberValue(*value.Number)
+	case device.ValueTypeString:
+		if value.String == nil {
+			return
+		}
+		optimistic.Value = domainstate.StringValue(*value.String)
+	case device.ValueTypeEnum:
+		if value.String == nil {
+			return
+		}
+		optimistic.Value = domainstate.EnumValue(*value.String)
 	default:
 		return
 	}
@@ -858,9 +879,10 @@ func (s *DeviceService) handleEvent(event eventbus.Event) {
 	}
 	s.registry.Upsert(item)
 	if item.IsOnline() {
-		s.applySnapshot(item)
+		s.applySnapshot(item, event.TraceID)
 	} else {
-		stale := s.states.MarkDeviceStale(item.ID)
+		s.ensureUnknownStates(item, unavailableReason(item), event.TraceID)
+		stale := s.states.MarkDeviceUnavailable(item.ID, unavailableReason(item), event.TraceID)
 		s.metrics.statesMarkedStale.Add(uint64(len(stale)))
 		for _, value := range stale {
 			s.publishState(value)
@@ -912,7 +934,7 @@ func (s *DeviceService) resetSnapshotSequence(deviceID string) {
 	s.snapshotMu.Unlock()
 }
 
-func (s *DeviceService) applySnapshot(item device.Device) {
+func (s *DeviceService) applySnapshot(item device.Device, traceID string) {
 	receivedAt := time.Now().UTC()
 	observedAt := s.safeObservedAt(item.LastUpdateAt, receivedAt)
 	for _, endpoint := range item.Endpoints {
@@ -921,7 +943,7 @@ func (s *DeviceService) applySnapshot(item device.Device) {
 				value := domainstate.StateValue{
 					Key:        domainstate.Key{DeviceID: item.ID, EndpointID: endpoint.ID, CapabilityID: capability.ID, PropertyID: property.Definition.ID},
 					ProviderID: item.ProviderID, Source: domainstate.SourceReported,
-					ObservedAt: observedAt, ReceivedAt: receivedAt, Sequence: item.Sequence, Quality: domainstate.QualityReported,
+					ObservedAt: observedAt, ReceivedAt: receivedAt, Sequence: item.Sequence, Quality: domainstate.QualityReported, TraceID: traceID,
 				}
 				if property.Definition.StaleAfterSeconds > 0 {
 					value.ExpiresAt = receivedAt.Add(time.Duration(property.Definition.StaleAfterSeconds) * time.Second)
@@ -942,6 +964,16 @@ func (s *DeviceService) applySnapshot(item device.Device) {
 						continue
 					}
 					value.Value = domainstate.NumberValue(*property.Value.Number)
+				case device.ValueTypeString:
+					if property.Value.String == nil {
+						continue
+					}
+					value.Value = domainstate.StringValue(*property.Value.String)
+				case device.ValueTypeEnum:
+					if property.Value.String == nil {
+						continue
+					}
+					value.Value = domainstate.EnumValue(*property.Value.String)
 				default:
 					continue
 				}
@@ -951,6 +983,37 @@ func (s *DeviceService) applySnapshot(item device.Device) {
 			}
 		}
 	}
+}
+
+func (s *DeviceService) ensureUnknownStates(item device.Device, reason domainstate.UnavailableReason, traceID string) {
+	now := time.Now().UTC()
+	for _, endpoint := range item.Endpoints {
+		for _, capability := range endpoint.Capabilities {
+			for _, property := range capability.Properties {
+				value := domainstate.StateValue{
+					Key:        domainstate.Key{DeviceID: item.ID, EndpointID: endpoint.ID, CapabilityID: capability.ID, PropertyID: property.Definition.ID},
+					ProviderID: item.ProviderID, Source: domainstate.SourceUnknown, Quality: domainstate.QualityUnknown,
+					ObservedAt: now, ReceivedAt: now, UnavailableReason: reason, TraceID: traceID,
+				}
+				if created, changed := s.states.EnsureUnknown(value); changed {
+					s.publishState(created)
+				}
+			}
+		}
+	}
+}
+
+func unavailableReason(item device.Device) domainstate.UnavailableReason {
+	if item.Removed {
+		return domainstate.UnavailableRemoved
+	}
+	if item.Disabled {
+		return domainstate.UnavailableDisabled
+	}
+	if item.EffectiveAvailability() == device.AvailabilityUnknown {
+		return domainstate.UnavailableAvailabilityUnknown
+	}
+	return domainstate.UnavailableDeviceOffline
 }
 
 func (s *DeviceService) safeObservedAt(observedAt, receivedAt time.Time) time.Time {

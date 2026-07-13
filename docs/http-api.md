@@ -81,7 +81,7 @@ Provider 上报时间与接收时间相差超过 5 分钟时，Core 会记录时
 
 带正数 `sequence` 的 Provider 快照按设备进行单调比较。重复或倒退事件不会覆盖设备列表或属性状态，并计入 `homeloom_provider_events_ignored_total`。Virtual Provider 的 simulation API 支持 `sequence` 和 1–10 次的 `repeat`，管理页可直接触发重复与旧序列事件。
 
-设备临时离线仅来自 Provider availability，不写数据库；人工禁用写入 `device_preferences`，实时标记状态 stale 并阻止读写及后续 Provider 事件复活；设备从 Provider 配置中删除后保留 `removed` tombstone 和稳定身份。重新出现相同设备 ID 时可恢复原身份。
+设备临时离线仅来自 Provider availability，不写数据库；人工禁用写入 `device_preferences`，实时标记状态 unavailable 并阻止读写及后续 Provider 事件复活；设备从 Provider 配置中删除后保留 `removed` tombstone 和稳定身份。重新出现相同设备 ID 时可恢复原身份。State 的 `known/available/unavailableReason` 区分“从未有值”和“最后值暂时不可用”；前者输出 `value:null`，后者保留 typed value。属性写入不接受 `null`。
 
 ## Action / Command
 

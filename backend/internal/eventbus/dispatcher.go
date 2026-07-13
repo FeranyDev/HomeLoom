@@ -3,6 +3,7 @@ package eventbus
 import (
 	"context"
 	"errors"
+	"fmt"
 	"hash/fnv"
 	"sync"
 	"sync/atomic"
@@ -16,9 +17,12 @@ var (
 
 type Event struct {
 	DeviceID   string
+	TraceID    string
 	Payload    any
 	enqueuedAt time.Time
 }
+
+var traceSequence atomic.Uint64
 
 type Stats struct {
 	Handled        uint64
@@ -62,6 +66,9 @@ func (d *Dispatcher) Publish(event Event) error {
 	defer d.mu.RUnlock()
 	if d.closed {
 		return ErrDispatcherClosed
+	}
+	if event.TraceID == "" {
+		event.TraceID = fmt.Sprintf("event-%x-%x", time.Now().UnixNano(), traceSequence.Add(1))
 	}
 	queue := d.shards[shard(event.DeviceID, len(d.shards))]
 	event.enqueuedAt = time.Now()

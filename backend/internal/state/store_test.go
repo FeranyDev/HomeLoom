@@ -1,12 +1,34 @@
 package state
 
 import (
+	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	domainstate "github.com/feranydev/homeloom/backend/internal/domain/state"
 )
+
+func TestUnknownNullAndUnavailableRetainsLastValue(t *testing.T) {
+	store := NewStore()
+	now := time.Now().UTC()
+	key := domainstate.Key{DeviceID: "sensor", EndpointID: "main", CapabilityID: "mode", PropertyID: "value"}
+	unknown, created := store.EnsureUnknown(domainstate.StateValue{Key: key, ProviderID: "provider", Source: domainstate.SourceUnknown, ObservedAt: now, ReceivedAt: now, UnavailableReason: domainstate.UnavailableAvailabilityUnknown})
+	payload, err := json.Marshal(unknown)
+	if err != nil || !created || unknown.Known || unknown.Available || unknown.Quality != domainstate.QualityUnknown || !strings.Contains(string(payload), `"value":null`) || !strings.Contains(string(payload), `"unavailableReason":"availability-unknown"`) {
+		t.Fatalf("unknown = %#v, json = %s, error = %v", unknown, payload, err)
+	}
+	reported, accepted := store.Apply(domainstate.StateValue{Key: key, Value: domainstate.EnumValue("auto"), ProviderID: "provider", Source: domainstate.SourceReported, ObservedAt: now.Add(time.Second), ReceivedAt: now.Add(time.Second), Quality: domainstate.QualityReported})
+	if !accepted || !reported.Known || !reported.Available || reported.Value.Kind != domainstate.KindEnum || reported.Value.String == nil || *reported.Value.String != "auto" {
+		t.Fatalf("reported = %#v", reported)
+	}
+	changed := store.MarkDeviceUnavailable("sensor", domainstate.UnavailableDeviceOffline)
+	payload, err = json.Marshal(changed[0])
+	if err != nil || len(changed) != 1 || !changed[0].Known || changed[0].Available || changed[0].Quality != domainstate.QualityStale || changed[0].Value.String == nil || *changed[0].Value.String != "auto" || !strings.Contains(string(payload), `"value":{"kind":"enum","string":"auto"}`) {
+		t.Fatalf("unavailable = %#v, json = %s, error = %v", changed, payload, err)
+	}
+}
 
 func TestApplyRejectsOlderSequenceFromSameProvider(t *testing.T) {
 	store := NewStore()

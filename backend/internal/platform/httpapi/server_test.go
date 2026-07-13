@@ -517,6 +517,13 @@ func TestGenericPropertyWrite(t *testing.T) {
 	if invalidResponse.Code != http.StatusBadRequest || !bytes.Contains(invalidResponse.Body.Bytes(), []byte(`"code":"bad_request"`)) {
 		t.Fatalf("invalid response = %d %s", invalidResponse.Code, invalidResponse.Body.String())
 	}
+	nullValue := httptest.NewRequest(http.MethodPut, "/api/v1/devices/virtual-switch-1/endpoints/main/capabilities/switch/properties/power", bytes.NewBufferString(`null`))
+	nullValue.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	nullResponse := httptest.NewRecorder()
+	newTestServer().Handler().ServeHTTP(nullResponse, nullValue)
+	if nullResponse.Code != http.StatusBadRequest || !bytes.Contains(nullResponse.Body.Bytes(), []byte(`"code":"bad_request"`)) {
+		t.Fatalf("null response = %d %s", nullResponse.Code, nullResponse.Body.String())
+	}
 }
 
 func TestGenericPropertyRead(t *testing.T) {
@@ -531,6 +538,21 @@ func TestGenericPropertyRead(t *testing.T) {
 	newTestServer().Handler().ServeHTTP(missingResponse, missing)
 	if missingResponse.Code != http.StatusNotFound {
 		t.Fatalf("missing status = %d", missingResponse.Code)
+	}
+}
+
+func TestUnknownStateAPIUsesNullWithoutInventingProviderValue(t *testing.T) {
+	provider, err := virtual.NewProviderFromConfig(providerconfig.Config{ID: "unknown-api", Name: "Unknown", Config: []byte(`{"devices":[{"id":"pending","type":"switch","availability":"unknown"}]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/devices/pending/states", nil)
+	response := httptest.NewRecorder()
+	newTestServerWithProvider(provider).Handler().ServeHTTP(response, request)
+	for _, expected := range []string{`"value":null`, `"quality":"unknown"`, `"known":false`, `"available":false`, `"unavailableReason":"availability-unknown"`} {
+		if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(expected)) {
+			t.Fatalf("unknown state response = %d %s", response.Code, response.Body.String())
+		}
 	}
 }
 

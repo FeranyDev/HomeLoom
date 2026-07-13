@@ -116,7 +116,7 @@ M0 退出条件：Apple Home 实机配对、双向控制、多桥运行和三次
 - [x] 最小值、最大值和步长；
 - [x] 单位；
 - [x] 读、写和通知权限；
-- [ ] unknown、null 和 unavailable 语义；
+- [x] unknown、null 和 unavailable 语义；
 - [x] 属性类型或范围校验失败统一返回 `400 bad_request`；
 - [x] JSON 序列化契约；
 - [x] 模型表驱动测试。
@@ -209,7 +209,7 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 - [x] 事件吞吐指标；
 - [x] 事件处理延迟指标；
 - [x] 慢 Handler 检测；
-- [ ] 事件 trace ID；
+- [x] 事件 trace ID；
 - [x] 压力测试每秒 100 条事件；
 - [x] 关闭超时测试。
 
@@ -238,7 +238,7 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 
 - [x] stale TTL；
 - [x] 定时 stale 扫描；
-- [ ] unknown 初始状态；
+- [x] unknown 初始状态；
 - [x] Provider 离线批量标记 stale；
 - [x] 乐观状态；
 - [x] 乐观状态到期；

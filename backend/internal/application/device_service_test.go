@@ -269,6 +269,32 @@ func TestDeviceServicePublishesIntegerState(t *testing.T) {
 	}
 }
 
+func TestUnknownDeviceStartsWithoutInventedValueAndRecovers(t *testing.T) {
+	provider, err := virtual.NewProviderFromConfig(providerconfig.Config{ID: "unknown-provider", Name: "Unknown", Config: []byte(`{"devices":[{"id":"pending","type":"switch","availability":"unknown"}]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := application.NewDeviceService(provider)
+	defer service.Close()
+	states := service.States("pending")
+	if len(states) != 1 || states[0].Known || states[0].Available || states[0].Quality != domainstate.QualityUnknown || states[0].UnavailableReason != domainstate.UnavailableAvailabilityUnknown || states[0].Value.Kind != "" {
+		t.Fatalf("initial states = %#v", states)
+	}
+	online := device.AvailabilityOnline
+	if _, err := service.Simulate(context.Background(), providersdk.SimulationRequest{DeviceID: "pending", Availability: &online}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		states = service.States("pending")
+		if len(states) == 1 && states[0].Known && states[0].Available && states[0].Quality == domainstate.QualityReported && states[0].Value.Bool != nil && states[0].TraceID != "" {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("recovered states = %#v", states)
+}
+
 func TestDeviceServiceRejectsInvalidTypedPropertyBeforeCreatingCommand(t *testing.T) {
 	service := application.NewDeviceService(&integerSnapshotProvider{})
 	defer service.Close()
@@ -506,7 +532,8 @@ func TestSlowSubscriberDoesNotBlockCoreDispatcher(t *testing.T) {
 func TestDeviceServiceCommandIsConfirmedByProviderEvent(t *testing.T) {
 	service := application.NewDeviceService(virtual.NewProvider())
 	defer service.Close()
-	_, command, err := service.ExecutePower(context.Background(), "virtual-switch-1", true)
+	ctx := application.WithCorrelationID(context.Background(), "trace-optimistic")
+	_, command, err := service.ExecutePower(ctx, "virtual-switch-1", true)
 	if err != nil {
 		t.Fatalf("ExecutePower() error = %v", err)
 	}
@@ -540,7 +567,7 @@ func TestDeviceOfflineImmediatelyMarksStateStaleAndOnlineRestoresIt(t *testing.T
 	var staleVersion uint64
 	for time.Now().Before(deadline) {
 		states := service.States(id)
-		if len(states) == 1 && states[0].Quality == domainstate.QualityStale {
+		if len(states) == 1 && states[0].Quality == domainstate.QualityStale && states[0].Known && !states[0].Available && states[0].UnavailableReason == domainstate.UnavailableDeviceOffline {
 			staleVersion = states[0].Version
 			break
 		}
@@ -576,7 +603,7 @@ func TestDeviceOfflineImmediatelyMarksStateStaleAndOnlineRestoresIt(t *testing.T
 	deadline = time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		states := service.States(id)
-		if len(states) == 1 && states[0].Quality == domainstate.QualityReported && states[0].Version == staleVersion+1 {
+		if len(states) == 1 && states[0].Quality == domainstate.QualityReported && states[0].Known && states[0].Available && states[0].Version == staleVersion+1 {
 			select {
 			case event := <-stateEvents:
 				if event.Quality != domainstate.QualityReported {
@@ -620,13 +647,14 @@ func TestCommandPublishesOptimisticThenReportedState(t *testing.T) {
 		}
 	})
 	defer unsubscribe()
-	_, command, err := service.ExecutePower(context.Background(), "virtual-switch-1", true)
+	ctx := application.WithCorrelationID(context.Background(), "trace-optimistic")
+	_, command, err := service.ExecutePower(ctx, "virtual-switch-1", true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	select {
 	case state := <-events:
-		if state.Quality != domainstate.QualityOptimistic || state.PendingCommandID != command.ID || state.Value.Bool == nil || !*state.Value.Bool {
+		if state.Quality != domainstate.QualityOptimistic || state.PendingCommandID != command.ID || state.TraceID != "trace-optimistic" || state.Value.Bool == nil || !*state.Value.Bool {
 			t.Fatalf("optimistic = %#v", state)
 		}
 	case <-time.After(time.Second):
