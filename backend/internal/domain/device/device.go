@@ -3,6 +3,7 @@ package device
 import (
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"time"
 )
@@ -35,6 +36,7 @@ var ErrInvalidModel = errors.New("invalid device model")
 
 const (
 	ValueTypeBool   ValueType = "bool"
+	ValueTypeInt    ValueType = "int"
 	ValueTypeNumber ValueType = "number"
 	ValueTypeString ValueType = "string"
 	ValueTypeEnum   ValueType = "enum"
@@ -43,11 +45,13 @@ const (
 type PropertyValue struct {
 	Type   ValueType `json:"type"`
 	Bool   *bool     `json:"bool,omitempty"`
+	Int    *int64    `json:"int,omitempty"`
 	Number *float64  `json:"number,omitempty"`
 	String *string   `json:"string,omitempty"`
 }
 
 func BoolValue(value bool) PropertyValue { return PropertyValue{Type: ValueTypeBool, Bool: &value} }
+func IntValue(value int64) PropertyValue { return PropertyValue{Type: ValueTypeInt, Int: &value} }
 func NumberValue(value float64) PropertyValue {
 	return PropertyValue{Type: ValueTypeNumber, Number: &value}
 }
@@ -241,7 +245,7 @@ func claimStableID(seen map[string]struct{}, id, kind string) error {
 }
 
 func validValueType(value ValueType) bool {
-	return value == ValueTypeBool || value == ValueTypeNumber || value == ValueTypeString || value == ValueTypeEnum
+	return value == ValueTypeBool || value == ValueTypeInt || value == ValueTypeNumber || value == ValueTypeString || value == ValueTypeEnum
 }
 
 func (p Property) Validate() error {
@@ -255,11 +259,21 @@ func (p Property) Validate() error {
 	if p.Definition.Type == ValueTypeEnum && len(p.Definition.Enum) == 0 {
 		return errors.New("enum options are required")
 	}
+	if p.Definition.Type == ValueTypeInt {
+		for name, constraint := range map[string]*float64{"minimum": p.Definition.Min, "maximum": p.Definition.Max, "step": p.Definition.Step} {
+			if constraint != nil && math.Trunc(*constraint) != *constraint {
+				return fmt.Errorf("int %s must be an integer", name)
+			}
+		}
+	}
 	if value.Type != p.Definition.Type {
 		return fmt.Errorf("value type %q does not match definition %q", value.Type, p.Definition.Type)
 	}
 	pointers := 0
 	if value.Bool != nil {
+		pointers++
+	}
+	if value.Int != nil {
 		pointers++
 	}
 	if value.Number != nil {
@@ -275,6 +289,16 @@ func (p Property) Validate() error {
 	case ValueTypeBool:
 		if value.Bool == nil {
 			return errors.New("bool payload is missing")
+		}
+	case ValueTypeInt:
+		if value.Int == nil {
+			return errors.New("int payload is missing")
+		}
+		if p.Definition.Min != nil && float64(*value.Int) < *p.Definition.Min {
+			return errors.New("int is below minimum")
+		}
+		if p.Definition.Max != nil && float64(*value.Int) > *p.Definition.Max {
+			return errors.New("int is above maximum")
 		}
 	case ValueTypeNumber:
 		if value.Number == nil {
@@ -367,6 +391,10 @@ func (d Device) Clone() Device {
 				if property.Value.Bool != nil {
 					value := *property.Value.Bool
 					cloneProperty.Value.Bool = &value
+				}
+				if property.Value.Int != nil {
+					value := *property.Value.Int
+					cloneProperty.Value.Int = &value
 				}
 				if property.Value.Number != nil {
 					value := *property.Value.Number

@@ -11,6 +11,7 @@ import (
 var (
 	ErrDeviceNotFound      = errors.New("device not found")
 	ErrPropertyUnsupported = errors.New("property unsupported")
+	ErrPropertyInvalid     = errors.New("invalid property value")
 	ErrWriteRejected       = errors.New("provider rejected write")
 	ErrSimulationInvalid   = errors.New("invalid simulation request")
 	ErrProviderUnavailable = errors.New("provider unavailable")

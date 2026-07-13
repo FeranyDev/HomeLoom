@@ -10,6 +10,10 @@ import (
 
 func (s *Store) SaveTarget(ctx context.Context, item target.Config) error {
 	defer s.observe(time.Now())
+	pin, err := s.secrets.encrypt("target-pin:"+item.ID, item.Pin)
+	if err != nil {
+		return fmt.Errorf("encrypt target pin: %w", err)
+	}
 	transaction, err := s.database.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin target save: %w", err)
@@ -23,7 +27,7 @@ func (s *Store) SaveTarget(ctx context.Context, item target.Config) error {
           type = excluded.type, name = excluded.name, enabled = excluded.enabled,
           address = excluded.address, pin = excluded.pin, setup_id = excluded.setup_id,
           store_path = excluded.store_path, updated_at = excluded.updated_at`,
-		item.ID, item.Type, item.Name, item.Enabled, item.Address, item.Pin, item.SetupID, item.StorePath, now, now,
+		item.ID, item.Type, item.Name, item.Enabled, item.Address, pin, item.SetupID, item.StorePath, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("save target: %w", err)
@@ -76,6 +80,11 @@ func (s *Store) ListTargets(ctx context.Context) ([]target.Config, error) {
 			&item.Pin, &item.SetupID, &item.StorePath,
 		); err != nil {
 			return nil, fmt.Errorf("scan target: %w", err)
+		}
+		item.Pin, err = s.secrets.decrypt("target-pin:"+item.ID, item.Pin)
+		if err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("decrypt target %q pin: %w", item.ID, err)
 		}
 		result = append(result, item)
 	}

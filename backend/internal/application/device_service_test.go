@@ -26,6 +26,23 @@ type blockingWriteProvider struct {
 
 type skewedSnapshotProvider struct{ inner *virtual.Provider }
 
+type integerSnapshotProvider struct{}
+
+func (*integerSnapshotProvider) Manifest() providersdk.Manifest {
+	return providersdk.Manifest{ID: "integer", Type: "test", Name: "Integer", Version: "1"}
+}
+func (*integerSnapshotProvider) Capabilities() providersdk.Capabilities {
+	return providersdk.Capabilities{Discovery: true}
+}
+func (*integerSnapshotProvider) Initialize(context.Context) error { return nil }
+func (*integerSnapshotProvider) Close(context.Context) error      { return nil }
+func (*integerSnapshotProvider) DiscoverDevices(context.Context) ([]device.Device, error) {
+	maximum := 10.0
+	item := device.Device{SchemaVersion: device.SchemaVersion, ID: "counter", ProviderID: "integer", Name: "Counter", Type: device.Type("counter"), LastUpdateAt: time.Now().UTC(), Endpoints: []device.Endpoint{{ID: "main", Name: "Main", Type: "counter", Capabilities: []device.Capability{{ID: "counter", Type: "counter", Properties: []device.Property{{Definition: device.PropertyDefinition{ID: "value", Name: "Value", Type: device.ValueTypeInt, Readable: true, Writable: true, Max: &maximum}, Value: device.IntValue(7)}}}}}}}
+	item.SetOnline(true)
+	return []device.Device{item}, nil
+}
+
 func (p *skewedSnapshotProvider) Manifest() providersdk.Manifest { return p.inner.Manifest() }
 func (p *skewedSnapshotProvider) Capabilities() providersdk.Capabilities {
 	return p.inner.Capabilities()
@@ -127,6 +144,28 @@ func TestDeviceServiceDetectsAndClampsProviderClockSkew(t *testing.T) {
 	states := service.States("virtual-switch-1")
 	if len(states) != 1 || states[0].ObservedAt.After(time.Now().Add(time.Minute)) {
 		t.Fatalf("clamped states = %#v", states)
+	}
+}
+
+func TestDeviceServicePublishesIntegerState(t *testing.T) {
+	service := application.NewDeviceService(&integerSnapshotProvider{})
+	defer service.Close()
+	states := service.States("counter")
+	if len(states) != 1 || states[0].Value.Kind != domainstate.KindInt || states[0].Value.Int == nil || *states[0].Value.Int != 7 {
+		t.Fatalf("states = %#v", states)
+	}
+}
+
+func TestDeviceServiceRejectsInvalidTypedPropertyBeforeCreatingCommand(t *testing.T) {
+	service := application.NewDeviceService(&integerSnapshotProvider{})
+	defer service.Close()
+	_, _, err := service.ExecuteProperty(context.Background(), "counter", "main", "counter", "value", device.NumberValue(7))
+	if !errors.Is(err, providersdk.ErrPropertyInvalid) || len(service.Commands()) != 0 {
+		t.Fatalf("type error = %v, commands = %#v", err, service.Commands())
+	}
+	_, _, err = service.ExecuteProperty(context.Background(), "counter", "main", "counter", "value", device.IntValue(11))
+	if !errors.Is(err, providersdk.ErrPropertyInvalid) || len(service.Commands()) != 0 {
+		t.Fatalf("range error = %v, commands = %#v", err, service.Commands())
 	}
 }
 

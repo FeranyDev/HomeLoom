@@ -81,7 +81,7 @@ SQLite 在线一致性备份（不会在备份前迁移源库）：
 ./scripts/backup.sh
 ```
 
-该脚本备份 SQLite 配置与稳定 ID 表。灾难恢复 HomeKit 配对关系时，还必须备份相应的 HAP 身份目录。
+该脚本会生成 SQLite 备份及配套的 `.db.key` 主密钥文件，两者必须一起保管和恢复。灾难恢复 HomeKit 配对关系时，还必须备份相应的 HAP 身份目录。
 
 ## 当前 Demo 链路
 

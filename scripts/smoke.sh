@@ -46,5 +46,5 @@ kill -TERM "$PID"
 wait "$PID"
 PID=""
 HOMELOOM_DATABASE="$TEMP/homeloom.db" "$BINARY" -backup "$TEMP/backup.db" >/dev/null
-if [ ! -s "$TEMP/backup.db" ]; then echo "backup smoke test produced no data" >&2; exit 1; fi
+if [ ! -s "$TEMP/backup.db" ] || [ ! -s "$TEMP/backup.db.key" ]; then echo "backup smoke test produced incomplete database/key pair" >&2; exit 1; fi
 printf 'smoke test passed (%s)\n' "$ADDRESS"

@@ -56,6 +56,21 @@ func TestCommandConfirmsTypedNumber(t *testing.T) {
 	}
 }
 
+func TestCommandConfirmsTypedInteger(t *testing.T) {
+	tracker := NewTracker(time.Second)
+	command := tracker.Begin("counter", "main", "counter", "value", device.IntValue(7))
+	tracker.Accepted(command.ID)
+	tracker.Confirm("counter", "main", "counter", "value", device.IntValue(7))
+	current, _ := tracker.Get(command.ID)
+	if current.Status != domaincommand.StatusConfirmed {
+		t.Fatalf("status = %s", current.Status)
+	}
+	tracker.Confirm("counter", "main", "counter", "value", device.NumberValue(7))
+	if valuesEqual(device.IntValue(7), device.NumberValue(7)) {
+		t.Fatal("int and number compared equal")
+	}
+}
+
 func TestTrackerBoundsTerminalHistory(t *testing.T) {
 	tracker := NewTracker(time.Second)
 	for index := 0; index < 1001; index++ {

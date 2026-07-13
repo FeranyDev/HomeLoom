@@ -1,8 +1,8 @@
 export type DeviceType = 'switch' | 'temperature-sensor' | 'lightbulb' | 'outlet' | 'humidity-sensor' | 'contact-sensor' | 'motion-sensor'
-export type ValueType = 'bool' | 'number' | 'string' | 'enum'
+export type ValueType = 'bool' | 'int' | 'number' | 'string' | 'enum'
 export type DeviceAvailability = 'online' | 'offline' | 'unknown'
 
-export interface PropertyValue { type: ValueType; bool?: boolean; number?: number; string?: string }
+export interface PropertyValue { type: ValueType; bool?: boolean; int?: number; number?: number; string?: string }
 export interface PropertyDefinition { id: string; name: string; type: ValueType; unit?: string; readable: boolean; writable: boolean; notifiable: boolean; min?: number; max?: number; step?: number; enum?: string[]; staleAfterSeconds?: number }
 export interface Property { definition: PropertyDefinition; value: PropertyValue }
 export interface CommandParameter { id: string; name: string; type: ValueType; required: boolean }
@@ -22,7 +22,7 @@ export function deviceProperty(device: Device, capabilityId: string, propertyId:
 
 export interface StateValue {
   key: { deviceId: string; endpointId: string; capabilityId: string; propertyId: string }
-  value: { kind: 'bool' | 'number'; bool?: boolean; number?: number }
+  value: { kind: 'bool' | 'int' | 'number'; bool?: boolean; int?: number; number?: number }
   providerId: string; source: string; observedAt: string; receivedAt: string; expiresAt?: string
   sequence: number; version: number; quality: string; pendingCommandId?: string
 }

@@ -35,6 +35,10 @@ func TestConsistentBackupPreservesSchemaAndConfiguration(t *testing.T) {
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("backup mode = %o", info.Mode().Perm())
 	}
+	keyInfo, err := os.Stat(destination + ".key")
+	if err != nil || keyInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("backup key mode = %v, %v", keyInfo, err)
+	}
 	backup, err := sql.Open("sqlite", destination)
 	if err != nil {
 		t.Fatal(err)
@@ -59,6 +63,133 @@ func TestConsistentBackupPreservesSchemaAndConfiguration(t *testing.T) {
 	}
 	if err := store.Backup(ctx, source); err == nil {
 		t.Fatal("database was backed up over itself")
+	}
+}
+
+func TestTargetPINIsEncryptedAndSurvivesRestart(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "homeloom.db")
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := target.Config{ID: "encrypted", Type: "apple-hap", Name: "Encrypted", Address: ":51827", Pin: "12345678", SetupID: "ENC1", StorePath: "data/hap/encrypted"}
+	if err := store.SaveTarget(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+	var stored string
+	if err := store.database.QueryRowContext(ctx, "SELECT pin FROM targets WHERE id = ?", item.ID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored == item.Pin || !strings.HasPrefix(stored, encryptedPrefix) {
+		t.Fatalf("stored pin = %q", stored)
+	}
+	keyInfo, err := os.Stat(path + ".key")
+	if err != nil || keyInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("master key mode = %v, %v", keyInfo, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := reopened.ListTargets(ctx)
+	reopened.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, current := range items {
+		if current.ID == item.ID {
+			found = current.Pin == item.Pin
+		}
+	}
+	if !found {
+		t.Fatalf("decrypted target not found: %#v", items)
+	}
+}
+
+func TestOpenRejectsMissingMasterKeyForEncryptedPIN(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "homeloom.db")
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveTarget(ctx, target.Config{ID: "encrypted", Type: "apple-hap", Name: "Encrypted", Pin: "12345678"}); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	if err := os.Remove(path + ".key"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(ctx, path); err == nil || !strings.Contains(err.Error(), "master key is missing") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestBackupCarriesMasterKeyNeededToRestoreTargetPIN(t *testing.T) {
+	ctx := context.Background()
+	directory := t.TempDir()
+	sourcePath := filepath.Join(directory, "source.db")
+	store, err := Open(ctx, sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := target.Config{ID: "restore", Type: "apple-hap", Name: "Restore", Pin: "87654321"}
+	if err := store.SaveTarget(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(directory, "restore.db")
+	if err := store.Backup(ctx, destination); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	restored, err := Open(ctx, destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	items, err := restored.ListTargets(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, current := range items {
+		if current.ID == item.ID && current.Pin == item.Pin {
+			return
+		}
+	}
+	t.Fatalf("restored target pin missing: %#v", items)
+}
+
+func TestOpenEncryptsLegacyPlaintextPINWithExistingKey(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "homeloom.db")
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.database.ExecContext(ctx, "UPDATE targets SET pin = '11223344' WHERE id = 'apple-main'"); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	reopened, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	var raw string
+	if err := reopened.database.QueryRowContext(ctx, "SELECT pin FROM targets WHERE id = 'apple-main'").Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(raw, encryptedPrefix) {
+		t.Fatalf("legacy pin was not encrypted: %q", raw)
+	}
+	items, err := reopened.ListTargets(ctx)
+	if err != nil || len(items) == 0 || items[0].Pin != "11223344" {
+		t.Fatalf("targets = %#v, %v", items, err)
 	}
 }
 

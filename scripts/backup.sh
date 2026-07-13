@@ -15,3 +15,4 @@ if [ ! -f "$DATABASE" ]; then echo "database not found: $DATABASE" >&2; exit 1; 
 mkdir -p "$DESTINATION_DIR"
 HOMELOOM_DATABASE="$DATABASE" "$BINARY" -backup "$DESTINATION"
 printf '%s\n' "$DESTINATION"
+if [ -f "$DESTINATION.key" ]; then printf '%s\n' "$DESTINATION.key"; fi

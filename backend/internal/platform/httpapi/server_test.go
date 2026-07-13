@@ -404,6 +404,17 @@ func TestGenericPropertyWrite(t *testing.T) {
 	if unsupportedResponse.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d", unsupportedResponse.Code)
 	}
+	invalid := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/devices/virtual-switch-1/endpoints/main/capabilities/switch/properties/power",
+		bytes.NewBufferString(`{"type":"number","number":1}`),
+	)
+	invalid.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	invalidResponse := httptest.NewRecorder()
+	newTestServer().Handler().ServeHTTP(invalidResponse, invalid)
+	if invalidResponse.Code != http.StatusBadRequest || !bytes.Contains(invalidResponse.Body.Bytes(), []byte(`"code":"bad_request"`)) {
+		t.Fatalf("invalid response = %d %s", invalidResponse.Code, invalidResponse.Body.String())
+	}
 }
 
 func TestGenericPropertyRead(t *testing.T) {

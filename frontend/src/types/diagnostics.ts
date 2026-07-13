@@ -20,7 +20,7 @@ export interface Diagnostics {
 export interface SystemVersion { version: string; commit: string; buildTime: string; goVersion: string }
 export interface RuntimeSettings { commandTimeoutSeconds: number; commandHistoryLimit: number }
 
-export interface CommandValue { type: string; bool?: boolean; number?: number; string?: string }
+export interface CommandValue { type: string; bool?: boolean; int?: number; number?: number; string?: string }
 export interface DeviceCommand {
   id: string; kind?: 'property' | 'action'; deviceId: string; endpointId: string; capabilityId: string; propertyId?: string; commandId?: string
   expected?: CommandValue; parameters?: Record<string, CommandValue>; status: 'queued' | 'sent' | 'accepted' | 'confirmed' | 'rejected' | 'timeout' | 'superseded'

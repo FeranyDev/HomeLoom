@@ -15,6 +15,8 @@ import (
 type Store struct {
 	database          *sql.DB
 	path              string
+	keyPath           string
+	secrets           *secretCodec
 	operationCount    atomic.Uint64
 	totalLatencyNanos atomic.Uint64
 	maxLatencyNanos   atomic.Uint64
@@ -31,8 +33,12 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	}
 	database.SetMaxOpenConns(1)
 
-	store := &Store{database: database, path: path}
+	store := &Store{database: database, path: path, keyPath: path + ".key"}
 	if err := store.initialize(ctx); err != nil {
+		database.Close()
+		return nil, err
+	}
+	if err := store.initializeSecrets(ctx); err != nil {
 		database.Close()
 		return nil, err
 	}
@@ -58,7 +64,7 @@ func OpenForBackup(ctx context.Context, path string) (*Store, error) {
 		database.Close()
 		return nil, fmt.Errorf("initialize backup connection: %w", err)
 	}
-	return &Store{database: database, path: path}, nil
+	return &Store{database: database, path: path, keyPath: path + ".key"}, nil
 }
 
 func (s *Store) initialize(ctx context.Context) error {
@@ -111,6 +117,24 @@ func (s *Store) Backup(ctx context.Context, destination string) error {
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("check backup destination: %w", err)
 	}
+	destinationKey := destination + ".key"
+	keyInfo, keyErr := os.Lstat(s.keyPath)
+	if keyErr == nil {
+		if keyInfo.Mode()&os.ModeSymlink != 0 || !keyInfo.Mode().IsRegular() {
+			return fmt.Errorf("source master key must be a regular file")
+		}
+		if _, destinationErr := os.Stat(destinationKey); destinationErr == nil {
+			return fmt.Errorf("backup key destination already exists")
+		} else if !os.IsNotExist(destinationErr) {
+			return fmt.Errorf("check backup key destination: %w", destinationErr)
+		}
+	} else if !os.IsNotExist(keyErr) {
+		return fmt.Errorf("check source master key: %w", keyErr)
+	} else if encrypted, inspectErr := s.hasEncryptedTargetPINs(ctx); inspectErr != nil {
+		return inspectErr
+	} else if encrypted {
+		return fmt.Errorf("master key is missing for encrypted target secrets")
+	}
 	if err := os.MkdirAll(filepath.Dir(destination), 0o750); err != nil {
 		return fmt.Errorf("create backup directory: %w", err)
 	}
@@ -119,6 +143,9 @@ func (s *Store) Backup(ctx context.Context, destination string) error {
 	}
 	if err := os.Chmod(destination, 0o600); err != nil {
 		return fmt.Errorf("secure backup permissions: %w", err)
+	}
+	if err := copyPrivateFile(s.keyPath, destinationKey); err != nil {
+		return fmt.Errorf("backup master key: %w", err)
 	}
 	return nil
 }

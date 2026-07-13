@@ -27,11 +27,15 @@ func TestPropertyLookupAndUpdate(t *testing.T) {
 
 func TestTypedValues(t *testing.T) {
 	boolean := BoolValue(true)
+	integer := IntValue(42)
 	number := NumberValue(23.5)
 	text := StringValue("hello")
 	enumerated := EnumValue("auto")
 	if boolean.Type != ValueTypeBool || boolean.Bool == nil || !*boolean.Bool {
 		t.Fatalf("BoolValue() = %#v", boolean)
+	}
+	if integer.Type != ValueTypeInt || integer.Int == nil || *integer.Int != 42 {
+		t.Fatalf("IntValue() = %#v", integer)
 	}
 	if number.Type != ValueTypeNumber || number.Number == nil || *number.Number != 23.5 {
 		t.Fatalf("NumberValue() = %#v", number)
@@ -100,5 +104,22 @@ func TestValidateModelContract(t *testing.T) {
 				t.Fatalf("error = %v", err)
 			}
 		})
+	}
+}
+
+func TestValidateIntegerPropertyContract(t *testing.T) {
+	minimum, maximum, step := 0.0, 100.0, 1.0
+	property := Property{Definition: PropertyDefinition{ID: "level", Type: ValueTypeInt, Min: &minimum, Max: &maximum, Step: &step}, Value: IntValue(42)}
+	if err := property.Validate(); err != nil {
+		t.Fatalf("valid integer rejected: %v", err)
+	}
+	property.Value = IntValue(101)
+	if err := property.Validate(); err == nil {
+		t.Fatal("out-of-range integer accepted")
+	}
+	fractionalStep := 0.5
+	property.Value, property.Definition.Step = IntValue(42), &fractionalStep
+	if err := property.Validate(); err == nil {
+		t.Fatal("fractional integer step accepted")
 	}
 }

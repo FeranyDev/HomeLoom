@@ -193,8 +193,9 @@ components:
       type: object
       required: [type]
       properties:
-        type: { type: string, enum: [bool, number, string, enum] }
+        type: { type: string, enum: [bool, int, number, string, enum] }
         bool: { type: boolean }
+        int: { type: integer, format: int64 }
         number: { type: number }
         string: { type: string }
     Property:

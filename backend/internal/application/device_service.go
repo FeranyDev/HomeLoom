@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -303,6 +304,9 @@ func (s *DeviceService) ExecutePower(ctx context.Context, id string, power bool)
 }
 
 func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) (device.Device, domaincommand.Command, error) {
+	if err := s.validatePropertyWrite(deviceID, endpointID, capabilityID, propertyID, value); err != nil {
+		return device.Device{}, domaincommand.Command{}, err
+	}
 	release, err := s.commandQueue.acquire(ctx, deviceID)
 	if err != nil {
 		return device.Device{}, domaincommand.Command{}, err
@@ -342,6 +346,22 @@ func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointI
 	s.commands.Accepted(command.ID)
 	current, _ := s.commands.Get(command.ID)
 	return item, current, nil
+}
+
+func (s *DeviceService) validatePropertyWrite(deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) error {
+	item, ok := s.registry.Get(deviceID)
+	if !ok {
+		return ErrDeviceNotFound
+	}
+	property, ok := item.Property(endpointID, capabilityID, propertyID)
+	if !ok || !property.Definition.Writable {
+		return ErrPropertyUnsupported
+	}
+	property.Value = value
+	if err := property.Validate(); err != nil {
+		return fmt.Errorf("%w: %v", providersdk.ErrPropertyInvalid, err)
+	}
+	return nil
 }
 
 func (s *DeviceService) ExecuteCommand(ctx context.Context, request providersdk.CommandRequest) (device.Device, domaincommand.Command, error) {
@@ -437,6 +457,9 @@ func valueMatchesType(value device.PropertyValue, expected device.ValueType) boo
 	if value.Bool != nil {
 		payloads++
 	}
+	if value.Int != nil {
+		payloads++
+	}
 	if value.Number != nil {
 		payloads++
 	}
@@ -446,7 +469,7 @@ func valueMatchesType(value device.PropertyValue, expected device.ValueType) boo
 	if payloads != 1 {
 		return false
 	}
-	return (expected == device.ValueTypeBool && value.Bool != nil) || (expected == device.ValueTypeNumber && value.Number != nil) || ((expected == device.ValueTypeString || expected == device.ValueTypeEnum) && value.String != nil)
+	return (expected == device.ValueTypeBool && value.Bool != nil) || (expected == device.ValueTypeInt && value.Int != nil) || (expected == device.ValueTypeNumber && value.Number != nil) || ((expected == device.ValueTypeString || expected == device.ValueTypeEnum) && value.String != nil)
 }
 
 func (s *DeviceService) applyOptimisticState(key domainstate.Key, value device.PropertyValue, command domaincommand.Command, previous domainstate.StateValue, hadPrevious bool) {
@@ -457,6 +480,11 @@ func (s *DeviceService) applyOptimisticState(key domainstate.Key, value device.P
 			return
 		}
 		optimistic.Value = domainstate.BoolValue(*value.Bool)
+	case device.ValueTypeInt:
+		if value.Int == nil {
+			return
+		}
+		optimistic.Value = domainstate.IntValue(*value.Int)
 	case device.ValueTypeNumber:
 		if value.Number == nil {
 			return
@@ -595,6 +623,11 @@ func (s *DeviceService) applySnapshot(item device.Device) {
 						continue
 					}
 					value.Value = domainstate.BoolValue(*property.Value.Bool)
+				case device.ValueTypeInt:
+					if property.Value.Int == nil {
+						continue
+					}
+					value.Value = domainstate.IntValue(*property.Value.Int)
 				case device.ValueTypeNumber:
 					if property.Value.Number == nil {
 						continue

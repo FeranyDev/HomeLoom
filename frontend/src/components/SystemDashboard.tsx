@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { DeviceCommand, Diagnostics, RuntimeSettings } from '../types/diagnostics'
 
-function expectedValue(command: DeviceCommand): string { if (command.kind === 'action') return Object.entries(command.parameters ?? {}).map(([key, value]) => `${key}=${value.bool ?? value.number ?? value.string ?? '—'}`).join(', ') || '无参数'; const value = command.expected; if (!value) return '—'; if (value.bool !== undefined) return String(value.bool); if (value.number !== undefined) return String(value.number); return value.string ?? '—' }
+function expectedValue(command: DeviceCommand): string { if (command.kind === 'action') return Object.entries(command.parameters ?? {}).map(([key, value]) => `${key}=${value.bool ?? value.int ?? value.number ?? value.string ?? '—'}`).join(', ') || '无参数'; const value = command.expected; if (!value) return '—'; if (value.bool !== undefined) return String(value.bool); if (value.int !== undefined) return String(value.int); if (value.number !== undefined) return String(value.number); return value.string ?? '—' }
 function megabytes(bytes: number): string { return `${(bytes / 1024 / 1024).toFixed(1)}MB` }
 
 function RuntimeSettingsCard({ settings, onSave }: { settings: RuntimeSettings | null; onSave: (settings: RuntimeSettings) => Promise<void> }) {
@@ -15,7 +15,15 @@ function RuntimeSettingsCard({ settings, onSave }: { settings: RuntimeSettings |
 }
 
 export function SystemDashboard({ diagnostics, commands, settings, onSettingsSave }: { diagnostics: Diagnostics | null; commands: DeviceCommand[]; settings: RuntimeSettings | null; onSettingsSave: (settings: RuntimeSettings) => Promise<void> }) {
+	const [commandQuery, setCommandQuery] = useState('')
+	const [commandStatus, setCommandStatus] = useState('all')
   if (!diagnostics) return <div className="empty-state">正在加载诊断数据…</div>
+	const normalizedQuery = commandQuery.trim().toLowerCase()
+	const filteredCommands = commands.filter((command) => {
+		const matchesStatus = commandStatus === 'all' || command.status === commandStatus || command.outcome === commandStatus
+		const searchable = `${command.id} ${command.deviceId} ${command.endpointId} ${command.capabilityId} ${command.propertyId ?? ''} ${command.commandId ?? ''} ${command.error ?? ''}`.toLowerCase()
+		return matchesStatus && (!normalizedQuery || searchable.includes(normalizedQuery))
+	})
   const successRate = diagnostics.commandsStarted ? Math.round(diagnostics.commandsConfirmed / diagnostics.commandsStarted * 100) : 100
   const queueRate = diagnostics.eventQueueCapacity ? Math.round(diagnostics.eventQueuePending / diagnostics.eventQueueCapacity * 100) : 0
   const metrics = [
@@ -43,6 +51,6 @@ export function SystemDashboard({ diagnostics, commands, settings, onSettingsSav
   return <section className="system-dashboard"><div className="metric-grid">{metrics.map(([label, value]) => <article key={label}><span>{label}</span><strong>{value}</strong></article>)}</div>
     <div className="queue-card"><div><span>事件队列</span><strong>{diagnostics.eventQueuePending} / {diagnostics.eventQueueCapacity}</strong></div><div className="queue-track"><span style={{ width: `${Math.min(queueRate, 100)}%` }} /></div><small>当前占用 {queueRate}% · 核心队列满时会丢弃并计数，不阻塞 Provider 线程。</small></div>
     <RuntimeSettingsCard settings={settings} onSave={onSettingsSave} />
-    <div className="command-section"><div className="command-heading"><h3>命令历史</h3><span>内存中最多保留 {settings?.commandHistoryLimit ?? 1000} 条终态记录</span></div>{commands.length === 0 ? <div className="command-empty">还没有控制命令</div> : <div className="command-table"><div className="command-row command-header"><span>设备 / 属性或动作</span><span>期望值 / 参数</span><span>状态 / 结果</span><span>更新时间</span></div>{commands.map((command) => <div className="command-row" key={command.id}><span><b>{command.deviceId}</b><small>{command.capabilityId}.{command.commandId ?? command.propertyId}</small></span><code>{expectedValue(command)}</code><span><i className={`command-status is-${command.status}`}>{command.status}</i>{command.outcome && <small>outcome: {command.outcome}</small>}{command.error && <small>{command.error}</small>}</span><time>{new Date(command.updatedAt).toLocaleString()}</time></div>)}</div>}</div>
+    <div className="command-section"><div className="command-heading"><h3>命令历史</h3><span>内存中最多保留 {settings?.commandHistoryLimit ?? 1000} 条记录</span></div><div className="command-filters"><input aria-label="搜索命令" value={commandQuery} onChange={(event) => setCommandQuery(event.target.value)} placeholder="搜索设备、属性、动作、错误或命令 ID" /><select aria-label="命令状态" value={commandStatus} onChange={(event) => setCommandStatus(event.target.value)}><option value="all">全部状态</option><option value="queued">queued</option><option value="sent">sent</option><option value="accepted">accepted</option><option value="confirmed">confirmed</option><option value="rejected">rejected</option><option value="timeout">timeout</option><option value="superseded">superseded</option><option value="unknown">outcome unknown</option></select><span>{filteredCommands.length} / {commands.length}</span></div>{commands.length === 0 ? <div className="command-empty">还没有控制命令</div> : filteredCommands.length === 0 ? <div className="command-empty">没有匹配的命令</div> : <div className="command-table"><div className="command-row command-header"><span>设备 / 属性或动作</span><span>期望值 / 参数</span><span>状态 / 结果</span><span>更新时间</span></div>{filteredCommands.map((command) => <div className="command-row" key={command.id}><span><b>{command.deviceId}</b><small>{command.capabilityId}.{command.commandId ?? command.propertyId}</small><small>{command.id}</small></span><code>{expectedValue(command)}</code><span><i className={`command-status is-${command.status}`}>{command.status}</i>{command.outcome && <small>outcome: {command.outcome}</small>}{command.error && <small>{command.error}</small>}</span><time>{new Date(command.updatedAt).toLocaleString()}</time></div>)}</div>}</div>
   </section>
 }

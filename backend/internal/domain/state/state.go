@@ -8,6 +8,7 @@ type Quality string
 
 const (
 	KindBool   ValueKind = "bool"
+	KindInt    ValueKind = "int"
 	KindNumber ValueKind = "number"
 
 	SourceReported        Source = "reported"
@@ -26,10 +27,12 @@ const (
 type Value struct {
 	Kind   ValueKind `json:"kind"`
 	Bool   *bool     `json:"bool,omitempty"`
+	Int    *int64    `json:"int,omitempty"`
 	Number *float64  `json:"number,omitempty"`
 }
 
 func BoolValue(value bool) Value      { return Value{Kind: KindBool, Bool: &value} }
+func IntValue(value int64) Value      { return Value{Kind: KindInt, Int: &value} }
 func NumberValue(value float64) Value { return Value{Kind: KindNumber, Number: &value} }
 
 type Key struct {

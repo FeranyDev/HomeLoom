@@ -4,7 +4,7 @@ import { availabilityLabel, type Device, type PropertyValue, type StateValue } f
 import { PropertyControl } from './PropertyControl'
 import { CommandControl } from './CommandControl'
 
-function displayValue(value: PropertyValue): string { if (value.bool !== undefined) return value.bool ? 'true' : 'false'; if (value.number !== undefined) return String(value.number); return value.string ?? '—' }
+function displayValue(value: PropertyValue): string { if (value.bool !== undefined) return value.bool ? 'true' : 'false'; if (value.int !== undefined) return String(value.int); if (value.number !== undefined) return String(value.number); return value.string ?? '—' }
 function mergeState(items: StateValue[], incoming: StateValue): StateValue[] { const index = items.findIndex((item) => item.key.endpointId === incoming.key.endpointId && item.key.capabilityId === incoming.key.capabilityId && item.key.propertyId === incoming.key.propertyId); if (index < 0) return [...items, incoming]; if (items[index].version > incoming.version) return items; return items.map((item, current) => current === index ? incoming : item) }
 
 export function DeviceDetails({ device, onClose, onPropertyWrite, onCommandExecute }: { device: Device; onClose: () => void; onPropertyWrite: (endpointId: string, capabilityId: string, propertyId: string, value: PropertyValue) => Promise<void>; onCommandExecute: (endpointId: string, capabilityId: string, commandId: string, parameters: Record<string, PropertyValue>, idempotencyKey: string) => Promise<void> }) {

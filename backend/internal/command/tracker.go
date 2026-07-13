@@ -316,6 +316,8 @@ func valuesEqual(left, right device.PropertyValue) bool {
 	switch left.Type {
 	case device.ValueTypeBool:
 		return left.Bool != nil && right.Bool != nil && *left.Bool == *right.Bool
+	case device.ValueTypeInt:
+		return left.Int != nil && right.Int != nil && *left.Int == *right.Int
 	case device.ValueTypeNumber:
 		return left.Number != nil && right.Number != nil && *left.Number == *right.Number
 	case device.ValueTypeString, device.ValueTypeEnum:

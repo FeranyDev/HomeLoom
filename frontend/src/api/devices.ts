@@ -1,4 +1,4 @@
-import type { Device, DeviceAvailability, Property, StateValue } from '../types/device'
+import type { Device, DeviceAvailability, Property, PropertyValue, StateValue } from '../types/device'
 import { requestData } from './client'
 
 export async function listDevices(signal?: AbortSignal): Promise<Device[]> {
@@ -27,11 +27,11 @@ export async function setDevicePower(id: string, value: boolean): Promise<Device
   })
 }
 
-export async function setDeviceProperty(id: string, endpointId: string, capabilityId: string, propertyId: string, value: { type: string; bool?: boolean; number?: number; string?: string }): Promise<Device> {
+export async function setDeviceProperty(id: string, endpointId: string, capabilityId: string, propertyId: string, value: PropertyValue): Promise<Device> {
   return requestData<Device>(`/api/v1/devices/${encodeURIComponent(id)}/endpoints/${encodeURIComponent(endpointId)}/capabilities/${encodeURIComponent(capabilityId)}/properties/${encodeURIComponent(propertyId)}`, { method: 'PUT', body: JSON.stringify(value) })
 }
 
-export async function executeDeviceCommand(id: string, endpointId: string, capabilityId: string, commandId: string, parameters: Record<string, { type: string; bool?: boolean; number?: number; string?: string }>, idempotencyKey: string): Promise<Device> {
+export async function executeDeviceCommand(id: string, endpointId: string, capabilityId: string, commandId: string, parameters: Record<string, PropertyValue>, idempotencyKey: string): Promise<Device> {
 	return requestData<Device>(`/api/v1/devices/${encodeURIComponent(id)}/endpoints/${encodeURIComponent(endpointId)}/capabilities/${encodeURIComponent(capabilityId)}/commands/${encodeURIComponent(commandId)}`, { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ parameters }) })
 }
 

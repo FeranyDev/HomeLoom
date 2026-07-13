@@ -21,4 +21,14 @@ describe('CommandControl', () => {
 		await userEvent.click(screen.getByRole('button', { name: '执行命令' }))
 		expect(onExecute.mock.calls[0][1]).toBe(onExecute.mock.calls[1][1])
 	})
+
+	it('builds integer parameters without truncating fractions', async () => {
+		const onExecute = vi.fn().mockResolvedValue(undefined)
+		render(<CommandControl definition={{ id: 'set-count', name: '设置计数', parameters: [{ id: 'count', name: '计数', type: 'int', required: true }] }} onExecute={onExecute} />)
+		const input = screen.getByRole('spinbutton')
+		await userEvent.type(input, '1.5'); await userEvent.click(screen.getByRole('button', { name: '执行命令' }))
+		expect(await screen.findByText('计数必须是整数')).toBeInTheDocument(); expect(onExecute).not.toHaveBeenCalled()
+		await userEvent.clear(input); await userEvent.type(input, '2'); await userEvent.click(screen.getByRole('button', { name: '执行命令' }))
+		expect(onExecute).toHaveBeenCalledWith({ count: { type: 'int', int: 2 } }, expect.any(String))
+	})
 })

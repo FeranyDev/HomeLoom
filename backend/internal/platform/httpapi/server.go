@@ -581,6 +581,9 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		if errors.Is(err, application.ErrPropertyUnsupported) {
 			return echo.NewHTTPError(http.StatusUnprocessableEntity, "property is not supported")
 		}
+		if errors.Is(err, providersdk.ErrPropertyInvalid) {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid property value")
+		}
 		if errors.Is(err, providersdk.ErrProviderUnavailable) {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "provider unavailable")
 		}
