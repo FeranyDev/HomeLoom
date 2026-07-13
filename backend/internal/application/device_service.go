@@ -68,6 +68,10 @@ type DeviceMetrics struct {
 	CommandsConfirmed   uint64 `json:"commandsConfirmed"`
 	CommandsRejected    uint64 `json:"commandsRejected"`
 	CommandsTimedOut    uint64 `json:"commandsTimedOut"`
+	OnlineDevices       int    `json:"onlineDevices"`
+	OfflineDevices      int    `json:"offlineDevices"`
+	ProvidersRunning    int    `json:"providersRunning"`
+	DeviceSubscribers   int    `json:"deviceSubscribers"`
 }
 
 func NewDeviceService(provider providersdk.Provider) *DeviceService {
@@ -131,12 +135,29 @@ func (s *DeviceService) Simulate(ctx context.Context, request providersdk.Simula
 }
 
 func (s *DeviceService) Metrics() DeviceMetrics {
+	items := s.registry.List()
+	online := 0
+	for _, item := range items {
+		if item.Online {
+			online++
+		}
+	}
+	providersRunning := 0
+	for _, item := range s.ProviderInfos() {
+		if item.Status == "running" {
+			providersRunning++
+		}
+	}
+	s.mu.RLock()
+	subscribers := len(s.listeners)
+	s.mu.RUnlock()
 	return DeviceMetrics{
 		EventsReceived: s.metrics.eventsReceived.Load(), EventsProcessed: s.metrics.eventsProcessed.Load(),
 		EventsDropped: s.metrics.eventsDropped.Load(), EventQueuePending: s.dispatcher.Pending(), EventQueueCapacity: s.dispatcher.Capacity(),
 		TargetEventsDropped: s.metrics.targetEventsDropped.Load(), StatesMarkedStale: s.metrics.statesMarkedStale.Load(),
 		CommandsStarted: s.metrics.commandsStarted.Load(), CommandsConfirmed: s.metrics.commandsConfirmed.Load(),
 		CommandsRejected: s.metrics.commandsRejected.Load(), CommandsTimedOut: s.metrics.commandsTimedOut.Load(),
+		OnlineDevices: online, OfflineDevices: len(items) - online, ProvidersRunning: providersRunning, DeviceSubscribers: subscribers,
 	}
 }
 

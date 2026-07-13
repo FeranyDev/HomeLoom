@@ -86,6 +86,12 @@ func TestDiagnosticsAndPrometheusMetrics(t *testing.T) {
 		if !bytes.Contains(response.Body.Bytes(), []byte("event")) {
 			t.Fatalf("%s body = %s", path, response.Body.String())
 		}
+		if path == "/api/v1/diagnostics" && !bytes.Contains(response.Body.Bytes(), []byte(`"onlineDevices":2`)) {
+			t.Fatalf("diagnostics missing device counts: %s", response.Body.String())
+		}
+		if path == "/metrics" && !bytes.Contains(response.Body.Bytes(), []byte("homeloom_devices_online 2")) {
+			t.Fatalf("metrics missing device counts: %s", response.Body.String())
+		}
 	}
 }
 

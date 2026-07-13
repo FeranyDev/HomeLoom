@@ -4,9 +4,10 @@ interface DeviceCardProps {
   device: Device
   pending: boolean
   onPowerChange: (device: Device, value: boolean) => void
+  onDetails: (device: Device) => void
 }
 
-export function DeviceCard({ device, pending, onPowerChange }: DeviceCardProps) {
+export function DeviceCard({ device, pending, onPowerChange, onDetails }: DeviceCardProps) {
   const isSwitch = device.type === 'switch'
 
   return (
@@ -35,8 +36,7 @@ export function DeviceCard({ device, pending, onPowerChange }: DeviceCardProps) 
         </div>
       )}
 
-      <footer>更新于 {new Date(device.lastUpdateAt).toLocaleTimeString('zh-CN')}</footer>
+      <footer><span>更新于 {new Date(device.lastUpdateAt).toLocaleTimeString('zh-CN')}</span><button onClick={() => onDetails(device)}>查看详情</button></footer>
     </article>
   )
 }
-

@@ -16,10 +16,11 @@ type Tracker struct {
 	timeout  time.Duration
 	commands map[string]domaincommand.Command
 	pending  map[string]string
+	maxItems int
 }
 
 func NewTracker(timeout time.Duration) *Tracker {
-	return &Tracker{timeout: timeout, commands: make(map[string]domaincommand.Command), pending: make(map[string]string)}
+	return &Tracker{timeout: timeout, commands: make(map[string]domaincommand.Command), pending: make(map[string]string), maxItems: 1000}
 }
 
 func (t *Tracker) Begin(deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) domaincommand.Command {
@@ -30,10 +31,30 @@ func (t *Tracker) Begin(deviceID, endpointID, capabilityID, propertyID string, v
 		Status: domaincommand.StatusQueued, CreatedAt: now, UpdatedAt: now, Deadline: now.Add(t.timeout),
 	}
 	t.mu.Lock()
+	t.pruneLocked()
 	t.commands[command.ID] = command
 	t.pending[pendingKey(deviceID, endpointID, capabilityID, propertyID)] = command.ID
 	t.mu.Unlock()
 	return command
+}
+
+func (t *Tracker) pruneLocked() {
+	if len(t.commands) < t.maxItems {
+		return
+	}
+	var oldestID string
+	var oldest time.Time
+	for id, command := range t.commands {
+		if !terminal(command.Status) {
+			continue
+		}
+		if oldestID == "" || command.CreatedAt.Before(oldest) {
+			oldestID, oldest = id, command.CreatedAt
+		}
+	}
+	if oldestID != "" {
+		delete(t.commands, oldestID)
+	}
 }
 
 func (t *Tracker) Sent(id string)     { t.transition(id, domaincommand.StatusSent, "") }

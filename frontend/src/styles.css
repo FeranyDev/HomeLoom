@@ -59,7 +59,11 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .temperature { display: flex; align-items: start; margin-top: 46px; }
 .temperature strong { font-size: 82px; font-weight: 500; line-height: 1; letter-spacing: -.07em; }
 .temperature span { margin: 8px 0 0 10px; color: #73776e; font-size: 20px; }
-.device-card footer { margin-top: 34px; color: #9b9c96; font-size: 12px; }
+.device-card footer { display: flex; align-items: center; justify-content: space-between; margin-top: 34px; color: #9b9c96; font-size: 12px; }
+.device-card footer button { padding: 5px 0; border: 0; border-bottom: 1px solid #b8bab3; background: transparent; color: #696e66; cursor: pointer; }
+.device-filters { display: grid; grid-template-columns: 1fr 180px auto; gap: 10px; align-items: center; margin-bottom: 18px; }
+.device-filters input, .device-filters select { padding: 11px 13px; border: 1px solid #cac9c1; background: rgba(250,249,245,.72); color: #4f534c; font: inherit; }
+.device-filters span { color: #898d85; font: 11px ui-monospace, monospace; }
 .error-banner, .empty-state { padding: 22px; border: 1px solid #d3b8a9; background: #f4e6df; color: #744b38; }
 .target-list { display: grid; gap: 18px; }
 .provider-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
@@ -79,6 +83,30 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .simulation-actions button, .simulation-actions input { min-width: 0; padding: 6px 8px; border: 1px solid #c4c5bd; background: #f7f6f0; color: #555a52; font-size: 11px; }
 .simulation-actions input { width: 72px; }
 .inline-error { color: #944f3f; font-size: 13px; }
+.system-dashboard { display: grid; gap: 18px; }
+.metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.metric-grid article { display: grid; gap: 20px; min-height: 128px; padding: 19px; border: 1px solid #d2d0c7; background: rgba(250, 249, 245, .72); }
+.metric-grid span { color: #858981; font-size: 11px; }
+.metric-grid strong { align-self: end; font-size: 34px; font-weight: 500; }
+.queue-card { display: grid; gap: 13px; padding: 24px; border: 1px solid #d2d0c7; background: rgba(250, 249, 245, .72); }
+.queue-card > div:first-child { display: flex; justify-content: space-between; }
+.queue-card small, .command-heading span { color: #898d85; font-size: 11px; }
+.queue-track { height: 7px; overflow: hidden; background: #dedfd8; }
+.queue-track span { display: block; height: 100%; background: #66806a; }
+.command-section { border: 1px solid #d2d0c7; background: rgba(250, 249, 245, .72); }
+.command-heading { display: flex; align-items: center; justify-content: space-between; padding: 24px; border-bottom: 1px solid #d8d7cf; }
+.command-heading h3 { margin: 0; font-size: 21px; }
+.command-empty { padding: 38px 24px; color: #969991; }
+.command-row { display: grid; grid-template-columns: 2fr .7fr 1fr 1.2fr; gap: 14px; align-items: center; padding: 15px 24px; border-bottom: 1px solid #e0dfd8; font-size: 12px; }
+.command-row:last-child { border-bottom: 0; }
+.command-row > span { display: grid; gap: 3px; }
+.command-row small { color: #92958e; font: 10px ui-monospace, monospace; }
+.command-row code { font-size: 12px; }
+.command-row time { color: #858981; font-size: 11px; }
+.command-header { color: #90938c; font-size: 10px; text-transform: uppercase; letter-spacing: .07em; }
+.command-status { justify-self: start; padding: 4px 7px; background: #e4e5df; color: #6a6e67; font-style: normal; font-size: 10px; }
+.command-status.is-confirmed { background: #dfe9df; color: #4f7055; }
+.command-status.is-rejected, .command-status.is-timeout { background: #efe0da; color: #8b5547; }
 .config-note { display: grid; grid-template-columns: 120px 1fr; gap: 8px 20px; padding: 20px 26px; border: 1px dashed #bfc1b8; color: #757970; }
 .config-note strong { color: #3e433c; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
 .config-note p { grid-column: 2; margin: 0; font-size: 13px; }
@@ -103,6 +131,30 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .show-qr, .hide-qr { margin-top: 16px; background: #f3f1e9; }
 .modal-backdrop { position: fixed; z-index: 10; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(31, 34, 29, .58); overflow: auto; }
 .target-form { width: min(720px, 100%); max-height: calc(100vh - 48px); overflow: auto; padding: 32px; background: #f4f2eb; box-shadow: 0 30px 100px rgba(0,0,0,.3); }
+.device-details { width: min(920px, 100%); max-height: calc(100vh - 48px); overflow: auto; padding: 32px; background: #f4f2eb; box-shadow: 0 30px 100px rgba(0,0,0,.3); }
+.device-details .form-heading small { color: #92958e; font: 11px ui-monospace, monospace; }
+.device-detail-summary { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 24px; }
+.device-detail-summary span { display: flex; align-items: center; gap: 7px; padding: 7px 10px; background: #e8e7df; color: #686d64; font-size: 11px; }
+.capability-tree { display: grid; gap: 18px; }
+.capability-tree > section { border: 1px solid #cbc9c1; }
+.tree-heading, .capability-node > div:first-child { display: grid; grid-template-columns: 100px 1fr auto; gap: 12px; align-items: center; padding: 13px 16px; background: #dfded6; }
+.tree-heading span, .capability-node > div:first-child span { color: #878b82; font-size: 9px; letter-spacing: .1em; }
+.tree-heading code, .capability-node code { color: #81857d; font-size: 10px; }
+.capability-node { margin: 12px; border: 1px solid #d4d3cb; background: #eeece5; }
+.capability-node > div:first-child { background: #e8e6de; }
+.property-node { display: grid; grid-template-columns: 1.2fr .8fr; gap: 14px; padding: 16px; border-top: 1px solid #d9d8d0; }
+.property-node > div:first-child { display: grid; gap: 4px; }
+.property-node > div:first-child code { color: #8b8e87; font-size: 10px; }
+.property-value { display: flex; align-items: start; justify-content: flex-end; gap: 10px; }
+.property-value b { font: 18px ui-monospace, monospace; }
+.property-value span { padding: 4px 6px; background: #dfe1d9; color: #667064; font: 9px ui-monospace, monospace; letter-spacing: .08em; }
+.property-node dl { display: grid; grid-template-columns: repeat(3, 1fr); grid-column: 1 / -1; gap: 1px; margin: 0; background: #d9d8d1; }
+.property-node dl div { padding: 9px; background: #f3f1ea; }
+.property-node dt { color: #999b95; font-size: 9px; }
+.property-node dd { margin: 4px 0 0; overflow-wrap: anywhere; color: #62665f; font-size: 10px; }
+.quality { padding: 3px 5px; background: #e4e4de; font-style: normal; }
+.quality.is-reported, .quality.is-confirmed { background: #dce8dc; color: #4d6d52; }
+.quality.is-stale, .quality.is-unknown { background: #eee0d9; color: #8b584a; }
 .form-heading { display: flex; justify-content: space-between; align-items: start; margin-bottom: 26px; }
 .form-heading h2 { margin: 0; font-size: 30px; }
 .form-heading .eyebrow { margin-bottom: 5px; }
@@ -130,8 +182,13 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
   .hero { display: block; padding-bottom: 42px; }
   .summary { width: 100%; height: auto; margin-top: 42px; padding: 20px; border-radius: 3px; }
   .summary span { font-size: 32px; }
-  .device-grid { grid-template-columns: 1fr; }
+	.device-grid { grid-template-columns: 1fr; }
+	.device-filters { grid-template-columns: 1fr; }
+	.device-filters span { display: none; }
 	.provider-grid { grid-template-columns: 1fr; }
+	.metric-grid { grid-template-columns: repeat(2, 1fr); }
+	.command-row { grid-template-columns: 1.5fr .7fr 1fr; padding: 13px; }
+	.command-row time { display: none; }
   .device-card { min-height: 290px; }
 	.target-card { grid-template-columns: 1fr; }
 	.pairing-panel { border-top: 1px solid #d2d0c7; border-left: 0; }
@@ -141,4 +198,7 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 	.form-grid .wide { grid-column: 1; }
 	.target-form fieldset label { grid-template-columns: 22px 1fr; }
 	.target-form fieldset small { grid-column: 2; }
+	.property-node { grid-template-columns: 1fr; }
+	.property-value { justify-content: flex-start; }
+	.property-node dl { grid-template-columns: 1fr 1fr; }
 }

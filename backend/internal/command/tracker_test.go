@@ -55,3 +55,14 @@ func TestCommandConfirmsTypedNumber(t *testing.T) {
 		t.Fatal("values with different types compared equal")
 	}
 }
+
+func TestTrackerBoundsTerminalHistory(t *testing.T) {
+	tracker := NewTracker(time.Second)
+	for index := 0; index < 1001; index++ {
+		command := tracker.Begin("switch", "main", "switch", "power", device.BoolValue(true))
+		tracker.Rejected(command.ID, errors.New("test"))
+	}
+	if items := tracker.List(); len(items) != 1000 {
+		t.Fatalf("history length = %d", len(items))
+	}
+}

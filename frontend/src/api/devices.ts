@@ -1,4 +1,4 @@
-import type { Device } from '../types/device'
+import type { Device, StateValue } from '../types/device'
 
 interface ApiResponse<T> {
   data: T
@@ -14,6 +14,11 @@ async function parse<T>(response: Response): Promise<T> {
 export async function listDevices(signal?: AbortSignal): Promise<Device[]> {
   const response = await fetch('/api/v1/devices', { signal })
   return (await parse<ApiResponse<Device[]>>(response)).data
+}
+
+export async function getDeviceStates(id: string, signal?: AbortSignal): Promise<StateValue[]> {
+  const response = await fetch(`/api/v1/devices/${encodeURIComponent(id)}/states`, { signal })
+  return (await parse<ApiResponse<StateValue[]>>(response)).data
 }
 
 export async function setDevicePower(id: string, value: boolean): Promise<Device> {

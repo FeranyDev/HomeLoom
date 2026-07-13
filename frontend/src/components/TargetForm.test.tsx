@@ -8,7 +8,7 @@ describe('TargetForm', () => {
     const onSave = vi.fn().mockResolvedValue(undefined)
     render(<TargetForm target={null} devices={[{
       id: 'switch-1', providerId: 'virtual', name: '客厅开关', type: 'switch', online: true,
-      state: { power: false }, lastUpdateAt: new Date().toISOString(),
+      state: { power: false }, endpoints: [], lastUpdateAt: new Date().toISOString(),
     }]} onCancel={vi.fn()} onSave={onSave} />)
     await userEvent.click(screen.getByText('客厅开关'))
     await userEvent.click(screen.getByRole('button', { name: '保存到数据库' }))
