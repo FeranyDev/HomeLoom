@@ -4,6 +4,8 @@ export interface Diagnostics {
   statesMarkedStale: number; commandsStarted: number; commandsConfirmed: number
   commandsRejected: number; commandsTimedOut: number
   onlineDevices: number; offlineDevices: number; providersRunning: number; deviceSubscribers: number
+  providerRetries: number
+  commandAverageLatencyMs: number
 }
 
 export interface CommandValue { type: string; bool?: boolean; number?: number; string?: string }

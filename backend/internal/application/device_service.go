@@ -57,21 +57,23 @@ type deviceMetrics struct {
 }
 
 type DeviceMetrics struct {
-	EventsReceived      uint64 `json:"eventsReceived"`
-	EventsProcessed     uint64 `json:"eventsProcessed"`
-	EventsDropped       uint64 `json:"eventsDropped"`
-	EventQueuePending   int    `json:"eventQueuePending"`
-	EventQueueCapacity  int    `json:"eventQueueCapacity"`
-	TargetEventsDropped uint64 `json:"targetEventsDropped"`
-	StatesMarkedStale   uint64 `json:"statesMarkedStale"`
-	CommandsStarted     uint64 `json:"commandsStarted"`
-	CommandsConfirmed   uint64 `json:"commandsConfirmed"`
-	CommandsRejected    uint64 `json:"commandsRejected"`
-	CommandsTimedOut    uint64 `json:"commandsTimedOut"`
-	OnlineDevices       int    `json:"onlineDevices"`
-	OfflineDevices      int    `json:"offlineDevices"`
-	ProvidersRunning    int    `json:"providersRunning"`
-	DeviceSubscribers   int    `json:"deviceSubscribers"`
+	EventsReceived          uint64  `json:"eventsReceived"`
+	EventsProcessed         uint64  `json:"eventsProcessed"`
+	EventsDropped           uint64  `json:"eventsDropped"`
+	EventQueuePending       int     `json:"eventQueuePending"`
+	EventQueueCapacity      int     `json:"eventQueueCapacity"`
+	TargetEventsDropped     uint64  `json:"targetEventsDropped"`
+	StatesMarkedStale       uint64  `json:"statesMarkedStale"`
+	CommandsStarted         uint64  `json:"commandsStarted"`
+	CommandsConfirmed       uint64  `json:"commandsConfirmed"`
+	CommandsRejected        uint64  `json:"commandsRejected"`
+	CommandsTimedOut        uint64  `json:"commandsTimedOut"`
+	OnlineDevices           int     `json:"onlineDevices"`
+	OfflineDevices          int     `json:"offlineDevices"`
+	ProvidersRunning        int     `json:"providersRunning"`
+	ProviderRetries         int     `json:"providerRetries"`
+	DeviceSubscribers       int     `json:"deviceSubscribers"`
+	CommandAverageLatencyMS float64 `json:"commandAverageLatencyMs"`
 }
 
 func NewDeviceService(provider providersdk.Provider) *DeviceService {
@@ -142,8 +144,9 @@ func (s *DeviceService) Metrics() DeviceMetrics {
 			online++
 		}
 	}
-	providersRunning := 0
+	providersRunning, providerRetries := 0, 0
 	for _, item := range s.ProviderInfos() {
+		providerRetries += item.RetryCount
 		if item.Status == "running" {
 			providersRunning++
 		}
@@ -151,13 +154,27 @@ func (s *DeviceService) Metrics() DeviceMetrics {
 	s.mu.RLock()
 	subscribers := len(s.listeners)
 	s.mu.RUnlock()
+	commands := s.commands.List()
+	var latency time.Duration
+	terminalCount := 0
+	for _, command := range commands {
+		if command.Status == domaincommand.StatusConfirmed || command.Status == domaincommand.StatusRejected || command.Status == domaincommand.StatusTimeout {
+			latency += command.UpdatedAt.Sub(command.CreatedAt)
+			terminalCount++
+		}
+	}
+	averageLatency := float64(0)
+	if terminalCount > 0 {
+		averageLatency = float64(latency.Nanoseconds()) / float64(time.Millisecond) / float64(terminalCount)
+	}
 	return DeviceMetrics{
 		EventsReceived: s.metrics.eventsReceived.Load(), EventsProcessed: s.metrics.eventsProcessed.Load(),
 		EventsDropped: s.metrics.eventsDropped.Load(), EventQueuePending: s.dispatcher.Pending(), EventQueueCapacity: s.dispatcher.Capacity(),
 		TargetEventsDropped: s.metrics.targetEventsDropped.Load(), StatesMarkedStale: s.metrics.statesMarkedStale.Load(),
 		CommandsStarted: s.metrics.commandsStarted.Load(), CommandsConfirmed: s.metrics.commandsConfirmed.Load(),
 		CommandsRejected: s.metrics.commandsRejected.Load(), CommandsTimedOut: s.metrics.commandsTimedOut.Load(),
-		OnlineDevices: online, OfflineDevices: len(items) - online, ProvidersRunning: providersRunning, DeviceSubscribers: subscribers,
+		OnlineDevices: online, OfflineDevices: len(items) - online, ProvidersRunning: providersRunning, ProviderRetries: providerRetries, DeviceSubscribers: subscribers,
+		CommandAverageLatencyMS: averageLatency,
 	}
 }
 
@@ -206,6 +223,10 @@ func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointI
 func (s *DeviceService) Commands() []domaincommand.Command { return s.commands.List() }
 
 func (s *DeviceService) Command(id string) (domaincommand.Command, bool) { return s.commands.Get(id) }
+
+func (s *DeviceService) SubscribeCommands(handler func(domaincommand.Command)) func() {
+	return s.commands.Subscribe(handler)
+}
 
 func (s *DeviceService) Subscribe(handler func(device.Device)) func() {
 	s.mu.Lock()

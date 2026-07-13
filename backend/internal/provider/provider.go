@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 )
@@ -68,10 +69,13 @@ type Simulator interface {
 }
 
 type RuntimeInfo struct {
-	Manifest     Manifest     `json:"manifest"`
-	Capabilities Capabilities `json:"capabilities"`
-	Status       string       `json:"status"`
-	Error        string       `json:"error,omitempty"`
+	Manifest       Manifest     `json:"manifest"`
+	Capabilities   Capabilities `json:"capabilities"`
+	Status         string       `json:"status"`
+	Error          string       `json:"error,omitempty"`
+	RetryCount     int          `json:"retryCount"`
+	NextRetryAt    *time.Time   `json:"nextRetryAt,omitempty"`
+	TransitionedAt time.Time    `json:"transitionedAt"`
 }
 
 type Inspector interface {

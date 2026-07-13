@@ -168,3 +168,31 @@ func (s *ProviderService) Delete(ctx context.Context, id string) error {
 	s.mu.Unlock()
 	return nil
 }
+
+func (s *ProviderService) Restart(ctx context.Context, id string) (ProviderInfo, error) {
+	s.mu.RLock()
+	item, exists := s.configs[id]
+	s.mu.RUnlock()
+	if !exists {
+		return ProviderInfo{}, fmt.Errorf("provider %q not found", id)
+	}
+	if !item.Enabled {
+		return ProviderInfo{}, fmt.Errorf("provider %q is disabled", id)
+	}
+	if s.factory == nil || s.runtime == nil {
+		return ProviderInfo{}, errors.New("provider management is unavailable")
+	}
+	instance, err := s.factory.Create(item)
+	if err != nil {
+		return ProviderInfo{}, err
+	}
+	if err := s.runtime.Apply(ctx, instance); err != nil {
+		return ProviderInfo{}, err
+	}
+	for _, info := range s.List() {
+		if info.ID == id {
+			return info, nil
+		}
+	}
+	return ProviderInfo{}, fmt.Errorf("provider %q was not restarted", id)
+}

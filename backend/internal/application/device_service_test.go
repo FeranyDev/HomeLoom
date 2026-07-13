@@ -81,6 +81,9 @@ func TestDeviceServiceCommandIsConfirmedByProviderEvent(t *testing.T) {
 	for time.Now().Before(deadline) {
 		current, ok := service.Command(command.ID)
 		if ok && current.Status == domaincommand.StatusConfirmed {
+			if service.Metrics().CommandAverageLatencyMS <= 0 {
+				t.Fatal("average command latency was not recorded")
+			}
 			return
 		}
 		time.Sleep(time.Millisecond)

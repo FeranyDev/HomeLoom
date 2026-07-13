@@ -2,6 +2,8 @@ package providermanager_test
 
 import (
 	"context"
+	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,6 +12,32 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
 	"github.com/feranydev/homeloom/backend/internal/runtime/providermanager"
 )
+
+type failingProvider struct{ id string }
+
+func (p failingProvider) Manifest() providersdk.Manifest {
+	return providersdk.Manifest{ID: p.id, Type: "test", Name: "Failing"}
+}
+func (failingProvider) Capabilities() providersdk.Capabilities { return providersdk.Capabilities{} }
+func (failingProvider) Initialize(context.Context) error       { return errors.New("connection refused") }
+func (failingProvider) Close(context.Context) error            { return nil }
+
+type flakyProvider struct{ attempts atomic.Int32 }
+
+func (*flakyProvider) Manifest() providersdk.Manifest {
+	return providersdk.Manifest{ID: "flaky", Type: "test", Name: "Flaky"}
+}
+func (*flakyProvider) Capabilities() providersdk.Capabilities {
+	return providersdk.Capabilities{Discovery: true}
+}
+func (p *flakyProvider) Initialize(context.Context) error {
+	if p.attempts.Add(1) == 1 {
+		return errors.New("temporary failure")
+	}
+	return nil
+}
+func (*flakyProvider) Close(context.Context) error                              { return nil }
+func (*flakyProvider) DiscoverDevices(context.Context) ([]device.Device, error) { return nil, nil }
 
 func TestManagerDiscoversRoutesEventsAndWrites(t *testing.T) {
 	ctx := context.Background()
@@ -106,4 +134,48 @@ func TestManagerHotAppliesAndRemovesProvider(t *testing.T) {
 	if len(manager.ProviderInfos()) != 0 {
 		t.Fatal("provider still registered")
 	}
+}
+
+func TestManagerIsolatesProviderInitializationFailure(t *testing.T) {
+	manager, err := providermanager.New(failingProvider{id: "broken"}, virtual.NewProvider())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close(context.Background())
+	if err := manager.Initialize(context.Background()); err != nil {
+		t.Fatalf("manager initialization should isolate provider failure: %v", err)
+	}
+	infos := manager.ProviderInfos()
+	if len(infos) != 2 || infos[0].Status != "error" || infos[0].Error != "connection refused" || infos[1].Status != "running" {
+		t.Fatalf("infos = %#v", infos)
+	}
+	items, err := manager.DiscoverDevices(context.Background())
+	if err != nil || len(items) != 2 {
+		t.Fatalf("healthy discovery = %#v, %v", items, err)
+	}
+}
+
+func TestManagerAutomaticallyRetriesFailedProvider(t *testing.T) {
+	provider := &flakyProvider{}
+	manager, _ := providermanager.New(provider)
+	defer manager.Close(context.Background())
+	if err := manager.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	initial := manager.ProviderInfos()[0]
+	if initial.Status != "error" || initial.NextRetryAt == nil {
+		t.Fatalf("initial = %#v", initial)
+	}
+	deadline := time.Now().Add(2500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		info := manager.ProviderInfos()[0]
+		if info.Status == "running" {
+			if info.RetryCount != 1 || info.NextRetryAt != nil {
+				t.Fatalf("recovered = %#v", info)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("provider did not recover: %#v", manager.ProviderInfos()[0])
 }

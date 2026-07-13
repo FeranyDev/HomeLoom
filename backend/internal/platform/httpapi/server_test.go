@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -13,9 +14,28 @@ import (
 	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/application"
+	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
+	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
+	"github.com/feranydev/homeloom/backend/internal/runtime/providermanager"
 	"github.com/labstack/echo/v4"
 )
+
+type apiProviderStore struct {
+	items map[string]providerconfig.Config
+}
+
+func (s *apiProviderStore) ListProviders(context.Context) ([]providerconfig.Config, error) {
+	return nil, nil
+}
+func (s *apiProviderStore) SaveProvider(_ context.Context, item providerconfig.Config) error {
+	s.items[item.ID] = item
+	return nil
+}
+func (s *apiProviderStore) DeleteProvider(_ context.Context, id string) error {
+	delete(s.items, id)
+	return nil
+}
 
 func newTestServer() *Server {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -287,5 +307,77 @@ func TestDeviceEventStreamPublishesSnapshots(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("device event not received: %v", scanner.Err())
+	}
+}
+
+func TestCommandEventStreamPublishesLifecycle(t *testing.T) {
+	httpServer := httptest.NewServer(newTestServer().Handler())
+	defer httpServer.Close()
+	response, err := http.Get(httpServer.URL + "/api/v1/events/commands")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	scanner := bufio.NewScanner(response.Body)
+	if !scanner.Scan() || scanner.Text() != "event: ready" {
+		t.Fatalf("ready = %q", scanner.Text())
+	}
+	for scanner.Scan() {
+		if scanner.Text() == "" {
+			break
+		}
+	}
+	write, _ := http.NewRequest(http.MethodPut, httpServer.URL+"/api/v1/devices/virtual-switch-1/properties/power", bytes.NewBufferString(`{"value":true}`))
+	write.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	writeResponse, err := http.DefaultClient.Do(write)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeResponse.Body.Close()
+	statuses := make([]string, 0, 4)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		var command struct {
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &command); err != nil {
+			t.Fatal(err)
+		}
+		statuses = append(statuses, command.Status)
+		if command.Status == "confirmed" {
+			break
+		}
+	}
+	if len(statuses) < 4 || statuses[0] != "queued" || statuses[len(statuses)-1] != "confirmed" {
+		t.Fatalf("statuses = %#v", statuses)
+	}
+}
+
+func TestRestartProviderEndpoint(t *testing.T) {
+	ctx := context.Background()
+	config := providerconfig.Config{ID: "virtual-main", Type: "virtual", Name: "Virtual", Enabled: true, Config: []byte(`{}`)}
+	factory := providersdk.NewFactory()
+	if err := factory.Register("virtual", func(item providerconfig.Config) (providersdk.Provider, error) {
+		return virtual.NewProviderFromConfig(item)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	manager, _ := providermanager.New(virtual.NewProvider())
+	_ = manager.Initialize(ctx)
+	devices := application.NewDeviceService(manager)
+	defer devices.Close()
+	store := &apiProviderStore{items: map[string]providerconfig.Config{config.ID: config}}
+	providers := application.NewProviderService([]providerconfig.Config{config}, store, factory, manager)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	targets := application.NewTargetService(nil, nil)
+	server := NewServer(":0", devices, targets, logger, providers)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/providers/virtual-main/restart", nil)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"status":"running"`)) {
+		t.Fatalf("restart response = %d %s", response.Code, response.Body.String())
 	}
 }

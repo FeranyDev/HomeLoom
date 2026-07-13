@@ -65,6 +65,21 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .device-filters input, .device-filters select { padding: 11px 13px; border: 1px solid #cac9c1; background: rgba(250,249,245,.72); color: #4f534c; font: inherit; }
 .device-filters span { color: #898d85; font: 11px ui-monospace, monospace; }
 .error-banner, .empty-state { padding: 22px; border: 1px solid #d3b8a9; background: #f4e6df; color: #744b38; }
+.page-state { display: grid; grid-column: 1 / -1; min-height: 170px; place-content: center; gap: 8px; padding: 28px; border: 1px dashed #c7c6be; color: #777b73; text-align: center; }
+.page-state p { max-width: 420px; margin: 0; color: #95978f; font-size: 12px; }
+.page-state.is-loading span { justify-self: center; width: 22px; height: 22px; border: 2px solid #d0d1c9; border-top-color: #596058; border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.toast-center { position: fixed; z-index: 30; right: 22px; bottom: 22px; display: grid; width: min(360px, calc(100% - 44px)); gap: 8px; }
+.toast { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; padding: 14px 16px; border: 1px solid #c8c7c0; background: #f8f7f1; box-shadow: 0 14px 42px rgba(35,38,33,.18); color: #555a52; font-size: 13px; }
+.toast.is-success { border-left: 4px solid #66816b; }
+.toast.is-error { border-left: 4px solid #a26150; }
+.toast.is-info { border-left: 4px solid #77879a; }
+.toast button { border: 0; background: transparent; color: #8b8e87; cursor: pointer; font-size: 17px; }
+.fatal-error { display: grid; min-height: 100vh; align-content: center; padding: 10vw; }
+.fatal-error h1 { margin: 0; font-size: clamp(42px, 7vw, 82px); }
+.fatal-error > p:not(.eyebrow) { color: #8d5d4f; }
+.fatal-error div { display: flex; gap: 9px; margin-top: 24px; }
+.fatal-error button { padding: 10px 14px; border: 1px solid #bfc1b8; background: transparent; cursor: pointer; }
 .target-list { display: grid; gap: 18px; }
 .provider-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
 .provider-grid .config-note { grid-column: 1 / -1; }
@@ -83,6 +98,9 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .simulation-actions button, .simulation-actions input { min-width: 0; padding: 6px 8px; border: 1px solid #c4c5bd; background: #f7f6f0; color: #555a52; font-size: 11px; }
 .simulation-actions input { width: 72px; }
 .inline-error { color: #944f3f; font-size: 13px; }
+.provider-error { margin-top: 15px; padding: 10px; background: #f0e1da; }
+.provider-error p { margin: 0 0 5px; }
+.provider-error small { color: #8b6a5f; font-size: 10px; }
 .system-dashboard { display: grid; gap: 18px; }
 .metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
 .metric-grid article { display: grid; gap: 20px; min-height: 128px; padding: 19px; border: 1px solid #d2d0c7; background: rgba(250, 249, 245, .72); }
@@ -148,6 +166,11 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .property-value { display: flex; align-items: start; justify-content: flex-end; gap: 10px; }
 .property-value b { font: 18px ui-monospace, monospace; }
 .property-value span { padding: 4px 6px; background: #dfe1d9; color: #667064; font: 9px ui-monospace, monospace; letter-spacing: .08em; }
+.property-control { display: flex; grid-column: 1 / -1; justify-content: flex-end; gap: 7px; padding: 10px; border: 1px dashed #cccbc4; }
+.property-control input, .property-control select, .property-control button { padding: 7px 9px; border: 1px solid #c5c6be; background: #f8f7f1; color: #545950; font-size: 11px; }
+.property-control input { width: 150px; }
+.property-control button { cursor: pointer; }
+.property-control small { align-self: center; color: #9a5545; }
 .property-node dl { display: grid; grid-template-columns: repeat(3, 1fr); grid-column: 1 / -1; gap: 1px; margin: 0; background: #d9d8d1; }
 .property-node dl div { padding: 9px; background: #f3f1ea; }
 .property-node dt { color: #999b95; font-size: 9px; }

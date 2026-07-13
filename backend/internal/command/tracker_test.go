@@ -66,3 +66,24 @@ func TestTrackerBoundsTerminalHistory(t *testing.T) {
 		t.Fatalf("history length = %d", len(items))
 	}
 }
+
+func TestTrackerPublishesLifecycleTransitions(t *testing.T) {
+	tracker := NewTracker(time.Second)
+	statuses := make(chan domaincommand.Status, 4)
+	unsubscribe := tracker.Subscribe(func(command domaincommand.Command) { statuses <- command.Status })
+	defer unsubscribe()
+	command := tracker.Begin("switch", "main", "switch", "power", device.BoolValue(true))
+	tracker.Sent(command.ID)
+	tracker.Accepted(command.ID)
+	tracker.Confirm("switch", "main", "switch", "power", device.BoolValue(true))
+	for _, expected := range []domaincommand.Status{domaincommand.StatusQueued, domaincommand.StatusSent, domaincommand.StatusAccepted, domaincommand.StatusConfirmed} {
+		select {
+		case actual := <-statuses:
+			if actual != expected {
+				t.Fatalf("status = %s, want %s", actual, expected)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("missing %s", expected)
+		}
+	}
+}

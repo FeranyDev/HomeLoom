@@ -80,3 +80,25 @@ func TestProviderServiceValidatesConfiguration(t *testing.T) {
 		t.Fatal("invalid configuration reached durable storage")
 	}
 }
+
+func TestProviderServiceRestartsEnabledProvider(t *testing.T) {
+	ctx := context.Background()
+	config := providerconfig.Config{ID: "virtual-main", Type: "virtual", Name: "Virtual", Enabled: true, Config: []byte(`{}`)}
+	store := &providerStore{items: map[string]providerconfig.Config{config.ID: config}}
+	factory := providersdk.NewFactory()
+	if err := factory.Register("virtual", func(item providerconfig.Config) (providersdk.Provider, error) {
+		return virtual.NewProviderFromConfig(item)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime, _ := providermanager.New()
+	_ = runtime.Initialize(ctx)
+	service := application.NewProviderService([]providerconfig.Config{config}, store, factory, runtime)
+	info, err := service.Restart(ctx, config.ID)
+	if err != nil || info.Status != "running" {
+		t.Fatalf("restart = %#v, %v", info, err)
+	}
+	if _, err := service.Restart(ctx, "missing"); err == nil {
+		t.Fatal("missing provider restart succeeded")
+	}
+}

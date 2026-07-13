@@ -12,15 +12,17 @@ import (
 )
 
 type Tracker struct {
-	mu       sync.RWMutex
-	timeout  time.Duration
-	commands map[string]domaincommand.Command
-	pending  map[string]string
-	maxItems int
+	mu           sync.RWMutex
+	timeout      time.Duration
+	commands     map[string]domaincommand.Command
+	pending      map[string]string
+	maxItems     int
+	listeners    map[uint64]func(domaincommand.Command)
+	nextListener uint64
 }
 
 func NewTracker(timeout time.Duration) *Tracker {
-	return &Tracker{timeout: timeout, commands: make(map[string]domaincommand.Command), pending: make(map[string]string), maxItems: 1000}
+	return &Tracker{timeout: timeout, commands: make(map[string]domaincommand.Command), pending: make(map[string]string), maxItems: 1000, listeners: make(map[uint64]func(domaincommand.Command))}
 }
 
 func (t *Tracker) Begin(deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) domaincommand.Command {
@@ -35,6 +37,7 @@ func (t *Tracker) Begin(deviceID, endpointID, capabilityID, propertyID string, v
 	t.commands[command.ID] = command
 	t.pending[pendingKey(deviceID, endpointID, capabilityID, propertyID)] = command.ID
 	t.mu.Unlock()
+	t.notify(command)
 	return command
 }
 
@@ -65,20 +68,23 @@ func (t *Tracker) Rejected(id string, err error) {
 
 func (t *Tracker) Confirm(deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) bool {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	key := pendingKey(deviceID, endpointID, capabilityID, propertyID)
 	id, ok := t.pending[key]
 	if !ok {
+		t.mu.Unlock()
 		return false
 	}
 	command := t.commands[id]
 	if !valuesEqual(command.Expected, value) {
+		t.mu.Unlock()
 		return false
 	}
 	command.Status = domaincommand.StatusConfirmed
 	command.UpdatedAt = time.Now().UTC()
 	t.commands[id] = command
 	delete(t.pending, key)
+	t.mu.Unlock()
+	t.notify(command)
 	return true
 }
 
@@ -104,9 +110,9 @@ func (t *Tracker) List() []domaincommand.Command {
 
 func (t *Tracker) transition(id string, status domaincommand.Status, message string) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	command, ok := t.commands[id]
 	if !ok || terminal(command.Status) {
+		t.mu.Unlock()
 		return
 	}
 	command.Status, command.Error, command.UpdatedAt = status, message, time.Now().UTC()
@@ -114,11 +120,12 @@ func (t *Tracker) transition(id string, status domaincommand.Status, message str
 	if terminal(status) {
 		delete(t.pending, pendingKey(command.DeviceID, command.EndpointID, command.CapabilityID, command.PropertyID))
 	}
+	t.mu.Unlock()
+	t.notify(command)
 }
 
 func (t *Tracker) Expire(now time.Time) []domaincommand.Command {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	expired := make([]domaincommand.Command, 0)
 	for id, command := range t.commands {
 		if terminal(command.Status) || now.Before(command.Deadline) {
@@ -129,7 +136,33 @@ func (t *Tracker) Expire(now time.Time) []domaincommand.Command {
 		delete(t.pending, pendingKey(command.DeviceID, command.EndpointID, command.CapabilityID, command.PropertyID))
 		expired = append(expired, command)
 	}
+	t.mu.Unlock()
+	for _, command := range expired {
+		t.notify(command)
+	}
 	return expired
+}
+
+func (t *Tracker) Subscribe(handler func(domaincommand.Command)) func() {
+	t.mu.Lock()
+	t.nextListener++
+	id := t.nextListener
+	t.listeners[id] = handler
+	t.mu.Unlock()
+	var once sync.Once
+	return func() { once.Do(func() { t.mu.Lock(); delete(t.listeners, id); t.mu.Unlock() }) }
+}
+
+func (t *Tracker) notify(command domaincommand.Command) {
+	t.mu.RLock()
+	listeners := make([]func(domaincommand.Command), 0, len(t.listeners))
+	for _, listener := range t.listeners {
+		listeners = append(listeners, listener)
+	}
+	t.mu.RUnlock()
+	for _, listener := range listeners {
+		listener(command)
+	}
 }
 
 func terminal(status domaincommand.Status) bool {

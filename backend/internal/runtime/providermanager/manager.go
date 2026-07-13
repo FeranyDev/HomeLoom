@@ -5,27 +5,36 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 )
 
 type managedProvider struct {
-	provider    providersdk.Provider
-	status      string
-	err         string
-	unsubscribe func()
-	deviceIDs   map[string]struct{}
+	provider       providersdk.Provider
+	status         string
+	err            string
+	unsubscribe    func()
+	deviceIDs      map[string]struct{}
+	retryCount     int
+	nextRetryAt    time.Time
+	transitionedAt time.Time
 }
 
 type Manager struct {
-	mu           sync.RWMutex
-	providers    map[string]*managedProvider
-	order        []string
-	routes       map[string]string
-	listeners    map[uint64]func(device.Device)
-	nextListener uint64
-	initialized  bool
+	mu              sync.RWMutex
+	providers       map[string]*managedProvider
+	order           []string
+	routes          map[string]string
+	listeners       map[uint64]func(device.Device)
+	nextListener    uint64
+	initialized     bool
+	lifecycleCtx    context.Context
+	lifecycleCancel context.CancelFunc
+	retryRunning    bool
+	retryDone       chan struct{}
+	closed          bool
 }
 
 func New(items ...providersdk.Provider) (*Manager, error) {
@@ -38,7 +47,7 @@ func New(items ...providersdk.Provider) (*Manager, error) {
 		if _, exists := m.providers[id]; exists {
 			return nil, fmt.Errorf("duplicate provider id %q", id)
 		}
-		m.providers[id] = &managedProvider{provider: item, status: "created", deviceIDs: make(map[string]struct{})}
+		m.providers[id] = &managedProvider{provider: item, status: "created", deviceIDs: make(map[string]struct{}), transitionedAt: time.Now().UTC()}
 		m.order = append(m.order, id)
 	}
 	return m, nil
@@ -52,6 +61,11 @@ func (m *Manager) Capabilities() providersdk.Capabilities {
 }
 
 func (m *Manager) Initialize(ctx context.Context) error {
+	m.mu.Lock()
+	if m.lifecycleCancel == nil {
+		m.lifecycleCtx, m.lifecycleCancel = context.WithCancel(ctx)
+	}
+	m.mu.Unlock()
 	m.mu.RLock()
 	ids := append([]string(nil), m.order...)
 	m.mu.RUnlock()
@@ -61,18 +75,19 @@ func (m *Manager) Initialize(ctx context.Context) error {
 		m.mu.RUnlock()
 		if err := current.provider.Initialize(ctx); err != nil {
 			m.mu.Lock()
-			current.status, current.err = "error", err.Error()
+			m.markFailureLocked(current, err)
 			m.mu.Unlock()
-			return fmt.Errorf("initialize provider %q: %w", id, err)
+			continue
 		}
 		m.mu.Lock()
-		current.status, current.err = "running", ""
+		current.status, current.err, current.transitionedAt = "running", "", time.Now().UTC()
 		m.mu.Unlock()
 		m.attach(id, current)
 	}
 	m.mu.Lock()
 	m.initialized = true
 	m.mu.Unlock()
+	m.startRetryWorker()
 	return nil
 }
 
@@ -85,14 +100,22 @@ func (m *Manager) DiscoverDevices(ctx context.Context) ([]device.Device, error) 
 	for _, id := range ids {
 		m.mu.RLock()
 		current := m.providers[id]
+		running := current != nil && current.status == "running"
 		m.mu.RUnlock()
+		if !running {
+			continue
+		}
 		discoverer, ok := current.provider.(providersdk.Discoverer)
 		if !ok {
 			continue
 		}
 		items, err := discoverer.DiscoverDevices(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("discover provider %q: %w", id, err)
+			m.mu.Lock()
+			m.markFailureLocked(current, err)
+			m.mu.Unlock()
+			m.startRetryWorker()
+			continue
 		}
 		currentIDs := make(map[string]struct{}, len(items))
 		for _, item := range items {
@@ -126,7 +149,7 @@ func (m *Manager) Apply(ctx context.Context, item providersdk.Provider) error {
 	if err := item.Initialize(ctx); err != nil {
 		return fmt.Errorf("initialize provider %q: %w", id, err)
 	}
-	created := &managedProvider{provider: item, status: "running", deviceIDs: make(map[string]struct{})}
+	created := &managedProvider{provider: item, status: "running", deviceIDs: make(map[string]struct{}), transitionedAt: time.Now().UTC()}
 	var discovered []device.Device
 	if source, ok := item.(providersdk.Discoverer); ok {
 		items, err := source.DiscoverDevices(ctx)
@@ -311,21 +334,180 @@ func (m *Manager) Subscribe(handler func(device.Device)) func() {
 	return func() { once.Do(func() { m.mu.Lock(); delete(m.listeners, id); m.mu.Unlock() }) }
 }
 
+func (m *Manager) markFailureLocked(current *managedProvider, err error) {
+	current.status, current.err, current.transitionedAt = "error", err.Error(), time.Now().UTC()
+	delay := time.Second << min(current.retryCount, 5)
+	if delay > 30*time.Second {
+		delay = 30 * time.Second
+	}
+	current.nextRetryAt = time.Now().UTC().Add(delay)
+}
+
+func (m *Manager) startRetryWorker() {
+	m.mu.Lock()
+	if m.closed || m.retryRunning || m.lifecycleCtx == nil {
+		m.mu.Unlock()
+		return
+	}
+	hasFailure := false
+	for _, current := range m.providers {
+		if current.status == "error" {
+			hasFailure = true
+			break
+		}
+	}
+	if !hasFailure {
+		m.mu.Unlock()
+		return
+	}
+	m.retryRunning, m.retryDone = true, make(chan struct{})
+	ctx, done := m.lifecycleCtx, m.retryDone
+	m.mu.Unlock()
+	go m.retryLoop(ctx, done)
+}
+
+func (m *Manager) retryLoop(ctx context.Context, done chan struct{}) {
+	defer func() {
+		m.mu.Lock()
+		m.retryRunning = false
+		retryAgain := false
+		if !m.closed {
+			for _, current := range m.providers {
+				if current.status == "error" {
+					retryAgain = true
+					break
+				}
+			}
+		}
+		m.mu.Unlock()
+		close(done)
+		if retryAgain {
+			m.startRetryWorker()
+		}
+	}()
+	for {
+		m.mu.RLock()
+		var selectedID string
+		var selected *managedProvider
+		var retryAt time.Time
+		for _, id := range m.order {
+			current := m.providers[id]
+			if current.status != "error" {
+				continue
+			}
+			if selected == nil || current.nextRetryAt.Before(retryAt) {
+				selectedID, selected, retryAt = id, current, current.nextRetryAt
+			}
+		}
+		m.mu.RUnlock()
+		if selected == nil {
+			return
+		}
+		delay := time.Until(retryAt)
+		if delay < 0 {
+			delay = 0
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		m.retryProvider(ctx, selectedID, selected)
+	}
+}
+
+func (m *Manager) retryProvider(ctx context.Context, id string, current *managedProvider) {
+	m.mu.Lock()
+	if m.providers[id] != current || current.status != "error" {
+		m.mu.Unlock()
+		return
+	}
+	current.status, current.transitionedAt = "retrying", time.Now().UTC()
+	current.retryCount++
+	m.mu.Unlock()
+	if err := current.provider.Initialize(ctx); err != nil {
+		m.mu.Lock()
+		if m.providers[id] == current {
+			m.markFailureLocked(current, err)
+		}
+		m.mu.Unlock()
+		return
+	}
+	items := make([]device.Device, 0)
+	if discoverer, ok := current.provider.(providersdk.Discoverer); ok {
+		discovered, err := discoverer.DiscoverDevices(ctx)
+		if err != nil {
+			m.mu.Lock()
+			if m.providers[id] == current {
+				m.markFailureLocked(current, err)
+			}
+			m.mu.Unlock()
+			return
+		}
+		items = discovered
+	}
+	m.mu.Lock()
+	if m.providers[id] != current {
+		m.mu.Unlock()
+		return
+	}
+	for _, item := range items {
+		if owner, exists := m.routes[item.ID]; exists && owner != id {
+			m.markFailureLocked(current, fmt.Errorf("device id %q is already owned by %q", item.ID, owner))
+			m.mu.Unlock()
+			return
+		}
+	}
+	for deviceID := range current.deviceIDs {
+		delete(m.routes, deviceID)
+	}
+	current.deviceIDs = make(map[string]struct{}, len(items))
+	for _, item := range items {
+		current.deviceIDs[item.ID] = struct{}{}
+		m.routes[item.ID] = id
+	}
+	current.status, current.err, current.nextRetryAt, current.transitionedAt = "running", "", time.Time{}, time.Now().UTC()
+	m.mu.Unlock()
+	m.attach(id, current)
+	for _, item := range items {
+		item.ProviderID = id
+		m.broadcast(item)
+	}
+}
+
 func (m *Manager) ProviderInfos() []providersdk.RuntimeInfo {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	result := make([]providersdk.RuntimeInfo, 0, len(m.order))
 	for _, id := range m.order {
 		current := m.providers[id]
-		result = append(result, providersdk.RuntimeInfo{Manifest: current.provider.Manifest(), Capabilities: current.provider.Capabilities(), Status: current.status, Error: current.err})
+		var nextRetryAt *time.Time
+		if !current.nextRetryAt.IsZero() {
+			value := current.nextRetryAt
+			nextRetryAt = &value
+		}
+		result = append(result, providersdk.RuntimeInfo{Manifest: current.provider.Manifest(), Capabilities: current.provider.Capabilities(), Status: current.status, Error: current.err, RetryCount: current.retryCount, NextRetryAt: nextRetryAt, TransitionedAt: current.transitionedAt})
 	}
 	return result
 }
 
 func (m *Manager) Close(ctx context.Context) error {
-	m.mu.RLock()
+	m.mu.Lock()
+	m.closed = true
+	if m.lifecycleCancel != nil {
+		m.lifecycleCancel()
+	}
+	retryDone := m.retryDone
 	ids := append([]string(nil), m.order...)
-	m.mu.RUnlock()
+	m.mu.Unlock()
+	if retryDone != nil {
+		select {
+		case <-retryDone:
+		case <-ctx.Done():
+		}
+	}
 	var first error
 	for i := len(ids) - 1; i >= 0; i-- {
 		m.mu.RLock()
@@ -341,7 +523,7 @@ func (m *Manager) Close(ctx context.Context) error {
 			first = fmt.Errorf("close provider %q: %w", ids[i], err)
 		}
 		m.mu.Lock()
-		current.status = "stopped"
+		current.status, current.transitionedAt = "stopped", time.Now().UTC()
 		current.unsubscribe = nil
 		m.mu.Unlock()
 	}

@@ -1,6 +1,10 @@
 import type { DeviceCommand, Diagnostics } from '../types/diagnostics'
+import { requestData } from './client'
+export const getDiagnostics = (signal?: AbortSignal) => requestData<Diagnostics>('/api/v1/diagnostics', { signal })
+export const listCommands = (signal?: AbortSignal) => requestData<DeviceCommand[]>('/api/v1/commands', { signal })
 
-interface ApiResponse<T> { data: T }
-async function read<T>(path: string, signal?: AbortSignal): Promise<T> { const response = await fetch(path, { signal }); if (!response.ok) throw new Error(`诊断请求失败 (${response.status})`); return ((await response.json()) as ApiResponse<T>).data }
-export const getDiagnostics = (signal?: AbortSignal) => read<Diagnostics>('/api/v1/diagnostics', signal)
-export const listCommands = (signal?: AbortSignal) => read<DeviceCommand[]>('/api/v1/commands', signal)
+export function subscribeCommands(onCommand: (command: DeviceCommand) => void): () => void {
+  const source = new EventSource('/api/v1/events/commands')
+  source.addEventListener('command', (event) => { try { onCommand(JSON.parse(event.data) as DeviceCommand) } catch { /* ignore malformed events */ } })
+  return () => source.close()
+}

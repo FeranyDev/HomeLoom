@@ -20,6 +20,9 @@ export interface Provider extends ProviderConfig {
   error?: string
   manifest?: ProviderManifest
   capabilities: ProviderCapabilities
+  retryCount: number
+  nextRetryAt?: string
+  transitionedAt?: string
 }
 
 export type ProviderInput = ProviderConfig

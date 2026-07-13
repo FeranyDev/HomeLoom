@@ -1,40 +1,30 @@
 import type { Device, StateValue } from '../types/device'
-
-interface ApiResponse<T> {
-  data: T
-}
-
-async function parse<T>(response: Response): Promise<T> {
-  if (!response.ok) {
-    throw new Error(`请求失败 (${response.status})`)
-  }
-  return (await response.json()) as T
-}
+import { requestData } from './client'
 
 export async function listDevices(signal?: AbortSignal): Promise<Device[]> {
-  const response = await fetch('/api/v1/devices', { signal })
-  return (await parse<ApiResponse<Device[]>>(response)).data
+  return requestData<Device[]>('/api/v1/devices', { signal })
 }
 
 export async function getDeviceStates(id: string, signal?: AbortSignal): Promise<StateValue[]> {
-  const response = await fetch(`/api/v1/devices/${encodeURIComponent(id)}/states`, { signal })
-  return (await parse<ApiResponse<StateValue[]>>(response)).data
+  return requestData<StateValue[]>(`/api/v1/devices/${encodeURIComponent(id)}/states`, { signal })
 }
 
 export async function setDevicePower(id: string, value: boolean): Promise<Device> {
-  const response = await fetch(`/api/v1/devices/${encodeURIComponent(id)}/properties/power`, {
+  return requestData<Device>(`/api/v1/devices/${encodeURIComponent(id)}/properties/power`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ value }),
   })
-  return (await parse<ApiResponse<Device>>(response)).data
+}
+
+export async function setDeviceProperty(id: string, endpointId: string, capabilityId: string, propertyId: string, value: { type: string; bool?: boolean; number?: number; string?: string }): Promise<Device> {
+  return requestData<Device>(`/api/v1/devices/${encodeURIComponent(id)}/endpoints/${encodeURIComponent(endpointId)}/capabilities/${encodeURIComponent(capabilityId)}/properties/${encodeURIComponent(propertyId)}`, { method: 'PUT', body: JSON.stringify(value) })
 }
 
 export async function simulateDevice(id: string, values: { online?: boolean; power?: boolean; temperature?: number }): Promise<Device> {
-  const response = await fetch(`/api/v1/devices/${encodeURIComponent(id)}/simulation`, {
+  return requestData<Device>(`/api/v1/devices/${encodeURIComponent(id)}/simulation`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values),
   })
-  return (await parse<ApiResponse<Device>>(response)).data
 }
 
 export function subscribeDevices(onDevice: (device: Device) => void, onConnection?: (connected: boolean) => void): () => void {

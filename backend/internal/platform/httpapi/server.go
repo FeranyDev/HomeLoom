@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/application"
+	domaincommand "github.com/feranydev/homeloom/backend/internal/domain/command"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	domaintarget "github.com/feranydev/homeloom/backend/internal/domain/target"
@@ -99,7 +100,9 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		writeMetric("devices_online", metrics.OnlineDevices)
 		writeMetric("devices_offline", metrics.OfflineDevices)
 		writeMetric("providers_running", metrics.ProvidersRunning)
+		writeMetric("provider_retries_total", metrics.ProviderRetries)
 		writeMetric("device_subscribers", metrics.DeviceSubscribers)
+		writeMetric("command_average_latency_milliseconds", metrics.CommandAverageLatencyMS)
 		return c.String(http.StatusOK, output.String())
 	})
 	e.GET("/api/v1/devices", func(c echo.Context) error {
@@ -154,6 +157,51 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 			}
 		}
 	})
+	e.GET("/api/v1/events/commands", func(c echo.Context) error {
+		response := c.Response()
+		response.Header().Set(echo.HeaderContentType, "text/event-stream")
+		response.Header().Set(echo.HeaderCacheControl, "no-cache")
+		response.Header().Set("X-Accel-Buffering", "no")
+		response.WriteHeader(http.StatusOK)
+		flusher, ok := response.Writer.(http.Flusher)
+		if !ok {
+			return echo.NewHTTPError(http.StatusInternalServerError, "streaming is unsupported")
+		}
+		events := make(chan domaincommand.Command, 32)
+		unsubscribe := devices.SubscribeCommands(func(item domaincommand.Command) {
+			select {
+			case events <- item:
+			default:
+			}
+		})
+		defer unsubscribe()
+		if _, err := response.Write([]byte("event: ready\ndata: {}\n\n")); err != nil {
+			return nil
+		}
+		flusher.Flush()
+		heartbeat := time.NewTicker(15 * time.Second)
+		defer heartbeat.Stop()
+		for {
+			select {
+			case item := <-events:
+				payload, err := json.Marshal(item)
+				if err != nil {
+					continue
+				}
+				if _, err := fmt.Fprintf(response, "event: command\ndata: %s\n\n", payload); err != nil {
+					return nil
+				}
+				flusher.Flush()
+			case <-heartbeat.C:
+				if _, err := response.Write([]byte(": keepalive\n\n")); err != nil {
+					return nil
+				}
+				flusher.Flush()
+			case <-c.Request().Context().Done():
+				return nil
+			}
+		}
+	})
 	var providers *application.ProviderService
 	if len(providerServices) > 0 {
 		providers = providerServices[0]
@@ -191,6 +239,16 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
 		return c.NoContent(http.StatusNoContent)
+	})
+	e.POST("/api/v1/providers/:id/restart", func(c echo.Context) error {
+		if providers == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "provider management is unavailable")
+		}
+		info, err := providers.Restart(c.Request().Context(), c.Param("id"))
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": info})
 	})
 	e.GET("/api/v1/devices/:id/states", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"data": devices.States(c.Param("id"))})
