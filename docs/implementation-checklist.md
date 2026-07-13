@@ -438,9 +438,9 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [ ] Provider Profile；
 - [ ] Capability Profile；
 - [ ] Target Profile；
-- [ ] Profile ID 和版本；
-- [ ] Profile schema；
-- [ ] Profile validator；
+- [x] Profile ID 和版本；
+- [x] Profile schema；
+- [x] Profile validator；
 - [ ] 内置 Profile；
 - [ ] 用户覆盖；
 - [ ] 数据库存储；
@@ -448,27 +448,27 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 
 ### 10.2 转换能力
 
-- [ ] bool 转换；
-- [ ] 数值范围转换；
-- [ ] 数值缩放；
-- [ ] 枚举转换；
-- [ ] 单位转换；
-- [ ] 默认值；
+- [x] bool 转换；
+- [x] 数值范围转换；
+- [x] 数值缩放；
+- [x] 枚举转换；
+- [x] 单位转换；
+- [x] 默认值；
 - [ ] 缺失属性；
 - [ ] 多属性组合；
-- [ ] 写入反向转换；
-- [ ] 转换错误解释。
+- [x] 写入反向转换；
+- [x] 转换错误解释。
 
 ### 10.3 工具
 
-- [ ] 映射预览 API；
+- [x] 映射预览 API；
 - [ ] 原始 Provider 数据预览；
 - [ ] Capability 结果预览；
 - [ ] HAP Target 结果预览；
 - [ ] 前端 Profile 管理；
-- [ ] 映射调试页面；
+- [x] 映射调试页面；
 - [ ] 热重载；
-- [ ] 表驱动转换测试。
+- [x] 表驱动转换测试。
 
 退出条件：新增普通 MQTT 设备类型不需要修改 Go 代码。
 
@@ -500,7 +500,7 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [x] 状态来源和质量展示；
 - [x] 命令历史页面；
 - [~] 实时日志（审计事件已支持 SQLite 历史和 SSE，进程运行日志流待实现）；
-- [ ] Mapping 预览；
+- [x] Mapping 预览；
 - [ ] Profile 管理；
 - [ ] 备份恢复；
 - [x] 错误边界；
@@ -587,12 +587,12 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [ ] Target 保存失败回滚测试；
 - [x] Dispatcher 关闭超时测试；
 - [x] Command 多次覆盖测试；
-- [ ] State stale/optimistic 测试；
+- [x] State stale/optimistic 测试；
 - [x] 500 设备基准测试；
 - [x] 每秒 100 事件基准测试；
 - [x] 20 并发命令测试；
 - [ ] 24 小时稳定性测试；
-- [ ] 前端 API 错误测试；
+- [x] 前端 API 错误测试；
 - [x] 前端 Target/Provider 删除确认测试；
 - [x] 前端 Target 编辑回填测试；
 - [ ] 前端覆盖率阈值；

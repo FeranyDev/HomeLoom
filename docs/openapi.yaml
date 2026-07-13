@@ -83,6 +83,24 @@ paths:
       operationId: getDiagnostics
       responses:
         "200": { description: Runtime metrics snapshot, content: { application/json: { schema: { $ref: "#/components/schemas/ObjectResponse" } } } }
+  /api/v1/mapping/preview:
+    post:
+      operationId: previewMapping
+      description: Validates and executes an ephemeral mapping profile without persisting it or writing a device. Reverse direction applies reversible transforms in reverse order.
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: "#/components/schemas/MappingPreviewRequest" } }
+      responses:
+        "200":
+          description: Final typed value and each evaluated transform step
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties: { data: { $ref: "#/components/schemas/MappingPreviewResult" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
   /api/v1/audit-events:
     get:
       operationId: listAuditEvents
@@ -295,6 +313,60 @@ components:
         metrics: { type: object, additionalProperties: true }
         configuration: { $ref: "#/components/schemas/ConfigurationExport" }
         recentAudit: { type: array, items: { $ref: "#/components/schemas/AuditEvent" } }
+    MappingTransform:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, enum: [invert, scale, clamp, enum, unit] }
+        factor: { type: number }
+        offset: { type: number }
+        min: { type: number }
+        max: { type: number }
+        values: { type: object, additionalProperties: { type: string } }
+        fromUnit: { type: string, enum: [celsius, fahrenheit, kelvin, ratio, percent] }
+        toUnit: { type: string, enum: [celsius, fahrenheit, kelvin, ratio, percent] }
+    MappingProfile:
+      type: object
+      required: [schemaVersion, id, version, kind, inputType, outputType, transforms]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        id: { type: string }
+        version: { type: integer, minimum: 1 }
+        kind: { type: string, enum: [provider, capability, target] }
+        inputType: { type: string, enum: [bool, int, number, string, enum] }
+        outputType: { type: string, enum: [bool, int, number, string, enum] }
+        default: { $ref: "#/components/schemas/PropertyValue" }
+        transforms: { type: array, items: { $ref: "#/components/schemas/MappingTransform" } }
+    MappingPreviewRequest:
+      type: object
+      required: [profile, direction, value]
+      properties:
+        profile: { $ref: "#/components/schemas/MappingProfile" }
+        direction: { type: string, enum: [forward, reverse] }
+        value:
+          oneOf:
+            - { $ref: "#/components/schemas/PropertyValue" }
+            - { type: "null" }
+    MappingStep:
+      type: object
+      required: [index, transform, input, output]
+      properties:
+        index: { type: integer }
+        transform: { type: string }
+        input:
+          oneOf:
+            - { $ref: "#/components/schemas/PropertyValue" }
+            - { type: "null" }
+        output: { $ref: "#/components/schemas/PropertyValue" }
+    MappingPreviewResult:
+      type: object
+      required: [profileId, profileVersion, direction, value, steps]
+      properties:
+        profileId: { type: string }
+        profileVersion: { type: integer }
+        direction: { type: string, enum: [forward, reverse] }
+        value: { $ref: "#/components/schemas/PropertyValue" }
+        steps: { type: array, items: { $ref: "#/components/schemas/MappingStep" } }
     PropertyValue:
       type: object
       required: [type]

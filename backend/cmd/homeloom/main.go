@@ -27,6 +27,8 @@ func main() {
 	configPath := flag.String("config", "", "path to a YAML configuration file")
 	showVersion := flag.Bool("version", false, "print build version and exit")
 	backupPath := flag.String("backup", "", "create a consistent SQLite backup and exit")
+	restorePath := flag.String("restore", "", "restore a validated SQLite backup and exit")
+	restoreReplace := flag.Bool("restore-replace", false, "explicitly allow restore to replace the configured database")
 	flag.Parse()
 	if *showVersion {
 		info := buildinfo.Current()
@@ -42,6 +44,23 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if *backupPath != "" && *restorePath != "" {
+		logger.Error("backup and restore flags cannot be used together")
+		os.Exit(2)
+	}
+	if *restoreReplace && *restorePath == "" {
+		logger.Error("restore replacement confirmation requires -restore")
+		os.Exit(2)
+	}
+	if *restorePath != "" {
+		recoveryPath, restoreErr := sqlite.Restore(ctx, *restorePath, settings.Storage.Database, *restoreReplace)
+		if restoreErr != nil {
+			logger.Error("database restore failed", "source", *restorePath, "destination", settings.Storage.Database, "error", restoreErr)
+			os.Exit(1)
+		}
+		logger.Info("database restore completed", "source", *restorePath, "destination", settings.Storage.Database, "pre_restore_backup", recoveryPath)
+		return
+	}
 	if *backupPath != "" {
 		store, openErr := sqlite.OpenForBackup(ctx, settings.Storage.Database)
 		if openErr != nil {

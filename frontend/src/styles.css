@@ -125,6 +125,20 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .artifact-card p { margin: 0; color: #686b65; line-height: 1.6; }
 .artifact-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .artifact-actions a { padding: 10px 14px; border: 1px solid #747970; color: #343931; text-decoration: none; }
+.mapping-preview { display: grid; gap: 18px; }
+.mapping-workbench { display: grid; grid-template-columns: minmax(280px, .8fr) minmax(360px, 1.2fr); border: 1px solid #d2d0c7; background: rgba(250, 249, 245, .72); }
+.mapping-form { display: grid; align-content: start; gap: 16px; padding: 28px; border-right: 1px solid #d2d0c7; }
+.mapping-form label { display: grid; gap: 7px; color: #73776f; font-size: 12px; }
+.mapping-form input, .mapping-form select { width: 100%; padding: 11px; border: 1px solid #c9c8c0; background: #fbfaf6; color: #343831; font: inherit; }
+.mapping-form button { justify-self: start; }
+.mapping-result { min-height: 360px; padding: 28px; }
+.mapping-output { display: grid; gap: 8px; padding: 24px; background: #343931; color: #f7f5ee; }
+.mapping-output span, .mapping-output small { color: #c8cec4; }
+.mapping-output strong { font: 44px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.mapping-steps { margin-top: 28px; }
+.mapping-steps > div { display: grid; grid-template-columns: .7fr 1fr .7fr; gap: 12px; padding: 12px 0; border-top: 1px solid #dad9d2; }
+.mapping-steps span, .mapping-steps small { overflow-wrap: anywhere; }
+.mapping-steps small { color: #8a8e86; }
 .settings-card label { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: 12px; color: #5f625d; }
 .settings-card input { width: 120px; }
 .settings-card > button { justify-self: start; }
@@ -238,6 +252,8 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 @media (max-width: 720px) {
   main { width: min(100% - 28px, 1120px); padding-top: 38px; }
 	.top-nav { margin-bottom: 46px; }
+	.top-nav { flex-wrap: wrap; }
+	.top-nav > div { order: 3; width: 100%; overflow-x: auto; }
   .hero { display: block; padding-bottom: 42px; }
   .summary { width: 100%; height: auto; margin-top: 42px; padding: 20px; border-radius: 3px; }
   .summary span { font-size: 32px; }
@@ -262,4 +278,7 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 	.property-node { grid-template-columns: 1fr; }
 	.property-value { justify-content: flex-start; }
 	.property-node dl { grid-template-columns: 1fr 1fr; }
+	.mapping-workbench { grid-template-columns: 1fr; }
+	.mapping-form { border-right: 0; border-bottom: 1px solid #d2d0c7; }
+	.mapping-steps > div { grid-template-columns: 1fr; }
 }

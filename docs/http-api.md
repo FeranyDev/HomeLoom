@@ -106,6 +106,18 @@ Core 会根据 Capability 中的 `CommandDefinition` 校验必填参数、未声
 
 动作请求建议携带最长 128 字符的 `Idempotency-Key` header。在命令历史保留期内，相同设备、Capability、Command、参数和 key 只执行一次；重复请求返回原命令。同一作用域的 key 如果被复用为不同参数，返回 409 `conflict`。
 
+## Mapping 预览
+
+`POST /api/v1/mapping/preview` 接受带 `schemaVersion`、稳定 ID、版本、Profile kind、输入/输出 typed value 类型和转换流水线的临时 Profile。预览是无状态操作，不保存 Profile，也不写设备。当前转换包括：
+
+- `invert`：布尔反转；
+- `scale`：数值缩放和偏移，反向按逆公式执行；
+- `clamp`：范围裁剪，因为信息丢失而明确拒绝反向执行；
+- `enum`：一对一枚举映射，重复目标值会在校验阶段拒绝；
+- `unit`：摄氏、华氏、开尔文以及比例、百分比转换。
+
+响应包含最终 typed value 和每一步的输入、输出及 transform 索引。错误 Profile 使用统一字段错误结构返回，字段路径例如 `profile.transforms.0.factor`，便于前端准确定位。反向预览逆序运行 transform，用于提前验证 Target 控制写回 Provider 的可逆性。
+
 ## Provider 敏感配置
 
 Provider 配置仍以完整值保存在 SQLite 中，但管理 API 会递归识别 password、secret、token、API key、private key 和 credential 类字段，并以 `********` 返回。编辑时保留该占位符会沿用数据库中的原值；输入新值会替换原值。新建 Provider 时不能把占位符当作真实密钥提交。数组对象优先按稳定 `id` 恢复密钥，避免配置重排后发生错配。

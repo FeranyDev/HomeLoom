@@ -571,6 +571,27 @@ func TestGenericPropertyWritePropagatesRequestTimeoutToVirtualProvider(t *testin
 	}
 }
 
+func TestMappingPreviewAPIExplainsForwardAndReverseTransforms(t *testing.T) {
+	server := newTestServer()
+	forward := httptest.NewRequest(http.MethodPost, "/api/v1/mapping/preview", bytes.NewBufferString(`{"profile":{"schemaVersion":1,"id":"temperature-map","version":1,"kind":"capability","inputType":"number","outputType":"number","transforms":[{"type":"scale","factor":1.8,"offset":32}]},"direction":"forward","value":{"type":"number","number":20}}`))
+	forward.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, forward)
+	for _, expected := range []string{`"number":68`, `"transform":"scale"`, `"profileId":"temperature-map"`} {
+		if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(expected)) {
+			t.Fatalf("response = %d %s", response.Code, response.Body.String())
+		}
+	}
+
+	reverseClamp := httptest.NewRequest(http.MethodPost, "/api/v1/mapping/preview", bytes.NewBufferString(`{"profile":{"schemaVersion":1,"id":"clamped","version":1,"kind":"target","inputType":"number","outputType":"number","transforms":[{"type":"clamp","min":0,"max":100}]},"direction":"reverse","value":{"type":"number","number":50}}`))
+	reverseClamp.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, reverseClamp)
+	if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte(`"profile.transforms.0":"clamp is not reversible"`)) {
+		t.Fatalf("reverse response = %d %s", response.Code, response.Body.String())
+	}
+}
+
 func TestGenericPropertyRead(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/devices/virtual-temperature-1/endpoints/main/capabilities/temperature/properties/current-temperature", nil)
 	response := httptest.NewRecorder()

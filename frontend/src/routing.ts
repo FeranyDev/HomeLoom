@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
-export type Page = 'devices' | 'providers' | 'targets' | 'system'
-const pages = new Set<Page>(['devices', 'providers', 'targets', 'system'])
+export type Page = 'devices' | 'providers' | 'targets' | 'mapping' | 'system'
+const pages = new Set<Page>(['devices', 'providers', 'targets', 'mapping', 'system'])
 function currentPage(): Page { const value = window.location.hash.replace(/^#\/?/, '').split('/')[0] as Page; return pages.has(value) ? value : 'devices' }
 
 export function usePageRoute(): [Page, (page: Page) => void] {

@@ -83,6 +83,14 @@ SQLite 在线一致性备份（不会在备份前迁移源库）：
 
 该脚本会生成 SQLite 备份及配套的 `.db.key` 主密钥文件，两者必须一起保管和恢复。灾难恢复 HomeKit 配对关系时，还必须备份相应的 HAP 身份目录。
 
+停止 HomeLoom 后可以恢复备份到 `HOMELOOM_DATABASE` 指定的位置：
+
+```bash
+HOMELOOM_DATABASE=backend/data/restored.db ./scripts/restore.sh backups/homeloom-20260713T000000Z.db
+```
+
+目标数据库已经存在时必须额外传入 `--replace`。恢复流程会先在目标目录完成完整性、schema、migration 和主密钥解密验证；替换时会保留带 `.pre-restore-<时间>` 后缀的原数据库及配套密钥，便于人工回滚。运行中的数据库存在 WAL/SHM sidecar 时会拒绝恢复。
+
 ## 当前 Demo 链路
 
 ```text

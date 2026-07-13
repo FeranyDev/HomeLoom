@@ -20,6 +20,7 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	domainstate "github.com/feranydev/homeloom/backend/internal/domain/state"
 	domaintarget "github.com/feranydev/homeloom/backend/internal/domain/target"
+	"github.com/feranydev/homeloom/backend/internal/mapping"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -179,7 +180,7 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			err := next(c)
-			if server.audit == nil || !auditMethod(c.Request().Method) || !strings.HasPrefix(c.Request().URL.Path, "/api/v1/") {
+			if server.audit == nil || !auditMethod(c.Request().Method) || !strings.HasPrefix(c.Request().URL.Path, "/api/v1/") || c.Path() == "/api/v1/mapping/preview" {
 				return err
 			}
 			status := c.Response().Status
@@ -256,6 +257,21 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 	})
 	e.GET("/api/v1/diagnostics", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"data": devices.Metrics()})
+	})
+	e.POST("/api/v1/mapping/preview", func(c echo.Context) error {
+		var input mapping.PreviewRequest
+		if err := c.Bind(&input); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid mapping preview")
+		}
+		result, err := mapping.Preview(input)
+		if err != nil {
+			var validationError *mapping.ValidationError
+			if errors.As(err, &validationError) {
+				return application.NewValidationError("invalid mapping preview", validationError.Fields)
+			}
+			return echo.NewHTTPError(http.StatusInternalServerError, "mapping preview failed").SetInternal(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": result})
 	})
 	e.GET("/api/v1/system/config-export", func(c echo.Context) error {
 		if server.exports == nil {

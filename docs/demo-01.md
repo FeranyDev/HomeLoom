@@ -55,5 +55,5 @@
 
 - 完成 Apple Home 实机配对、双向控制和三次重启验收；
 - 加入管理员认证、CSRF 防护和敏感操作二次确认；
-- 完成 SQLite 一致性备份/恢复和版本兼容检查；
+- 将已完成的 SQLite 一致性备份/离线安全恢复接入管理员认证后的 Web 运维入口；
 - 开始 MQTT Provider 与 discovery/state/command 协议实现。

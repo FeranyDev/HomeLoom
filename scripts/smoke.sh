@@ -40,6 +40,7 @@ version=$(curl -fsS "$BASE_URL/api/v1/system/version")
 devices=$(curl -fsS "$BASE_URL/api/v1/devices")
 config_export=$(curl -fsS "$BASE_URL/api/v1/system/config-export")
 diagnostic_bundle=$(curl -fsS "$BASE_URL/api/v1/system/diagnostic-bundle")
+mapping_preview=$(curl -fsS -H 'Content-Type: application/json' -d '{"profile":{"schemaVersion":1,"id":"smoke-map","version":1,"kind":"capability","inputType":"number","outputType":"number","transforms":[{"type":"scale","factor":1.8,"offset":32}]},"direction":"forward","value":{"type":"number","number":20}}' "$BASE_URL/api/v1/mapping/preview")
 case "$health" in *'"status":"ok"'*) ;; *) echo "unexpected health response: $health" >&2; exit 1;; esac
 case "$version" in *'"version"'*) ;; *) echo "unexpected version response: $version" >&2; exit 1;; esac
 case "$devices" in *'"schemaVersion":1'*) ;; *) echo "unexpected devices response: $devices" >&2; exit 1;; esac
@@ -47,10 +48,13 @@ case "$config_export" in *'"formatVersion":1'*'"providers"'*'"targets"'*) ;; *) 
 case "$diagnostic_bundle" in *'"formatVersion":1'*) ;; *) echo "unexpected diagnostic bundle version: $diagnostic_bundle" >&2; exit 1;; esac
 case "$diagnostic_bundle" in *'"configuration"'*) ;; *) echo "diagnostic bundle has no configuration: $diagnostic_bundle" >&2; exit 1;; esac
 case "$diagnostic_bundle" in *'"metrics"'*) ;; *) echo "diagnostic bundle has no metrics: $diagnostic_bundle" >&2; exit 1;; esac
+case "$mapping_preview" in *'"profileId":"smoke-map"'*'"number":68'*) ;; *) echo "unexpected mapping preview: $mapping_preview" >&2; exit 1;; esac
 
 kill -TERM "$PID"
 wait "$PID"
 PID=""
 HOMELOOM_DATABASE="$TEMP/homeloom.db" "$BINARY" -backup "$TEMP/backup.db" >/dev/null
 if [ ! -s "$TEMP/backup.db" ] || [ ! -s "$TEMP/backup.db.key" ]; then echo "backup smoke test produced incomplete database/key pair" >&2; exit 1; fi
+HOMELOOM_DATABASE="$TEMP/restored.db" "$BINARY" -restore "$TEMP/backup.db" >/dev/null
+if [ ! -s "$TEMP/restored.db" ] || [ ! -s "$TEMP/restored.db.key" ]; then echo "restore smoke test produced incomplete database/key pair" >&2; exit 1; fi
 printf 'smoke test passed (%s)\n' "$ADDRESS"

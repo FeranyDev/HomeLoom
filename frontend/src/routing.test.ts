@@ -13,5 +13,7 @@ describe('usePageRoute', () => {
     expect(window.location.hash).toBe('#/providers'); expect(result.current[0]).toBe('providers')
     act(() => { window.location.hash = '#/targets'; window.dispatchEvent(new HashChangeEvent('hashchange')) })
     expect(result.current[0]).toBe('targets')
+	act(() => { result.current[1]('mapping'); window.dispatchEvent(new HashChangeEvent('hashchange')) })
+	expect(result.current[0]).toBe('mapping')
   })
 })

@@ -10,6 +10,7 @@ import { TargetForm } from './components/TargetForm'
 import { ProviderCard } from './components/ProviderCard'
 import { ProviderForm } from './components/ProviderForm'
 import { SystemDashboard } from './components/SystemDashboard'
+import { MappingPreview } from './components/MappingPreview'
 import { DeviceDetails } from './components/DeviceDetails'
 import { ToastCenter } from './components/ToastCenter'
 import { useToasts } from './useToasts'
@@ -126,8 +127,8 @@ export function App() {
 	async function handlePropertyWrite(device: Device, endpointId: string, capabilityId: string, propertyId: string, value: PropertyValue) { try { const updated = await setDeviceProperty(device.id, endpointId, capabilityId, propertyId, value); setDevices((current) => current.map((item) => item.id === updated.id ? updated : item)); const [diagnosticData, commandData] = await Promise.all([getDiagnostics(), listCommands()]); setDiagnostics(diagnosticData); setCommands(commandData); setError(null); notify('success', `${device.name}.${propertyId} 写入成功`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '属性写入失败'); throw cause } }
 	async function handleCommandExecute(device: Device, endpointId: string, capabilityId: string, commandId: string, parameters: Record<string, PropertyValue>, idempotencyKey: string) { try { const updated = await executeDeviceCommand(device.id, endpointId, capabilityId, commandId, parameters, idempotencyKey); setDevices((current) => current.map((item) => item.id === updated.id ? updated : item)); const [diagnosticData, commandData] = await Promise.all([getDiagnostics(), listCommands()]); setDiagnostics(diagnosticData); setCommands(commandData); setError(null); notify('success', `${device.name}.${commandId} 执行成功`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '命令执行失败'); throw cause } }
 	async function handleRuntimeSettingsSave(next: RuntimeSettings) { try { const saved = await saveRuntimeSettings(next); commandHistoryLimit.current = saved.commandHistoryLimit; setCommands((current) => current.slice(0, saved.commandHistoryLimit)); setRuntimeSettings(saved); notify('success', '运行时设置已保存并实时生效') } catch (cause) { notify('error', cause instanceof Error ? cause.message : '保存运行时设置失败'); throw cause } }
-	const pageCopy = page === 'devices' ? { title: <>把家的状态<br />织在一起。</>, intro: '设备状态驻留内存，由 Provider 实时上报。', eyebrow: 'DEVICES', section: '设备中心' } : page === 'providers' ? { title: <>数据源，随时<br />接入或离开。</>, intro: 'Provider 配置存储于 SQLite，并可在线启停和替换。', eyebrow: 'PROVIDERS', section: 'Provider 管理' } : page === 'targets' ? { title: <>一座桥，或<br />很多座桥。</>, intro: '按设备或平台拆分桥实例。每座桥拥有独立身份、端口、配对资料和二维码。', eyebrow: 'TARGETS', section: '桥接中心' } : { title: <>看见系统的<br />每一次呼吸。</>, intro: '观察事件队列、设备连接和命令生命周期。', eyebrow: 'SYSTEM', section: '系统诊断' }
-	const summary = page === 'devices' ? devices.filter((item) => item.availability === 'online').length : page === 'providers' ? providers.filter((item) => item.status === 'running').length : page === 'targets' ? targets.filter((item) => item.status === 'running').length : diagnostics?.eventsProcessed ?? 0
+	const pageCopy = page === 'devices' ? { title: <>把家的状态<br />织在一起。</>, intro: '设备状态驻留内存，由 Provider 实时上报。', eyebrow: 'DEVICES', section: '设备中心' } : page === 'providers' ? { title: <>数据源，随时<br />接入或离开。</>, intro: 'Provider 配置存储于 SQLite，并可在线启停和替换。', eyebrow: 'PROVIDERS', section: 'Provider 管理' } : page === 'targets' ? { title: <>一座桥，或<br />很多座桥。</>, intro: '按设备或平台拆分桥实例。每座桥拥有独立身份、端口、配对资料和二维码。', eyebrow: 'TARGETS', section: '桥接中心' } : page === 'mapping' ? { title: <>让数据说<br />同一种语言。</>, intro: '在写入 Profile 前预览正向和反向转换的每一步。', eyebrow: 'MAPPING', section: '映射调试' } : { title: <>看见系统的<br />每一次呼吸。</>, intro: '观察事件队列、设备连接和命令生命周期。', eyebrow: 'SYSTEM', section: '系统诊断' }
+	const summary = page === 'devices' ? devices.filter((item) => item.availability === 'online').length : page === 'providers' ? providers.filter((item) => item.status === 'running').length : page === 'targets' ? targets.filter((item) => item.status === 'running').length : page === 'mapping' ? 5 : diagnostics?.eventsProcessed ?? 0
 	const filteredDevices = devices.filter((item) => { const matchesText = `${item.name} ${item.id} ${item.providerId}`.toLowerCase().includes(deviceQuery.trim().toLowerCase()); const matchesStatus = deviceStatus === 'all' || (deviceStatus === 'disabled' ? item.disabled : deviceStatus === 'removed' ? item.removed : item.availability === deviceStatus && !item.disabled && !item.removed); return matchesText && matchesStatus })
 	const selectedDevice = selectedDeviceID ? devices.find((item) => item.id === selectedDeviceID) ?? null : null
 
@@ -140,6 +141,7 @@ export function App() {
 	      <button aria-current={page === 'devices' ? 'page' : undefined} className={page === 'devices' ? 'is-active' : ''} onClick={() => setPage('devices')}>设备</button>
 	      <button aria-current={page === 'providers' ? 'page' : undefined} className={page === 'providers' ? 'is-active' : ''} onClick={() => setPage('providers')}>Provider</button>
 	      <button aria-current={page === 'targets' ? 'page' : undefined} className={page === 'targets' ? 'is-active' : ''} onClick={() => setPage('targets')}>桥接中心</button>
+	      <button aria-current={page === 'mapping' ? 'page' : undefined} className={page === 'mapping' ? 'is-active' : ''} onClick={() => setPage('mapping')}>映射</button>
 	      <button aria-current={page === 'system' ? 'page' : undefined} className={page === 'system' ? 'is-active' : ''} onClick={() => setPage('system')}>系统</button>
 	    </div>
 	    <span className="runtime-meta"><span className="version-badge" title={version ? `${version.commit} · ${version.buildTime}` : '版本读取中'}>{version?.version ?? '…'}</span><span aria-live="polite" className={`live-indicator ${live ? 'is-live' : ''}`}>{live ? '实时' : '重连中'}</span></span>
@@ -150,7 +152,7 @@ export function App() {
 		  <h1>{pageCopy.title}</h1><p className="intro">{pageCopy.intro}</p>
         </div>
         <div className="summary">
-		  <span>{summary}</span><small>{page === 'devices' ? '在线设备' : page === 'providers' ? '运行中 Provider' : page === 'targets' ? '运行中的桥' : '已处理事件'}</small>
+		  <span>{summary}</span><small>{page === 'devices' ? '在线设备' : page === 'providers' ? '运行中 Provider' : page === 'targets' ? '运行中的桥' : page === 'mapping' ? '转换能力' : '已处理事件'}</small>
         </div>
       </header>
 
@@ -178,7 +180,7 @@ export function App() {
             />
           ))}
 		  {filteredDevices.length === 0 && <CollectionEmpty title="没有匹配的设备" description={devices.length ? '请调整搜索文字或在线状态筛选。' : '启用 Provider 后，发现的设备会显示在这里。'} />}
-		</section> : page === 'providers' ? <section className="provider-grid"><div className="config-note"><span>配置来源</span><strong>SQLite · providers</strong><p>保存后运行时立即应用；单个 Provider 失败不会影响其他实例，可独立重新启动。</p></div>{providers.map((provider) => <ProviderCard key={provider.id} provider={provider} devices={devices.filter((item) => item.providerId === provider.id && !item.removed)} onEdit={(item) => setProviderForm({ open: true, provider: item })} onDelete={(item) => void handleProviderDelete(item)} onRestart={handleProviderRestart} onSimulate={handleSimulation} />)}{providers.length === 0 && <CollectionEmpty title="还没有 Provider" description="创建 Provider 后，HomeLoom 会立即初始化并发现设备。" />}</section> : page === 'system' ? <SystemDashboard diagnostics={diagnostics} commands={commands} auditEvents={auditEvents} settings={runtimeSettings} onSettingsSave={handleRuntimeSettingsSave} /> : <section className="target-list">
+		</section> : page === 'providers' ? <section className="provider-grid"><div className="config-note"><span>配置来源</span><strong>SQLite · providers</strong><p>保存后运行时立即应用；单个 Provider 失败不会影响其他实例，可独立重新启动。</p></div>{providers.map((provider) => <ProviderCard key={provider.id} provider={provider} devices={devices.filter((item) => item.providerId === provider.id && !item.removed)} onEdit={(item) => setProviderForm({ open: true, provider: item })} onDelete={(item) => void handleProviderDelete(item)} onRestart={handleProviderRestart} onSimulate={handleSimulation} />)}{providers.length === 0 && <CollectionEmpty title="还没有 Provider" description="创建 Provider 后，HomeLoom 会立即初始化并发现设备。" />}</section> : page === 'mapping' ? <MappingPreview /> : page === 'system' ? <SystemDashboard diagnostics={diagnostics} commands={commands} auditEvents={auditEvents} settings={runtimeSettings} onSettingsSave={handleRuntimeSettingsSave} /> : <section className="target-list">
 		  <div className="config-note">
 		    <span>配置来源</span>
 		    <strong>SQLite · targets</strong>
