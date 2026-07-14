@@ -179,3 +179,5 @@ Provider 由 Provider Manager 聚合管理。Core 只依赖标准 Provider SDK�
 Provider 配置保存在 SQLite `providers` 表，启动时由 Provider Factory 按 `type` 构造实例。Migration 会创建默认启用的 `virtual-main`；YAML 不包含 Provider 配置。
 
 MQTT Provider 已支持数据库/前端结构化配置、TLS/mTLS、认证、QoS、retained 恢复、自动重连、状态去重和命令确认。密码及嵌套的 token/secret/private-key 类字段使用数据库主密钥加密，API 只返回脱敏占位符。Topic 与 payload 契约见 [MQTT Provider 协议](docs/mqtt-protocol.md)。本地可用 `docker compose up -d mosquitto` 启动开发 Broker。
+
+Xiaomi Central Hub Provider 已接入 OAuth 授权、证书申请、MQTT 5/MIPS、属性读写、Action、状态订阅、轮询校准和自动重连。OAuth 使用固定回调地址 `http://homeassistant.local:8123`，授权后按页面引导复制完整回调 URL 粘贴回 HomeLoom。OAuth Token、私钥、证书及 MIoT 映射均保存在 SQLite Provider 配置中，不需要额外 YAML/JSON/证书目录；使用方法和授权边界见 [Xiaomi Provider 文档](docs/xiaomi-provider.md)。

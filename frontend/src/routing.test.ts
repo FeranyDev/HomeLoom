@@ -15,5 +15,7 @@ describe('usePageRoute', () => {
     expect(result.current[0]).toBe('targets')
 	act(() => { result.current[1]('mapping'); window.dispatchEvent(new HashChangeEvent('hashchange')) })
 	expect(result.current[0]).toBe('mapping')
+	act(() => { result.current[1]('xiaomi'); window.dispatchEvent(new HashChangeEvent('hashchange')) })
+	expect(result.current[0]).toBe('xiaomi')
   })
 })

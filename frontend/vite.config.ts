@@ -1,7 +1,11 @@
 import { defineConfig } from 'vitest/config'
+import { loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '')
+  const apiProxy = env.HOMELOOM_API_PROXY || 'http://localhost:8090'
+  return {
   plugins: [react()],
   test: {
     environment: 'jsdom',
@@ -23,9 +27,10 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': 'http://localhost:8090',
-      '/health': 'http://localhost:8090',
-      '/ready': 'http://localhost:8090',
+      '/api': apiProxy,
+      '/health': apiProxy,
+      '/ready': apiProxy,
     },
   },
+  }
 })

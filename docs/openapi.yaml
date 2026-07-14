@@ -358,6 +358,38 @@ paths:
       responses:
         "200": { description: Connection and subscription succeeded, content: { application/json: { schema: { type: object, required: [data], properties: { data: { type: object, required: [reachable], properties: { reachable: { type: boolean, const: true } } } } } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
+  /api/v1/xiaomi/oauth/start:
+    post:
+      operationId: startXiaomiOAuth
+      description: Generates or reuses the stable OAuth identity and returns the Xiaomi authorization URL using the fixed http://homeassistant.local:8123 redirect URI. Requires an authenticated administrator session.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/XiaomiOAuthStart" } } } }
+      responses:
+        "200": { description: Authorization URL, state, OAuth UUID and virtual DID, content: { application/json: { schema: { $ref: "#/components/schemas/ObjectResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/v1/xiaomi/oauth/complete:
+    post:
+      operationId: completeXiaomiOAuth
+      description: Accepts code and state parsed by the UI from the complete callback URL copied by the user, validates state, exchanges the authorization code, retrieves the account UID and issues an Ed25519 central-hub client certificate. The response is marked no-store.
+      requestBody: { required: true, content: { application/json: { schema: { allOf: [{ $ref: "#/components/schemas/XiaomiOAuthStart" }, { type: object, required: [code, state], properties: { code: { type: string }, state: { type: string } } }] } } } }
+      responses:
+        "200": { description: OAuth token metadata and in-memory PEM material to include in the encrypted Provider configuration, content: { application/json: { schema: { $ref: "#/components/schemas/ObjectResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/v1/xiaomi/gateways:
+    get:
+      operationId: discoverXiaomiCentralGateways
+      description: Browses `_miot-central._tcp.local.` for five seconds and returns role/MQTT capability metadata from the mDNS profile.
+      responses:
+        "200": { description: Discovered central hubs, content: { application/json: { schema: { $ref: "#/components/schemas/ObjectResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/v1/xiaomi/providers/{providerId}/devices:
+    parameters: [{ name: providerId, in: path, required: true, schema: { type: string } }]
+    get:
+      operationId: discoverXiaomiHubDevices
+      description: Reuses the established MQTT connection of an enabled, running Xiaomi Provider and returns its central-hub subdevice directory. OAuth/certificate provisioning and Provider connection must already be complete.
+      responses:
+        "200": { description: Central gateway device directory, content: { application/json: { schema: { type: object, required: [data], properties: { data: { type: array, items: { $ref: "#/components/schemas/XiaomiHubDevice" } } } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { description: Xiaomi Provider is not enabled and connected }
   /api/v1/providers/{providerId}:
     parameters: [{ name: providerId, in: path, required: true, schema: { type: string } }]
     put:
@@ -748,6 +780,26 @@ components:
         name: { type: string }
         enabled: { type: boolean }
         config: { type: object, additionalProperties: true, description: Sensitive values are returned as ********; submit the placeholder unchanged to preserve the stored value. }
+    XiaomiOAuthStart:
+      type: object
+      required: [clientId, region]
+      properties:
+        clientId: { type: string, pattern: "^[0-9]+$", description: Authorized Xiaomi OAuth application ID. }
+        region: { type: string, example: cn }
+        redirectUrl: { type: string, format: uri, const: "http://homeassistant.local:8123", default: "http://homeassistant.local:8123", description: Fixed Xiaomi OAuth redirect URI; any supplied value is normalized to this URI. }
+        oauthUuid: { type: string, pattern: "^[0-9a-f]{32}$" }
+        virtualDid: { type: string, pattern: "^[0-9]+$" }
+    XiaomiHubDevice:
+      type: object
+      required: [did, name]
+      properties:
+        did: { type: string }
+        name: { type: string }
+        model: { type: string }
+        roomId: { type: string }
+        roomName: { type: string }
+        specType: { type: string }
+        online: { type: boolean }
     TargetInput:
       type: object
       required: [type, name, enabled]

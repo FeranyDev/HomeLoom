@@ -3,6 +3,7 @@ package application_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/feranydev/homeloom/backend/internal/application"
@@ -31,6 +32,10 @@ func TestProviderServiceRedactsAndRestoresSecrets(t *testing.T) {
 	listed := service.List()
 	if len(listed) != 1 || string(listed[0].Config.Config) != `{"accounts":[{"id":"a","password":"********"},{"id":"b","password":"********"}],"devices":[],"nested":{"accessToken":"********","tokenExpiresAt":"public"},"password":"********"}` {
 		t.Fatalf("redacted config = %s", listed[0].Config.Config)
+	}
+	resolved, err := service.ResolveTransientConfig(listed[0].Config)
+	if err != nil || !strings.Contains(string(resolved.Config), `"password":"keep-me"`) || !strings.Contains(string(resolved.Config), `"accessToken":"token-value"`) {
+		t.Fatalf("resolved transient config = %s, %v", resolved.Config, err)
 	}
 	listed[0].Config.Config = []byte(`{"password":"********","nested":{"accessToken":"********","tokenExpiresAt":"changed"},"accounts":[{"id":"b","password":"********"},{"id":"a","password":"********"}],"devices":[]}`)
 	if _, err := service.Save(ctx, listed[0].Config); err != nil {

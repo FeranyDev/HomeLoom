@@ -49,6 +49,43 @@ type ProviderService struct {
 	runtime ProviderRuntime
 }
 
+// ResolveTransientConfig restores redacted secrets from the durable provider
+// configuration for a short-lived operation such as gateway device discovery.
+// The resolved value must never be returned by an HTTP response.
+func (s *ProviderService) ResolveTransientConfig(item providerconfig.Config) (providerconfig.Config, error) {
+	s.mu.RLock()
+	previous := s.configs[strings.TrimSpace(item.ID)]
+	s.mu.RUnlock()
+	if len(item.Config) == 0 {
+		item.Config = json.RawMessage(`{}`)
+	}
+	var object map[string]any
+	if err := json.Unmarshal(item.Config, &object); err != nil || object == nil {
+		return providerconfig.Config{}, NewValidationError("invalid provider configuration", map[string]string{"config": "must be a JSON object"})
+	}
+	if err := restoreProviderSecrets(object, previous.Config); err != nil {
+		return providerconfig.Config{}, NewValidationError("invalid provider configuration", map[string]string{"config": err.Error()})
+	}
+	encoded, err := json.Marshal(object)
+	if err != nil {
+		return providerconfig.Config{}, NewValidationError("invalid provider configuration", map[string]string{"config": "could not be encoded"})
+	}
+	item.Config = encoded
+	return item, nil
+}
+
+// RuntimeProvider exposes only a currently running instance when the runtime
+// supports safe lookup. Callers must keep the operation read-only.
+func (s *ProviderService) RuntimeProvider(id string) (providersdk.Provider, bool) {
+	accessor, ok := s.runtime.(interface {
+		Provider(string) (providersdk.Provider, bool)
+	})
+	if !ok {
+		return nil, false
+	}
+	return accessor.Provider(strings.TrimSpace(id))
+}
+
 func NewProviderService(configs []providerconfig.Config, store ProviderStore, factory *providersdk.Factory, runtime ProviderRuntime) *ProviderService {
 	s := &ProviderService{configs: make(map[string]providerconfig.Config), store: store, factory: factory, runtime: runtime}
 	for _, item := range configs {

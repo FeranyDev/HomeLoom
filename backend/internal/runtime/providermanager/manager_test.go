@@ -24,6 +24,42 @@ func (failingProvider) Close(context.Context) error            { return nil }
 
 type flakyProvider struct{ attempts atomic.Int32 }
 
+type liveProvider struct {
+	id           string
+	name         string
+	items        []device.Device
+	initialized  atomic.Int32
+	reconfigured atomic.Int32
+}
+
+func (p *liveProvider) Manifest() providersdk.Manifest {
+	return providersdk.Manifest{ID: p.id, Type: "live-test", Name: p.name}
+}
+func (*liveProvider) Capabilities() providersdk.Capabilities {
+	return providersdk.Capabilities{Discovery: true}
+}
+func (p *liveProvider) Initialize(context.Context) error {
+	p.initialized.Add(1)
+	return nil
+}
+func (*liveProvider) Close(context.Context) error { return nil }
+func (p *liveProvider) DiscoverDevices(context.Context) ([]device.Device, error) {
+	result := make([]device.Device, len(p.items))
+	for index := range p.items {
+		result[index] = p.items[index].Clone()
+	}
+	return result, nil
+}
+func (p *liveProvider) Reconfigure(_ context.Context, replacement providersdk.Provider) (bool, error) {
+	next, ok := replacement.(*liveProvider)
+	if !ok {
+		return false, nil
+	}
+	p.name, p.items = next.name, next.items
+	p.reconfigured.Add(1)
+	return true, nil
+}
+
 func (*flakyProvider) Manifest() providersdk.Manifest {
 	return providersdk.Manifest{ID: "flaky", Type: "test", Name: "Flaky"}
 }
@@ -137,6 +173,48 @@ func TestManagerHotAppliesAndRemovesProvider(t *testing.T) {
 	}
 	if len(manager.ProviderInfos()) != 0 {
 		t.Fatal("provider still registered")
+	}
+}
+
+func TestManagerUsesLiveReconfigurationWithoutInitializingReplacement(t *testing.T) {
+	ctx := context.Background()
+	virtualDevices, err := virtual.NewProvider().DiscoverDevices(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := &liveProvider{id: "live-main", name: "Current", items: virtualDevices[:1]}
+	manager, err := providermanager.New(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close(ctx)
+	if err := manager.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.DiscoverDevices(ctx); err != nil {
+		t.Fatal(err)
+	}
+	events := make(chan device.Device, 2)
+	unsubscribe := manager.Subscribe(func(item device.Device) { events <- item })
+	defer unsubscribe()
+	replacement := &liveProvider{id: "live-main", name: "Updated", items: nil}
+	if err := manager.Apply(ctx, replacement); err != nil {
+		t.Fatal(err)
+	}
+	if current.initialized.Load() != 1 || replacement.initialized.Load() != 0 || current.reconfigured.Load() != 1 {
+		t.Fatalf("initialize/reconfigure counts current=%d replacement=%d reconfigured=%d", current.initialized.Load(), replacement.initialized.Load(), current.reconfigured.Load())
+	}
+	select {
+	case item := <-events:
+		if !item.Removed || item.Online {
+			t.Fatalf("removed event = %#v", item)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("missing removed-device event")
+	}
+	info := manager.ProviderInfos()[0]
+	if info.Manifest.Name != "Updated" || info.Status != "running" {
+		t.Fatalf("runtime info = %#v", info)
 	}
 }
 

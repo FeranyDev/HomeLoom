@@ -20,6 +20,7 @@ import (
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	mqttprovider "github.com/feranydev/homeloom/backend/internal/providers/mqtt"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
+	"github.com/feranydev/homeloom/backend/internal/providers/xiaomi"
 	"github.com/feranydev/homeloom/backend/internal/runtime/providermanager"
 	"github.com/feranydev/homeloom/backend/internal/runtime/targetmanager"
 )
@@ -125,6 +126,12 @@ func main() {
 		return mqttprovider.NewProviderFromConfig(config)
 	}); err != nil {
 		logger.Error("mqtt provider factory registration failed", "error", err)
+		os.Exit(1)
+	}
+	if err := factory.Register("xiaomi", func(config providerconfig.Config) (providersdk.Provider, error) {
+		return xiaomi.NewProviderFromConfig(config)
+	}); err != nil {
+		logger.Error("xiaomi provider factory registration failed", "error", err)
 		os.Exit(1)
 	}
 	providerInstances := make([]providersdk.Provider, 0, len(providerConfigs))

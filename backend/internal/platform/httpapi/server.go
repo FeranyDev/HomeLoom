@@ -24,6 +24,7 @@ import (
 	domaintarget "github.com/feranydev/homeloom/backend/internal/domain/target"
 	"github.com/feranydev/homeloom/backend/internal/mapping"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
+	"github.com/feranydev/homeloom/backend/internal/providers/xiaomi"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 )
@@ -998,6 +999,60 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
 		return c.JSON(http.StatusOK, map[string]any{"data": map[string]bool{"reachable": true}})
+	})
+	e.POST("/api/v1/xiaomi/oauth/start", func(c echo.Context) error {
+		var request xiaomi.OAuthStartRequest
+		if err := c.Bind(&request); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid Xiaomi OAuth request")
+		}
+		result, err := xiaomi.StartOAuth(request)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": result})
+	})
+	e.POST("/api/v1/xiaomi/oauth/complete", func(c echo.Context) error {
+		var request xiaomi.OAuthCompleteRequest
+		if err := c.Bind(&request); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid Xiaomi OAuth callback")
+		}
+		ctx, cancel := context.WithTimeout(c.Request().Context(), 90*time.Second)
+		defer cancel()
+		result, err := xiaomi.CompleteOAuth(ctx, request)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+		return c.JSON(http.StatusOK, map[string]any{"data": result})
+	})
+	e.GET("/api/v1/xiaomi/gateways", func(c echo.Context) error {
+		ctx, cancel := context.WithTimeout(c.Request().Context(), 5*time.Second)
+		defer cancel()
+		gateways, err := xiaomi.DiscoverGateways(ctx)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": gateways})
+	})
+	e.GET("/api/v1/xiaomi/providers/:id/devices", func(c echo.Context) error {
+		if providers == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "provider management is unavailable")
+		}
+		instance, ok := providers.RuntimeProvider(c.Param("id"))
+		if !ok {
+			return echo.NewHTTPError(http.StatusConflict, "Xiaomi provider must be enabled and connected before discovering subdevices")
+		}
+		live, ok := instance.(*xiaomi.Provider)
+		if !ok {
+			return echo.NewHTTPError(http.StatusBadRequest, "provider is not a Xiaomi central hub")
+		}
+		ctx, cancel := context.WithTimeout(c.Request().Context(), 30*time.Second)
+		defer cancel()
+		items, err := live.DiscoverHubDevices(ctx)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": items})
 	})
 	e.DELETE("/api/v1/providers/:id", func(c echo.Context) error {
 		if providers == nil {

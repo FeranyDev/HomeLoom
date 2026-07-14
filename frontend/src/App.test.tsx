@@ -71,6 +71,9 @@ describe('App integration', () => {
     await user.click(screen.getByRole('button', { name: 'Provider' }))
     expect(await screen.findByRole('heading', { name: 'Provider 管理' })).toBeInTheDocument()
     expect(screen.getByText('还没有 Provider')).toBeInTheDocument()
+	await user.click(screen.getByRole('button', { name: '米家' }))
+	expect(await screen.findByRole('heading', { name: '米家' })).toBeInTheDocument()
+	expect(screen.getByText('还没有接入米家')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: '退出' }))
     await waitFor(() => expect(api.logout).toHaveBeenCalledOnce())

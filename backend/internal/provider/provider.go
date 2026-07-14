@@ -41,6 +41,15 @@ type Provider interface {
 	Close(context.Context) error
 }
 
+// LiveReconfigurer lets a running provider adopt a compatible replacement
+// configuration without tearing down its network session. Returning handled
+// false asks the runtime to perform the normal close-and-replace lifecycle.
+// Implementations must leave the current provider unchanged when returning an
+// error.
+type LiveReconfigurer interface {
+	Reconfigure(context.Context, Provider) (handled bool, err error)
+}
+
 type Discoverer interface {
 	DiscoverDevices(context.Context) ([]device.Device, error)
 }

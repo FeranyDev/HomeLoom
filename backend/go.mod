@@ -3,6 +3,7 @@ module github.com/feranydev/homeloom/backend
 go 1.26
 
 require (
+	github.com/brutella/dnssd v1.2.14
 	github.com/brutella/hap v0.0.35
 	github.com/eclipse/paho.golang v0.23.0
 	github.com/kradalby/homekit-qr v0.0.0-20251117145710-0ea350a04eaa
@@ -13,7 +14,6 @@ require (
 )
 
 require (
-	github.com/brutella/dnssd v1.2.14 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/go-chi/chi v1.5.4 // indirect
 	github.com/google/uuid v1.6.0 // indirect

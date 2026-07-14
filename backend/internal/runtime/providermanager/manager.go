@@ -60,6 +60,20 @@ func (m *Manager) Capabilities() providersdk.Capabilities {
 	return providersdk.Capabilities{Discovery: true, PropertyRead: true, PropertyWrite: true, Commands: true, Events: true}
 }
 
+// Provider returns a running provider instance for provider-specific,
+// read-only operations that should reuse an established network connection.
+func (m *Manager) Provider(id string) (providersdk.Provider, bool) {
+	m.mu.RLock()
+	current := m.providers[id]
+	if current == nil || current.status != "running" {
+		m.mu.RUnlock()
+		return nil, false
+	}
+	provider := current.provider
+	m.mu.RUnlock()
+	return provider, true
+}
+
 func (m *Manager) Initialize(ctx context.Context) error {
 	m.mu.Lock()
 	if m.lifecycleCancel == nil {
@@ -155,6 +169,25 @@ func (m *Manager) Apply(ctx context.Context, item providersdk.Provider) error {
 	if id == "" {
 		return fmt.Errorf("provider id is required")
 	}
+	m.mu.RLock()
+	current := m.providers[id]
+	running := current != nil && current.status == "running"
+	m.mu.RUnlock()
+	if running {
+		if reconfigurer, ok := current.provider.(providersdk.LiveReconfigurer); ok {
+			var previous []device.Device
+			if source, discoverable := current.provider.(providersdk.Discoverer); discoverable {
+				previous, _ = source.DiscoverDevices(ctx)
+			}
+			handled, err := reconfigurer.Reconfigure(ctx, item)
+			if err != nil {
+				return fmt.Errorf("reconfigure provider %q: %w", id, err)
+			}
+			if handled {
+				return m.reconcileReconfigured(ctx, id, current, previous)
+			}
+		}
+	}
 	if err := item.Initialize(ctx); err != nil {
 		return fmt.Errorf("initialize provider %q: %w", id, err)
 	}
@@ -220,6 +253,62 @@ func (m *Manager) Apply(ctx context.Context, item providersdk.Provider) error {
 	}
 	for _, snapshot := range discovered {
 		snapshot.ProviderID = id
+		m.broadcast(snapshot)
+	}
+	return nil
+}
+
+func (m *Manager) reconcileReconfigured(ctx context.Context, id string, current *managedProvider, previous []device.Device) error {
+	source, ok := current.provider.(providersdk.Discoverer)
+	if !ok {
+		return nil
+	}
+	items, err := source.DiscoverDevices(ctx)
+	if err != nil {
+		return fmt.Errorf("discover reconfigured provider %q: %w", id, err)
+	}
+	for index := range items {
+		items[index].ProviderID = id
+		items[index].NormalizeAvailability()
+		if err := items[index].NormalizeModelParameters(); err != nil {
+			return fmt.Errorf("provider %q returned invalid device snapshot: %w", id, err)
+		}
+	}
+
+	m.mu.Lock()
+	if m.providers[id] != current {
+		m.mu.Unlock()
+		return fmt.Errorf("provider %q changed while applying live configuration", id)
+	}
+	for _, snapshot := range items {
+		if owner, exists := m.routes[snapshot.ID]; exists && owner != id {
+			m.mu.Unlock()
+			return fmt.Errorf("device id %q is already owned by %q", snapshot.ID, owner)
+		}
+	}
+	previousIDs := current.deviceIDs
+	nextIDs := make(map[string]struct{}, len(items))
+	current.deviceIDs = nextIDs
+	for deviceID := range previousIDs {
+		delete(m.routes, deviceID)
+	}
+	for _, snapshot := range items {
+		nextIDs[snapshot.ID] = struct{}{}
+		m.routes[snapshot.ID] = id
+	}
+	current.err, current.nextRetryAt, current.transitionedAt = "", time.Time{}, time.Now().UTC()
+	m.mu.Unlock()
+
+	for _, snapshot := range previous {
+		if _, retained := nextIDs[snapshot.ID]; retained {
+			continue
+		}
+		snapshot.ProviderID = id
+		snapshot.Removed = true
+		snapshot.SetOnline(false)
+		m.broadcast(snapshot)
+	}
+	for _, snapshot := range items {
 		m.broadcast(snapshot)
 	}
 	return nil

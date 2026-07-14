@@ -1,0 +1,6 @@
+
+*.zip
+auth.json
+certs/
+config.json
+xiaomi-hub

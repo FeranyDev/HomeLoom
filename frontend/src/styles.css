@@ -311,6 +311,92 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .form-actions button { padding: 11px 18px; border: 1px solid #bfc1b8; background: transparent; cursor: pointer; }
 .form-actions .primary { border-color: #343931; background: #343931; color: white; }
 
+.xiaomi-workspace { display: grid; gap: 22px; }
+.xiaomi-overview { display: grid; grid-template-columns: 1fr auto; gap: 30px; align-items: end; padding: 34px; border: 1px solid #d2d0c7; background: linear-gradient(135deg, rgba(250,249,245,.88), rgba(235,232,222,.78)); }
+.xiaomi-overview h3 { margin: 0; font-size: clamp(28px, 4vw, 44px); letter-spacing: -.035em; }
+.xiaomi-overview p:not(.eyebrow) { max-width: 660px; margin: 14px 0 0; color: #74786f; line-height: 1.65; }
+.xiaomi-overview__actions { display: flex; flex-wrap: wrap; justify-content: end; gap: 10px; }
+.xiaomi-overview__actions button { padding: 10px 16px; border: 1px solid #bfc1b8; background: transparent; color: #535850; cursor: pointer; }
+.xiaomi-overview__actions .add-button { border-color: #343931; background: #343931; color: white; }
+.xiaomi-flow { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid #d2d0c7; background: rgba(250,249,245,.6); }
+.xiaomi-flow > div { display: grid; gap: 5px; min-height: 120px; padding: 20px; border-right: 1px solid #d9d7cf; }
+.xiaomi-flow > div:last-child { border-right: 0; }
+.xiaomi-flow span { color: #a1a39c; font: 11px ui-monospace, monospace; }
+.xiaomi-flow strong { align-self: end; font-size: 15px; }
+.xiaomi-flow small { color: #898d85; line-height: 1.45; }
+.xiaomi-gateways, .xiaomi-device-list { border: 1px solid #d2d0c7; background: rgba(250,249,245,.7); }
+.xiaomi-gateways article { display: grid; grid-template-columns: auto 1.5fr 1fr minmax(140px, auto); gap: 14px; align-items: center; padding: 15px 20px; border-top: 1px solid #dfddd5; }
+.xiaomi-gateways article > div { display: grid; gap: 3px; }
+.xiaomi-gateways article small { color: #8a8e86; }
+.xiaomi-gateways article code { justify-self: end; color: #777c73; font-size: 11px; }
+.xiaomi-provider-list { display: grid; gap: 22px; }
+.xiaomi-provider { border: 1px solid #cccac1; background: rgba(250,249,245,.76); }
+.xiaomi-provider > header { display: flex; justify-content: space-between; gap: 24px; align-items: start; padding: 28px 30px; border-bottom: 1px solid #d8d6ce; }
+.xiaomi-provider h3 { margin: 16px 0 0; font-size: 29px; }
+.xiaomi-provider header p { margin: 6px 0 0; color: #8a8d86; font: 12px ui-monospace, monospace; }
+.xiaomi-provider__actions { display: flex; flex-wrap: wrap; justify-content: end; gap: 8px; }
+.xiaomi-provider__actions button { padding: 8px 11px; border: 1px solid #c1c2ba; background: transparent; color: #555a51; cursor: pointer; }
+.xiaomi-provider__actions button:disabled { opacity: .5; cursor: wait; }
+.xiaomi-provider__actions .is-danger { color: #945a4b; }
+.xiaomi-status-grid { display: grid; grid-template-columns: repeat(4, 1fr); }
+.xiaomi-status-grid > div { display: grid; gap: 7px; min-height: 128px; padding: 22px 24px; border-right: 1px solid #dedcd4; }
+.xiaomi-status-grid > div:last-child { border-right: 0; }
+.xiaomi-status-grid span { color: #8c9088; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.xiaomi-status-grid strong { align-self: end; font-size: 23px; }
+.xiaomi-status-grid strong.is-ready { color: #52705a; }
+.xiaomi-status-grid small { overflow-wrap: anywhere; color: #92958e; font-size: 10px; }
+.xiaomi-runtime { display: flex; flex-wrap: wrap; gap: 24px; padding: 13px 24px; border-top: 1px solid #dedcd4; border-bottom: 1px solid #dedcd4; color: #858981; font-size: 11px; }
+.xiaomi-runtime b { color: #4e534b; font-family: ui-monospace, monospace; }
+.xiaomi-provider > .provider-error { margin: 22px 24px; }
+.xiaomi-device-list { margin: 24px; }
+.xiaomi-device-list > p { margin: 0; padding: 25px; color: #92958e; }
+.xiaomi-device-list > div:not(.command-heading) { display: grid; grid-template-columns: auto 1fr minmax(180px, auto) minmax(150px, auto); gap: 12px; align-items: center; padding: 13px 18px; border-top: 1px solid #e0ded6; }
+.xiaomi-device-list code, .xiaomi-device-list small { color: #898d85; font-size: 10px; }
+.xiaomi-oauth-callback { display: grid; gap: 10px; padding: 18px; border: 1px dashed #b9bcb2; background: rgba(235,234,226,.72); }
+.xiaomi-oauth-callback strong { color: #454a42; font-size: 14px; }
+.xiaomi-oauth-callback ol { display: grid; gap: 6px; margin: 0; padding-left: 20px; color: #747970; font-size: 12px; line-height: 1.5; }
+.xiaomi-oauth-callback code { overflow-wrap: anywhere; color: #596158; font-size: 11px; }
+.xiaomi-oauth-callback button { justify-self: start; padding: 9px 13px; border: 1px solid #343931; background: #343931; color: white; cursor: pointer; }
+.xiaomi-oauth-callback button:disabled { opacity: .5; cursor: not-allowed; }
+.xiaomi-device-binding { display: grid; gap: 14px; padding: 18px; border: 1px solid #c9c8bf; background: rgba(246,245,239,.82); }
+.xiaomi-device-binding__heading { display: flex; align-items: start; justify-content: space-between; gap: 18px; }
+.xiaomi-device-binding__heading > div { display: grid; gap: 5px; }
+.xiaomi-device-binding__heading small, .xiaomi-mapped-summary small { color: #777c73; line-height: 1.5; }
+.xiaomi-device-binding__heading button, .xiaomi-hub-device-list button { padding: 9px 12px; border: 1px solid #555b52; background: #f7f6f1; color: #4f554d; cursor: pointer; white-space: nowrap; }
+.xiaomi-device-binding__heading button:disabled { opacity: .45; cursor: not-allowed; }
+.xiaomi-device-binding__empty { margin: 0; padding: 16px; border: 1px dashed #cfcec6; color: #858981; font-size: 12px; }
+.xiaomi-hub-device-list { display: grid; max-height: 360px; overflow: auto; border: 1px solid #d6d4cc; }
+.xiaomi-hub-device-list article { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(150px, auto) auto; gap: 14px; align-items: center; padding: 13px 15px; border-top: 1px solid #dfddd5; }
+.xiaomi-hub-device-list article:first-child { border-top: 0; }
+.xiaomi-hub-device-list article > div { display: grid; gap: 3px; min-width: 0; }
+.xiaomi-hub-device-list article small, .xiaomi-hub-device-list article code { overflow: hidden; color: #858981; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.xiaomi-hub-device-list article label { display: grid; gap: 4px; color: #777c73; font-size: 10px; }
+.xiaomi-hub-device-list article select { min-width: 145px; }
+.xiaomi-hub-device-list button.is-danger { border-color: #b98b80; color: #945a4b; }
+.xiaomi-mapped-summary { display: grid; gap: 4px; padding-top: 3px; }
+.xiaomi-connection-flow { display: grid; gap: 16px; }
+.xiaomi-connection-step { display: grid; gap: 18px; padding: 20px; border: 1px solid #cbc9c0; background: rgba(247,246,240,.82); }
+.xiaomi-connection-step.is-locked { opacity: .62; }
+.xiaomi-connection-step__heading { display: flex; gap: 14px; align-items: start; }
+.xiaomi-connection-step__heading > span { display: grid; width: 32px; height: 32px; place-items: center; border: 1px solid #bfc1b8; color: #858981; font: 11px ui-monospace, monospace; }
+.xiaomi-connection-step__heading > div { display: grid; gap: 4px; }
+.xiaomi-connection-step__heading strong { font-size: 15px; }
+.xiaomi-connection-step__heading small { color: #7f837b; line-height: 1.5; }
+.xiaomi-next-step { padding: 18px 20px; border-left: 3px solid #778778; background: rgba(229,234,226,.7); }
+.xiaomi-next-step p { margin: 7px 0 0; color: #70766d; font-size: 12px; line-height: 1.6; }
+.xiaomi-device-manager { display: grid; gap: 20px; }
+.xiaomi-device-manager > header { display: flex; justify-content: space-between; gap: 24px; align-items: start; padding: 28px 30px; border: 1px solid #cccac1; background: rgba(250,249,245,.76); }
+.xiaomi-device-manager > header h3 { margin: 7px 0; font-size: clamp(25px, 4vw, 38px); }
+.xiaomi-device-manager > header p:not(.eyebrow) { margin: 0; color: #7e827a; }
+.xiaomi-device-manager > header button, .xiaomi-device-manager__status button { padding: 9px 13px; border: 1px solid #555b52; background: #f7f6f1; color: #4f554d; cursor: pointer; }
+.xiaomi-device-manager__status { display: grid; grid-template-columns: auto 1fr auto; gap: 13px; align-items: center; padding: 18px 20px; border: 1px solid #d2d0c7; background: rgba(250,249,245,.7); }
+.xiaomi-device-manager__status > div { display: grid; gap: 4px; }
+.xiaomi-device-manager__status small { color: #898d85; font: 10px ui-monospace, monospace; }
+.xiaomi-device-manager button:disabled { opacity: .48; cursor: not-allowed; }
+.xiaomi-device-manager > details { padding: 18px; border: 1px solid #d2d0c7; background: rgba(250,249,245,.7); }
+.xiaomi-device-manager > details summary { cursor: pointer; }
+.xiaomi-device-manager > details .config-editor { margin-top: 15px; }
+
 @media (max-width: 720px) {
   main { width: min(100% - 28px, 1120px); padding-top: 38px; }
 	.top-nav { margin-bottom: 46px; }
@@ -347,6 +433,21 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 	.profile-heading { display: grid; }
 	.profile-heading > div:last-child { justify-content: start; }
 	.profile-list { grid-template-columns: 1fr; }
+	.xiaomi-overview { grid-template-columns: 1fr; }
+	.xiaomi-overview__actions { justify-content: start; }
+	.xiaomi-flow, .xiaomi-status-grid { grid-template-columns: 1fr 1fr; }
+	.xiaomi-flow > div:nth-child(2), .xiaomi-status-grid > div:nth-child(2) { border-right: 0; }
+	.xiaomi-flow > div { border-bottom: 1px solid #d9d7cf; }
+	.xiaomi-provider > header { flex-direction: column; }
+	.xiaomi-provider__actions { justify-content: start; }
+	.xiaomi-gateways article { grid-template-columns: auto 1fr; }
+	.xiaomi-gateways article code { grid-column: 2; justify-self: start; }
+	.xiaomi-device-list > div:not(.command-heading) { grid-template-columns: auto 1fr; }
+	.xiaomi-device-binding__heading { flex-direction: column; }
+	.xiaomi-hub-device-list article { grid-template-columns: 1fr; }
+	.xiaomi-device-manager > header { flex-direction: column; }
+	.xiaomi-device-manager__status { grid-template-columns: auto 1fr; }
+	.xiaomi-device-manager__status button { grid-column: 2; justify-self: start; }
 	.mapping-form { border-right: 0; border-bottom: 1px solid #d2d0c7; }
 	.mapping-steps > div { grid-template-columns: 1fr; }
 }

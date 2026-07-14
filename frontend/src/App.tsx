@@ -23,6 +23,8 @@ import { usePageRoute } from './routing'
 import { confirmExactPhrase, confirmProviderDeletion, confirmTargetDeletion } from './confirmations'
 import { getAuthStatus, login, logout, setupAdministrator, type AuthStatus } from './api/auth'
 import { AuthScreen } from './components/AuthScreen'
+import { XiaomiWorkspace } from './components/XiaomiWorkspace'
+import { XiaomiDeviceManager } from './components/XiaomiDeviceManager'
 
 export function App() {
 	const [auth, setAuth] = useState<AuthStatus | null>(null)
@@ -64,6 +66,7 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
 	const [page, setPage] = usePageRoute()
 	const [targetForm, setTargetForm] = useState<{ open: boolean, target: Target | null }>({ open: false, target: null })
 	const [providerForm, setProviderForm] = useState<{ open: boolean, provider: Provider | null }>({ open: false, provider: null })
+	const [xiaomiDeviceProviderID, setXiaomiDeviceProviderID] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [pendingIds, setPendingIds] = useState<Set<string>>(new Set())
@@ -167,8 +170,10 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
 	async function handlePropertyWrite(device: Device, endpointId: string, capabilityId: string, propertyId: string, value: PropertyValue) { try { const updated = await setDeviceProperty(device.id, endpointId, capabilityId, propertyId, value); setDevices((current) => current.map((item) => item.id === updated.id ? updated : item)); const [diagnosticData, commandData] = await Promise.all([getDiagnostics(), listCommands()]); setDiagnostics(diagnosticData); setCommands(commandData); setError(null); notify('success', `${device.name}.${propertyId} 写入成功`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '属性写入失败'); throw cause } }
 	async function handleCommandExecute(device: Device, endpointId: string, capabilityId: string, commandId: string, parameters: Record<string, PropertyValue>, idempotencyKey: string) { try { const updated = await executeDeviceCommand(device.id, endpointId, capabilityId, commandId, parameters, idempotencyKey); setDevices((current) => current.map((item) => item.id === updated.id ? updated : item)); const [diagnosticData, commandData] = await Promise.all([getDiagnostics(), listCommands()]); setDiagnostics(diagnosticData); setCommands(commandData); setError(null); notify('success', `${device.name}.${commandId} 执行成功`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '命令执行失败'); throw cause } }
 	async function handleRuntimeSettingsSave(next: RuntimeSettings) { try { const saved = await saveRuntimeSettings(next); commandHistoryLimit.current = saved.commandHistoryLimit; setCommands((current) => current.slice(0, saved.commandHistoryLimit)); setRuntimeSettings(saved); notify('success', '运行时设置已保存并实时生效') } catch (cause) { notify('error', cause instanceof Error ? cause.message : '保存运行时设置失败'); throw cause } }
-	const pageCopy = page === 'devices' ? { title: <>把家的状态<br />织在一起。</>, intro: '设备状态驻留内存，由 Provider 实时上报。', eyebrow: 'DEVICES', section: '设备中心' } : page === 'providers' ? { title: <>数据源，随时<br />接入或离开。</>, intro: 'Provider 配置存储于 SQLite，并可在线启停和替换。', eyebrow: 'PROVIDERS', section: 'Provider 管理' } : page === 'targets' ? { title: <>一座桥，或<br />很多座桥。</>, intro: '按设备或平台拆分桥实例。每座桥拥有独立身份、端口、配对资料和二维码。', eyebrow: 'TARGETS', section: '桥接中心' } : page === 'mapping' ? { title: <>让数据说<br />同一种语言。</>, intro: '在写入 Profile 前预览正向和反向转换的每一步。', eyebrow: 'MAPPING', section: '映射调试' } : { title: <>看见系统的<br />每一次呼吸。</>, intro: '观察事件队列、设备连接和命令生命周期。', eyebrow: 'SYSTEM', section: '系统诊断' }
-	const summary = page === 'devices' ? devices.filter((item) => item.availability === 'online').length : page === 'providers' ? providers.filter((item) => item.status === 'running').length : page === 'targets' ? targets.filter((item) => item.status === 'running').length : page === 'mapping' ? 5 : diagnostics?.eventsProcessed ?? 0
+	const xiaomiProviders = providers.filter((item) => item.type === 'xiaomi')
+	const xiaomiDeviceProvider = xiaomiDeviceProviderID ? xiaomiProviders.find((item) => item.id === xiaomiDeviceProviderID) ?? null : null
+	const pageCopy = page === 'devices' ? { title: <>把家的状态<br />织在一起。</>, intro: '设备状态驻留内存，由 Provider 实时上报。', eyebrow: 'DEVICES', section: '设备中心' } : page === 'xiaomi' ? { title: <>让米家设备，<br />回到本地。</>, intro: '从账号授权、中枢发现到设备映射，统一管理米家局域网接入。', eyebrow: 'XIAOMI HOME', section: '米家' } : page === 'providers' ? { title: <>数据源，随时<br />接入或离开。</>, intro: 'Provider 配置存储于 SQLite，并可在线启停和替换。', eyebrow: 'PROVIDERS', section: 'Provider 管理' } : page === 'targets' ? { title: <>一座桥，或<br />很多座桥。</>, intro: '按设备或平台拆分桥实例。每座桥拥有独立身份、端口、配对资料和二维码。', eyebrow: 'TARGETS', section: '桥接中心' } : page === 'mapping' ? { title: <>让数据说<br />同一种语言。</>, intro: '在写入 Profile 前预览正向和反向转换的每一步。', eyebrow: 'MAPPING', section: '映射调试' } : { title: <>看见系统的<br />每一次呼吸。</>, intro: '观察事件队列、设备连接和命令生命周期。', eyebrow: 'SYSTEM', section: '系统诊断' }
+	const summary = page === 'devices' ? devices.filter((item) => item.availability === 'online').length : page === 'xiaomi' ? devices.filter((item) => xiaomiProviders.some((provider) => provider.id === item.providerId) && item.availability === 'online').length : page === 'providers' ? providers.filter((item) => item.status === 'running').length : page === 'targets' ? targets.filter((item) => item.status === 'running').length : page === 'mapping' ? 5 : diagnostics?.eventsProcessed ?? 0
 	const filteredDevices = devices.filter((item) => { const matchesText = `${item.name} ${item.id} ${item.providerId}`.toLowerCase().includes(deviceQuery.trim().toLowerCase()); const matchesStatus = deviceStatus === 'all' || (deviceStatus === 'disabled' ? item.disabled : deviceStatus === 'removed' ? item.removed : item.availability === deviceStatus && !item.disabled && !item.removed); return matchesText && matchesStatus })
 	const selectedDevice = selectedDeviceID ? devices.find((item) => item.id === selectedDeviceID) ?? null : null
 
@@ -179,6 +184,7 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
 	    <a className="wordmark" href="#/devices">HomeLoom</a>
 	    <div>
 	      <button aria-current={page === 'devices' ? 'page' : undefined} className={page === 'devices' ? 'is-active' : ''} onClick={() => setPage('devices')}>设备</button>
+	      <button aria-current={page === 'xiaomi' ? 'page' : undefined} className={page === 'xiaomi' ? 'is-active' : ''} onClick={() => setPage('xiaomi')}>米家</button>
 	      <button aria-current={page === 'providers' ? 'page' : undefined} className={page === 'providers' ? 'is-active' : ''} onClick={() => setPage('providers')}>Provider</button>
 	      <button aria-current={page === 'targets' ? 'page' : undefined} className={page === 'targets' ? 'is-active' : ''} onClick={() => setPage('targets')}>桥接中心</button>
 	      <button aria-current={page === 'mapping' ? 'page' : undefined} className={page === 'mapping' ? 'is-active' : ''} onClick={() => setPage('mapping')}>映射</button>
@@ -192,7 +198,7 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
 		  <h1>{pageCopy.title}</h1><p className="intro">{pageCopy.intro}</p>
         </div>
         <div className="summary">
-		  <span>{summary}</span><small>{page === 'devices' ? '在线设备' : page === 'providers' ? '运行中 Provider' : page === 'targets' ? '运行中的桥' : page === 'mapping' ? '转换能力' : '已处理事件'}</small>
+		  <span>{summary}</span><small>{page === 'devices' ? '在线设备' : page === 'xiaomi' ? '米家在线设备' : page === 'providers' ? '运行中 Provider' : page === 'targets' ? '运行中的桥' : page === 'mapping' ? '转换能力' : '已处理事件'}</small>
         </div>
       </header>
 
@@ -200,7 +206,7 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
         <div>
 		  <p className="eyebrow">{pageCopy.eyebrow}</p><h2>{pageCopy.section}</h2>
         </div>
-		<div className="heading-actions">{page === 'providers' && <button className="add-button" onClick={() => setProviderForm({ open: true, provider: null })}>＋ 新建 Provider</button>}{page === 'targets' && <button className="add-button" onClick={() => setTargetForm({ open: true, target: null })}>＋ 新建桥</button>}<button className="refresh-button" onClick={() => void refresh()} disabled={loading}>刷新状态</button></div>
+		<div className="heading-actions">{page === 'xiaomi' && !xiaomiDeviceProvider && <button className="add-button" onClick={() => setProviderForm({ open: true, provider: null })}>＋ 接入米家</button>}{page === 'providers' && <button className="add-button" onClick={() => setProviderForm({ open: true, provider: null })}>＋ 新建 Provider</button>}{page === 'targets' && <button className="add-button" onClick={() => setTargetForm({ open: true, target: null })}>＋ 新建桥</button>}<button className="refresh-button" onClick={() => void refresh()} disabled={loading}>刷新状态</button></div>
       </section>
 	  {page === 'devices' && <div className="device-filters"><input aria-label="搜索设备" value={deviceQuery} onChange={(event) => setDeviceQuery(event.target.value)} placeholder="搜索名称、ID 或 Provider" /><select aria-label="设备状态" value={deviceStatus} onChange={(event) => setDeviceStatus(event.target.value as typeof deviceStatus)}><option value="all">全部状态</option><option value="online">仅在线</option><option value="offline">暂时离线</option><option value="unknown">可用性未知</option><option value="disabled">人工禁用</option><option value="removed">来源已删除</option></select><span>{filteredDevices.length} / {devices.length}</span></div>}
 
@@ -220,7 +226,7 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
             />
           ))}
 		  {filteredDevices.length === 0 && <CollectionEmpty title="没有匹配的设备" description={devices.length ? '请调整搜索文字或在线状态筛选。' : '启用 Provider 后，发现的设备会显示在这里。'} />}
-		</section> : page === 'providers' ? <section className="provider-grid"><div className="config-note"><span>配置来源</span><strong>SQLite · providers</strong><p>保存后运行时立即应用；单个 Provider 失败不会影响其他实例，可独立重新启动。</p></div>{providers.map((provider) => <ProviderCard key={provider.id} provider={provider} devices={devices.filter((item) => item.providerId === provider.id && !item.removed)} onEdit={(item) => setProviderForm({ open: true, provider: item })} onDelete={(item) => void handleProviderDelete(item)} onRestart={handleProviderRestart} onSimulate={handleSimulation} />)}{providers.length === 0 && <CollectionEmpty title="还没有 Provider" description="创建 Provider 后，HomeLoom 会立即初始化并发现设备。" />}</section> : page === 'mapping' ? <MappingWorkspace devices={devices} /> : page === 'system' ? <SystemDashboard diagnostics={diagnostics} commands={commands} auditEvents={auditEvents} settings={runtimeSettings} onSettingsSave={handleRuntimeSettingsSave} /> : <section className="target-list">
+		</section> : page === 'xiaomi' ? xiaomiDeviceProvider ? <XiaomiDeviceManager provider={xiaomiDeviceProvider} onClose={() => setXiaomiDeviceProviderID(null)} onSave={async (input, editing) => { await handleProviderSave(input, editing); setXiaomiDeviceProviderID(null) }} /> : <XiaomiWorkspace providers={xiaomiProviders} devices={devices} onCreate={() => setProviderForm({ open: true, provider: null })} onEdit={(item) => setProviderForm({ open: true, provider: item })} onManageDevices={(item) => setXiaomiDeviceProviderID(item.id)} onDelete={(item) => void handleProviderDelete(item)} onRestart={handleProviderRestart} onTest={handleProviderTest} /> : page === 'providers' ? <section className="provider-grid"><div className="config-note"><span>配置来源</span><strong>SQLite · providers</strong><p>保存后运行时立即应用；单个 Provider 失败不会影响其他实例，可独立重新启动。</p></div>{providers.map((provider) => <ProviderCard key={provider.id} provider={provider} devices={devices.filter((item) => item.providerId === provider.id && !item.removed)} onEdit={(item) => setProviderForm({ open: true, provider: item })} onDelete={(item) => void handleProviderDelete(item)} onRestart={handleProviderRestart} onSimulate={handleSimulation} />)}{providers.length === 0 && <CollectionEmpty title="还没有 Provider" description="创建 Provider 后，HomeLoom 会立即初始化并发现设备。" />}</section> : page === 'mapping' ? <MappingWorkspace devices={devices} /> : page === 'system' ? <SystemDashboard diagnostics={diagnostics} commands={commands} auditEvents={auditEvents} settings={runtimeSettings} onSettingsSave={handleRuntimeSettingsSave} /> : <section className="target-list">
 		  <div className="config-note">
 		    <span>配置来源</span>
 		    <strong>SQLite · targets</strong>
@@ -231,7 +237,7 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
 		</section>
       )}
 	  {targetForm.open && <TargetForm target={targetForm.target} devices={devices.filter((item) => !item.removed)} onCancel={() => setTargetForm({ open: false, target: null })} onSave={handleTargetSave} />}
-	  {providerForm.open && <ProviderForm provider={providerForm.provider} onCancel={() => setProviderForm({ open: false, provider: null })} onSave={handleProviderSave} onTest={handleProviderTest} />}
+	  {providerForm.open && <ProviderForm provider={providerForm.provider} initialType={page === 'xiaomi' ? 'xiaomi' : undefined} onCancel={() => setProviderForm({ open: false, provider: null })} onSave={handleProviderSave} onTest={handleProviderTest} />}
 	  {selectedDevice && <DeviceDetails device={selectedDevice} onClose={() => setSelectedDeviceID(null)} onPropertyWrite={(endpointId, capabilityId, propertyId, value) => handlePropertyWrite(selectedDevice, endpointId, capabilityId, propertyId, value)} onCommandExecute={(endpointId, capabilityId, commandId, parameters, idempotencyKey) => handleCommandExecute(selectedDevice, endpointId, capabilityId, commandId, parameters, idempotencyKey)} />}
 	  <ToastCenter toasts={toasts} dismiss={dismiss} />
     </main>

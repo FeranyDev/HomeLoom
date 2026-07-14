@@ -630,6 +630,24 @@ func TestProviderConnectionTestAPI(t *testing.T) {
 	}
 }
 
+func TestXiaomiSubdeviceDirectoryRequiresRunningXiaomiProvider(t *testing.T) {
+	server := newProviderManagementTestServer(t)
+
+	missing := httptest.NewRequest(http.MethodGet, "/api/v1/xiaomi/providers/missing/devices", nil)
+	missingResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(missingResponse, missing)
+	if missingResponse.Code != http.StatusConflict || !strings.Contains(missingResponse.Body.String(), "enabled and connected") {
+		t.Fatalf("missing provider response = %d %s", missingResponse.Code, missingResponse.Body.String())
+	}
+
+	wrongType := httptest.NewRequest(http.MethodGet, "/api/v1/xiaomi/providers/virtual-main/devices", nil)
+	wrongTypeResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(wrongTypeResponse, wrongType)
+	if wrongTypeResponse.Code != http.StatusBadRequest || !strings.Contains(wrongTypeResponse.Body.String(), "not a Xiaomi") {
+		t.Fatalf("wrong provider response = %d %s", wrongTypeResponse.Code, wrongTypeResponse.Body.String())
+	}
+}
+
 func TestListDevices(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/devices", nil)
 	response := httptest.NewRecorder()
@@ -1236,7 +1254,10 @@ func TestCommandEventStreamPublishesLifecycle(t *testing.T) {
 			break
 		}
 	}
-	if len(statuses) < 4 || statuses[0] != "queued" || statuses[len(statuses)-1] != "confirmed" {
+	// Provider state can confirm a fast local write before the accepted
+	// notification is delivered. Confirmed already implies acceptance, so the
+	// stream contract permits queued -> sent -> confirmed.
+	if len(statuses) < 3 || statuses[0] != "queued" || statuses[1] != "sent" || statuses[len(statuses)-1] != "confirmed" {
 		t.Fatalf("statuses = %#v", statuses)
 	}
 }
