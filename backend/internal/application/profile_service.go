@@ -29,6 +29,9 @@ type ProfileStore interface {
 	ListMappingBindings(context.Context) ([]mapping.Binding, error)
 	SaveMappingBinding(context.Context, mapping.Binding) error
 	DeleteMappingBinding(context.Context, string) error
+	ListCustomModelProperties(context.Context) ([]mapping.CustomModelProperty, error)
+	SaveCustomModelProperty(context.Context, mapping.CustomModelProperty) error
+	DeleteCustomModelProperty(context.Context, string) error
 }
 
 type ProfileInfo struct {
@@ -37,17 +40,19 @@ type ProfileInfo struct {
 }
 
 type ProfileService struct {
-	mu            sync.RWMutex
-	profiles      map[string]mapping.Profile
-	builtIns      map[string]mapping.Profile
-	bindings      map[string]mapping.Binding
-	bindingsByKey map[string]string
-	store         ProfileStore
-	changeHandler func(context.Context)
+	mu               sync.RWMutex
+	profiles         map[string]mapping.Profile
+	builtIns         map[string]mapping.Profile
+	bindings         map[string]mapping.Binding
+	bindingsByKey    map[string]string
+	bindingsByModel  map[string]string
+	customProperties map[string]mapping.CustomModelProperty
+	store            ProfileStore
+	changeHandler    func(context.Context)
 }
 
 func NewProfileService(ctx context.Context, store ProfileStore) (*ProfileService, error) {
-	service := &ProfileService{profiles: make(map[string]mapping.Profile), builtIns: make(map[string]mapping.Profile), bindings: make(map[string]mapping.Binding), bindingsByKey: make(map[string]string), store: store}
+	service := &ProfileService{profiles: make(map[string]mapping.Profile), builtIns: make(map[string]mapping.Profile), bindings: make(map[string]mapping.Binding), bindingsByKey: make(map[string]string), bindingsByModel: make(map[string]string), customProperties: make(map[string]mapping.CustomModelProperty), store: store}
 	for _, item := range BuiltInProfiles() {
 		if err := mapping.Validate(item); err != nil {
 			return nil, fmt.Errorf("validate built-in mapping profile %q: %w", item.ID, err)
@@ -67,6 +72,19 @@ func NewProfileService(ctx context.Context, store ProfileStore) (*ProfileService
 		}
 		service.profiles[item.ID] = cloneProfile(item)
 	}
+	customProperties, err := store.ListCustomModelProperties(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range customProperties {
+		if err := mapping.ValidateCustomModelProperty(item); err != nil {
+			return nil, fmt.Errorf("validate stored custom model property %q: %w", item.ID, err)
+		}
+		if _, duplicate := service.customProperties[item.Key()]; duplicate {
+			return nil, fmt.Errorf("stored custom model property %q duplicates path %s", item.ID, item.Path())
+		}
+		service.customProperties[item.Key()] = item
+	}
 	bindings, err := store.ListMappingBindings(ctx)
 	if err != nil {
 		return nil, err
@@ -80,6 +98,12 @@ func NewProfileService(ctx context.Context, store ProfileStore) (*ProfileService
 		}
 		service.bindings[item.ID] = item
 		service.bindingsByKey[item.Key()] = item.ID
+		if item.EffectiveStage() == mapping.StageProvider {
+			if _, duplicate := service.bindingsByModel[item.ModelKey()]; duplicate {
+				return nil, fmt.Errorf("stored mapping binding %q duplicates unified model path %s", item.ID, item.ModelPath())
+			}
+			service.bindingsByModel[item.ModelKey()] = item.ID
+		}
 	}
 	return service, nil
 }
@@ -262,7 +286,9 @@ func (s *ProfileService) Import(ctx context.Context, items []mapping.Profile) ([
 func validateRuntimeProfileUpdate(item mapping.Profile, bindings map[string]mapping.Binding, id string) error {
 	for _, binding := range bindings {
 		if binding.ProfileID == id {
-			return validateRuntimeProfile(item)
+			if err := validateRuntimeProfile(item, binding.EffectiveStage()); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

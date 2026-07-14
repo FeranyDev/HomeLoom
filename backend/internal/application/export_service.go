@@ -24,13 +24,14 @@ type ExportTargetConfig struct {
 }
 
 type ConfigurationExport struct {
-	FormatVersion int                     `json:"formatVersion"`
-	GeneratedAt   time.Time               `json:"generatedAt"`
-	Providers     []providerconfig.Config `json:"providers"`
-	Targets       []ExportTargetConfig    `json:"targets"`
-	Settings      RuntimeSettings         `json:"settings"`
-	Profiles      []ProfileInfo           `json:"profiles"`
-	Bindings      []mapping.Binding       `json:"bindings"`
+	FormatVersion         int                           `json:"formatVersion"`
+	GeneratedAt           time.Time                     `json:"generatedAt"`
+	Providers             []providerconfig.Config       `json:"providers"`
+	Targets               []ExportTargetConfig          `json:"targets"`
+	Settings              RuntimeSettings               `json:"settings"`
+	Profiles              []ProfileInfo                 `json:"profiles"`
+	Bindings              []mapping.Binding             `json:"bindings"`
+	CustomModelProperties []mapping.CustomModelProperty `json:"customModelProperties"`
 }
 
 type DiagnosticBundle struct {
@@ -65,7 +66,7 @@ func (s *ExportService) Configuration() ConfigurationExport {
 }
 
 func (s *ExportService) configurationAt(generatedAt time.Time) ConfigurationExport {
-	result := ConfigurationExport{FormatVersion: exportFormatVersion, GeneratedAt: generatedAt, Providers: []providerconfig.Config{}, Targets: []ExportTargetConfig{}, Profiles: []ProfileInfo{}, Bindings: []mapping.Binding{}}
+	result := ConfigurationExport{FormatVersion: exportFormatVersion, GeneratedAt: generatedAt, Providers: []providerconfig.Config{}, Targets: []ExportTargetConfig{}, Profiles: []ProfileInfo{}, Bindings: []mapping.Binding{}, CustomModelProperties: []mapping.CustomModelProperty{}}
 	if s.providers != nil {
 		result.Providers = s.providers.ExportConfigs()
 	}
@@ -81,6 +82,7 @@ func (s *ExportService) configurationAt(generatedAt time.Time) ConfigurationExpo
 	if s.profiles != nil {
 		result.Profiles = s.profiles.List()
 		result.Bindings = s.profiles.ListBindings()
+		result.CustomModelProperties = s.profiles.ListCustomModelProperties()
 	}
 	return result
 }

@@ -35,7 +35,7 @@ HomeLoom 的 Xiaomi Provider 通过小米中枢网关的局域网 MQTT 5/MIPS �
 9. 从设备目录中选择要接入的设备和统一模型，再生成设备映射；
 10. 在高级 JSON 中按设备 MIoT Spec 核对 `siid/piid/aiid`，保存后实时应用。
 
-新建 Xiaomi Provider 时 `devices` 默认为空数组，不再生成 DID 为空的示例设备。Provider 配置页不展示、读取或修改子设备映射，防止在 OAuth、证书或 MQTT 尚未就绪时越级发现设备。网关目录只提供设备身份、名称、房间和型号等元数据；自动生成的映射只包含对应统一模型的必需参数模板，SIID/PIID 仍需以具体型号的 MIoT Spec 为准。
+新建 Xiaomi Provider 时 `devices` 默认为空数组，不再生成 DID 为空的示例设备。Provider 配置页不展示、读取或修改子设备映射，防止在 OAuth、证书或 MQTT 尚未就绪时越级发现设备。网关目录提供设备身份、名称、房间、型号和可用的 `specType`；设备加入 HomeLoom 后，Provider 根据 `specType` 或 `model` 从 MIoT Spec V2 实例目录加载完整的 Property、Action 和 Event 定义并缓存到 SQLite。自动生成的旧式映射仍只覆盖统一模型必需参数，但设备中心的来源目录不再受这些已配置属性限制。
 
 Provider 配置只写入 SQLite，不生成 `auth.json`、`config.json` 或 `certs/` 目录。`accessToken`、`refreshToken` 和 `privateKey` 由数据库旁主密钥使用 AES-256-GCM 加密；管理 API 和诊断导出只返回 `********`。
 
@@ -89,11 +89,23 @@ Provider 配置只写入 SQLite，不生成 `auth.json`、`config.json` 或 `cer
 
 设备映射必须满足对应统一模型的必须参数。例如 `switch` 必须发布 `main/switch/power`。不满足契约的配置在写入数据库前即被拒绝。
 
+### 原始属性目录
+
+MIoT Spec 中尚未出现在旧式 `devices[].properties` 配置里的属性，会以稳定原始路径发布：
+
+```text
+miot-{SIID} / service-{SIID} / property-{PIID}
+```
+
+例如 SIID 2、PIID 3 对应 `miot-2/service-2/property-3`。这些属性保留 Spec 声明的值类型、读写/通知权限、单位、数值范围、步长和枚举，并可直接作为 `Provider → 统一模型` 路由的来源。Action 使用 `action-{AIID}`，Event 使用 `event-{EIID}`，全部会在设备映射页面汇总展示。
+
+`miot_spec_cache` 表按完整实例 URN 保存原始 JSON 和获取时间。相同型号后续启动优先读取数据库，不重复访问远端。若设备没有 `specType`、型号无法在 released 实例索引中解析或网络不可用且无缓存，接口会返回 `catalog.complete=false` 和具体错误；页面显示“来源属性（不完整）”，不会再把已配置属性宣称为完整目录。
+
 ## 运行语义
 
 - SQLite 保存期望配置、OAuth 身份、Token、证书和 MIoT 映射；
 - 当前属性值、在线状态和 sequence 只保存在内存；
-- 启动时连接中枢、获取设备列表并并发读取映射属性；
+- 启动时连接中枢、获取设备列表、加载/缓存 MIoT Spec，并有界并发读取完整可读属性；
 - 仅修改子设备映射时复用当前 MQTT 会话原地更新设备模型，新增属性在后台有界并发读取，不创建相同 Client ID 的第二条连接；
 - 中枢地址、Client ID、TLS/OAuth 或轮询参数变化时才执行连接级替换；
 - 属性通知实时更新内存快照；
@@ -107,4 +119,4 @@ Provider 配置只写入 SQLite，不生成 `auth.json`、`config.json` 或 `cer
 
 HomeLoom 不内置、不冒充任何第三方 OAuth 应用身份。使用者必须提供自己有权使用、且已登记固定 Redirect URL `http://homeassistant.local:8123` 的 Client ID，并自行确认云接口、OAuth 应用和代码使用方式符合所获授权。小米云接口和中枢固件行为可能变化，正式部署前仍需使用目标账号、地区和实体中枢完成验收。
 
-当前 MIoT Spec 不从云端自动下载；映射应依据设备对应 Spec 明确配置。这样可以先保证发布到 HomeKit 的模型契约稳定，也避免固件或 Spec 变化静默改变附件类型。自动 Spec 获取、缓存与映射建议仍作为后续增强项。
+MIoT Spec 只用于构造 Provider 原始目录，不会自动改变统一模型类型或 HomeKit 附件结构；是否把某个原始属性映射到统一模型仍由管理员逐设备决定。实例 JSON 从公开的 MIoT Spec V2 服务获取并持久缓存，OAuth Token、DID、证书等凭据不会发送给 Spec 服务。

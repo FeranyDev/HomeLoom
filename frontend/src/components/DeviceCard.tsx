@@ -5,10 +5,11 @@ interface DeviceCardProps {
   pending: boolean
   onPowerChange: (device: Device, value: boolean) => void
   onDetails: (device: Device) => void
+	onMapping?: (device: Device) => void
 	onEnabledChange?: (device: Device, enabled: boolean) => void
 }
 
-export function DeviceCard({ device, pending, onPowerChange, onDetails, onEnabledChange }: DeviceCardProps) {
+export function DeviceCard({ device, pending, onPowerChange, onDetails, onMapping, onEnabledChange }: DeviceCardProps) {
   const hasPower = device.type === 'switch' || device.type === 'lightbulb' || device.type === 'outlet'
   const kind = { switch: '开关', lightbulb: '灯泡', outlet: '插座', 'temperature-sensor': '温度传感器', 'humidity-sensor': '湿度传感器', 'contact-sensor': '接触传感器', 'motion-sensor': '活动传感器', fan: '风扇', 'air-purifier': '空气净化器', 'window-covering': '窗帘' }[device.type]
   const power = deviceProperty(device, 'switch', 'power')?.bool ?? false
@@ -52,7 +53,7 @@ export function DeviceCard({ device, pending, onPowerChange, onDetails, onEnable
         : <div className={`sensor-state ${device.online && (contact || motion) ? 'is-active' : ''}`}><strong>{!device.online ? '不可用' : device.type === 'contact-sensor' ? (contact ? '已闭合' : '已打开') : (motion ? '检测到活动' : '无活动')}</strong><span>{device.type === 'contact-sensor' ? 'CONTACT' : 'MOTION'}</span></div>
       }
 
-      <footer><span>更新于 {new Date(device.lastUpdateAt).toLocaleTimeString('zh-CN')}</span><div><button onClick={() => onDetails(device)}>查看详情</button>{onEnabledChange && !device.removed && <button disabled={pending} onClick={() => onEnabledChange(device, Boolean(device.disabled))}>{device.disabled ? '重新启用' : '禁用设备'}</button>}</div></footer>
+      <footer><span>更新于 {new Date(device.lastUpdateAt).toLocaleTimeString('zh-CN')}</span><div><button onClick={() => onDetails(device)}>查看详情</button>{onMapping && !device.removed && <button onClick={() => onMapping(device)}>配置映射</button>}{onEnabledChange && !device.removed && <button disabled={pending} onClick={() => onEnabledChange(device, Boolean(device.disabled))}>{device.disabled ? '重新启用' : '禁用设备'}</button>}</div></footer>
     </article>
   )
 }

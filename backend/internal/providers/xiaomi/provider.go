@@ -21,21 +21,25 @@ import (
 type clientFactory func() hubClient
 
 type Provider struct {
-	id      string
-	name    string
-	config  Config
-	factory clientFactory
+	id       string
+	name     string
+	config   Config
+	factory  clientFactory
+	resolver *SpecResolver
 
-	mu        sync.RWMutex
-	client    hubClient
-	devices   map[string]device.Device
-	byDID     map[string]string
-	listeners map[uint64]func(device.Device)
-	next      uint64
-	sequence  uint64
-	cancel    context.CancelFunc
-	lifecycle context.Context
-	done      chan struct{}
+	mu            sync.RWMutex
+	client        hubClient
+	devices       map[string]device.Device
+	byDID         map[string]string
+	rawProperties map[string]PropertyMapping
+	rawActions    map[string]ActionMapping
+	catalog       map[string]providersdk.SourceCatalogMetadata
+	listeners     map[uint64]func(device.Device)
+	next          uint64
+	sequence      uint64
+	cancel        context.CancelFunc
+	lifecycle     context.Context
+	done          chan struct{}
 
 	requests atomic.Uint64
 	events   atomic.Uint64
@@ -43,16 +47,24 @@ type Provider struct {
 }
 
 func NewProviderFromConfig(item providerconfig.Config) (*Provider, error) {
+	return NewProviderFromConfigWithSpecResolver(item, NewSpecResolver(nil))
+}
+
+func NewProviderFromConfigWithSpecResolver(item providerconfig.Config, resolver *SpecResolver) (*Provider, error) {
 	config, brokerURL, tlsConfig, err := decodeConfig(item)
 	if err != nil {
 		return nil, err
 	}
 	factory := func() hubClient { return newMIPSClient(config, brokerURL, tlsConfig) }
-	return newProvider(item.ID, item.Name, config, factory)
+	return newProviderWithResolver(item.ID, item.Name, config, factory, resolver)
 }
 
 func newProvider(id, name string, config Config, factory clientFactory) (*Provider, error) {
-	provider := &Provider{id: id, name: name, config: config, factory: factory, devices: make(map[string]device.Device), byDID: make(map[string]string), listeners: make(map[uint64]func(device.Device))}
+	return newProviderWithResolver(id, name, config, factory, nil)
+}
+
+func newProviderWithResolver(id, name string, config Config, factory clientFactory, resolver *SpecResolver) (*Provider, error) {
+	provider := &Provider{id: id, name: name, config: config, factory: factory, resolver: resolver, devices: make(map[string]device.Device), byDID: make(map[string]string), rawProperties: make(map[string]PropertyMapping), rawActions: make(map[string]ActionMapping), catalog: make(map[string]providersdk.SourceCatalogMetadata), listeners: make(map[uint64]func(device.Device))}
 	for _, configured := range config.Devices {
 		item := buildDevice(id, configured)
 		if err := item.NormalizeModelParameters(); err != nil {
@@ -60,6 +72,7 @@ func newProvider(id, name string, config Config, factory clientFactory) (*Provid
 		}
 		provider.devices[item.ID] = item
 		provider.byDID[configured.DID] = item.ID
+		provider.catalog[item.ID] = providersdk.SourceCatalogMetadata{Complete: false, Source: "configured-mapping-fallback", Model: configured.Model, Error: "MIoT Spec has not been loaded"}
 	}
 	return provider, nil
 }
@@ -106,6 +119,12 @@ func (p *Provider) Initialize(ctx context.Context) error {
 		p.client, p.cancel, p.lifecycle = nil, nil, nil
 		p.mu.Unlock()
 		return fmt.Errorf("request Xiaomi device list: %w", err)
+	}
+	hubDevices, parseErr := parseHubDeviceList(deviceList)
+	if parseErr == nil {
+		p.loadSourceSpecs(ctx, hubDevices)
+	} else {
+		p.markCatalogError(parseErr)
 	}
 	// Initial reads run concurrently with a bounded worker count. Individual
 	// unavailable properties remain at their typed zero value and are retried by
@@ -175,6 +194,7 @@ func (p *Provider) Reconfigure(ctx context.Context, replacement providersdk.Prov
 		updated[id] = item
 	}
 	p.name, p.config, p.devices = next.name, next.config, updated
+	p.rawProperties, p.rawActions, p.catalog = next.rawProperties, next.rawActions, next.catalog
 	p.byDID = make(map[string]string, len(next.byDID))
 	for did, id := range next.byDID {
 		p.byDID[did] = id
@@ -190,6 +210,7 @@ func (p *Provider) Reconfigure(ctx context.Context, replacement providersdk.Prov
 		go func() {
 			refreshCtx, cancel := context.WithTimeout(lifecycle, timeout)
 			defer cancel()
+			p.refreshSourceCatalog(refreshCtx)
 			p.refreshAll(refreshCtx)
 		}()
 	}
@@ -432,10 +453,25 @@ func (p *Provider) refreshAll(ctx context.Context) {
 	}
 	p.mu.RLock()
 	configuredDevices := append([]DeviceConfig(nil), p.config.Devices...)
+	rawMappings := make(map[string]PropertyMapping, len(p.rawProperties))
+	for key, mapping := range p.rawProperties {
+		rawMappings[key] = mapping
+	}
 	p.mu.RUnlock()
 sendLoop:
 	for _, configured := range configuredDevices {
 		for _, mapping := range configured.Properties {
+			select {
+			case jobs <- job{device: configured, mapTo: mapping}:
+			case <-ctx.Done():
+				break sendLoop
+			}
+		}
+		prefix := configured.ID + "\x00"
+		for key, mapping := range rawMappings {
+			if !strings.HasPrefix(key, prefix) {
+				continue
+			}
 			select {
 			case jobs <- job{device: configured, mapTo: mapping}:
 			case <-ctx.Done():
@@ -514,6 +550,7 @@ func (p *Provider) snapshot(id string) (device.Device, bool) {
 func (p *Provider) mappingForProperty(id, endpoint, capability, property string) (DeviceConfig, PropertyMapping, error) {
 	p.mu.RLock()
 	configuredDevices := append([]DeviceConfig(nil), p.config.Devices...)
+	raw, rawExists := p.rawProperties[sourcePropertyKey(id, endpoint, capability, property)]
 	p.mu.RUnlock()
 	for _, configured := range configuredDevices {
 		if configured.ID != id {
@@ -524,6 +561,9 @@ func (p *Provider) mappingForProperty(id, endpoint, capability, property string)
 				return configured, mapping, nil
 			}
 		}
+		if rawExists {
+			return configured, raw, nil
+		}
 		return DeviceConfig{}, PropertyMapping{}, providersdk.ErrPropertyUnsupported
 	}
 	return DeviceConfig{}, PropertyMapping{}, providersdk.ErrDeviceNotFound
@@ -532,10 +572,21 @@ func (p *Provider) mappingForProperty(id, endpoint, capability, property string)
 func (p *Provider) mappingForMIoT(id string, siid, piid int) (DeviceConfig, PropertyMapping, error) {
 	p.mu.RLock()
 	configuredDevices := append([]DeviceConfig(nil), p.config.Devices...)
+	rawMappings := make([]PropertyMapping, 0, len(p.rawProperties))
+	for key, mapping := range p.rawProperties {
+		if strings.HasPrefix(key, id+"\x00") {
+			rawMappings = append(rawMappings, mapping)
+		}
+	}
 	p.mu.RUnlock()
 	for _, configured := range configuredDevices {
 		if configured.ID == id {
 			for _, mapping := range configured.Properties {
+				if mapping.SIID == siid && mapping.PIID == piid {
+					return configured, mapping, nil
+				}
+			}
+			for _, mapping := range rawMappings {
 				if mapping.SIID == siid && mapping.PIID == piid {
 					return configured, mapping, nil
 				}
@@ -548,6 +599,7 @@ func (p *Provider) mappingForMIoT(id string, siid, piid int) (DeviceConfig, Prop
 func (p *Provider) mappingForAction(id, endpoint, capability, command string) (DeviceConfig, ActionMapping, error) {
 	p.mu.RLock()
 	configuredDevices := append([]DeviceConfig(nil), p.config.Devices...)
+	raw, rawExists := p.rawActions[sourceActionKey(id, endpoint, capability, command)]
 	p.mu.RUnlock()
 	for _, configured := range configuredDevices {
 		if configured.ID != id {
@@ -557,6 +609,9 @@ func (p *Provider) mappingForAction(id, endpoint, capability, command string) (D
 			if mapping.EndpointID == endpoint && mapping.CapabilityID == capability && mapping.CommandID == command {
 				return configured, mapping, nil
 			}
+		}
+		if rawExists {
+			return configured, raw, nil
 		}
 		return DeviceConfig{}, ActionMapping{}, providersdk.ErrCommandUnsupported
 	}

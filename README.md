@@ -161,7 +161,7 @@ GET /api/v1/system/diagnostic-bundle
 
 两者都使用独立的脱敏模型并禁止浏览器缓存：Provider 凭据替换为占位符，桥 PIN、Setup URI 和本地身份存储路径不会进入文件。
 
-映射页可以管理 SQLite 中的用户 Profile，并直接预览内置或已保存版本。Profile CRUD、批量导入和删除在数据库提交后立即更新应用层快照，不需要重启：
+“模型工具”页可以管理 SQLite 中的用户 Profile，并直接预览内置或已保存版本。Profile CRUD、批量导入和删除在数据库提交后立即更新应用层快照，不需要重启：
 
 ```text
 GET/POST /api/v1/mapping/profiles
@@ -169,10 +169,15 @@ POST     /api/v1/mapping/profiles/import
 GET      /api/v1/mapping/profiles/export
 GET/POST /api/v1/mapping/bindings
 GET/PUT/DELETE /api/v1/mapping/bindings/{id}
+GET      /api/v1/mapping/catalog
+GET/POST /api/v1/device-models/custom-properties
+PUT/DELETE /api/v1/device-models/custom-properties/{id}
 POST     /api/v1/mapping/preview
 ```
 
-属性绑定保存在 SQLite `mapping_bindings`。启用的绑定会在 Provider 事件进入 Core 时正向转换，在控制写回 Provider 时反向转换；新增、修改、停用或删除绑定后会立即重新发现当前快照，不重启 Provider 或 Target。当前绑定使用精确的 `provider/device/endpoint/capability/property` 路径，并要求 Profile 输入输出类型一致且转换可逆。
+属性路由保存在 SQLite `mapping_bindings`，明确分为 `Provider → 统一模型` 和 `统一模型 → Consumer` 两段。两段路由都绑定具体 `providerId + deviceId`，同型号设备互不继承配置。两侧都可选择可逆 Profile，事件走正向转换，控制走反向转换；数值类型可在 `int` 与 `number` 间转换。统一模型始终使用 Endpoint / Capability / Property 三级路径，并按 required、optional、custom 分级。自定义属性及其类型、单位、范围、枚举和 R/W/N 权限保存在 `custom_model_properties`。
+
+设备映射从设备中心的对应设备卡片进入。三栏关系图会锁定该设备，只展示它的 Provider 原始目录、统一模型参数、HomeKit Consumer 属性和已有路由，不允许在编辑器内切换或操作其他设备。原始目录明确展示完整性、数据来源、Spec URN，以及 Property/Action/Event 数量；米家设备通过缓存的 MIoT Spec 补齐未配置属性。顶层“模型工具”页只保留统一模型自定义属性、Profile 与转换预览。Provider 路由变化只刷新原始快照，不重启 Provider；Consumer 路由变化会保留桥的配对身份并重建附件图。完整设计见 [双段设备映射架构](docs/mapping-architecture.md)。
 
 Provider 由 Provider Manager 聚合管理。Core 只依赖标准 Provider SDK；Manager 负责初始化、发现、事件转发以及 `Device ID → Provider ID` 写入路由，为后续同时运行 MQTT、米家和其他 Provider 保留统一边界。
 

@@ -1002,6 +1002,48 @@ func TestMappingProfileCRUDHotReloadAndExport(t *testing.T) {
 	}
 }
 
+func TestMappingCatalogCustomPropertyAndConsumerRouteAPI(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "mapping-graph-api.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, err := application.NewProfileService(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	devices := application.NewDeviceService(virtual.NewProvider(), profiles)
+	defer devices.Close()
+	server := NewServer(":0", devices, application.NewTargetService(nil, nil), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server.SetProfileService(profiles)
+
+	create := httptest.NewRequest(http.MethodPost, "/api/v1/device-models/custom-properties", bytes.NewBufferString(`{"id":"switch-led-pattern","deviceType":"switch","endpointId":"main","endpointName":"Main","endpointType":"main","capabilityId":"vendor-acme","capabilityType":"vendor-acme","definition":{"id":"led-pattern","name":"LED Pattern","type":"enum","enum":["off","pulse"],"readable":true,"writable":true,"notifiable":true}}`))
+	create.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, create)
+	if response.Code != http.StatusCreated || !bytes.Contains(response.Body.Bytes(), []byte(`"parameterLevel":"custom"`)) {
+		t.Fatalf("custom create = %d %s", response.Code, response.Body.String())
+	}
+
+	catalog := httptest.NewRequest(http.MethodGet, "/api/v1/mapping/catalog", nil)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, catalog)
+	for _, expected := range []string{`"providers"`, `"models"`, `"consumers"`, `"led-pattern"`, `"Switch.On"`, `"catalog"`, `"complete":true`, `"source":"provider-discovery"`} {
+		if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(expected)) {
+			t.Fatalf("catalog = %d %s", response.Code, response.Body.String())
+		}
+	}
+
+	consumerBinding := httptest.NewRequest(http.MethodPost, "/api/v1/mapping/bindings", bytes.NewBufferString(`{"stage":"consumer","providerId":"virtual-main","deviceId":"virtual-switch-1","deviceType":"switch","modelEndpointId":"main","modelCapabilityId":"switch","modelPropertyId":"power","consumerId":"homekit","consumerProperty":"Switch.On","enabled":true}`))
+	consumerBinding.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, consumerBinding)
+	if response.Code != http.StatusCreated || !bytes.Contains(response.Body.Bytes(), []byte(`"stage":"consumer"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"consumerProperty":"Switch.On"`)) {
+		t.Fatalf("consumer binding = %d %s", response.Code, response.Body.String())
+	}
+}
+
 func TestGenericPropertyRead(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/devices/virtual-temperature-1/endpoints/main/capabilities/temperature/properties/current-temperature", nil)
 	response := httptest.NewRecorder()

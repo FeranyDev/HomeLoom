@@ -54,6 +54,7 @@ func (s *ProfileService) CreateBinding(ctx context.Context, item mapping.Binding
 		}
 		item.ID = id
 	}
+	item = canonicalBinding(item)
 	s.mu.Lock()
 	if err := s.validateBindingLocked(item); err != nil {
 		s.mu.Unlock()
@@ -67,12 +68,21 @@ func (s *ProfileService) CreateBinding(ctx context.Context, item mapping.Binding
 		s.mu.Unlock()
 		return mapping.Binding{}, ErrBindingExists
 	}
+	if item.EffectiveStage() == mapping.StageProvider {
+		if _, exists := s.bindingsByModel[item.ModelKey()]; exists {
+			s.mu.Unlock()
+			return mapping.Binding{}, ErrBindingExists
+		}
+	}
 	if err := s.store.SaveMappingBinding(ctx, item); err != nil {
 		s.mu.Unlock()
 		return mapping.Binding{}, err
 	}
 	s.bindings[item.ID] = item
 	s.bindingsByKey[item.Key()] = item.ID
+	if item.EffectiveStage() == mapping.StageProvider {
+		s.bindingsByModel[item.ModelKey()] = item.ID
+	}
 	s.mu.Unlock()
 	s.notifyChanged(ctx)
 	return item, nil
@@ -80,6 +90,7 @@ func (s *ProfileService) CreateBinding(ctx context.Context, item mapping.Binding
 
 func (s *ProfileService) UpdateBinding(ctx context.Context, id string, item mapping.Binding) (mapping.Binding, error) {
 	item.ID = id
+	item = canonicalBinding(item)
 	s.mu.Lock()
 	current, exists := s.bindings[id]
 	if !exists {
@@ -94,16 +105,35 @@ func (s *ProfileService) UpdateBinding(ctx context.Context, id string, item mapp
 		s.mu.Unlock()
 		return mapping.Binding{}, ErrBindingExists
 	}
+	if item.EffectiveStage() == mapping.StageProvider {
+		if owner, exists := s.bindingsByModel[item.ModelKey()]; exists && owner != id {
+			s.mu.Unlock()
+			return mapping.Binding{}, ErrBindingExists
+		}
+	}
 	if err := s.store.SaveMappingBinding(ctx, item); err != nil {
 		s.mu.Unlock()
 		return mapping.Binding{}, err
 	}
 	delete(s.bindingsByKey, current.Key())
+	if current.EffectiveStage() == mapping.StageProvider {
+		delete(s.bindingsByModel, current.ModelKey())
+	}
 	s.bindings[id] = item
 	s.bindingsByKey[item.Key()] = id
+	if item.EffectiveStage() == mapping.StageProvider {
+		s.bindingsByModel[item.ModelKey()] = id
+	}
 	s.mu.Unlock()
 	s.notifyChanged(ctx)
 	return item, nil
+}
+
+func canonicalBinding(item mapping.Binding) mapping.Binding {
+	item.Stage = item.EffectiveStage()
+	model := item.ModelPath()
+	item.ModelEndpointID, item.ModelCapabilityID, item.ModelPropertyID = model.EndpointID, model.CapabilityID, model.PropertyID
+	return item
 }
 
 func (s *ProfileService) DeleteBinding(ctx context.Context, id string) error {
@@ -119,15 +149,21 @@ func (s *ProfileService) DeleteBinding(ctx context.Context, id string) error {
 	}
 	delete(s.bindings, id)
 	delete(s.bindingsByKey, item.Key())
+	if item.EffectiveStage() == mapping.StageProvider {
+		delete(s.bindingsByModel, item.ModelKey())
+	}
 	s.mu.Unlock()
 	s.notifyChanged(ctx)
 	return nil
 }
 
 func (s *ProfileService) TransformProperty(providerID, deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue, direction mapping.Direction) (device.PropertyValue, string, bool, error) {
-	binding, profile, applied, err := s.resolveBinding(providerID, deviceID, endpointID, capabilityID, propertyID)
+	binding, profile, applied, err := s.resolveProviderBinding(providerID, deviceID, endpointID, capabilityID, propertyID, direction)
 	if err != nil || !applied {
 		return value, binding.ID, applied, err
+	}
+	if binding.ProfileID == "" {
+		return value, binding.ID, true, nil
 	}
 	result, err := mapping.Preview(mapping.PreviewRequest{Profile: profile, Direction: direction, Value: &value})
 	if err != nil {
@@ -137,24 +173,33 @@ func (s *ProfileService) TransformProperty(providerID, deviceID, endpointID, cap
 }
 
 func (s *ProfileService) TransformPropertyDefinition(providerID, deviceID, endpointID, capabilityID, propertyID string, definition device.PropertyDefinition) (device.PropertyDefinition, string, bool, error) {
-	binding, profile, applied, err := s.resolveBinding(providerID, deviceID, endpointID, capabilityID, propertyID)
+	binding, profile, applied, err := s.resolveProviderBinding(providerID, deviceID, endpointID, capabilityID, propertyID, mapping.DirectionForward)
 	if err != nil || !applied {
 		return definition, binding.ID, applied, err
+	}
+	if binding.ProfileID == "" {
+		return definition, binding.ID, true, nil
 	}
 	result := definition
 	result.Type = profile.OutputType
 	mapNumber := func(value float64) (float64, error) {
 		input := device.NumberValue(value)
+		if profile.InputType == device.ValueTypeInt {
+			input = device.IntValue(int64(value))
+		}
 		preview, previewErr := mapping.Preview(mapping.PreviewRequest{Profile: profile, Direction: mapping.DirectionForward, Value: &input})
-		if previewErr != nil || preview.Value.Number == nil {
+		if previewErr != nil || (preview.Value.Number == nil && preview.Value.Int == nil) {
 			if previewErr == nil {
 				previewErr = fmt.Errorf("numeric definition transform did not produce a number")
 			}
 			return 0, previewErr
 		}
+		if preview.Value.Int != nil {
+			return float64(*preview.Value.Int), nil
+		}
 		return *preview.Value.Number, nil
 	}
-	if profile.InputType == device.ValueTypeNumber {
+	if profile.InputType == device.ValueTypeNumber || profile.InputType == device.ValueTypeInt {
 		var minimum, maximum *float64
 		if definition.Min != nil {
 			value, mapErr := mapNumber(*definition.Min)
@@ -209,15 +254,38 @@ func (s *ProfileService) TransformPropertyDefinition(providerID, deviceID, endpo
 	return result, binding.ID, true, nil
 }
 
-func (s *ProfileService) resolveBinding(providerID, deviceID, endpointID, capabilityID, propertyID string) (mapping.Binding, mapping.Profile, bool, error) {
-	key := (mapping.Binding{ProviderID: providerID, DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID, PropertyID: propertyID}).Key()
+func (s *ProfileService) ResolvePropertyPath(providerID, deviceID, endpointID, capabilityID, propertyID string, direction mapping.Direction) (device.ParameterPath, string, bool, error) {
+	binding, _, applied, err := s.resolveProviderBinding(providerID, deviceID, endpointID, capabilityID, propertyID, direction)
+	if err != nil || !applied {
+		return device.ParameterPath{EndpointID: endpointID, CapabilityID: capabilityID, PropertyID: propertyID}, binding.ID, applied, err
+	}
+	if direction == mapping.DirectionReverse {
+		return binding.SourcePath(), binding.ID, true, nil
+	}
+	return binding.ModelPath(), binding.ID, true, nil
+}
+
+func (s *ProfileService) resolveProviderBinding(providerID, deviceID, endpointID, capabilityID, propertyID string, direction mapping.Direction) (mapping.Binding, mapping.Profile, bool, error) {
+	probe := mapping.Binding{Stage: mapping.StageProvider, ProviderID: providerID, DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID, PropertyID: propertyID}
+	key := probe.Key()
 	s.mu.RLock()
-	id, ok := s.bindingsByKey[key]
+	var id string
+	var ok bool
+	if direction == mapping.DirectionReverse {
+		probe.ModelEndpointID, probe.ModelCapabilityID, probe.ModelPropertyID = endpointID, capabilityID, propertyID
+		id, ok = s.bindingsByModel[probe.ModelKey()]
+	} else {
+		id, ok = s.bindingsByKey[key]
+	}
 	if !ok || !s.bindings[id].Enabled {
 		s.mu.RUnlock()
 		return mapping.Binding{}, mapping.Profile{}, false, nil
 	}
 	binding := s.bindings[id]
+	if binding.ProfileID == "" {
+		s.mu.RUnlock()
+		return binding, mapping.Profile{}, true, nil
+	}
 	profile, ok := s.profileLocked(binding.ProfileID)
 	s.mu.RUnlock()
 	if !ok {
@@ -230,20 +298,81 @@ func (s *ProfileService) validateBindingLocked(item mapping.Binding) error {
 	if err := mapping.ValidateBinding(item); err != nil {
 		return bindingValidationError(err)
 	}
+	modelParameter, modelExists := s.modelParameterLocked(item.DeviceType, item.ModelPath())
+	if item.DeviceType != "" && !modelExists {
+		return NewValidationError("invalid mapping binding", map[string]string{"modelPropertyId": "unified model property not found"})
+	}
+	var consumerProperty *mapping.ConsumerProperty
+	if item.EffectiveStage() == mapping.StageConsumer {
+		for _, catalog := range mapping.BuiltInConsumerCatalogs() {
+			if catalog.ID != item.ConsumerID {
+				continue
+			}
+			for index := range catalog.Properties {
+				candidate := &catalog.Properties[index]
+				if candidate.DeviceType == item.DeviceType && candidate.ID == item.ConsumerProperty {
+					consumerProperty = candidate
+					break
+				}
+			}
+		}
+		if consumerProperty == nil {
+			return NewValidationError("invalid mapping binding", map[string]string{"consumerProperty": "consumer property not found"})
+		}
+	}
+	if item.ProfileID == "" {
+		if consumerProperty != nil && modelParameter.Type != consumerProperty.Type {
+			return NewValidationError("invalid mapping binding", map[string]string{"profileId": "a conversion profile is required because the model and consumer types differ"})
+		}
+		return nil
+	}
 	profile, ok := s.profileLocked(item.ProfileID)
 	if !ok {
 		return NewValidationError("invalid mapping binding", map[string]string{"profileId": "mapping profile not found"})
 	}
-	return validateRuntimeProfile(profile)
+	if modelExists {
+		if item.EffectiveStage() == mapping.StageProvider && profile.OutputType != modelParameter.Type {
+			return NewValidationError("invalid mapping binding", map[string]string{"profileId": "profile output type does not match the unified model property"})
+		}
+		if item.EffectiveStage() == mapping.StageConsumer && profile.InputType != modelParameter.Type {
+			return NewValidationError("invalid mapping binding", map[string]string{"profileId": "profile input type does not match the unified model property"})
+		}
+	}
+	if consumerProperty != nil && profile.OutputType != consumerProperty.Type {
+		return NewValidationError("invalid mapping binding", map[string]string{"profileId": "profile output type does not match the consumer property"})
+	}
+	return validateRuntimeProfile(profile, item.EffectiveStage())
 }
 
-func validateRuntimeProfile(profile mapping.Profile) error {
+func (s *ProfileService) modelParameterLocked(deviceType device.Type, path device.ParameterPath) (device.ModelParameter, bool) {
+	if deviceType == "" {
+		return device.ModelParameter{}, false
+	}
+	contract, ok := device.ModelContractFor(deviceType)
+	if ok {
+		for _, parameter := range contract.Parameters {
+			if parameter.Path == path {
+				return parameter, true
+			}
+		}
+	}
+	if item, exists := s.customProperties[string(deviceType)+"\x00"+path.Key()]; exists {
+		return mapping.CustomModelParameter(item), true
+	}
+	return device.ModelParameter{}, false
+}
+
+func validateRuntimeProfile(profile mapping.Profile, stages ...mapping.BindingStage) error {
 	fields := make(map[string]string)
-	if profile.Kind == mapping.KindTarget {
+	stage := mapping.StageProvider
+	if len(stages) > 0 {
+		stage = stages[0]
+	}
+	if stage == mapping.StageProvider && profile.Kind == mapping.KindTarget {
 		fields["profileId"] = "target profiles cannot be attached to provider properties"
 	}
-	if profile.InputType != profile.OutputType {
-		fields["profileId"] = "runtime property bindings currently require matching input and output types"
+	if stage == mapping.StageConsumer && profile.Kind == mapping.KindProvider {
+		fields["profileId"] = "provider profiles cannot be attached to consumer properties"
 	}
 	for _, transform := range profile.Transforms {
 		if transform.Type == mapping.TransformClamp {

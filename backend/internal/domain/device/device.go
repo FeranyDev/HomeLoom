@@ -175,7 +175,7 @@ func (d *Device) SetOnline(online bool) {
 
 func (d *Device) NormalizeAvailability() { d.SetAvailability(d.EffectiveAvailability()) }
 
-func (d Device) Validate() error {
+func (d Device) ValidateStructure() error {
 	if d.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("%w: unsupported schema version %d", ErrInvalidModel, d.SchemaVersion)
 	}
@@ -246,6 +246,16 @@ func (d Device) Validate() error {
 				}
 			}
 		}
+	}
+	return nil
+}
+
+// Validate applies both the transport-safe structural contract and the
+// unified publisher contract. Provider managers use ValidateStructure before
+// configurable mapping; the Core uses Validate after Provider → model routing.
+func (d Device) Validate() error {
+	if err := d.ValidateStructure(); err != nil {
+		return err
 	}
 	if err := validatePublisherModel(d); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidModel, err)

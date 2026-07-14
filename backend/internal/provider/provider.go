@@ -54,6 +54,32 @@ type Discoverer interface {
 	DiscoverDevices(context.Context) ([]device.Device, error)
 }
 
+// SourceCatalogMetadata describes how completely a Provider can enumerate the
+// native capabilities of one device. A Provider must not claim Complete when
+// the catalog only mirrors user-configured mappings.
+type SourceCatalogMetadata struct {
+	Complete  bool      `json:"complete"`
+	Source    string    `json:"source"`
+	SpecType  string    `json:"specType,omitempty"`
+	Model     string    `json:"model,omitempty"`
+	FetchedAt time.Time `json:"fetchedAt,omitempty"`
+	Error     string    `json:"error,omitempty"`
+}
+
+// SourceCatalogDevice keeps the normal device shape so existing clients can
+// traverse Endpoint/Capability/Property while adding an explicit provenance
+// and completeness contract.
+type SourceCatalogDevice struct {
+	device.Device
+	Catalog SourceCatalogMetadata `json:"catalog"`
+}
+
+// SourceCataloger exposes native Provider attributes before configurable
+// Provider → unified-model projection.
+type SourceCataloger interface {
+	SourceCatalog(context.Context) ([]SourceCatalogDevice, error)
+}
+
 type PropertyReadRequest struct {
 	DeviceID     string
 	EndpointID   string

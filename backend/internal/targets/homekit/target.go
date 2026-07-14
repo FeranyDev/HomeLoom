@@ -637,7 +637,7 @@ func (b *accessoryBindings) update(item device.Device) uint64 {
 func writeHomeKitProperty(devices *application.DeviceService, logger *slog.Logger, deviceID, capabilityID, propertyID string, value device.PropertyValue) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, _, err := devices.ExecuteProperty(ctx, deviceID, "main", capabilityID, propertyID, value); err != nil {
+	if _, _, err := devices.ExecuteConsumerProperty(ctx, "homekit", deviceID, "main", capabilityID, propertyID, value); err != nil {
 		logger.Error("HomeKit property write failed", "device_id", deviceID, "capability_id", capabilityID, "property_id", propertyID, "error", err)
 		return err
 	}
@@ -770,6 +770,14 @@ func New(ctx context.Context, config Config, devices *application.DeviceService,
 	if err != nil {
 		return nil, fmt.Errorf("list devices: %w", err)
 	}
+	for index := range items {
+		projected, projectErr := devices.ProjectForConsumer("homekit", items[index])
+		if projectErr != nil {
+			logger.Error("HomeKit consumer projection failed", "device_id", items[index].ID, "error", projectErr)
+			continue
+		}
+		items[index] = projected
+	}
 
 	selected := make(map[string]bool, len(config.DeviceIDs))
 	for _, id := range config.DeviceIDs {
@@ -830,7 +838,12 @@ func New(ctx context.Context, config Config, devices *application.DeviceService,
 		pairing: PairingInfo{Code: formatPin(config.Pin), SetupURI: setupURI, QR: qr, Devices: append([]string(nil), config.DeviceIDs...)},
 	}
 	target.cancelSubscription = devices.Subscribe(func(item device.Device) {
-		devices.RecordHomeKitPushes(bindings.update(item))
+		projected, projectErr := devices.ProjectForConsumer("homekit", item)
+		if projectErr != nil {
+			logger.Error("HomeKit consumer projection failed", "device_id", item.ID, "error", projectErr)
+			return
+		}
+		devices.RecordHomeKitPushes(bindings.update(projected))
 	})
 	return target, nil
 }

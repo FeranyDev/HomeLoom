@@ -159,6 +159,20 @@ func TestTargetPairingMaintenancePreservesConfiguration(t *testing.T) {
 	}
 }
 
+func TestTargetRefreshRebuildsOnlyEnabledConsumerGraphs(t *testing.T) {
+	enabled := target.Config{ID: "apple-main", Type: "apple-hap", Name: "Main", Enabled: true, Address: ":51826", Pin: "12345678", SetupID: "MAIN", StorePath: "data/hap/apple-main"}
+	disabled := target.Config{ID: "apple-off", Type: "apple-hap", Name: "Off", Enabled: false, Address: ":51827", Pin: "12345678", SetupID: "OFF1", StorePath: "data/hap/apple-off"}
+	runtime := &targetRuntimeStub{}
+	service := NewTargetService(nil, &targetStoreStub{}, enabled, disabled)
+	service.SetRuntime(runtime)
+	if err := service.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime.applied) != 1 || runtime.applied[0].ID != enabled.ID {
+		t.Fatalf("refreshed targets = %#v", runtime.applied)
+	}
+}
+
 func TestSlowTargetStatusSubscriberDoesNotBlockUpdates(t *testing.T) {
 	service := NewTargetService([]TargetRegistration{{Info: TargetInfo{ID: "one", Status: "starting"}}}, &targetStoreStub{})
 	blocked := make(chan struct{})

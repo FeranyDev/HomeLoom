@@ -3,6 +3,8 @@ package xiaomi
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -12,11 +14,12 @@ import (
 )
 
 type fakeHub struct {
-	mu       sync.Mutex
-	value    any
-	handler  func(hubIncoming)
-	actions  int
-	connects int
+	mu         sync.Mutex
+	value      any
+	handler    func(hubIncoming)
+	actions    int
+	connects   int
+	deviceList json.RawMessage
 }
 
 func (f *fakeHub) Connect(context.Context, context.Context) error {
@@ -27,6 +30,9 @@ func (f *fakeHub) Connect(context.Context, context.Context) error {
 }
 func (f *fakeHub) Close(context.Context) error { return nil }
 func (f *fakeHub) DeviceList(context.Context) (json.RawMessage, error) {
+	if len(f.deviceList) > 0 {
+		return append(json.RawMessage(nil), f.deviceList...), nil
+	}
 	return json.RawMessage(`{"code":0,"result":{"list":[{"did":"123"}]}}`), nil
 }
 func (f *fakeHub) GetProperty(context.Context, string, int, int) (json.RawMessage, error) {
@@ -105,6 +111,72 @@ func TestProviderReadWriteAndNotification(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("notification was not broadcast")
+	}
+}
+
+func TestProviderLoadsCompleteMIoTSourceCatalog(t *testing.T) {
+	specType := "urn:miot-spec-v2:device:switch:0000A003:vendor-v1:1"
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/instance" || request.URL.Query().Get("type") != specType {
+			http.NotFound(writer, request)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"type":"urn:miot-spec-v2:device:switch:0000A003:vendor-v1:1","description":"Switch","services":[{"iid":2,"type":"urn:miot-spec-v2:service:switch:0000780C:vendor-v1:1","description":"Switch","properties":[{"iid":1,"type":"urn:miot-spec-v2:property:on:00000006:vendor-v1:1","description":"Switch Status","format":"bool","access":["read","write","notify"]},{"iid":2,"type":"urn:miot-spec-v2:property:temperature:00000020:vendor-v1:1","description":"Temperature","format":"float","access":["read","write","notify"],"unit":"celsius","value-range":[-20,80,0.1]}],"actions":[{"iid":1,"type":"urn:miot-spec-v2:action:toggle:0000280C:vendor-v1:1","description":"Toggle","in":[],"out":[]}],"events":[{"iid":1,"type":"urn:miot-spec-v2:event:fault:00005005:vendor-v1:1","description":"Fault","arguments":[2]}]}]}`))
+	}))
+	defer server.Close()
+	resolver := NewSpecResolver(nil)
+	resolver.baseURL, resolver.client = server.URL, server.Client()
+	hub := &fakeHub{value: 23.5, deviceList: json.RawMessage(`{"code":0,"result":{"list":[{"did":"123","name":"米家开关","model":"vendor.switch.v1","specType":"urn:miot-spec-v2:device:switch:0000A003:vendor-v1:1"}]}}`)}
+	provider, err := newProviderWithResolver("xiaomi-main", "米家", testConfig(), func() hubClient { return hub }, resolver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := provider.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close(ctx)
+
+	catalog, err := provider.SourceCatalog(ctx)
+	if err != nil || len(catalog) != 1 || !catalog[0].Catalog.Complete || catalog[0].Catalog.SpecType != specType {
+		t.Fatalf("catalog=%#v err=%v", catalog, err)
+	}
+	property, ok := catalog[0].Property("miot-2", "service-2", "property-2")
+	if !ok || property.Definition.Name != "Temperature" || property.Definition.Min == nil || *property.Definition.Min != -20 {
+		t.Fatalf("native temperature property=%#v", property)
+	}
+	capability := catalog[0].Endpoints[len(catalog[0].Endpoints)-1].Capabilities[0]
+	if len(capability.Commands) != 1 || len(capability.Events) != 1 {
+		t.Fatalf("native definitions=%#v", capability)
+	}
+	read, err := provider.ReadProperty(ctx, providersdk.PropertyReadRequest{DeviceID: "xiaomi-switch", EndpointID: "miot-2", CapabilityID: "service-2", PropertyID: "property-2"})
+	if err != nil || read.Value.Number == nil || *read.Value.Number != 23.5 {
+		t.Fatalf("native read=%#v err=%v", read, err)
+	}
+	written, err := provider.WriteProperty(ctx, providersdk.PropertyWriteRequest{DeviceID: "xiaomi-switch", EndpointID: "miot-2", CapabilityID: "service-2", PropertyID: "property-2", Value: device.NumberValue(24.5)})
+	writtenProperty, _ := written.Property("miot-2", "service-2", "property-2")
+	if err != nil || writtenProperty.Value.Number == nil || *writtenProperty.Value.Number != 24.5 {
+		t.Fatalf("native write=%#v err=%v", writtenProperty, err)
+	}
+	discovered, _ := provider.DiscoverDevices(ctx)
+	if len(discovered) != 1 || discovered[0].NormalizeModelParameters() != nil {
+		t.Fatalf("complete native snapshot did not preserve unified model compatibility: %#v", discovered)
+	}
+
+	events := make(chan device.Device, 1)
+	unsubscribe := provider.Subscribe(func(item device.Device) { events <- item })
+	defer unsubscribe()
+	hub.handler(hubIncoming{Topic: "master/appMsg/notify/iot/123/property/2.2", Payload: json.RawMessage(`{"did":"123","siid":2,"piid":2,"value":25.5}`)})
+	select {
+	case updated := <-events:
+		property, _ := updated.Property("miot-2", "service-2", "property-2")
+		if property.Value.Number == nil || *property.Value.Number != 25.5 {
+			t.Fatalf("native notification=%#v", property)
+		}
+	case <-ctx.Done():
+		t.Fatal("native notification was not broadcast")
 	}
 }
 

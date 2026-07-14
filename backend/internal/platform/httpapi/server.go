@@ -434,7 +434,66 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		return c.NoContent(http.StatusNoContent)
 	})
 	e.GET("/api/v1/device-models", func(c echo.Context) error {
+		if server.profiles != nil {
+			return c.JSON(http.StatusOK, map[string]any{"data": server.profiles.ModelContracts()})
+		}
 		return c.JSON(http.StatusOK, map[string]any{"data": device.ModelContracts()})
+	})
+	e.GET("/api/v1/mapping/catalog", func(c echo.Context) error {
+		models := device.ModelContracts()
+		if server.profiles != nil {
+			models = server.profiles.ModelContracts()
+		}
+		items, err := devices.ProviderCatalog(c.Request().Context())
+		if err != nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "provider property catalog is unavailable").SetInternal(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": map[string]any{
+			"providers": items, "models": models, "consumers": mapping.BuiltInConsumerCatalogs(),
+		}})
+	})
+	e.GET("/api/v1/device-models/custom-properties", func(c echo.Context) error {
+		if server.profiles == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "custom model properties are unavailable")
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": server.profiles.ListCustomModelProperties()})
+	})
+	e.POST("/api/v1/device-models/custom-properties", func(c echo.Context) error {
+		if server.profiles == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "custom model properties are unavailable")
+		}
+		var item mapping.CustomModelProperty
+		if err := c.Bind(&item); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid custom model property")
+		}
+		created, err := server.profiles.CreateCustomModelProperty(c.Request().Context(), item)
+		if err != nil {
+			return profileHTTPError(err)
+		}
+		return c.JSON(http.StatusCreated, map[string]any{"data": created})
+	})
+	e.PUT("/api/v1/device-models/custom-properties/:id", func(c echo.Context) error {
+		if server.profiles == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "custom model properties are unavailable")
+		}
+		var item mapping.CustomModelProperty
+		if err := c.Bind(&item); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid custom model property")
+		}
+		updated, err := server.profiles.UpdateCustomModelProperty(c.Request().Context(), c.Param("id"), item)
+		if err != nil {
+			return profileHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": updated})
+	})
+	e.DELETE("/api/v1/device-models/custom-properties/:id", func(c echo.Context) error {
+		if server.profiles == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "custom model properties are unavailable")
+		}
+		if err := server.profiles.DeleteCustomModelProperty(c.Request().Context(), c.Param("id")); err != nil {
+			return profileHTTPError(err)
+		}
+		return c.NoContent(http.StatusNoContent)
 	})
 	e.GET("/api/v1/system/settings", func(c echo.Context) error {
 		if server.settings == nil {
@@ -1521,7 +1580,10 @@ func profileHTTPError(err error) error {
 	if errors.Is(err, application.ErrBindingNotFound) {
 		return echo.NewHTTPError(http.StatusNotFound, "mapping binding not found")
 	}
-	if errors.Is(err, application.ErrProfileExists) || errors.Is(err, application.ErrProfileBuiltIn) || errors.Is(err, application.ErrProfileInUse) || errors.Is(err, application.ErrBindingExists) {
+	if errors.Is(err, application.ErrCustomModelPropertyNotFound) {
+		return echo.NewHTTPError(http.StatusNotFound, "custom model property not found")
+	}
+	if errors.Is(err, application.ErrProfileExists) || errors.Is(err, application.ErrProfileBuiltIn) || errors.Is(err, application.ErrProfileInUse) || errors.Is(err, application.ErrBindingExists) || errors.Is(err, application.ErrCustomModelPropertyExists) {
 		return echo.NewHTTPError(http.StatusConflict, err.Error())
 	}
 	var validation *application.ValidationError

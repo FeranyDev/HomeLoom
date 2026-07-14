@@ -9,6 +9,9 @@ backups/
 backend/.cache/
 .cache/
 
+# Local Xiaomi central hub reference source (not part of HomeLoom).
+xiaomi-central-hub-client-oauth-tls-fix-source/
+
 frontend/node_modules/
 frontend/dist/
 frontend/coverage/

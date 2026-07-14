@@ -136,7 +136,7 @@ providerLoop:
 		for _, item := range items {
 			item.ProviderID = id
 			item.NormalizeAvailability()
-			if err := item.NormalizeModelParameters(); err != nil {
+			if err := item.ValidateStructure(); err != nil {
 				m.mu.Lock()
 				m.markFailureLocked(current, fmt.Errorf("invalid device snapshot: %w", err))
 				m.mu.Unlock()
@@ -160,6 +160,55 @@ providerLoop:
 	m.routes = routes
 	m.mu.Unlock()
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result, nil
+}
+
+// SourceCatalog aggregates native catalogs from running providers. Providers
+// without a specialized catalog contract fall back to their discovery
+// snapshot, which is complete relative to that Provider's published contract.
+func (m *Manager) SourceCatalog(ctx context.Context) ([]providersdk.SourceCatalogDevice, error) {
+	m.mu.RLock()
+	ids := append([]string(nil), m.order...)
+	m.mu.RUnlock()
+	result := make([]providersdk.SourceCatalogDevice, 0)
+	for _, id := range ids {
+		m.mu.RLock()
+		current := m.providers[id]
+		running := current != nil && current.status == "running"
+		m.mu.RUnlock()
+		if !running {
+			continue
+		}
+		if cataloger, ok := current.provider.(providersdk.SourceCataloger); ok {
+			items, err := cataloger.SourceCatalog(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("source catalog for provider %q: %w", id, err)
+			}
+			for index := range items {
+				items[index].ProviderID = id
+			}
+			result = append(result, items...)
+			continue
+		}
+		discoverer, ok := current.provider.(providersdk.Discoverer)
+		if !ok {
+			continue
+		}
+		items, err := discoverer.DiscoverDevices(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("source catalog fallback for provider %q: %w", id, err)
+		}
+		for _, item := range items {
+			item.ProviderID = id
+			result = append(result, providersdk.SourceCatalogDevice{Device: item, Catalog: providersdk.SourceCatalogMetadata{Complete: true, Source: "provider-discovery", FetchedAt: time.Now().UTC()}})
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].ProviderID != result[j].ProviderID {
+			return result[i].ProviderID < result[j].ProviderID
+		}
+		return result[i].ID < result[j].ID
+	})
 	return result, nil
 }
 
@@ -202,7 +251,7 @@ func (m *Manager) Apply(ctx context.Context, item providersdk.Provider) error {
 		for index := range items {
 			items[index].ProviderID = id
 			items[index].NormalizeAvailability()
-			if err := items[index].NormalizeModelParameters(); err != nil {
+			if err := items[index].ValidateStructure(); err != nil {
 				_ = item.Close(ctx)
 				return fmt.Errorf("provider %q returned invalid device snapshot: %w", id, err)
 			}
@@ -270,7 +319,7 @@ func (m *Manager) reconcileReconfigured(ctx context.Context, id string, current 
 	for index := range items {
 		items[index].ProviderID = id
 		items[index].NormalizeAvailability()
-		if err := items[index].NormalizeModelParameters(); err != nil {
+		if err := items[index].ValidateStructure(); err != nil {
 			return fmt.Errorf("provider %q returned invalid device snapshot: %w", id, err)
 		}
 	}
@@ -360,7 +409,7 @@ func (m *Manager) attach(id string, current *managedProvider) {
 	unsubscribe := subscriber.Subscribe(func(item device.Device) {
 		item.ProviderID = id
 		item.NormalizeAvailability()
-		if err := item.NormalizeModelParameters(); err != nil {
+		if err := item.ValidateStructure(); err != nil {
 			m.mu.Lock()
 			if m.providers[id] == current {
 				m.markFailureLocked(current, fmt.Errorf("invalid device event: %w", err))
@@ -421,7 +470,7 @@ func (m *Manager) WriteProperty(ctx context.Context, request providersdk.Propert
 	}
 	item.ProviderID = id
 	item.NormalizeAvailability()
-	if err := item.NormalizeModelParameters(); err != nil {
+	if err := item.ValidateStructure(); err != nil {
 		return device.Device{}, fmt.Errorf("provider %q returned invalid device snapshot: %w", id, err)
 	}
 	return item, nil
@@ -460,7 +509,7 @@ func (m *Manager) ExecuteCommand(ctx context.Context, request providersdk.Comman
 	}
 	item.ProviderID = id
 	item.NormalizeAvailability()
-	if err := item.NormalizeModelParameters(); err != nil {
+	if err := item.ValidateStructure(); err != nil {
 		return device.Device{}, fmt.Errorf("provider %q returned invalid device snapshot: %w", id, err)
 	}
 	return item, nil
@@ -484,7 +533,7 @@ func (m *Manager) Simulate(ctx context.Context, request providersdk.SimulationRe
 	}
 	item.ProviderID = id
 	item.NormalizeAvailability()
-	if err := item.NormalizeModelParameters(); err != nil {
+	if err := item.ValidateStructure(); err != nil {
 		return device.Device{}, fmt.Errorf("provider %q returned invalid device snapshot: %w", id, err)
 	}
 	return item, nil
@@ -702,6 +751,7 @@ func (m *Manager) Close(ctx context.Context) error {
 
 var _ providersdk.Provider = (*Manager)(nil)
 var _ providersdk.Discoverer = (*Manager)(nil)
+var _ providersdk.SourceCataloger = (*Manager)(nil)
 var _ providersdk.PropertyReader = (*Manager)(nil)
 var _ providersdk.PropertyWriter = (*Manager)(nil)
 var _ providersdk.CommandExecutor = (*Manager)(nil)

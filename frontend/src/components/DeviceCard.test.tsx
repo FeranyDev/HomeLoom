@@ -10,6 +10,14 @@ const sensorDevice = (type: Device['type'], capabilityId: string, propertyId: st
 })
 
 describe('DeviceCard device types', () => {
+	it('opens mapping configuration from the corresponding device card', async () => {
+		const device = sensorDevice('temperature-sensor', 'temperature', 'current-temperature', { type: 'number', number: 20 })
+		const onMapping = vi.fn()
+		render(<DeviceCard device={device} pending={false} onPowerChange={() => {}} onDetails={() => {}} onMapping={onMapping} />)
+		await userEvent.click(screen.getByRole('button', { name: '配置映射' }))
+		expect(onMapping).toHaveBeenCalledWith(device)
+	})
+
 	it('exposes persistent disable separately from provider availability', async () => {
 		const device = sensorDevice('temperature-sensor', 'temperature', 'current-temperature', { type: 'number', number: 20 })
 		const onEnabledChange = vi.fn()

@@ -78,6 +78,35 @@ func NewTargetService(registrations []TargetRegistration, store TargetStore, con
 
 func (s *TargetService) SetRuntime(runtime TargetRuntime) { s.runtime = runtime }
 
+// Refresh reapplies enabled Target configurations after Consumer mapping
+// changes. Pairing identity remains in the existing store path while the
+// accessory graph is rebuilt from the latest Consumer projection.
+func (s *TargetService) Refresh(ctx context.Context) error {
+	s.mu.RLock()
+	runtime := s.runtime
+	configs := make([]domaintarget.Config, 0, len(s.configs))
+	for _, item := range s.configs {
+		if item.Enabled {
+			configs = append(configs, item)
+		}
+	}
+	s.mu.RUnlock()
+	if runtime == nil {
+		return nil
+	}
+	for _, item := range configs {
+		registration, err := runtime.Apply(ctx, item)
+		if err != nil {
+			return fmt.Errorf("refresh target %q: %w", item.ID, err)
+		}
+		s.mu.Lock()
+		s.targets[item.ID] = registration
+		s.mu.Unlock()
+		s.notify(registration.Info)
+	}
+	return nil
+}
+
 func (s *TargetService) Save(ctx context.Context, item domaintarget.Config) (TargetInfo, error) {
 	s.mu.RLock()
 	item, err := s.withDefaults(item)

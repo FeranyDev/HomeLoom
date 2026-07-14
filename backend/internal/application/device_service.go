@@ -88,6 +88,19 @@ type PropertyMapper interface {
 	TransformPropertyDefinition(providerID, deviceID, endpointID, capabilityID, propertyID string, definition device.PropertyDefinition) (device.PropertyDefinition, string, bool, error)
 }
 
+type PropertyPathMapper interface {
+	ResolvePropertyPath(providerID, deviceID, endpointID, capabilityID, propertyID string, direction mapping.Direction) (device.ParameterPath, string, bool, error)
+}
+
+type ConsumerPropertyMapper interface {
+	ProjectConsumerDevice(consumerID string, item device.Device) (device.Device, error)
+	ResolveConsumerWrite(providerID, deviceID, consumerID string, deviceType device.Type, endpointID, capabilityID, propertyID string, value device.PropertyValue) (device.ParameterPath, device.PropertyValue, string, bool, error)
+}
+
+type ModelDefinitionMapper interface {
+	ResolveModelDefinition(deviceType device.Type, path device.ParameterPath, fallback device.PropertyDefinition) (device.PropertyDefinition, bool)
+}
+
 type Readiness struct {
 	Ready    bool   `json:"ready"`
 	Database string `json:"database"`
@@ -487,6 +500,54 @@ func (s *DeviceService) List(ctx context.Context) ([]device.Device, error) {
 	return s.registry.List(), nil
 }
 
+// ProviderCatalog returns the unprojected Provider snapshots for mapping
+// configuration. It intentionally bypasses Provider → model routes so the UI
+// can display every raw property address offered by the Provider.
+func (s *DeviceService) ProviderCatalog(ctx context.Context) ([]providersdk.SourceCatalogDevice, error) {
+	if cataloger, ok := s.provider.(providersdk.SourceCataloger); ok {
+		items, err := cataloger.SourceCatalog(ctx)
+		if err == nil {
+			return items, nil
+		}
+		fallback := s.registry.List()
+		if len(fallback) == 0 {
+			return nil, err
+		}
+		result := make([]providersdk.SourceCatalogDevice, 0, len(fallback))
+		for _, item := range fallback {
+			result = append(result, providersdk.SourceCatalogDevice{Device: item, Catalog: providersdk.SourceCatalogMetadata{Complete: false, Source: "unified-registry-fallback", Error: err.Error()}})
+		}
+		return result, nil
+	}
+	if s.discoverer == nil {
+		items := s.registry.List()
+		result := make([]providersdk.SourceCatalogDevice, 0, len(items))
+		for _, item := range items {
+			result = append(result, providersdk.SourceCatalogDevice{Device: item, Catalog: providersdk.SourceCatalogMetadata{Complete: false, Source: "unified-registry-fallback", Error: "provider does not expose a native source catalog"}})
+		}
+		return result, nil
+	}
+	items, err := s.discoverer.DiscoverDevices(ctx)
+	if err != nil {
+		// Existing registry data is still useful when a Provider is temporarily
+		// offline; callers should only fail when no catalog can be shown.
+		fallback := s.registry.List()
+		if len(fallback) > 0 {
+			result := make([]providersdk.SourceCatalogDevice, 0, len(fallback))
+			for _, item := range fallback {
+				result = append(result, providersdk.SourceCatalogDevice{Device: item, Catalog: providersdk.SourceCatalogMetadata{Complete: false, Source: "unified-registry-fallback", Error: err.Error()}})
+			}
+			return result, nil
+		}
+		return nil, err
+	}
+	result := make([]providersdk.SourceCatalogDevice, 0, len(items))
+	for _, item := range items {
+		result = append(result, providersdk.SourceCatalogDevice{Device: item, Catalog: providersdk.SourceCatalogMetadata{Complete: true, Source: "provider-discovery", FetchedAt: time.Now().UTC()}})
+	}
+	return result, nil
+}
+
 func (s *DeviceService) SetPower(ctx context.Context, id string, power bool) (device.Device, error) {
 	item, ok := s.registry.Get(id)
 	if ok && (item.Disabled || item.Removed) {
@@ -498,12 +559,16 @@ func (s *DeviceService) SetPower(ctx context.Context, id string, power bool) (de
 	if s.writer == nil {
 		return device.Device{}, ErrPropertyUnsupported
 	}
+	providerPath, _, _, err := s.resolvePropertyPath(item.ProviderID, id, "main", "switch", "power", mapping.DirectionReverse)
+	if err != nil {
+		return device.Device{}, err
+	}
 	value, _, _, err := s.mapProperty(item.ProviderID, id, "main", "switch", "power", device.BoolValue(power), mapping.DirectionReverse)
 	if err != nil {
 		return device.Device{}, err
 	}
 	updated, err := s.writer.WriteProperty(ctx, providersdk.PropertyWriteRequest{
-		DeviceID: id, EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Value: value,
+		DeviceID: id, EndpointID: providerPath.EndpointID, CapabilityID: providerPath.CapabilityID, PropertyID: providerPath.PropertyID, Value: value,
 	})
 	if err != nil {
 		return device.Device{}, err
@@ -518,34 +583,63 @@ func (s *DeviceService) ReadProperty(ctx context.Context, deviceID, endpointID, 
 	if s.reader == nil {
 		return device.Property{}, ErrPropertyUnsupported
 	}
-	property, err := s.reader.ReadProperty(ctx, providersdk.PropertyReadRequest{
-		DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID, PropertyID: propertyID,
-	})
-	if err != nil {
-		return device.Property{}, err
-	}
 	item, ok := s.registry.Get(deviceID)
 	if !ok {
 		return device.Property{}, ErrDeviceNotFound
 	}
+	providerPath, _, _, err := s.resolvePropertyPath(item.ProviderID, deviceID, endpointID, capabilityID, propertyID, mapping.DirectionReverse)
+	if err != nil {
+		return device.Property{}, err
+	}
+	property, err := s.reader.ReadProperty(ctx, providersdk.PropertyReadRequest{
+		DeviceID: deviceID, EndpointID: providerPath.EndpointID, CapabilityID: providerPath.CapabilityID, PropertyID: providerPath.PropertyID,
+	})
+	if err != nil {
+		return device.Property{}, err
+	}
 	if s.propertyMapper != nil {
-		definition, _, _, definitionErr := s.propertyMapper.TransformPropertyDefinition(item.ProviderID, deviceID, endpointID, capabilityID, propertyID, property.Definition)
+		definition, _, _, definitionErr := s.propertyMapper.TransformPropertyDefinition(item.ProviderID, deviceID, providerPath.EndpointID, providerPath.CapabilityID, providerPath.PropertyID, property.Definition)
 		if definitionErr != nil {
 			s.metrics.mappingErrors.Add(1)
 			return device.Property{}, definitionErr
 		}
 		property.Definition = definition
 	}
-	mapped, _, _, err := s.mapProperty(item.ProviderID, deviceID, endpointID, capabilityID, propertyID, property.Value, mapping.DirectionForward)
+	mapped, _, _, err := s.mapProperty(item.ProviderID, deviceID, providerPath.EndpointID, providerPath.CapabilityID, providerPath.PropertyID, property.Value, mapping.DirectionForward)
 	if err != nil {
 		return device.Property{}, err
 	}
 	property.Value = mapped
+	property.Definition.ID = propertyID
 	return property, nil
 }
 
 func (s *DeviceService) ExecutePower(ctx context.Context, id string, power bool) (device.Device, domaincommand.Command, error) {
 	return s.ExecuteProperty(ctx, id, "main", "switch", "power", device.BoolValue(power))
+}
+
+func (s *DeviceService) ProjectForConsumer(consumerID string, item device.Device) (device.Device, error) {
+	mapper, ok := s.propertyMapper.(ConsumerPropertyMapper)
+	if !ok {
+		return item, nil
+	}
+	return mapper.ProjectConsumerDevice(consumerID, item)
+}
+
+func (s *DeviceService) ExecuteConsumerProperty(ctx context.Context, consumerID, deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) (device.Device, domaincommand.Command, error) {
+	item, ok := s.registry.Get(deviceID)
+	if !ok {
+		return device.Device{}, domaincommand.Command{}, ErrDeviceNotFound
+	}
+	mapper, ok := s.propertyMapper.(ConsumerPropertyMapper)
+	if !ok {
+		return s.ExecuteProperty(ctx, deviceID, endpointID, capabilityID, propertyID, value)
+	}
+	path, mapped, _, _, err := mapper.ResolveConsumerWrite(item.ProviderID, item.ID, consumerID, item.Type, endpointID, capabilityID, propertyID, value)
+	if err != nil {
+		return device.Device{}, domaincommand.Command{}, err
+	}
+	return s.ExecuteProperty(ctx, deviceID, path.EndpointID, path.CapabilityID, path.PropertyID, mapped)
 }
 
 func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) (result device.Device, resultCommand domaincommand.Command, resultErr error) {
@@ -623,8 +717,16 @@ func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointI
 		current, _ := s.commands.Get(command.ID)
 		return device.Device{}, current, mapErr
 	}
+	providerPath, _, _, pathErr := s.resolvePropertyPath(registered.ProviderID, deviceID, endpointID, capabilityID, propertyID, mapping.DirectionReverse)
+	if pathErr != nil {
+		s.commands.Rejected(command.ID, pathErr)
+		s.rollbackOptimistic(command.ID, previous, hadPrevious)
+		s.metrics.commandsRejected.Add(1)
+		current, _ := s.commands.Get(command.ID)
+		return device.Device{}, current, pathErr
+	}
 	item, err := s.writer.WriteProperty(operation.ctx, providersdk.PropertyWriteRequest{
-		DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID, PropertyID: propertyID, Value: providerValue,
+		DeviceID: deviceID, EndpointID: providerPath.EndpointID, CapabilityID: providerPath.CapabilityID, PropertyID: providerPath.PropertyID, Value: providerValue,
 	})
 	if err != nil {
 		if current, ok := s.commands.Get(command.ID); ok && current.Status == domaincommand.StatusSuperseded {
@@ -1032,15 +1134,16 @@ func (s *DeviceService) mapSnapshot(item device.Device) (device.Device, error) {
 		return item, nil
 	}
 	result := item
-	result.Endpoints = append([]device.Endpoint(nil), item.Endpoints...)
-	for endpointIndex := range result.Endpoints {
-		endpoint := &result.Endpoints[endpointIndex]
-		endpoint.Capabilities = append([]device.Capability(nil), endpoint.Capabilities...)
-		for capabilityIndex := range endpoint.Capabilities {
-			capability := &endpoint.Capabilities[capabilityIndex]
-			capability.Properties = append([]device.Property(nil), capability.Properties...)
-			for propertyIndex := range capability.Properties {
-				property := &capability.Properties[propertyIndex]
+	result.Endpoints = nil
+	for _, endpoint := range item.Endpoints {
+		for _, capability := range endpoint.Capabilities {
+			if len(capability.Commands) > 0 || len(capability.Events) > 0 {
+				target := ensureCapability(&result, device.ParameterPath{EndpointID: endpoint.ID, CapabilityID: capability.ID}, endpoint.Name, endpoint.Type, capability.Type)
+				target.Commands = append([]device.CommandDefinition(nil), capability.Commands...)
+				target.Events = append([]device.EventDefinition(nil), capability.Events...)
+			}
+			for _, sourceProperty := range capability.Properties {
+				property := sourceProperty
 				definition, _, _, definitionErr := s.propertyMapper.TransformPropertyDefinition(item.ProviderID, item.ID, endpoint.ID, capability.ID, property.Definition.ID, property.Definition)
 				if definitionErr != nil {
 					s.metrics.mappingErrors.Add(1)
@@ -1050,12 +1153,56 @@ func (s *DeviceService) mapSnapshot(item device.Device) (device.Device, error) {
 				if err != nil {
 					return device.Device{}, err
 				}
-				property.Definition = definition
-				property.Value = value
+				targetPath, _, _, pathErr := s.resolvePropertyPath(item.ProviderID, item.ID, endpoint.ID, capability.ID, property.Definition.ID, mapping.DirectionForward)
+				if pathErr != nil {
+					s.metrics.mappingErrors.Add(1)
+					return device.Device{}, pathErr
+				}
+				definition.ID = targetPath.PropertyID
+				if resolver, ok := s.propertyMapper.(ModelDefinitionMapper); ok {
+					definition, _ = resolver.ResolveModelDefinition(item.Type, targetPath, definition)
+				}
+				property.Definition, property.Value = definition, value
+				target := ensureCapability(&result, targetPath, endpoint.Name, endpoint.Type, capability.Type)
+				for _, existing := range target.Properties {
+					if existing.Definition.ID == targetPath.PropertyID {
+						return device.Device{}, fmt.Errorf("mapping produces duplicate unified property %s for device %q", targetPath, item.ID)
+					}
+				}
+				target.Properties = append(target.Properties, property)
 			}
 		}
 	}
+	if err := result.NormalizeModelParameters(); err != nil {
+		return device.Device{}, fmt.Errorf("normalize mapped device %q: %w", item.ID, err)
+	}
 	return result, nil
+}
+
+func ensureCapability(item *device.Device, path device.ParameterPath, endpointName, endpointType, capabilityType string) *device.Capability {
+	for endpointIndex := range item.Endpoints {
+		if item.Endpoints[endpointIndex].ID != path.EndpointID {
+			continue
+		}
+		for capabilityIndex := range item.Endpoints[endpointIndex].Capabilities {
+			if item.Endpoints[endpointIndex].Capabilities[capabilityIndex].ID == path.CapabilityID {
+				return &item.Endpoints[endpointIndex].Capabilities[capabilityIndex]
+			}
+		}
+		item.Endpoints[endpointIndex].Capabilities = append(item.Endpoints[endpointIndex].Capabilities, device.Capability{ID: path.CapabilityID, Type: capabilityType})
+		return &item.Endpoints[endpointIndex].Capabilities[len(item.Endpoints[endpointIndex].Capabilities)-1]
+	}
+	if endpointName == "" || path.EndpointID != "main" {
+		endpointName = path.EndpointID
+	}
+	if endpointType == "" || path.EndpointID != "main" {
+		endpointType = path.EndpointID
+	}
+	if capabilityType == "" || path.CapabilityID == "" {
+		capabilityType = path.CapabilityID
+	}
+	item.Endpoints = append(item.Endpoints, device.Endpoint{ID: path.EndpointID, Name: endpointName, Type: endpointType, Capabilities: []device.Capability{{ID: path.CapabilityID, Type: capabilityType}}})
+	return &item.Endpoints[len(item.Endpoints)-1].Capabilities[0]
 }
 
 func (s *DeviceService) mapProperty(providerID, deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue, direction mapping.Direction) (device.PropertyValue, string, bool, error) {
@@ -1071,6 +1218,15 @@ func (s *DeviceService) mapProperty(providerID, deviceID, endpointID, capability
 		s.metrics.mappingApplied.Add(1)
 	}
 	return mapped, bindingID, applied, nil
+}
+
+func (s *DeviceService) resolvePropertyPath(providerID, deviceID, endpointID, capabilityID, propertyID string, direction mapping.Direction) (device.ParameterPath, string, bool, error) {
+	identity := device.ParameterPath{EndpointID: endpointID, CapabilityID: capabilityID, PropertyID: propertyID}
+	mapper, ok := s.propertyMapper.(PropertyPathMapper)
+	if !ok {
+		return identity, "", false, nil
+	}
+	return mapper.ResolvePropertyPath(providerID, deviceID, endpointID, capabilityID, propertyID, direction)
 }
 
 func (s *DeviceService) publishDevice(item device.Device) {

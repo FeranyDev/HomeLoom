@@ -128,8 +128,9 @@ func main() {
 		logger.Error("mqtt provider factory registration failed", "error", err)
 		os.Exit(1)
 	}
+	xiaomiSpecs := xiaomi.NewSpecResolver(store)
 	if err := factory.Register("xiaomi", func(config providerconfig.Config) (providersdk.Provider, error) {
-		return xiaomi.NewProviderFromConfig(config)
+		return xiaomi.NewProviderFromConfigWithSpecResolver(config, xiaomiSpecs)
 	}); err != nil {
 		logger.Error("xiaomi provider factory registration failed", "error", err)
 		os.Exit(1)
@@ -162,13 +163,6 @@ func main() {
 	}
 	service := application.NewDeviceService(providerManager, store, profileService)
 	defer service.Close()
-	profileService.SetChangeHandler(func(changeCtx context.Context) {
-		refreshCtx, cancelRefresh := context.WithTimeout(context.WithoutCancel(changeCtx), 10*time.Second)
-		defer cancelRefresh()
-		if refreshErr := service.RefreshDevices(refreshCtx); refreshErr != nil {
-			logger.Error("mapping hot reload failed", "error", refreshErr)
-		}
-	})
 	if err := service.LoadDevicePreferences(ctx); err != nil {
 		logger.Error("device preference load failed", "error", err)
 		os.Exit(1)
@@ -202,6 +196,17 @@ func main() {
 	targetService := application.NewTargetService(registrations, store, targetConfigs...)
 	targetService.SetRuntime(manager)
 	manager.SetStatusHandler(targetService.SetStatus)
+	profileService.SetChangeHandler(func(changeCtx context.Context) {
+		refreshCtx, cancelRefresh := context.WithTimeout(context.WithoutCancel(changeCtx), 15*time.Second)
+		defer cancelRefresh()
+		if refreshErr := service.RefreshDevices(refreshCtx); refreshErr != nil {
+			logger.Error("mapping hot reload failed", "error", refreshErr)
+			return
+		}
+		if refreshErr := targetService.Refresh(refreshCtx); refreshErr != nil {
+			logger.Error("consumer mapping target refresh failed", "error", refreshErr)
+		}
+	})
 	server := httpapi.NewServer(settings.Server.Address, service, targetService, logger, providerService)
 	if err := server.SetTrustedProxies(settings.Server.TrustedProxies); err != nil {
 		logger.Error("trusted proxy configuration failed", "error", err)

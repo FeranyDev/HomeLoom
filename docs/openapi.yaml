@@ -93,6 +93,23 @@ paths:
                 required: [data]
                 properties:
                   data: { type: array, items: { $ref: "#/components/schemas/DeviceModelContract" } }
+  /api/v1/device-models/custom-properties:
+    get:
+      operationId: listCustomModelProperties
+      responses: { "200": { description: Database-backed custom unified-model properties, content: { application/json: { schema: { type: object, required: [data], properties: { data: { type: array, items: { $ref: "#/components/schemas/CustomModelProperty" } } } } } } } }
+    post:
+      operationId: createCustomModelProperty
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CustomModelProperty" } } } }
+      responses: { "201": { description: Custom property persisted and added to the model catalog }, "400": { $ref: "#/components/responses/BadRequest" }, "409": { description: ID or model path already exists } }
+  /api/v1/device-models/custom-properties/{propertyId}:
+    parameters: [{ name: propertyId, in: path, required: true, schema: { type: string } }]
+    put:
+      operationId: updateCustomModelProperty
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CustomModelProperty" } } } }
+      responses: { "200": { description: Custom property updated }, "400": { $ref: "#/components/responses/BadRequest" }, "404": { $ref: "#/components/responses/NotFound" } }
+    delete:
+      operationId: deleteCustomModelProperty
+      responses: { "204": { description: Custom property deleted }, "404": { $ref: "#/components/responses/NotFound" }, "409": { description: Property is used by a mapping route } }
   /api/v1/system/settings:
     get:
       operationId: getRuntimeSettings
@@ -181,6 +198,29 @@ paths:
                 properties: { data: { $ref: "#/components/schemas/MappingPreviewResult" } }
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/mapping/catalog:
+    get:
+      operationId: getMappingCatalog
+      description: Returns native Provider source catalogs before Provider-to-model projection. Every Provider device includes catalog provenance and an explicit completeness flag; Xiaomi catalogs are expanded from cached MIoT Spec definitions when available.
+      description: Returns unprojected Provider attributes, the merged three-level unified model catalog, and every built-in Consumer property.
+      responses:
+        "200": { description: Visual mapping catalog, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/MappingCatalog" } } } } } }
+  /api/v1/mapping/bindings:
+    get:
+      operationId: listMappingBindings
+      responses: { "200": { description: Device-scoped Provider and Consumer routes, content: { application/json: { schema: { type: object, required: [data], properties: { data: { type: array, items: { $ref: "#/components/schemas/MappingBinding" } } } } } } } }
+    post:
+      operationId: createMappingBinding
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/MappingBinding" } } } }
+      responses: { "201": { description: Route persisted and applied }, "400": { $ref: "#/components/responses/BadRequest" }, "409": { description: Source or model destination is already routed } }
+  /api/v1/mapping/bindings/{bindingId}:
+    parameters: [{ name: bindingId, in: path, required: true, schema: { type: string } }]
+    get: { operationId: getMappingBinding, responses: { "200": { description: Mapping route }, "404": { $ref: "#/components/responses/NotFound" } } }
+    put:
+      operationId: updateMappingBinding
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/MappingBinding" } } } }
+      responses: { "200": { description: Route updated and reapplied }, "400": { $ref: "#/components/responses/BadRequest" }, "404": { $ref: "#/components/responses/NotFound" } }
+    delete: { operationId: deleteMappingBinding, responses: { "204": { description: Route deleted and runtime refreshed }, "404": { $ref: "#/components/responses/NotFound" } } }
   /api/v1/mapping/profiles:
     get:
       operationId: listMappingProfiles
@@ -545,7 +585,7 @@ components:
         deviceIds: { type: array, items: { type: string } }
     ConfigurationExport:
       type: object
-      required: [formatVersion, generatedAt, providers, targets, settings, profiles]
+      required: [formatVersion, generatedAt, providers, targets, settings, profiles, bindings, customModelProperties]
       properties:
         formatVersion: { type: integer, enum: [1] }
         generatedAt: { type: string, format: date-time }
@@ -553,6 +593,8 @@ components:
         targets: { type: array, items: { $ref: "#/components/schemas/ExportTargetConfig" } }
         settings: { $ref: "#/components/schemas/RuntimeSettings" }
         profiles: { type: array, items: { $ref: "#/components/schemas/MappingProfileInfo" } }
+        bindings: { type: array, items: { $ref: "#/components/schemas/MappingBinding" } }
+        customModelProperties: { type: array, items: { $ref: "#/components/schemas/CustomModelProperty" } }
     DiagnosticBundle:
       type: object
       required: [formatVersion, generatedAt, build, metrics, configuration, recentAudit]
@@ -693,7 +735,7 @@ components:
             capabilityId: { type: string }
             propertyId: { type: string }
         name: { type: string }
-        level: { type: string, enum: [required, optional] }
+        level: { type: string, enum: [required, optional, custom] }
         type: { type: string, enum: [bool, int, number, string, enum] }
         unit: { type: string }
         readable: { type: boolean }
@@ -715,6 +757,89 @@ components:
           properties:
             publisher: { $ref: "#/components/schemas/ParameterRole" }
             consumer: { $ref: "#/components/schemas/ParameterRole" }
+    ModelPath:
+      type: object
+      required: [endpointId, capabilityId, propertyId]
+      properties:
+        endpointId: { type: string }
+        capabilityId: { type: string }
+        propertyId: { type: string }
+    MappingBinding:
+      type: object
+      required: [id, stage, modelEndpointId, modelCapabilityId, modelPropertyId, enabled]
+      properties:
+        id: { type: string }
+        stage: { type: string, enum: [provider, consumer] }
+        profileId: { type: string, description: Empty or omitted means identity conversion. }
+        providerId: { type: string, description: Required for both stages; every route belongs to one concrete Provider device. }
+        deviceId: { type: string, description: Required for both stages; mappings are never inherited by other devices of the same type. }
+        endpointId: { type: string, description: Raw Provider endpoint. }
+        capabilityId: { type: string, description: Raw Provider capability. }
+        propertyId: { type: string, description: Raw Provider property. }
+        deviceType: { type: string }
+        modelEndpointId: { type: string }
+        modelCapabilityId: { type: string }
+        modelPropertyId: { type: string }
+        consumerId: { type: string }
+        consumerProperty: { type: string }
+        enabled: { type: boolean }
+    CustomModelProperty:
+      type: object
+      required: [id, deviceType, endpointId, endpointName, endpointType, capabilityId, capabilityType, definition]
+      properties:
+        id: { type: string }
+        deviceType: { type: string }
+        endpointId: { type: string }
+        endpointName: { type: string }
+        endpointType: { type: string }
+        capabilityId: { type: string }
+        capabilityType: { type: string }
+        definition: { type: object, additionalProperties: true }
+    ConsumerProperty:
+      type: object
+      required: [id, name, deviceType, defaultModelPath, level, type, readable, writable, notifiable]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        deviceType: { type: string }
+        defaultModelPath: { $ref: "#/components/schemas/ModelPath" }
+        level: { type: string, enum: [required, optional, custom] }
+        type: { type: string, enum: [bool, int, number, string, enum] }
+        readable: { type: boolean }
+        writable: { type: boolean }
+        notifiable: { type: boolean }
+    MappingCatalog:
+      type: object
+      required: [providers, models, consumers]
+      properties:
+        providers: { type: array, items: { $ref: "#/components/schemas/SourceCatalogDevice" } }
+        models: { type: array, items: { $ref: "#/components/schemas/DeviceModelContract" } }
+        consumers:
+          type: array
+          items:
+            type: object
+            required: [id, name, properties]
+            properties:
+              id: { type: string }
+              name: { type: string }
+              properties: { type: array, items: { $ref: "#/components/schemas/ConsumerProperty" } }
+    SourceCatalogDevice:
+      allOf:
+        - { $ref: "#/components/schemas/Device" }
+        - type: object
+          required: [catalog]
+          properties:
+            catalog: { $ref: "#/components/schemas/SourceCatalogMetadata" }
+    SourceCatalogMetadata:
+      type: object
+      required: [complete, source]
+      properties:
+        complete: { type: boolean, description: True only when the Provider enumerated the native device schema rather than mirroring configured mappings. }
+        source: { type: string, enum: [provider-discovery, miot-spec.org, miot-spec-cache, configured-mapping-fallback, unified-registry-fallback] }
+        specType: { type: string, description: Resolved MIoT instance URN when applicable. }
+        model: { type: string }
+        fetchedAt: { type: string, format: date-time }
+        error: { type: string, description: Why a complete native catalog could not be produced. }
     Device:
       type: object
       required: [schemaVersion, id, providerId, name, type, availability, online, endpoints, lastUpdateAt]
