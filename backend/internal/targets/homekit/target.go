@@ -195,34 +195,52 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 			bindings.switches[item.ID], bindings.outletInUse[item.ID], bindings.faults[item.ID] = a.Outlet.On, a.Outlet.OutletInUse, fault
 			bindings.accessories = append(bindings.accessories, a.A)
 			created = a.A
-		case device.TypeTemperatureSensor:
+		case device.TypeSinglePropertySensor:
+			_, hasTemperature := item.Property("main", "temperature", "current-temperature")
+			_, hasHumidity := item.Property("main", "humidity", "current-humidity")
+			if !hasTemperature && !hasHumidity {
+				continue
+			}
+			if hasTemperature {
+				a := accessory.NewTemperatureSensor(info)
+				a.A.Id = accessoryIDs[item.ID]
+				fault := characteristic.NewStatusFault()
+				a.TempSensor.AddC(fault.C)
+				bindings.temperatures[item.ID], bindings.faults[item.ID] = a.TempSensor.CurrentTemperature, fault
+				if hasHumidity {
+					humidity := service.NewHumiditySensor()
+					humidityFault := characteristic.NewStatusFault()
+					humidity.AddC(humidityFault.C)
+					a.A.AddS(humidity.S)
+					bindings.humidities[item.ID] = humidity.CurrentRelativeHumidity
+					bindings.extraFaults[item.ID] = append(bindings.extraFaults[item.ID], humidityFault)
+				}
+				bindings.accessories = append(bindings.accessories, a.A)
+				created = a.A
+			} else {
+				a := accessory.New(info, accessory.TypeSensor)
+				a.Id = accessoryIDs[item.ID]
+				sensor := service.NewHumiditySensor()
+				fault := characteristic.NewStatusFault()
+				sensor.AddC(fault.C)
+				a.AddS(sensor.S)
+				bindings.humidities[item.ID], bindings.faults[item.ID] = sensor.CurrentRelativeHumidity, fault
+				bindings.accessories = append(bindings.accessories, a)
+				created = a
+			}
+		case device.TypeTemperatureHumiditySensor:
 			a := accessory.NewTemperatureSensor(info)
 			a.A.Id = accessoryIDs[item.ID]
-			fault := characteristic.NewStatusFault()
-			a.TempSensor.AddC(fault.C)
-			if _, found := item.Property("main", "security", "tampered"); found {
-				current := characteristic.NewStatusTampered()
-				a.TempSensor.AddC(current.C)
-				bindings.tampered[item.ID] = current
-			}
-			bindings.temperatures[item.ID], bindings.faults[item.ID] = a.TempSensor.CurrentTemperature, fault
+			temperatureFault := characteristic.NewStatusFault()
+			a.TempSensor.AddC(temperatureFault.C)
+			humidity := service.NewHumiditySensor()
+			humidityFault := characteristic.NewStatusFault()
+			humidity.AddC(humidityFault.C)
+			a.A.AddS(humidity.S)
+			bindings.temperatures[item.ID], bindings.humidities[item.ID], bindings.faults[item.ID] = a.TempSensor.CurrentTemperature, humidity.CurrentRelativeHumidity, temperatureFault
+			bindings.extraFaults[item.ID] = append(bindings.extraFaults[item.ID], humidityFault)
 			bindings.accessories = append(bindings.accessories, a.A)
 			created = a.A
-		case device.TypeHumiditySensor:
-			a := accessory.New(info, accessory.TypeSensor)
-			a.Id = accessoryIDs[item.ID]
-			sensor := service.NewHumiditySensor()
-			fault := characteristic.NewStatusFault()
-			sensor.AddC(fault.C)
-			if _, found := item.Property("main", "security", "tampered"); found {
-				current := characteristic.NewStatusTampered()
-				sensor.AddC(current.C)
-				bindings.tampered[item.ID] = current
-			}
-			a.AddS(sensor.S)
-			bindings.humidities[item.ID], bindings.faults[item.ID] = sensor.CurrentRelativeHumidity, fault
-			bindings.accessories = append(bindings.accessories, a)
-			created = a
 		case device.TypeContactSensor:
 			a := accessory.NewContactSensor(info)
 			a.A.Id = accessoryIDs[item.ID]

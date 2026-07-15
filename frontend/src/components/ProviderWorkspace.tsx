@@ -5,7 +5,7 @@ import type { Provider, ProviderInput } from '../types/provider'
 import { CollectionEmpty } from './PageState'
 import { ProviderCard } from './ProviderCard'
 
-type SimulationValues = { availability?: DeviceAvailability; online?: boolean; power?: boolean; temperature?: number; humidity?: number; contact?: boolean; motion?: boolean; active?: boolean; speed?: number; mode?: string; filterLife?: number; filterChange?: boolean; position?: number; sequence?: number; repeat?: number }
+type SimulationValues = { availability?: DeviceAvailability; online?: boolean; power?: boolean; value?: number; temperature?: number; humidity?: number; contact?: boolean; motion?: boolean; active?: boolean; speed?: number; mode?: string; filterLife?: number; filterChange?: boolean; position?: number; sequence?: number; repeat?: number }
 
 export function ProviderWorkspace({ providers, devices, onEdit, onManageDevices, onDelete, onRestart, onTest, onSimulate }: {
 	providers: Provider[]

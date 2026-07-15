@@ -108,10 +108,30 @@ func TestFormatPin(t *testing.T) {
 	}
 }
 
+func projectSingleSensorAdapters(items []device.Device) []device.Device {
+	for index := range items {
+		if items[index].Type != device.TypeSinglePropertySensor {
+			continue
+		}
+		property, found := items[index].Property("main", "sensor", "value")
+		if !found {
+			continue
+		}
+		capabilityID, propertyID := "temperature", "current-temperature"
+		if property.Definition.Unit == "percent" {
+			capabilityID, propertyID = "humidity", "current-humidity"
+		}
+		property.Definition.ID = propertyID
+		items[index].Endpoints[0].Capabilities = append(items[index].Endpoints[0].Capabilities, device.Capability{ID: capabilityID, Type: capabilityID + "-sensor", Properties: []device.Property{property}})
+	}
+	return items
+}
+
 func TestAccessoryBindingsUpdateTemperatureAndOfflineFault(t *testing.T) {
 	service := application.NewDeviceService(virtual.NewProvider())
 	defer service.Close()
 	items, _ := service.List(context.Background())
+	items = projectSingleSensorAdapters(items)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	bindings := newAccessoryBindings(items, map[string]bool{}, map[string]uint64{"virtual-switch-1": 7, "virtual-temperature-1": 11}, service, logger)
 	if len(bindings.accessories) != 2 || len(bindings.switches) != 1 || len(bindings.temperatures) != 1 || len(bindings.faults) != 2 {
@@ -121,12 +141,13 @@ func TestAccessoryBindingsUpdateTemperatureAndOfflineFault(t *testing.T) {
 		t.Fatalf("persistent AIDs were not applied: %d %d", bindings.accessories[0].Id, bindings.accessories[1].Id)
 	}
 	temperature := -12.5
-	updated, err := service.Simulate(context.Background(), providersdk.SimulationRequest{DeviceID: "virtual-temperature-1", Properties: []providersdk.PropertyWriteRequest{{EndpointID: "main", CapabilityID: "temperature", PropertyID: "current-temperature", Value: device.NumberValue(temperature)}}})
+	updated, err := service.Simulate(context.Background(), providersdk.SimulationRequest{DeviceID: "virtual-temperature-1", Properties: []providersdk.PropertyWriteRequest{{EndpointID: "main", CapabilityID: "sensor", PropertyID: "value", Value: device.NumberValue(temperature)}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pushes := bindings.update(updated); pushes != 5 {
-		t.Fatalf("temperature pushes = %d, want fault + value + battery/tamper", pushes)
+	updated = projectSingleSensorAdapters([]device.Device{updated})[0]
+	if pushes := bindings.update(updated); pushes != 4 {
+		t.Fatalf("temperature pushes = %d, want fault + measurement + two battery properties", pushes)
 	}
 	if value := bindings.temperatures[updated.ID].Value(); value != 0 {
 		t.Fatalf("clamped temperature = %v", value)
@@ -158,6 +179,7 @@ func TestAccessoryBindingsHonorSelectedDevices(t *testing.T) {
 	service := application.NewDeviceService(virtual.NewProvider())
 	defer service.Close()
 	items, _ := service.List(context.Background())
+	items = projectSingleSensorAdapters(items)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	bindings := newAccessoryBindings(items, map[string]bool{"virtual-switch-1": true}, nil, service, logger)
 	if len(bindings.accessories) != 1 || bindings.switches["virtual-switch-1"] == nil || bindings.temperatures["virtual-temperature-1"] != nil {
@@ -182,6 +204,7 @@ func TestPersistentIIDsSurviveAccessoryRebuildAndNewCharacteristic(t *testing.T)
 	service := application.NewDeviceService(virtual.NewProvider())
 	defer service.Close()
 	items, _ := service.List(context.Background())
+	items = projectSingleSensorAdapters(items)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	identities := &memoryIdentityStore{values: make(map[string]uint64), next: make(map[string]uint64)}
 	first := newAccessoryBindings(items, map[string]bool{"virtual-switch-1": true}, map[string]uint64{"virtual-switch-1": 2}, service, logger).byDevice["virtual-switch-1"]
@@ -217,16 +240,17 @@ func TestPersistentIIDsSurviveAccessoryRebuildAndNewCharacteristic(t *testing.T)
 }
 
 func TestAccessoryBindingsMapSupportedDeviceTypes(t *testing.T) {
-	provider, err := virtual.NewProviderFromConfig(providerconfig.Config{ID: "room", Name: "Room", Config: []byte(`{"devices":[{"id":"plain","type":"switch"},{"id":"lamp","type":"lightbulb","power":true},{"id":"socket","type":"outlet","power":true},{"id":"temp","type":"temperature-sensor"},{"id":"humidity","type":"humidity-sensor","humidity":42.5},{"id":"door","type":"contact-sensor","contact":true},{"id":"motion","type":"motion-sensor","motion":true}]}`)})
+	provider, err := virtual.NewProviderFromConfig(providerconfig.Config{ID: "room", Name: "Room", Config: []byte(`{"devices":[{"id":"plain","type":"switch"},{"id":"lamp","type":"lightbulb","power":true},{"id":"socket","type":"outlet","power":true},{"id":"temp","type":"temperature-sensor"},{"id":"humidity","type":"humidity-sensor","humidity":42.5},{"id":"climate","type":"temperature-humidity-sensor","temperature":21.5,"humidity":52.5},{"id":"door","type":"contact-sensor","contact":true},{"id":"motion","type":"motion-sensor","motion":true}]}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	service := application.NewDeviceService(provider)
 	defer service.Close()
 	items, _ := service.List(context.Background())
+	items = projectSingleSensorAdapters(items)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	bindings := newAccessoryBindings(items, map[string]bool{}, nil, service, logger)
-	if len(bindings.accessories) != 7 || len(bindings.switches) != 3 || len(bindings.outletInUse) != 1 || len(bindings.temperatures) != 1 || len(bindings.humidities) != 1 || len(bindings.contacts) != 1 || len(bindings.motions) != 1 || len(bindings.brightness) != 1 || len(bindings.colorTemps) != 1 || len(bindings.hues) != 1 || len(bindings.saturations) != 1 || len(bindings.batteryLevels) != 4 || len(bindings.lowBatteries) != 4 || len(bindings.tampered) != 4 {
+	if len(bindings.accessories) != 8 || len(bindings.switches) != 3 || len(bindings.outletInUse) != 1 || len(bindings.temperatures) != 2 || len(bindings.humidities) != 2 || len(bindings.contacts) != 1 || len(bindings.motions) != 1 || len(bindings.brightness) != 1 || len(bindings.colorTemps) != 1 || len(bindings.hues) != 1 || len(bindings.saturations) != 1 || len(bindings.batteryLevels) != 5 || len(bindings.lowBatteries) != 5 || len(bindings.tampered) != 2 {
 		t.Fatalf("bindings = %#v", bindings)
 	}
 	if !bindings.switches["lamp"].Value() || !bindings.outletInUse["socket"].Value() {
@@ -235,8 +259,14 @@ func TestAccessoryBindingsMapSupportedDeviceTypes(t *testing.T) {
 	if bindings.humidities["humidity"].Value() != 42.5 || bindings.contacts["door"].Value() != characteristic.ContactSensorStateContactDetected || !bindings.motions["motion"].Value() {
 		t.Fatal("sensor values were not mapped")
 	}
+	if bindings.temperatures["climate"].Value() != 21.5 || bindings.humidities["climate"].Value() != 52.5 {
+		t.Fatal("combined temperature/humidity values were not mapped")
+	}
 	if bindings.batteryLevels["door"].Value() != 100 || bindings.lowBatteries["door"].Value() != characteristic.StatusLowBatteryBatteryLevelNormal || bindings.tampered["door"].Value() != characteristic.StatusTamperedNotTampered {
 		t.Fatal("sensor battery and tamper values were not mapped")
+	}
+	if bindings.batteryLevels["temp"].Value() != 100 || bindings.lowBatteries["climate"].Value() != characteristic.StatusLowBatteryBatteryLevelNormal {
+		t.Fatal("single and combined sensor battery values were not mapped")
 	}
 	request := &http.Request{}
 	if _, status := bindings.brightness["lamp"].SetValueRequest(42, request); status != 0 {
@@ -309,7 +339,7 @@ func TestAccessoryBindingsMapAndWriteAdvancedDeviceTypes(t *testing.T) {
 
 func TestAccessoryBindingsHandleOneHundredAccessoriesAndBurstUpdates(t *testing.T) {
 	definitions := make([]virtual.DeviceConfig, 0, 100)
-	types := []string{"switch", "fan", "air-purifier", "window-covering", "temperature-sensor"}
+	types := []string{"switch", "fan", "air-purifier", "window-covering", "single-property-sensor"}
 	for index := 0; index < 100; index++ {
 		definitions = append(definitions, virtual.DeviceConfig{ID: fmt.Sprintf("load-%03d", index), Name: fmt.Sprintf("Load %d", index), Type: types[index%len(types)]})
 	}
@@ -324,6 +354,7 @@ func TestAccessoryBindingsHandleOneHundredAccessoriesAndBurstUpdates(t *testing.
 	service := application.NewDeviceService(provider)
 	defer service.Close()
 	items, _ := service.List(context.Background())
+	items = projectSingleSensorAdapters(items)
 	bindings := newAccessoryBindings(items, map[string]bool{}, nil, service, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if len(bindings.accessories) != 100 || len(bindings.faults) != 100 {
 		t.Fatalf("accessories=%d faults=%d", len(bindings.accessories), len(bindings.faults))

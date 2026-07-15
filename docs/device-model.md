@@ -37,7 +37,7 @@ deviceId / endpointId / capabilityId / propertyId
   "id": "living-room-temperature",
   "providerId": "virtual-main",
   "name": "客厅温度",
-  "type": "temperature-sensor",
+  "type": "single-property-sensor",
   "availability": "online",
   "online": true,
   "endpoints": [{
@@ -45,11 +45,11 @@ deviceId / endpointId / capabilityId / propertyId
     "name": "主端点",
     "type": "sensor",
     "capabilities": [{
-      "id": "temperature",
-      "type": "temperature-sensor",
+      "id": "sensor",
+      "type": "sensor",
       "properties": [{
         "definition": {
-          "id": "current-temperature",
+          "id": "value",
           "name": "当前温度",
           "type": "number",
           "unit": "celsius",
@@ -65,6 +65,8 @@ deviceId / endpointId / capabilityId / propertyId
   "lastUpdateAt": "2026-07-13T02:00:00Z"
 }
 ```
+
+示例中的 `unit: celsius` 描述这个设备实例当前发布的是温度值，但统一模型类型仍是通用的 `single-property-sensor`。若它发布湿度，可沿用同一个 `sensor.value` 路径并将单位设为 `percent`；最终映射成哪种 HomeKit Service 由桥内虚拟设备的 Consumer 属性映射决定。
 
 ## 属性值契约
 

@@ -67,7 +67,7 @@
 - [ ] 扫描二维码完成配对；
 - [ ] 手工输入 PIN 完成配对；
 - [ ] Apple Home 显示虚拟开关；
-- [ ] Apple Home 显示温度传感器；
+- [ ] 将单属性传感器映射为温度后，Apple Home 显示温度传感器；
 - [ ] Apple Home 控制开关后命令进入 `confirmed`；
 - [ ] Web 控制开关后 Apple Home 状态同步；
 - [ ] 连续重启三次无需重新配对；
@@ -128,7 +128,7 @@ M0 退出条件：Apple Home 实机配对、双向控制、多桥运行和三次
 ### 2.3 兼容迁移
 
 - [x] 将虚拟开关迁移为 `switch/power` Capability；
-- [x] 将温度传感器迁移为 `temperature/current-temperature`；
+- [x] 将旧温度/湿度模型合并为 `single-property-sensor` 的 `sensor/value`；
 - [x] 一次性升级设备 API 和前端到 schema v1；
 - [x] HomeKit Target 改为读取 Capability；
 - [x] 删除 Target 中对简化 State 字段的直接依赖；
@@ -354,7 +354,7 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 ### 8.1 已支持
 
 - [x] Switch；
-- [x] Temperature Sensor。
+- [x] 单属性传感器映射到 Temperature Sensor；
 
 - [x] HomeKit 温度事件实时推送；
 - [x] HomeKit 离线 StatusFault 映射；
@@ -363,7 +363,9 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 
 - [x] Outlet；
 - [x] Lightbulb；
-- [x] Humidity Sensor；
+- [x] 单属性传感器映射到 Humidity Sensor；
+- [x] Temperature Humidity Sensor（组合模型提供温度/湿度双 Service）；
+- [x] 单属性与温湿度传感器的可选 Battery Level / Low Battery；
 - [x] Contact Sensor；
 - [x] Motion Sensor；
 - [x] Fan；

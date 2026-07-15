@@ -4,7 +4,8 @@ import type { TargetType } from './types/target'
 
 const deviceTypes: Record<DeviceType, string> = {
 	switch: '开关', lightbulb: '灯泡', outlet: '插座',
-	'temperature-sensor': '温度传感器', 'humidity-sensor': '湿度传感器',
+	'single-property-sensor': '单属性传感器',
+	'temperature-humidity-sensor': '温湿度传感器',
 	'contact-sensor': '接触传感器', 'motion-sensor': '活动传感器',
 	fan: '风扇', 'air-purifier': '空气净化器', 'window-covering': '窗帘',
 }
@@ -30,6 +31,7 @@ const resourceNames: Record<string, string> = {
 	filter: '滤芯', 'life-level': '剩余寿命', 'change-indication': '更换提示', 'window-covering': '窗帘',
 	'current-position': '当前位置', 'target-position': '目标位置', 'position-state': '运动状态',
 	'obstruction-detected': '障碍物检测', battery: '电池', level: '电量', low: '低电量', security: '安全状态', tampered: '防拆状态',
+	sensor: '传感器', value: '传感器值',
 }
 
 const serviceNames: Record<string, string> = {

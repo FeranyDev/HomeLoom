@@ -49,7 +49,19 @@ func (s *ProfileService) ResolveModelDefinition(deviceType device.Type, path dev
 	}
 	result := fallback
 	result.ID, result.Name, result.Type, result.ParameterLevel = path.PropertyID, parameter.Name, parameter.Type, parameter.Level
-	result.Unit, result.Readable, result.Writable, result.Notifiable = parameter.Unit, parameter.Readable, parameter.Writable, parameter.Notifiable
+	if parameter.Unit != "" {
+		result.Unit = parameter.Unit
+	}
+	if parameter.Min != nil {
+		result.Min = parameter.Min
+	}
+	if parameter.Max != nil {
+		result.Max = parameter.Max
+	}
+	if parameter.Step != nil {
+		result.Step = parameter.Step
+	}
+	result.Readable, result.Writable, result.Notifiable = parameter.Readable, parameter.Writable, parameter.Notifiable
 	result.Enum = append([]string(nil), parameter.Enum...)
 	return result, true
 }

@@ -16,16 +16,21 @@ type ParameterLevel string
 const (
 	SchemaVersion = 1
 
-	TypeSwitch            Type = "switch"
-	TypeTemperatureSensor Type = "temperature-sensor"
-	TypeLightbulb         Type = "lightbulb"
-	TypeOutlet            Type = "outlet"
-	TypeHumiditySensor    Type = "humidity-sensor"
-	TypeContactSensor     Type = "contact-sensor"
-	TypeMotionSensor      Type = "motion-sensor"
-	TypeFan               Type = "fan"
-	TypeAirPurifier       Type = "air-purifier"
-	TypeWindowCovering    Type = "window-covering"
+	TypeSwitch               Type = "switch"
+	TypeSinglePropertySensor Type = "single-property-sensor"
+	// Deprecated sensor types are retained only for reading legacy Provider
+	// configurations and snapshots. NormalizeModelParameters migrates them to
+	// TypeSinglePropertySensor before they enter the unified registry.
+	TypeTemperatureSensor         Type = "temperature-sensor"
+	TypeTemperatureHumiditySensor Type = "temperature-humidity-sensor"
+	TypeLightbulb                 Type = "lightbulb"
+	TypeOutlet                    Type = "outlet"
+	TypeHumiditySensor            Type = "humidity-sensor"
+	TypeContactSensor             Type = "contact-sensor"
+	TypeMotionSensor              Type = "motion-sensor"
+	TypeFan                       Type = "fan"
+	TypeAirPurifier               Type = "air-purifier"
+	TypeWindowCovering            Type = "window-covering"
 )
 
 const (

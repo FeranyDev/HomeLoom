@@ -4,14 +4,14 @@ import { describe, expect, it, vi } from 'vitest'
 import { DeviceCard } from './DeviceCard'
 import type { Device } from '../types/device'
 
-const sensorDevice = (type: Device['type'], capabilityId: string, propertyId: string, value: { type: 'bool'; bool: boolean } | { type: 'number'; number: number }): Device => ({
+const sensorDevice = (type: Device['type'], capabilityId: string, propertyId: string, value: { type: 'bool'; bool: boolean } | { type: 'number'; number: number }, unit?: string): Device => ({
   schemaVersion: 1, id: type, providerId: 'virtual', name: type, type, availability: 'online', online: true, lastUpdateAt: new Date().toISOString(),
-  endpoints: [{ id: 'main', name: 'Main', type: 'sensor', capabilities: [{ id: capabilityId, type, properties: [{ definition: { id: propertyId, name: propertyId, type: value.type, readable: true, writable: false, notifiable: true }, value }] }] }],
+  endpoints: [{ id: 'main', name: 'Main', type: 'sensor', capabilities: [{ id: capabilityId, type, properties: [{ definition: { id: propertyId, name: propertyId, type: value.type, unit, readable: true, writable: false, notifiable: true }, value }] }] }],
 })
 
 describe('DeviceCard device types', () => {
 	it('opens mapping configuration from the corresponding device card', async () => {
-		const device = sensorDevice('temperature-sensor', 'temperature', 'current-temperature', { type: 'number', number: 20 })
+		const device = sensorDevice('single-property-sensor', 'sensor', 'value', { type: 'number', number: 20 }, 'celsius')
 		const onMapping = vi.fn()
 		render(<DeviceCard device={device} pending={false} onPowerChange={() => {}} onDetails={() => {}} onMapping={onMapping} />)
 		await userEvent.click(screen.getByRole('button', { name: '配置映射' }))
@@ -19,7 +19,7 @@ describe('DeviceCard device types', () => {
 	})
 
 	it('exposes persistent disable separately from provider availability', async () => {
-		const device = sensorDevice('temperature-sensor', 'temperature', 'current-temperature', { type: 'number', number: 20 })
+		const device = sensorDevice('single-property-sensor', 'sensor', 'value', { type: 'number', number: 20 }, 'celsius')
 		const onEnabledChange = vi.fn()
 		const { rerender } = render(<DeviceCard device={device} pending={false} onPowerChange={() => {}} onDetails={() => {}} onEnabledChange={onEnabledChange} />)
 		await userEvent.click(screen.getByRole('button', { name: '禁用设备' })); expect(onEnabledChange).toHaveBeenCalledWith(device, false)
@@ -35,7 +35,7 @@ describe('DeviceCard device types', () => {
   })
 
   it.each([
-    [sensorDevice('humidity-sensor', 'humidity', 'current-humidity', { type: 'number', number: 61.2 }), '61.2', '%'],
+    [sensorDevice('single-property-sensor', 'sensor', 'value', { type: 'number', number: 61.2 }, 'percent'), '61.2', '%'],
     [sensorDevice('contact-sensor', 'contact', 'contact-detected', { type: 'bool', bool: true }), '已闭合', 'CONTACT'],
     [sensorDevice('motion-sensor', 'motion', 'motion-detected', { type: 'bool', bool: true }), '检测到活动', 'MOTION'],
   ])('renders sensor state for %s', (device, value, unit) => {
@@ -43,6 +43,20 @@ describe('DeviceCard device types', () => {
     expect(screen.getByText(value)).toBeInTheDocument()
     expect(screen.getByText(unit)).toBeInTheDocument()
   })
+
+	it('renders both measurements for a temperature/humidity sensor', () => {
+		const device: Device = {
+			schemaVersion: 1, id: 'climate', providerId: 'virtual', name: '温湿度', type: 'temperature-humidity-sensor', availability: 'online', online: true, lastUpdateAt: new Date().toISOString(),
+			endpoints: [{ id: 'main', name: 'Main', type: 'sensor', capabilities: [
+				{ id: 'temperature', type: 'temperature-sensor', properties: [{ definition: { id: 'current-temperature', name: '当前温度', type: 'number', readable: true, writable: false, notifiable: true }, value: { type: 'number', number: 22.4 } }] },
+				{ id: 'humidity', type: 'humidity-sensor', properties: [{ definition: { id: 'current-humidity', name: '当前湿度', type: 'number', readable: true, writable: false, notifiable: true }, value: { type: 'number', number: 48.5 } }] },
+			] }],
+		}
+		render(<DeviceCard device={device} pending={false} onPowerChange={() => {}} onDetails={() => {}} />)
+		expect(screen.getByText(/温湿度传感器.*temperature-humidity-sensor/)).toBeInTheDocument()
+		expect(screen.getByText('22.4')).toBeInTheDocument()
+		expect(screen.getByText('48.5')).toBeInTheDocument()
+	})
 
 	it('renders advanced HomeKit device summaries', () => {
 		const purifier: Device = { schemaVersion: 1, id: 'air', providerId: 'virtual', name: '净化器', type: 'air-purifier', availability: 'online', online: true, lastUpdateAt: new Date().toISOString(), endpoints: [{ id: 'main', name: 'Main', type: 'air-purifier', capabilities: [{ id: 'air-purifier', type: 'air-purifier', properties: [{ definition: { id: 'active', name: '启用', type: 'bool', readable: true, writable: true, notifiable: true }, value: { type: 'bool', bool: true } }, { definition: { id: 'rotation-speed', name: '速度', type: 'number', readable: true, writable: true, notifiable: true }, value: { type: 'number', number: 60 } }] }, { id: 'filter', type: 'filter-maintenance', properties: [{ definition: { id: 'life-level', name: '寿命', type: 'number', readable: true, writable: false, notifiable: true }, value: { type: 'number', number: 82 } }] }] }] }

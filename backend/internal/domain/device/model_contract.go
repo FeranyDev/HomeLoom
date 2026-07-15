@@ -62,6 +62,12 @@ func required(capabilityID, propertyID, name string, valueType ValueType, writab
 	return ModelParameter{Path: ParameterPath{EndpointID: "main", CapabilityID: capabilityID, PropertyID: propertyID}, Name: name, Level: ParameterRequired, Type: valueType, Readable: true, Writable: writable, Notifiable: true, Publisher: ParameterRole{Level: ParameterRequired, Behavior: "must-publish"}, Consumer: ParameterRole{Level: ParameterRequired, Behavior: "must-map"}, PublisherNotes: "必须发布且符合统一类型", ConsumerNotes: "Consumer 声明支持该模型时必须映射"}
 }
 
+func requiredMeasurement(capabilityID, propertyID, name, unit string, minimum, maximum, step float64) ModelParameter {
+	parameter := required(capabilityID, propertyID, name, ValueTypeNumber, false)
+	parameter.Unit, parameter.Min, parameter.Max, parameter.Step = unit, &minimum, &maximum, &step
+	return parameter
+}
+
 func optional(capabilityID, propertyID, name string, valueType ValueType, unit string, writable bool, enum ...string) ModelParameter {
 	return ModelParameter{Path: ParameterPath{EndpointID: "main", CapabilityID: capabilityID, PropertyID: propertyID}, Name: name, Level: ParameterOptional, Type: valueType, Unit: unit, Readable: true, Writable: writable, Notifiable: true, Enum: enum, Publisher: ParameterRole{Level: ParameterOptional, Behavior: "publish-if-supported"}, Consumer: ParameterRole{Level: ParameterOptional, Behavior: "map-if-supported"}, PublisherNotes: "Provider 有能力时发布", ConsumerNotes: "Consumer 支持时映射，缺失可降级"}
 }
@@ -74,12 +80,17 @@ func withCustomPolicy(contract ModelContract) ModelContract {
 	return contract
 }
 
-func batteryParameters() []ModelParameter {
+func batteryLevelParameters() []ModelParameter {
 	return []ModelParameter{
 		optional("battery", "level", "电池电量", ValueTypeInt, "percent", false),
 		optional("battery", "low", "低电量", ValueTypeBool, "", false),
-		optional("security", "tampered", "防拆状态", ValueTypeBool, "", false),
 	}
+}
+
+func batteryParameters() []ModelParameter {
+	return append(batteryLevelParameters(),
+		optional("security", "tampered", "防拆状态", ValueTypeBool, "", false),
+	)
 }
 
 var modelContracts = map[Type]ModelContract{
@@ -99,12 +110,13 @@ var modelContracts = map[Type]ModelContract{
 		optional("electrical", "current-power", "当前功率", ValueTypeNumber, "watt", false),
 		optional("electrical", "energy", "累计电量", ValueTypeNumber, "kilowatt-hour", false),
 	}},
-	TypeTemperatureSensor: {DeviceType: TypeTemperatureSensor, Version: 1, Parameters: append([]ModelParameter{
-		required("temperature", "current-temperature", "当前温度", ValueTypeNumber, false),
-	}, batteryParameters()...)},
-	TypeHumiditySensor: {DeviceType: TypeHumiditySensor, Version: 1, Parameters: append([]ModelParameter{
-		required("humidity", "current-humidity", "当前湿度", ValueTypeNumber, false),
-	}, batteryParameters()...)},
+	TypeSinglePropertySensor: {DeviceType: TypeSinglePropertySensor, Version: 1, Parameters: append([]ModelParameter{
+		required("sensor", "value", "传感器值", ValueTypeNumber, false),
+	}, batteryLevelParameters()...)},
+	TypeTemperatureHumiditySensor: {DeviceType: TypeTemperatureHumiditySensor, Version: 1, Parameters: append([]ModelParameter{
+		requiredMeasurement("temperature", "current-temperature", "当前温度", "celsius", -100, 200, 0.1),
+		requiredMeasurement("humidity", "current-humidity", "当前湿度", "percent", 0, 100, 0.1),
+	}, batteryLevelParameters()...)},
 	TypeContactSensor: {DeviceType: TypeContactSensor, Version: 1, Parameters: append([]ModelParameter{
 		required("contact", "contact-detected", "接触状态", ValueTypeBool, false),
 	}, batteryParameters()...)},
@@ -181,6 +193,7 @@ func parameterIndex(deviceType Type) map[string]ModelParameter {
 // standard parameters, marks unknown properties as custom, and validates all
 // required parameters before a snapshot reaches the registry or a Target.
 func (d *Device) NormalizeModelParameters() error {
+	d.normalizeLegacySinglePropertySensor()
 	index := parameterIndex(d.Type)
 	for endpointIndex := range d.Endpoints {
 		endpoint := &d.Endpoints[endpointIndex]
@@ -198,6 +211,41 @@ func (d *Device) NormalizeModelParameters() error {
 		}
 	}
 	return d.Validate()
+}
+
+func (d *Device) normalizeLegacySinglePropertySensor() {
+	var source ParameterPath
+	switch d.Type {
+	case TypeTemperatureSensor:
+		source = ParameterPath{EndpointID: "main", CapabilityID: "temperature", PropertyID: "current-temperature"}
+	case TypeHumiditySensor:
+		source = ParameterPath{EndpointID: "main", CapabilityID: "humidity", PropertyID: "current-humidity"}
+	default:
+		return
+	}
+
+	d.Type = TypeSinglePropertySensor
+	for endpointIndex := range d.Endpoints {
+		endpoint := &d.Endpoints[endpointIndex]
+		if endpoint.ID != source.EndpointID {
+			continue
+		}
+		for capabilityIndex := range endpoint.Capabilities {
+			capability := &endpoint.Capabilities[capabilityIndex]
+			if capability.ID != source.CapabilityID {
+				continue
+			}
+			for propertyIndex := range capability.Properties {
+				if capability.Properties[propertyIndex].Definition.ID != source.PropertyID {
+					continue
+				}
+				endpoint.Type, capability.ID, capability.Type = "sensor", "sensor", "sensor"
+				capability.Properties[propertyIndex].Definition.ID = "value"
+				capability.Properties[propertyIndex].Definition.ParameterLevel = ""
+				return
+			}
+		}
+	}
 }
 
 func validatePublisherModel(d Device) error {
@@ -236,9 +284,19 @@ func validatePublisherModel(d Device) error {
 }
 
 type ConsumerParameterMapping struct {
-	Source ParameterPath  `json:"source"`
-	Target string         `json:"target"`
-	Level  ParameterLevel `json:"level"`
+	// Source is the Consumer adapter path. DefaultModelPath is the unified-model
+	// path used when no per-device binding overrides it.
+	Source           ParameterPath  `json:"source"`
+	DefaultModelPath ParameterPath  `json:"defaultModelPath,omitempty"`
+	Target           string         `json:"target"`
+	Level            ParameterLevel `json:"level"`
+}
+
+func (m ConsumerParameterMapping) ModelPath() ParameterPath {
+	if m.DefaultModelPath.EndpointID != "" || m.DefaultModelPath.CapabilityID != "" || m.DefaultModelPath.PropertyID != "" {
+		return m.DefaultModelPath
+	}
+	return m.Source
 }
 
 type ConsumerModelContract struct {
@@ -282,7 +340,7 @@ func ProjectForConsumer(item Device, contract ConsumerModelContract) (ConsumerPr
 			result.MissingOptional = append(result.MissingOptional, mapping.Source)
 			continue
 		}
-		_, standard := index[mapping.Source.Key()]
+		_, standard := index[mapping.ModelPath().Key()]
 		if mapping.Level == ParameterCustom && standard {
 			return ConsumerProjection{}, fmt.Errorf("standard parameter %s cannot use a custom consumer mapping", mapping.Source)
 		}

@@ -76,6 +76,10 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .temperature { display: flex; align-items: start; margin-top: 46px; }
 .temperature strong { font-size: 82px; font-weight: 500; line-height: 1; letter-spacing: -.07em; }
 .temperature span { margin: 8px 0 0 10px; color: #73776e; font-size: 20px; }
+.dual-sensor { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 46px; }
+.dual-sensor > div { display: flex; align-items: start; min-width: 0; }
+.dual-sensor strong { font-size: clamp(42px, 5vw, 62px); font-weight: 500; line-height: 1; letter-spacing: -.07em; }
+.dual-sensor span { margin: 6px 0 0 7px; color: #73776e; font-size: 16px; }
 .sensor-state { display: grid; gap: 7px; margin-top: 62px; padding-top: 18px; border-top: 1px solid #dddcd4; color: #777b73; }
 .sensor-state strong { font-size: 25px; font-weight: 500; }
 .sensor-state span { font-size: 10px; letter-spacing: .12em; }

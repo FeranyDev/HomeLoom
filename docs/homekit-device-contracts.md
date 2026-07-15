@@ -7,8 +7,9 @@ HomeKit Target 只读取统一 Device Model，不依赖具体 Provider。Virtual
 | Device Type | Capability | Property / Command | 类型与方向 | HomeKit 映射 |
 | --- | --- | --- | --- | --- |
 | `switch` / `lightbulb` / `outlet` | `switch` | `power` | bool，R/W/N | On；Outlet 同步 Outlet In Use |
-| `temperature-sensor` | `temperature` | `current-temperature` | number，R/N | Current Temperature |
-| `humidity-sensor` | `humidity` | `current-humidity` | number，R/N | Current Relative Humidity |
+| `single-property-sensor` | `sensor` | `value` | number，R/N | 按设备映射为 Current Temperature 或 Current Relative Humidity |
+| `temperature-humidity-sensor` | `temperature` | `current-temperature` | number，R/N | Current Temperature |
+| `temperature-humidity-sensor` | `humidity` | `current-humidity` | number，R/N | Current Relative Humidity |
 | `contact-sensor` | `contact` | `contact-detected` | bool，R/N | Contact Sensor State |
 | `motion-sensor` | `motion` | `motion-detected` | bool，R/N | Motion Detected |
 | `fan` | `fan` | `active` | bool，R/W/N | Active |
@@ -26,7 +27,7 @@ HomeKit Target 只读取统一 Device Model，不依赖具体 Provider。Virtual
 | `window-covering` | `window-covering` | `target-position` | int 0–100，R/W/N | Target Position |
 | `window-covering` | `window-covering` | `position-state` | enum `decreasing/increasing/stopped`，R/N | Position State |
 
-增强映射还包括 Lightbulb 的亮度/色温/色相/饱和度，Outlet In Use，传感器的 Battery Service 与防拆状态，Fan 的摇头/方向/控制锁，Air Purifier 的摆风/控制锁及链接 Air Quality Sensor（空气质量、PM2.5、VOC），以及 Window Covering 的 Obstruction Detected。
+增强映射还包括 Lightbulb 的亮度/色温/色相/饱和度，Outlet In Use，单属性、温湿度、接触与活动传感器的 Battery Service，接触与活动传感器的防拆状态，Fan 的摇头/方向/控制锁，Air Purifier 的摆风/控制锁及链接 Air Quality Sensor（空气质量、PM2.5、VOC），以及 Window Covering 的 Obstruction Detected。单属性传感器只有一个 `sensor.value` 测量字段，桥内每台虚拟设备通过 Consumer 映射独立选择温度或湿度 Service；未配置目标映射时不会猜测或发布附件。温湿度模型在同一附件中提供两个独立 HAP Service。两个传感器模型都可选发布 `battery.level` 和 `battery.low`。
 
 `R/W/N` 分别表示 readable、writable、notifiable。Virtual Provider 会即时完成位置变化，并把窗帘状态归并为 `stopped`；真实 Provider 可以依次上报移动状态和最终位置。
 

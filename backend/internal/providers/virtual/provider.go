@@ -149,7 +149,7 @@ func defaultDevices(id string) map[string]device.Device {
 	temperatureID := prefix + "-temperature-1"
 	return map[string]device.Device{
 		switchID:      poweredDevice(switchID, id, "客厅开关", device.TypeSwitch, true, false),
-		temperatureID: temperatureDevice(temperatureID, id, "客厅温度", true, 23.6),
+		temperatureID: singlePropertySensorDevice(temperatureID, id, "客厅温度", true, 23.6, "celsius"),
 	}
 }
 
@@ -180,30 +180,41 @@ func poweredDevice(id, providerID, name string, deviceType device.Type, online, 
 	return item
 }
 
-func temperatureDevice(id, providerID, name string, online bool, temperature float64) device.Device {
-	minimum, maximum, step := -100.0, 200.0, 0.1
+func singlePropertySensorDevice(id, providerID, name string, online bool, value float64, unit string) device.Device {
+	step := 0.1
+	definition := device.PropertyDefinition{ID: "value", Name: "传感器值", Type: device.ValueTypeNumber, Unit: unit, Readable: true, Notifiable: true, Step: &step, StaleAfterSeconds: 30}
+	if unit == "celsius" {
+		minimum, maximum := -100.0, 200.0
+		definition.Name, definition.Min, definition.Max = "当前温度", &minimum, &maximum
+	} else if unit == "percent" {
+		minimum, maximum := 0.0, 100.0
+		definition.Name, definition.Min, definition.Max = "当前湿度", &minimum, &maximum
+	}
 	item := device.Device{SchemaVersion: device.SchemaVersion, ID: id, ProviderID: providerID, Name: name,
-		Type:         device.TypeTemperatureSensor,
+		Type:         device.TypeSinglePropertySensor,
 		Sequence:     1,
 		LastUpdateAt: time.Now().UTC(),
 		Endpoints: []device.Endpoint{{
 			ID: "main", Name: "主端点", Type: "sensor",
-			Capabilities: []device.Capability{{ID: "temperature", Type: "temperature-sensor", Properties: []device.Property{{
-				Definition: device.PropertyDefinition{ID: "current-temperature", Name: "当前温度", Type: device.ValueTypeNumber, Unit: "celsius", Readable: true, Notifiable: true, Min: &minimum, Max: &maximum, Step: &step, StaleAfterSeconds: 30},
-				Value:      device.NumberValue(temperature),
+			Capabilities: []device.Capability{{ID: "sensor", Type: "sensor", Properties: []device.Property{{
+				Definition: definition,
+				Value:      device.NumberValue(value),
 			}}}},
 		}},
 	}
 	item.SetOnline(online)
-	item.Endpoints[0].Capabilities = append(item.Endpoints[0].Capabilities, sensorStatusCapabilities()...)
+	item.Endpoints[0].Capabilities = append(item.Endpoints[0].Capabilities, batteryCapabilities()...)
 	return item
 }
 
-func humidityDevice(id, providerID, name string, online bool, humidity float64) device.Device {
-	minimum, maximum, step := 0.0, 100.0, 0.1
-	item := device.Device{SchemaVersion: device.SchemaVersion, ID: id, ProviderID: providerID, Name: name, Type: device.TypeHumiditySensor, Sequence: 1, LastUpdateAt: time.Now().UTC(), Endpoints: []device.Endpoint{{ID: "main", Name: "主端点", Type: "sensor", Capabilities: []device.Capability{{ID: "humidity", Type: "humidity-sensor", Properties: []device.Property{{Definition: device.PropertyDefinition{ID: "current-humidity", Name: "当前湿度", Type: device.ValueTypeNumber, Unit: "percent", Readable: true, Notifiable: true, Min: &minimum, Max: &maximum, Step: &step, StaleAfterSeconds: 30}, Value: device.NumberValue(humidity)}}}}}}}
+func temperatureHumidityDevice(id, providerID, name string, online bool, temperature, humidity float64) device.Device {
+	temperatureMinimum, temperatureMaximum, humidityMinimum, humidityMaximum, step := -100.0, 200.0, 0.0, 100.0, 0.1
+	item := device.Device{SchemaVersion: device.SchemaVersion, ID: id, ProviderID: providerID, Name: name, Type: device.TypeTemperatureHumiditySensor, Sequence: 1, LastUpdateAt: time.Now().UTC(), Endpoints: []device.Endpoint{{ID: "main", Name: "主端点", Type: string(device.TypeTemperatureHumiditySensor), Capabilities: []device.Capability{
+		{ID: "temperature", Type: "temperature-sensor", Properties: []device.Property{{Definition: device.PropertyDefinition{ID: "current-temperature", Name: "当前温度", Type: device.ValueTypeNumber, Unit: "celsius", Readable: true, Notifiable: true, Min: &temperatureMinimum, Max: &temperatureMaximum, Step: &step, StaleAfterSeconds: 30}, Value: device.NumberValue(temperature)}}},
+		{ID: "humidity", Type: "humidity-sensor", Properties: []device.Property{{Definition: device.PropertyDefinition{ID: "current-humidity", Name: "当前湿度", Type: device.ValueTypeNumber, Unit: "percent", Readable: true, Notifiable: true, Min: &humidityMinimum, Max: &humidityMaximum, Step: &step, StaleAfterSeconds: 30}, Value: device.NumberValue(humidity)}}},
+	}}}}
 	item.SetOnline(online)
-	item.Endpoints[0].Capabilities = append(item.Endpoints[0].Capabilities, sensorStatusCapabilities()...)
+	item.Endpoints[0].Capabilities = append(item.Endpoints[0].Capabilities, batteryCapabilities()...)
 	return item
 }
 
@@ -215,13 +226,16 @@ func booleanSensorDevice(id, providerID, name string, deviceType device.Type, ca
 }
 
 func sensorStatusCapabilities() []device.Capability {
+	return append(batteryCapabilities(), device.Capability{ID: "security", Type: "security-status", Properties: []device.Property{{Definition: device.PropertyDefinition{ID: "tampered", Name: "防拆状态", Type: device.ValueTypeBool, Readable: true, Notifiable: true, StaleAfterSeconds: 300}, Value: device.BoolValue(false)}}})
+}
+
+func batteryCapabilities() []device.Capability {
 	minimum, maximum, step := 0.0, 100.0, 1.0
 	return []device.Capability{
 		{ID: "battery", Type: "battery", Properties: []device.Property{
 			{Definition: device.PropertyDefinition{ID: "level", Name: "电池电量", Type: device.ValueTypeInt, Unit: "percent", Readable: true, Notifiable: true, Min: &minimum, Max: &maximum, Step: &step, StaleAfterSeconds: 300}, Value: device.IntValue(100)},
 			{Definition: device.PropertyDefinition{ID: "low", Name: "低电量", Type: device.ValueTypeBool, Readable: true, Notifiable: true, StaleAfterSeconds: 300}, Value: device.BoolValue(false)},
 		}},
-		{ID: "security", Type: "security-status", Properties: []device.Property{{Definition: device.PropertyDefinition{ID: "tampered", Name: "防拆状态", Type: device.ValueTypeBool, Readable: true, Notifiable: true, StaleAfterSeconds: 300}, Value: device.BoolValue(false)}}},
 	}
 }
 

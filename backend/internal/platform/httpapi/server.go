@@ -179,6 +179,7 @@ type simulationRequest struct {
 	Power        *bool                `json:"power"`
 	Temperature  *float64             `json:"temperature"`
 	Humidity     *float64             `json:"humidity"`
+	Value        *float64             `json:"value"`
 	Contact      *bool                `json:"contact"`
 	Motion       *bool                `json:"motion"`
 	Active       *bool                `json:"active"`
@@ -1138,27 +1139,12 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 	})
 	e.PATCH("/api/v1/devices/:id/simulation", func(c echo.Context) error {
 		var input simulationRequest
-		if err := c.Bind(&input); err != nil || (input.Availability == nil && input.Online == nil && input.Power == nil && input.Temperature == nil && input.Humidity == nil && input.Contact == nil && input.Motion == nil && input.Active == nil && input.Speed == nil && input.Mode == nil && input.FilterLife == nil && input.FilterChange == nil && input.Position == nil && input.Sequence == nil && input.Repeat == 0) {
+		if err := c.Bind(&input); err != nil || (input.Availability == nil && input.Online == nil && input.Power == nil && input.Temperature == nil && input.Humidity == nil && input.Value == nil && input.Contact == nil && input.Motion == nil && input.Active == nil && input.Speed == nil && input.Mode == nil && input.FilterLife == nil && input.FilterChange == nil && input.Position == nil && input.Sequence == nil && input.Repeat == 0) {
 			return echo.NewHTTPError(http.StatusBadRequest, "at least one simulation value is required")
 		}
 		request := providersdk.SimulationRequest{DeviceID: c.Param("id"), Online: input.Online, Availability: input.Availability, Sequence: input.Sequence, Repeat: input.Repeat}
-		if input.Power != nil {
-			request.Properties = append(request.Properties, providersdk.PropertyWriteRequest{EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Value: device.BoolValue(*input.Power)})
-		}
-		if input.Temperature != nil {
-			request.Properties = append(request.Properties, providersdk.PropertyWriteRequest{EndpointID: "main", CapabilityID: "temperature", PropertyID: "current-temperature", Value: device.NumberValue(*input.Temperature)})
-		}
-		if input.Humidity != nil {
-			request.Properties = append(request.Properties, providersdk.PropertyWriteRequest{EndpointID: "main", CapabilityID: "humidity", PropertyID: "current-humidity", Value: device.NumberValue(*input.Humidity)})
-		}
-		if input.Contact != nil {
-			request.Properties = append(request.Properties, providersdk.PropertyWriteRequest{EndpointID: "main", CapabilityID: "contact", PropertyID: "contact-detected", Value: device.BoolValue(*input.Contact)})
-		}
-		if input.Motion != nil {
-			request.Properties = append(request.Properties, providersdk.PropertyWriteRequest{EndpointID: "main", CapabilityID: "motion", PropertyID: "motion-detected", Value: device.BoolValue(*input.Motion)})
-		}
 		var simulatedType device.Type
-		if input.Active != nil || input.Speed != nil || input.Mode != nil || input.FilterLife != nil || input.FilterChange != nil || input.Position != nil {
+		if input.Temperature != nil || input.Humidity != nil || input.Active != nil || input.Speed != nil || input.Mode != nil || input.FilterLife != nil || input.FilterChange != nil || input.Position != nil {
 			items, _ := devices.List(c.Request().Context())
 			for _, item := range items {
 				if item.ID == request.DeviceID {
@@ -1166,6 +1152,32 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 					break
 				}
 			}
+		}
+		if input.Power != nil {
+			request.Properties = append(request.Properties, providersdk.PropertyWriteRequest{EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Value: device.BoolValue(*input.Power)})
+		}
+		if input.Temperature != nil {
+			capabilityID, propertyID := "temperature", "current-temperature"
+			if simulatedType == device.TypeSinglePropertySensor {
+				capabilityID, propertyID = "sensor", "value"
+			}
+			request.Properties = append(request.Properties, providersdk.PropertyWriteRequest{EndpointID: "main", CapabilityID: capabilityID, PropertyID: propertyID, Value: device.NumberValue(*input.Temperature)})
+		}
+		if input.Humidity != nil {
+			capabilityID, propertyID := "humidity", "current-humidity"
+			if simulatedType == device.TypeSinglePropertySensor {
+				capabilityID, propertyID = "sensor", "value"
+			}
+			request.Properties = append(request.Properties, providersdk.PropertyWriteRequest{EndpointID: "main", CapabilityID: capabilityID, PropertyID: propertyID, Value: device.NumberValue(*input.Humidity)})
+		}
+		if input.Value != nil {
+			request.Properties = append(request.Properties, providersdk.PropertyWriteRequest{EndpointID: "main", CapabilityID: "sensor", PropertyID: "value", Value: device.NumberValue(*input.Value)})
+		}
+		if input.Contact != nil {
+			request.Properties = append(request.Properties, providersdk.PropertyWriteRequest{EndpointID: "main", CapabilityID: "contact", PropertyID: "contact-detected", Value: device.BoolValue(*input.Contact)})
+		}
+		if input.Motion != nil {
+			request.Properties = append(request.Properties, providersdk.PropertyWriteRequest{EndpointID: "main", CapabilityID: "motion", PropertyID: "motion-detected", Value: device.BoolValue(*input.Motion)})
 		}
 		advancedCapability := "fan"
 		if simulatedType == device.TypeAirPurifier {

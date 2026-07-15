@@ -4,7 +4,7 @@ import type { DeviceType, ValueType } from '../types/device'
 import type { CustomModelProperty } from '../types/mapping'
 import { deviceTypeLabel, parameterLevelLabel, permissionLabel, propertyDisplayLabel, unitLabel, valueTypeLabel } from '../presentationLabels'
 
-const deviceTypes: DeviceType[] = ['switch', 'lightbulb', 'outlet', 'temperature-sensor', 'humidity-sensor', 'contact-sensor', 'motion-sensor', 'fan', 'air-purifier', 'window-covering']
+const deviceTypes: DeviceType[] = ['switch', 'lightbulb', 'outlet', 'single-property-sensor', 'temperature-humidity-sensor', 'contact-sensor', 'motion-sensor', 'fan', 'air-purifier', 'window-covering']
 const valueTypes: ValueType[] = ['bool', 'int', 'number', 'string', 'enum']
 
 function emptyProperty(deviceType: DeviceType = 'switch'): CustomModelProperty {

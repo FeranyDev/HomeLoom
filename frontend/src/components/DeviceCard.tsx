@@ -16,6 +16,9 @@ export function DeviceCard({ device, pending, onPowerChange, onDetails, onMappin
   const power = deviceProperty(device, 'switch', 'power')?.bool ?? false
   const temperature = deviceProperty(device, 'temperature', 'current-temperature')?.number
   const humidity = deviceProperty(device, 'humidity', 'current-humidity')?.number
+	const singleSensor = device.endpoints.flatMap((endpoint) => endpoint.capabilities).find((capability) => capability.id === 'sensor')?.properties.find((property) => property.definition.id === 'value')
+	const sensorValue = singleSensor?.value.number
+	const sensorUnit = singleSensor?.definition.unit === 'celsius' ? '°C' : singleSensor?.definition.unit === 'percent' ? '%' : singleSensor?.definition.unit ?? ''
   const contact = deviceProperty(device, 'contact', 'contact-detected')?.bool
   const motion = deviceProperty(device, 'motion', 'motion-detected')?.bool
   const advancedCapability = device.type === 'fan' ? 'fan' : 'air-purifier'
@@ -43,12 +46,12 @@ export function DeviceCard({ device, pending, onPowerChange, onDetails, onMappin
           <span>{pending ? '同步中' : !device.online ? '不可用' : power ? '已开启' : '已关闭'}</span>
           <span className="switch-track"><span /></span>
         </button>
-      ) : device.type === 'temperature-sensor' ? (
+      ) : device.type === 'single-property-sensor' ? (
         <div className="temperature">
-          <strong>{device.online ? temperature?.toFixed(1) : '—'}</strong>
-          <span>°C</span>
+          <strong>{device.online ? sensorValue?.toFixed(1) : '—'}</strong>
+          <span>{sensorUnit}</span>
         </div>
-      ) : device.type === 'humidity-sensor' ? <div className="temperature"><strong>{device.online ? humidity?.toFixed(1) : '—'}</strong><span>%</span></div>
+      ) : device.type === 'temperature-humidity-sensor' ? <div className="dual-sensor"><div><strong>{device.online ? temperature?.toFixed(1) : '—'}</strong><span>°C</span></div><div><strong>{device.online ? humidity?.toFixed(1) : '—'}</strong><span>%</span></div></div>
         : device.type === 'fan' || device.type === 'air-purifier' ? <div className={`sensor-state ${device.online && active ? 'is-active' : ''}`}><strong>{!device.online ? '不可用' : `${active ? '运行中' : '已停止'} · ${speed?.toFixed(0) ?? 0}%`}</strong><span>{device.type === 'fan' ? 'FAN' : `AIR · 滤芯 ${filterLife?.toFixed(0) ?? '—'}%`}</span></div>
         : device.type === 'window-covering' ? <div className="temperature"><strong>{device.online ? position ?? '—' : '—'}</strong><span>%</span></div>
         : <div className={`sensor-state ${device.online && (contact || motion) ? 'is-active' : ''}`}><strong>{!device.online ? '不可用' : device.type === 'contact-sensor' ? (contact ? '已闭合' : '已打开') : (motion ? '检测到活动' : '无活动')}</strong><span>{device.type === 'contact-sensor' ? 'CONTACT' : 'MOTION'}</span></div>

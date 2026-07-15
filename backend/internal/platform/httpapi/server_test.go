@@ -1045,13 +1045,13 @@ func TestMappingCatalogCustomPropertyAndConsumerRouteAPI(t *testing.T) {
 }
 
 func TestGenericPropertyRead(t *testing.T) {
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/devices/virtual-temperature-1/endpoints/main/capabilities/temperature/properties/current-temperature", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/devices/virtual-temperature-1/endpoints/main/capabilities/sensor/properties/value", nil)
 	response := httptest.NewRecorder()
 	newTestServer().Handler().ServeHTTP(response, request)
-	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"id":"current-temperature"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"number":23.6`)) {
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"id":"value"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"number":23.6`)) {
 		t.Fatalf("response = %d %s", response.Code, response.Body.String())
 	}
-	missing := httptest.NewRequest(http.MethodGet, "/api/v1/devices/missing/endpoints/main/capabilities/temperature/properties/current-temperature", nil)
+	missing := httptest.NewRequest(http.MethodGet, "/api/v1/devices/missing/endpoints/main/capabilities/sensor/properties/value", nil)
 	missingResponse := httptest.NewRecorder()
 	newTestServer().Handler().ServeHTTP(missingResponse, missing)
 	if missingResponse.Code != http.StatusNotFound {
@@ -1124,18 +1124,18 @@ func TestCommandIdempotencyKeyPreventsDuplicateExecution(t *testing.T) {
 
 func TestSimulateVirtualDevice(t *testing.T) {
 	server := newTestServer()
-	request := httptest.NewRequest(http.MethodPatch, "/api/v1/devices/virtual-temperature-1/simulation", bytes.NewBufferString(`{"online":false,"temperature":17.5}`))
+	request := httptest.NewRequest(http.MethodPatch, "/api/v1/devices/virtual-temperature-1/simulation", bytes.NewBufferString(`{"online":false,"value":17.5}`))
 	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)
-	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"online":false`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"id":"current-temperature"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"number":17.5`)) {
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"online":false`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"id":"value"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"number":17.5`)) {
 		t.Fatalf("response = %d %s", response.Code, response.Body.String())
 	}
 	time.Sleep(20 * time.Millisecond)
 	devicesRequest := httptest.NewRequest(http.MethodGet, "/api/v1/devices", nil)
 	devicesResponse := httptest.NewRecorder()
 	server.Handler().ServeHTTP(devicesResponse, devicesRequest)
-	if !bytes.Contains(devicesResponse.Body.Bytes(), []byte(`"id":"current-temperature"`)) || !bytes.Contains(devicesResponse.Body.Bytes(), []byte(`"number":17.5`)) {
+	if !bytes.Contains(devicesResponse.Body.Bytes(), []byte(`"id":"value"`)) || !bytes.Contains(devicesResponse.Body.Bytes(), []byte(`"number":17.5`)) {
 		t.Fatalf("registry was not updated: %s", devicesResponse.Body.String())
 	}
 	invalid := httptest.NewRequest(http.MethodPatch, "/api/v1/devices/virtual-temperature-1/simulation", bytes.NewBufferString(`{}`))

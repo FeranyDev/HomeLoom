@@ -1,4 +1,4 @@
-export type DeviceType = 'switch' | 'temperature-sensor' | 'lightbulb' | 'outlet' | 'humidity-sensor' | 'contact-sensor' | 'motion-sensor' | 'fan' | 'air-purifier' | 'window-covering'
+export type DeviceType = 'switch' | 'single-property-sensor' | 'temperature-humidity-sensor' | 'lightbulb' | 'outlet' | 'contact-sensor' | 'motion-sensor' | 'fan' | 'air-purifier' | 'window-covering'
 export type ValueType = 'bool' | 'int' | 'number' | 'string' | 'enum'
 export type DeviceAvailability = 'online' | 'offline' | 'unknown'
 export type ParameterLevel = 'required' | 'optional' | 'custom'

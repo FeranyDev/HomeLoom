@@ -1,15 +1,15 @@
 import type { XiaomiHubDevice } from './api/xiaomi'
 
 export const xiaomiDeviceTypes = [
-	['switch', '开关'], ['lightbulb', '灯'], ['outlet', '插座'], ['temperature-sensor', '温度传感器'], ['humidity-sensor', '湿度传感器'], ['contact-sensor', '门窗传感器'], ['motion-sensor', '人体传感器'], ['fan', '风扇'], ['air-purifier', '空气净化器'], ['window-covering', '窗帘'],
+	['switch', '开关'], ['lightbulb', '灯'], ['outlet', '插座'], ['single-property-sensor', '单属性传感器'], ['temperature-humidity-sensor', '温湿度传感器'], ['contact-sensor', '门窗传感器'], ['motion-sensor', '人体传感器'], ['fan', '风扇'], ['air-purifier', '空气净化器'], ['window-covering', '窗帘'],
 ] as const
 
 export function inferXiaomiDeviceType(item: XiaomiHubDevice): string {
 	const hint = `${item.name} ${item.model ?? ''} ${item.specType ?? ''}`.toLowerCase()
 	if (/light|lamp|灯/.test(hint)) return 'lightbulb'
 	if (/outlet|plug|插座/.test(hint)) return 'outlet'
-	if (/temperature|thermometer|温度/.test(hint)) return 'temperature-sensor'
-	if (/humidity|湿度/.test(hint)) return 'humidity-sensor'
+	if (/温湿度/.test(hint) || ((/temperature|thermometer|温度/.test(hint)) && (/humidity|湿度/.test(hint)))) return 'temperature-humidity-sensor'
+	if (/temperature|thermometer|温度|humidity|湿度/.test(hint)) return 'single-property-sensor'
 	if (/contact|door|window|门窗/.test(hint)) return 'contact-sensor'
 	if (/motion|occupancy|人体|移动/.test(hint)) return 'motion-sensor'
 	if (/purifier|air-purifier|净化器/.test(hint)) return 'air-purifier'
@@ -21,8 +21,8 @@ export function inferXiaomiDeviceType(item: XiaomiHubDevice): string {
 export function requiredXiaomiProperties(type: string) {
 	const property = (capabilityId: string, propertyId: string, name: string, valueType: string, piid: number, writable: boolean, enumValues?: Record<string, number>) => ({ endpointId: 'main', capabilityId, capabilityType: capabilityId, propertyId, name, valueType, siid: 2, piid, writable, notifiable: true, ...(enumValues ? { enum: enumValues } : {}) })
 	switch (type) {
-	case 'temperature-sensor': return [property('temperature', 'current-temperature', '当前温度', 'number', 1, false)]
-	case 'humidity-sensor': return [property('humidity', 'current-humidity', '当前湿度', 'number', 1, false)]
+	case 'single-property-sensor': return [property('sensor', 'value', '传感器值', 'number', 1, false)]
+	case 'temperature-humidity-sensor': return [property('temperature', 'current-temperature', '当前温度', 'number', 1, false), property('humidity', 'current-humidity', '当前湿度', 'number', 2, false)]
 	case 'contact-sensor': return [property('contact', 'contact-detected', '接触状态', 'bool', 1, false)]
 	case 'motion-sensor': return [property('motion', 'motion-detected', '活动状态', 'bool', 1, false)]
 	case 'fan': return [property('fan', 'active', '启用', 'bool', 1, true), property('fan', 'current-state', '当前状态', 'enum', 2, false, { inactive: 0, idle: 1, active: 2 })]

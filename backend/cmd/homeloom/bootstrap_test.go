@@ -51,8 +51,9 @@ func TestInitializeAllVirtualModelsPersistsEverySupportedTypeOnce(t *testing.T) 
 	}
 	want := map[device.Type]bool{
 		device.TypeSwitch: false, device.TypeLightbulb: false, device.TypeOutlet: false,
-		device.TypeTemperatureSensor: false, device.TypeHumiditySensor: false,
-		device.TypeContactSensor: false, device.TypeMotionSensor: false,
+		device.TypeSinglePropertySensor:      false,
+		device.TypeTemperatureHumiditySensor: false,
+		device.TypeContactSensor:             false, device.TypeMotionSensor: false,
 		device.TypeFan: false, device.TypeAirPurifier: false, device.TypeWindowCovering: false,
 	}
 	for _, item := range items {

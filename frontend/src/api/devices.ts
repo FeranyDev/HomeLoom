@@ -39,7 +39,7 @@ export async function executeDeviceCommand(id: string, endpointId: string, capab
 	return requestData<Device>(`/api/v1/devices/${encodeURIComponent(id)}/endpoints/${encodeURIComponent(endpointId)}/capabilities/${encodeURIComponent(capabilityId)}/commands/${encodeURIComponent(commandId)}`, { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ parameters }) })
 }
 
-export async function simulateDevice(id: string, values: { availability?: DeviceAvailability; online?: boolean; power?: boolean; temperature?: number; humidity?: number; contact?: boolean; motion?: boolean; active?: boolean; speed?: number; mode?: string; filterLife?: number; filterChange?: boolean; position?: number; sequence?: number; repeat?: number }): Promise<Device> {
+export async function simulateDevice(id: string, values: { availability?: DeviceAvailability; online?: boolean; power?: boolean; value?: number; temperature?: number; humidity?: number; contact?: boolean; motion?: boolean; active?: boolean; speed?: number; mode?: string; filterLife?: number; filterChange?: boolean; position?: number; sequence?: number; repeat?: number }): Promise<Device> {
   return requestData<Device>(`/api/v1/devices/${encodeURIComponent(id)}/simulation`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values),
   })

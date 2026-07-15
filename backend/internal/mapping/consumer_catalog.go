@@ -30,10 +30,11 @@ func BuiltInConsumerCatalogs() []ConsumerCatalog {
 			definitions[parameter.Path.Key()] = parameter
 		}
 		for _, item := range contract.Parameters {
-			parameter := definitions[item.Source.Key()]
+			modelPath := item.ModelPath()
+			parameter := definitions[modelPath.Key()]
 			properties = append(properties, ConsumerProperty{
 				ID: item.Target, Name: item.Target, DeviceType: contract.DeviceType,
-				DefaultModelPath: item.Source, Level: item.Level, Type: parameter.Type,
+				DefaultModelPath: modelPath, Level: item.Level, Type: parameter.Type,
 				Readable: parameter.Readable, Writable: parameter.Writable, Notifiable: parameter.Notifiable,
 			})
 		}
@@ -51,11 +52,25 @@ func HomeKitConsumerContracts() []device.ConsumerModelContract {
 	optional := func(deviceType device.Type, capabilityID, propertyID, target string) device.ConsumerParameterMapping {
 		return device.ConsumerParameterMapping{Source: path(capabilityID, propertyID), Target: target, Level: device.ParameterOptional}
 	}
+	singleSensor := func(capabilityID, propertyID, target string) device.ConsumerParameterMapping {
+		return device.ConsumerParameterMapping{
+			Source:           path(capabilityID, propertyID),
+			DefaultModelPath: path("sensor", "value"),
+			Target:           target,
+			Level:            device.ParameterOptional,
+		}
+	}
 	sensorStatus := func(deviceType device.Type) []device.ConsumerParameterMapping {
 		return []device.ConsumerParameterMapping{
 			optional(deviceType, "battery", "level", "BatteryService.BatteryLevel"),
 			optional(deviceType, "battery", "low", "BatteryService.StatusLowBattery"),
 			optional(deviceType, "security", "tampered", "PrimaryService.StatusTampered"),
+		}
+	}
+	batteryStatus := func(deviceType device.Type) []device.ConsumerParameterMapping {
+		return []device.ConsumerParameterMapping{
+			optional(deviceType, "battery", "level", "BatteryService.BatteryLevel"),
+			optional(deviceType, "battery", "low", "BatteryService.StatusLowBattery"),
 		}
 	}
 	contracts := []device.ConsumerModelContract{
@@ -64,8 +79,14 @@ func HomeKitConsumerContracts() []device.ConsumerModelContract {
 			required(device.TypeLightbulb, "switch", "power", "Lightbulb.On"), optional(device.TypeLightbulb, "light", "brightness", "Lightbulb.Brightness"), optional(device.TypeLightbulb, "light", "color-temperature", "Lightbulb.ColorTemperature"), optional(device.TypeLightbulb, "light", "hue", "Lightbulb.Hue"), optional(device.TypeLightbulb, "light", "saturation", "Lightbulb.Saturation"),
 		}},
 		{ConsumerID: "homekit", DeviceType: device.TypeOutlet, Parameters: []device.ConsumerParameterMapping{required(device.TypeOutlet, "switch", "power", "Outlet.On"), optional(device.TypeOutlet, "outlet", "in-use", "Outlet.OutletInUse")}},
-		{ConsumerID: "homekit", DeviceType: device.TypeTemperatureSensor, Parameters: append([]device.ConsumerParameterMapping{required(device.TypeTemperatureSensor, "temperature", "current-temperature", "TemperatureSensor.CurrentTemperature")}, sensorStatus(device.TypeTemperatureSensor)...)},
-		{ConsumerID: "homekit", DeviceType: device.TypeHumiditySensor, Parameters: append([]device.ConsumerParameterMapping{required(device.TypeHumiditySensor, "humidity", "current-humidity", "HumiditySensor.CurrentRelativeHumidity")}, sensorStatus(device.TypeHumiditySensor)...)},
+		{ConsumerID: "homekit", DeviceType: device.TypeSinglePropertySensor, Parameters: append([]device.ConsumerParameterMapping{
+			singleSensor("temperature", "current-temperature", "TemperatureSensor.CurrentTemperature"),
+			singleSensor("humidity", "current-humidity", "HumiditySensor.CurrentRelativeHumidity"),
+		}, batteryStatus(device.TypeSinglePropertySensor)...)},
+		{ConsumerID: "homekit", DeviceType: device.TypeTemperatureHumiditySensor, Parameters: append([]device.ConsumerParameterMapping{
+			required(device.TypeTemperatureHumiditySensor, "temperature", "current-temperature", "TemperatureSensor.CurrentTemperature"),
+			required(device.TypeTemperatureHumiditySensor, "humidity", "current-humidity", "HumiditySensor.CurrentRelativeHumidity"),
+		}, batteryStatus(device.TypeTemperatureHumiditySensor)...)},
 		{ConsumerID: "homekit", DeviceType: device.TypeContactSensor, Parameters: append([]device.ConsumerParameterMapping{required(device.TypeContactSensor, "contact", "contact-detected", "ContactSensor.ContactSensorState")}, sensorStatus(device.TypeContactSensor)...)},
 		{ConsumerID: "homekit", DeviceType: device.TypeMotionSensor, Parameters: append([]device.ConsumerParameterMapping{required(device.TypeMotionSensor, "motion", "motion-detected", "MotionSensor.MotionDetected")}, sensorStatus(device.TypeMotionSensor)...)},
 		{ConsumerID: "homekit", DeviceType: device.TypeFan, Parameters: []device.ConsumerParameterMapping{

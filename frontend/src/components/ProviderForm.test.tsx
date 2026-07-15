@@ -31,7 +31,7 @@ describe('ProviderForm', () => {
   it('loads one complete example for every model', async () => {
     const { container } = render(<ProviderForm provider={null} onCancel={() => {}} onSave={vi.fn()} />); await userEvent.click(screen.getByRole('button', { name: '载入完整模型示例' })); const editor = container.querySelector('textarea') as HTMLTextAreaElement
     const parsed = JSON.parse(editor.value) as { devices: Array<{ type: string }> }
-    expect(new Set(parsed.devices.map((item) => item.type)).size).toBe(10); expect(editor.value).toContain('"airQuality": "good"'); expect(editor.value).toContain('"obstruction": false')
+    expect(new Set(parsed.devices.map((item) => item.type)).size).toBe(10); expect(editor.value).toContain('"single-property-sensor"'); expect(editor.value).toContain('"temperature-humidity-sensor"'); expect(editor.value).toContain('"airQuality": "good"'); expect(editor.value).toContain('"obstruction": false')
   })
 
   it('shows server validation beside the matching field', async () => {

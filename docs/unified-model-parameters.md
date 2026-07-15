@@ -21,8 +21,8 @@ Consumer 可以把统一模型中的可选参数提升为自己的必须参数�
 | Switch | `switch.power` | — |
 | Lightbulb | `switch.power` | 亮度、色温、色相、饱和度 |
 | Outlet | `switch.power` | 使用状态、当前功率、累计电量 |
-| Temperature Sensor | 当前温度 | 电量、低电量、防拆 |
-| Humidity Sensor | 当前湿度 | 电量、低电量、防拆 |
+| Single Property Sensor | `sensor.value` 单一数值；单位与范围由设备实例提供 | 电量、低电量 |
+| Temperature Humidity Sensor | 当前温度、当前湿度 | 电量、低电量 |
 | Contact Sensor | 接触状态 | 电量、低电量、防拆 |
 | Motion Sensor | 活动状态 | 电量、低电量、防拆 |
 | Fan | 启用、当前状态 | 目标模式、转速、摇头、旋转方向、物理控制锁 |
@@ -43,6 +43,8 @@ Provider snapshot
   -> HomeKit / Web / future Target
 ```
 
-HomeKit Consumer 契约位于 `backend/internal/targets/homekit/model_contract.go`。它把统一路径映射到具体 HAP Characteristic，并允许同一 Provider 设备在不同 Consumer 中选择不同的可选参数集合。
+HomeKit Consumer 契约位于 `backend/internal/mapping/consumer_catalog.go`。它把统一路径映射到具体 HAP Characteristic，并允许同一 Provider 设备在不同 Consumer 中选择不同的可选参数集合。
+
+`single-property-sensor` 不固化“温度”或“湿度”语义。Provider 统一发布 `main/sensor/value`，并可在属性定义中给出 `celsius`、`percent` 等单位；桥内每台虚拟设备再独立把这个字段绑定到 `TemperatureSensor.CurrentTemperature`、`HumiditySensor.CurrentRelativeHumidity` 或后续 Consumer 支持的其他目标。需要同时发布温度和湿度时使用 `temperature-humidity-sensor`，它保留两个明确的必需字段。
 
 Virtual Provider 会发布当前契约中的完整可选参数集合，用于开发和回归测试。真实 Provider 可以只发布必须参数，再根据设备能力逐项增加可选参数。
