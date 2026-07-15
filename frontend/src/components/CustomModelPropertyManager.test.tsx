@@ -22,7 +22,7 @@ describe('CustomModelPropertyManager', () => {
     await userEvent.click(screen.getByRole('button', { name: '＋ 新建自定义属性' }))
     await userEvent.type(screen.getByPlaceholderText('custom-air-co2'), 'switch-vendor-led')
     const fields = screen.getAllByRole('group')
-    const property = fields.find((item) => within(item).queryByText('第三级 · Property'))!
+    const property = fields.find((item) => within(item).queryByText(/第三级.*Property/))!
     const inputs = within(property).getAllByRole('textbox')
     await userEvent.type(inputs[0], 'led-pattern')
     await userEvent.type(inputs[1], 'LED Pattern')

@@ -196,15 +196,16 @@ type commandRequest struct {
 }
 
 type targetRequest struct {
-	ID        string   `json:"id"`
-	Type      string   `json:"type"`
-	Name      string   `json:"name"`
-	Enabled   bool     `json:"enabled"`
-	Address   string   `json:"address"`
-	Pin       string   `json:"pin"`
-	SetupID   string   `json:"setupId"`
-	StorePath string   `json:"storePath"`
-	DeviceIDs []string `json:"deviceIds"`
+	ID        string                       `json:"id"`
+	Type      string                       `json:"type"`
+	Name      string                       `json:"name"`
+	Enabled   bool                         `json:"enabled"`
+	Address   string                       `json:"address"`
+	Pin       string                       `json:"pin"`
+	SetupID   string                       `json:"setupId"`
+	StorePath string                       `json:"storePath"`
+	DeviceIDs []string                     `json:"deviceIds"`
+	Devices   []domaintarget.VirtualDevice `json:"devices"`
 }
 
 func (r targetRequest) domain(id string) domaintarget.Config {
@@ -213,7 +214,7 @@ func (r targetRequest) domain(id string) domaintarget.Config {
 	}
 	return domaintarget.Config{
 		ID: id, Type: r.Type, Name: r.Name, Enabled: r.Enabled, Address: r.Address,
-		Pin: r.Pin, SetupID: r.SetupID, StorePath: r.StorePath, DeviceIDs: r.DeviceIDs,
+		Pin: r.Pin, SetupID: r.SetupID, StorePath: r.StorePath, DeviceIDs: r.DeviceIDs, Devices: r.Devices,
 	}
 }
 

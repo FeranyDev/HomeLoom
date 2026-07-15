@@ -30,6 +30,6 @@ describe('MappingPreview', () => {
 		await userEvent.selectOptions(await screen.findByLabelText('预览 Profile'), 'saved-map')
 		await userEvent.click(screen.getByRole('button', { name: '运行预览' }))
 		expect(runPreview).toHaveBeenCalledWith({ profileId: 'saved-map', direction: 'forward', value: { type: 'bool', bool: true } })
-		expect(screen.getByText('最终输出 · bool').parentElement).toHaveTextContent('false')
+		expect(screen.getByText(/最终输出.*bool/).parentElement).toHaveTextContent('false')
 	})
 })

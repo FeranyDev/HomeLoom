@@ -14,6 +14,7 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/buildinfo"
 	"github.com/feranydev/homeloom/backend/internal/config"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
+	"github.com/feranydev/homeloom/backend/internal/domain/target"
 	"github.com/feranydev/homeloom/backend/internal/persistence/sqlite"
 	"github.com/feranydev/homeloom/backend/internal/platform/httpapi"
 	"github.com/feranydev/homeloom/backend/internal/platform/safelog"
@@ -187,7 +188,8 @@ func main() {
 				ID: targetConfig.ID, Type: targetConfig.Type, Name: targetConfig.Name,
 				Enabled: targetConfig.Enabled, Status: "error", Address: targetConfig.Address,
 				SetupID: targetConfig.SetupID, DeviceIDs: append([]string{}, targetConfig.DeviceIDs...),
-				Error: targetErr.Error(),
+				Devices: append([]target.VirtualDevice(nil), targetConfig.Devices...),
+				Error:   targetErr.Error(),
 			}
 			logger.Error("target initialization failed", "target_id", targetConfig.ID, "error", targetErr)
 		}

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	domaintarget "github.com/feranydev/homeloom/backend/internal/domain/target"
 	homekitqr "github.com/kradalby/homekit-qr"
 )
@@ -19,17 +20,18 @@ import (
 var ErrTargetNotFound = errors.New("target not found")
 
 type TargetInfo struct {
-	ID          string   `json:"id"`
-	Type        string   `json:"type"`
-	Name        string   `json:"name"`
-	Enabled     bool     `json:"enabled"`
-	Status      string   `json:"status"`
-	Address     string   `json:"address,omitempty"`
-	SetupID     string   `json:"setupId,omitempty"`
-	PairingCode string   `json:"pairingCode,omitempty"`
-	SetupURI    string   `json:"setupUri,omitempty"`
-	DeviceIDs   []string `json:"deviceIds"`
-	Error       string   `json:"error,omitempty"`
+	ID          string                       `json:"id"`
+	Type        string                       `json:"type"`
+	Name        string                       `json:"name"`
+	Enabled     bool                         `json:"enabled"`
+	Status      string                       `json:"status"`
+	Address     string                       `json:"address,omitempty"`
+	SetupID     string                       `json:"setupId,omitempty"`
+	PairingCode string                       `json:"pairingCode,omitempty"`
+	SetupURI    string                       `json:"setupUri,omitempty"`
+	DeviceIDs   []string                     `json:"deviceIds"`
+	Devices     []domaintarget.VirtualDevice `json:"devices"`
+	Error       string                       `json:"error,omitempty"`
 }
 
 type TargetRegistration struct {
@@ -127,6 +129,7 @@ func (s *TargetService) Save(ctx context.Context, item domaintarget.Config) (Tar
 		ID: item.ID, Type: item.Type, Name: item.Name, Enabled: item.Enabled,
 		Status: "disabled", Address: item.Address, SetupID: item.SetupID,
 		DeviceIDs: append([]string{}, item.DeviceIDs...),
+		Devices:   append([]domaintarget.VirtualDevice(nil), item.Devices...),
 	}
 	registration := TargetRegistration{Info: info}
 	if s.runtime != nil {
@@ -202,6 +205,17 @@ func (s *TargetService) withDefaults(item domaintarget.Config) (domaintarget.Con
 			item.SetupID = setupID
 		}
 		item.StorePath = filepath.Join("data", "hap", item.ID)
+	}
+	if len(item.Devices) == 0 && len(item.DeviceIDs) > 0 {
+		for _, id := range item.DeviceIDs {
+			item.Devices = append(item.Devices, domaintarget.VirtualDevice{ID: id, Name: id, SourceDeviceID: id, Enabled: true})
+		}
+	}
+	item.DeviceIDs = item.DeviceIDs[:0]
+	for _, current := range item.Devices {
+		if current.Enabled {
+			item.DeviceIDs = append(item.DeviceIDs, current.SourceDeviceID)
+		}
 	}
 	return item, nil
 }
@@ -342,6 +356,30 @@ func validateTarget(item domaintarget.Config) error {
 				break
 			}
 		}
+	}
+	seenIDs := make(map[string]bool)
+	for index, current := range item.Devices {
+		prefix := fmt.Sprintf("devices.%d", index)
+		if !validTargetID.MatchString(current.ID) {
+			fields[prefix+".id"] = "may contain only letters, numbers, underscores and hyphens"
+		}
+		if strings.TrimSpace(current.Name) == "" {
+			fields[prefix+".name"] = "required"
+		}
+		if strings.TrimSpace(current.SourceDeviceID) == "" {
+			fields[prefix+".sourceDeviceId"] = "required"
+		} else if !device.ValidStableID(current.SourceDeviceID) {
+			fields[prefix+".sourceDeviceId"] = "must reference a stable unified device ID"
+		}
+		if current.Type != "" {
+			if _, supported := device.ModelContractFor(current.Type); !supported {
+				fields[prefix+".type"] = "must reference a supported unified device model"
+			}
+		}
+		if seenIDs[current.ID] {
+			fields[prefix+".id"] = "must be unique within the bridge"
+		}
+		seenIDs[current.ID] = true
 	}
 	if len(fields) > 0 {
 		return NewValidationError("invalid target configuration", fields)

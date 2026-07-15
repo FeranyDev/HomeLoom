@@ -101,10 +101,12 @@ func CustomModelParameter(item CustomModelProperty) device.ModelParameter {
 		Path: item.Path(), Name: definition.Name, Level: device.ParameterCustom,
 		Type: definition.Type, Unit: definition.Unit, Readable: definition.Readable,
 		Writable: definition.Writable, Notifiable: definition.Notifiable,
-		Enum:           append([]string(nil), definition.Enum...),
-		Publisher:      device.ParameterRole{Level: device.ParameterCustom, Behavior: "preserve-and-mark-custom"},
-		Consumer:       device.ParameterRole{Level: device.ParameterCustom, Behavior: "explicit-path-mapping-only"},
-		PublisherNotes: "Provider 通过显式路由发布自定义属性",
-		ConsumerNotes:  "Consumer 通过显式路由使用自定义属性",
+		Min: definition.Min, Max: definition.Max, Step: definition.Step,
+		StaleAfterSeconds: definition.StaleAfterSeconds,
+		Enum:              append([]string(nil), definition.Enum...),
+		Publisher:         device.ParameterRole{Level: device.ParameterCustom, Behavior: "preserve-and-mark-custom"},
+		Consumer:          device.ParameterRole{Level: device.ParameterCustom, Behavior: "explicit-path-mapping-only"},
+		PublisherNotes:    "Provider 通过显式路由发布自定义属性",
+		ConsumerNotes:     "Consumer 通过显式路由使用自定义属性",
 	}
 }

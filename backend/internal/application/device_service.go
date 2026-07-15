@@ -97,6 +97,11 @@ type ConsumerPropertyMapper interface {
 	ResolveConsumerWrite(providerID, deviceID, consumerID string, deviceType device.Type, endpointID, capabilityID, propertyID string, value device.PropertyValue) (device.ParameterPath, device.PropertyValue, string, bool, error)
 }
 
+type ScopedConsumerPropertyMapper interface {
+	ProjectConsumerDeviceInstance(consumerID, targetID, consumerDeviceID string, item device.Device) (device.Device, error)
+	ResolveConsumerWriteInstance(providerID, deviceID, targetID, consumerDeviceID, consumerID string, deviceType device.Type, endpointID, capabilityID, propertyID string, value device.PropertyValue) (device.ParameterPath, device.PropertyValue, string, bool, error)
+}
+
 type ModelDefinitionMapper interface {
 	ResolveModelDefinition(deviceType device.Type, path device.ParameterPath, fallback device.PropertyDefinition) (device.PropertyDefinition, bool)
 }
@@ -626,6 +631,14 @@ func (s *DeviceService) ProjectForConsumer(consumerID string, item device.Device
 	return mapper.ProjectConsumerDevice(consumerID, item)
 }
 
+func (s *DeviceService) ProjectForConsumerInstance(consumerID, targetID, consumerDeviceID string, item device.Device) (device.Device, error) {
+	mapper, ok := s.propertyMapper.(ScopedConsumerPropertyMapper)
+	if !ok {
+		return s.ProjectForConsumer(consumerID, item)
+	}
+	return mapper.ProjectConsumerDeviceInstance(consumerID, targetID, consumerDeviceID, item)
+}
+
 func (s *DeviceService) ExecuteConsumerProperty(ctx context.Context, consumerID, deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) (device.Device, domaincommand.Command, error) {
 	item, ok := s.registry.Get(deviceID)
 	if !ok {
@@ -636,6 +649,22 @@ func (s *DeviceService) ExecuteConsumerProperty(ctx context.Context, consumerID,
 		return s.ExecuteProperty(ctx, deviceID, endpointID, capabilityID, propertyID, value)
 	}
 	path, mapped, _, _, err := mapper.ResolveConsumerWrite(item.ProviderID, item.ID, consumerID, item.Type, endpointID, capabilityID, propertyID, value)
+	if err != nil {
+		return device.Device{}, domaincommand.Command{}, err
+	}
+	return s.ExecuteProperty(ctx, deviceID, path.EndpointID, path.CapabilityID, path.PropertyID, mapped)
+}
+
+func (s *DeviceService) ExecuteConsumerPropertyInstance(ctx context.Context, consumerID, targetID, consumerDeviceID, deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) (device.Device, domaincommand.Command, error) {
+	item, ok := s.registry.Get(deviceID)
+	if !ok {
+		return device.Device{}, domaincommand.Command{}, ErrDeviceNotFound
+	}
+	mapper, ok := s.propertyMapper.(ScopedConsumerPropertyMapper)
+	if !ok {
+		return s.ExecuteConsumerProperty(ctx, consumerID, deviceID, endpointID, capabilityID, propertyID, value)
+	}
+	path, mapped, _, _, err := mapper.ResolveConsumerWriteInstance(item.ProviderID, item.ID, targetID, consumerDeviceID, consumerID, item.Type, endpointID, capabilityID, propertyID, value)
 	if err != nil {
 		return device.Device{}, domaincommand.Command{}, err
 	}

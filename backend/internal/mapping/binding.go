@@ -2,10 +2,13 @@ package mapping
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 )
+
+var targetScopeID = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 type BindingStage string
 
@@ -37,6 +40,8 @@ type Binding struct {
 	ModelCapabilityID string       `json:"modelCapabilityId"`
 	ModelPropertyID   string       `json:"modelPropertyId"`
 	ConsumerID        string       `json:"consumerId,omitempty"`
+	TargetID          string       `json:"targetId,omitempty"`
+	ConsumerDeviceID  string       `json:"consumerDeviceId,omitempty"`
 	ConsumerProperty  string       `json:"consumerProperty,omitempty"`
 	Enabled           bool         `json:"enabled"`
 }
@@ -64,7 +69,7 @@ func (b Binding) ModelPath() device.ParameterPath {
 // Consumer target property may each have at most one active route.
 func (b Binding) Key() string {
 	if b.EffectiveStage() == StageConsumer {
-		return strings.Join([]string{string(StageConsumer), b.ProviderID, b.DeviceID, b.ConsumerID, b.ConsumerProperty}, "\x00")
+		return strings.Join([]string{string(StageConsumer), b.ProviderID, b.DeviceID, b.TargetID, b.ConsumerDeviceID, b.ConsumerID, b.ConsumerProperty}, "\x00")
 	}
 	return strings.Join([]string{string(StageProvider), b.ProviderID, b.DeviceID, b.EndpointID, b.CapabilityID, b.PropertyID}, "\x00")
 }
@@ -123,6 +128,15 @@ func ValidateBinding(b Binding) error {
 		if !device.ValidStableID(b.ConsumerID) {
 			fields["binding.consumerId"] = "must be a stable lowercase identifier"
 		}
+		if (b.TargetID == "") != (b.ConsumerDeviceID == "") {
+			fields["binding.targetId"] = "targetId and consumerDeviceId must be provided together"
+		}
+		if b.TargetID != "" && !targetScopeID.MatchString(b.TargetID) {
+			fields["binding.targetId"] = "may contain only letters, numbers, underscores and hyphens"
+		}
+		if b.ConsumerDeviceID != "" && !targetScopeID.MatchString(b.ConsumerDeviceID) {
+			fields["binding.consumerDeviceId"] = "may contain only letters, numbers, underscores and hyphens"
+		}
 		if _, ok := device.ModelContractFor(b.DeviceType); !ok {
 			fields["binding.deviceType"] = "must reference a supported unified device model"
 		}
@@ -138,7 +152,7 @@ func ValidateBinding(b Binding) error {
 
 func BindingPath(b Binding) string {
 	if b.EffectiveStage() == StageConsumer {
-		return fmt.Sprintf("%s/%s/%s -> %s/%s", b.ProviderID, b.DeviceID, b.ModelPath(), b.ConsumerID, b.ConsumerProperty)
+		return fmt.Sprintf("%s/%s/%s -> %s/%s/%s/%s", b.ProviderID, b.DeviceID, b.ModelPath(), b.TargetID, b.ConsumerDeviceID, b.ConsumerID, b.ConsumerProperty)
 	}
 	return fmt.Sprintf("%s/%s/%s -> %s", b.ProviderID, b.DeviceID, b.SourcePath(), b.ModelPath())
 }

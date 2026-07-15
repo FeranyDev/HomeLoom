@@ -16,7 +16,7 @@ Consumer 属性
   例如 HomeKit Service.Characteristic
 ```
 
-两段关系分别存储在 SQLite 的 `mapping_bindings` 中，而且都以具体设备为作用域。Provider 路由按 Provider、设备和原始三级路径匹配；Consumer 路由按 Provider、设备、Consumer 和目标属性匹配。同型号的两台设备可以配置完全不同的路径与转换。Profile 为空表示不转换，配置 Profile 时事件走正向转换，读取和控制走反向转换。
+两段关系分别存储在 SQLite 的 `mapping_bindings` 中，而且都以具体设备为作用域。Provider 路由按 Provider、设备和原始三级路径匹配；Consumer 路由按 Provider、设备、Target 桥、桥内虚拟设备、Consumer 和目标属性匹配。同型号的两台来源设备，以及同一来源设备发布到不同桥或不同虚拟设备时，都可以配置完全不同的路径与转换。Profile 为空表示不转换，配置 Profile 时事件走正向转换，读取和控制走反向转换。
 
 ## Provider 边界
 
@@ -36,10 +36,10 @@ Xiaomi Provider 在 MQTT 连接建立并取得 `getDevList` 后，根据 `specTy
 
 ## Consumer 边界
 
-Consumer 目录公开平台能提供的全部目标属性。配置入口位于设备中心的对应设备卡片，编辑器打开后锁定 `providerId + deviceId`，不提供跨设备选择，也不会展示其他设备的属性和路由。设备类型只用于筛选当前设备可用的统一模型和 Consumer 属性。HomeKit 路由在该设备独立的 Consumer 投影视图中生效，不会改写 Core 注册表、影响同型号的其他设备或影响 Web 等其他 Consumer。通知值走正向 Profile；HomeKit 控制先做反向 Profile，再写入对应的统一模型属性，随后继续沿该设备的 Provider 路由写回设备。
+Consumer 目录公开平台能提供的全部目标属性。Target 先创建独立桥，再在桥内创建拥有稳定 ID、名称和启停状态的虚拟设备；每台虚拟设备绑定一个统一注册表来源设备。属性映射入口位于该桥的对应虚拟设备，编辑器锁定 `providerId + deviceId + targetId + consumerDeviceId`，不会展示或修改其他桥内设备的路由。设备类型只用于筛选当前设备可用的统一模型和 Consumer 属性。HomeKit 路由在该桥内虚拟设备独立的 Consumer 投影视图中生效，不会改写 Core 注册表、影响同型号的其他设备或影响 Web 等其他 Consumer。通知值走正向 Profile；HomeKit 控制先按桥和虚拟设备作用域做反向 Profile，再写入对应的统一模型属性，随后继续沿来源设备的 Provider 路由写回设备。
 
 Provider 路由变化只刷新原始设备快照，不重启 Provider。Consumer 路由变化会保留 HomeKit 身份目录和配对资料，重建附件图以应用新的 Service/Characteristic 关系。
 
 ## 前端配置边界
 
-设备中心的每张设备卡片提供“配置映射”入口。弹出的三栏关系图只加载当前设备的 Provider 原始属性和当前设备已有路由，两段新路由也始终写入该设备作用域。顶层“模型工具”页面不再集中管理设备路由，只维护跨设备复用的统一模型自定义属性、转换 Profile 和转换预览。
+设备中心的每张设备卡片提供 Provider → 统一模型的“配置映射”入口。桥接中心的每张桥卡片提供“配置虚拟设备”入口；虚拟设备保存后，才能进入该实例的统一模型 → Consumer 三栏关系图。顶层“统一模型”页面以设备模型及端点 / 能力 / 属性三级字段为主工作区：完整展示必需、可选、自定义字段及发布端/消费端规则，并提供数据库自定义字段入口；跨设备复用的转换 Profile 和转换预览收纳在次级标签中。

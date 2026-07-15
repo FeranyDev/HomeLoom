@@ -13,6 +13,7 @@ import (
 	"github.com/brutella/hap/service"
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
+	domaintarget "github.com/feranydev/homeloom/backend/internal/domain/target"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	homekitqr "github.com/kradalby/homekit-qr"
 )
@@ -25,6 +26,7 @@ type Config struct {
 	SetupID       string
 	StorePath     string
 	DeviceIDs     []string
+	Devices       []domaintarget.VirtualDevice
 	IdentityStore AccessoryIdentityStore
 }
 
@@ -88,7 +90,23 @@ type accessoryBindings struct {
 	tampered        map[string]*characteristic.StatusTampered
 }
 
-func newAccessoryBindings(items []device.Device, selected map[string]bool, accessoryIDs map[string]uint64, devices *application.DeviceService, logger *slog.Logger) *accessoryBindings {
+type accessoryRoute struct {
+	sourceDeviceID   string
+	targetID         string
+	consumerDeviceID string
+}
+
+func newAccessoryBindings(items []device.Device, selected map[string]bool, accessoryIDs map[string]uint64, devices *application.DeviceService, logger *slog.Logger, routeMaps ...map[string]accessoryRoute) *accessoryBindings {
+	routes := map[string]accessoryRoute{}
+	if len(routeMaps) > 0 {
+		routes = routeMaps[0]
+	}
+	sourceID := func(id string) string {
+		if routes[id].sourceDeviceID != "" {
+			return routes[id].sourceDeviceID
+		}
+		return id
+	}
 	bindings := &accessoryBindings{
 		accessories: make([]*accessory.A, 0, len(items)), switches: make(map[string]*characteristic.On), temperatures: make(map[string]*characteristic.CurrentTemperature), faults: make(map[string]*characteristic.StatusFault), extraFaults: make(map[string][]*characteristic.StatusFault), byDevice: make(map[string]*accessory.A), outletInUse: make(map[string]*characteristic.OutletInUse), humidities: make(map[string]*characteristic.CurrentRelativeHumidity), contacts: make(map[string]*characteristic.ContactSensorState), motions: make(map[string]*characteristic.MotionDetected), actives: make(map[string]*characteristic.Active), fanCurrent: make(map[string]*characteristic.CurrentFanState), fanTargets: make(map[string]*characteristic.TargetFanState), airCurrent: make(map[string]*characteristic.CurrentAirPurifierState), airTargets: make(map[string]*characteristic.TargetAirPurifierState), speeds: make(map[string]*characteristic.RotationSpeed), filterLife: make(map[string]*characteristic.FilterLifeLevel), filterChange: make(map[string]*characteristic.FilterChangeIndication), filterResets: make(map[string]*characteristic.ResetFilterIndication), positions: make(map[string]*characteristic.CurrentPosition), positionTargets: make(map[string]*characteristic.TargetPosition), positionStates: make(map[string]*characteristic.PositionState),
 		brightness: make(map[string]*characteristic.Brightness), colorTemps: make(map[string]*characteristic.ColorTemperature), hues: make(map[string]*characteristic.Hue), saturations: make(map[string]*characteristic.Saturation), swingModes: make(map[string]*characteristic.SwingMode), directions: make(map[string]*characteristic.RotationDirection), controlLocks: make(map[string]*characteristic.LockPhysicalControls), airQualities: make(map[string]*characteristic.AirQuality), pm25: make(map[string]*characteristic.PM2_5Density), voc: make(map[string]*characteristic.VOCDensity), obstructions: make(map[string]*characteristic.ObstructionDetected), batteryLevels: make(map[string]*characteristic.BatteryLevel), lowBatteries: make(map[string]*characteristic.StatusLowBattery), tampered: make(map[string]*characteristic.StatusTampered),
@@ -106,6 +124,7 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 			continue
 		}
 		info := accessory.Info{Name: item.Name, SerialNumber: item.ID, Manufacturer: "HomeLoom", Model: string(item.Type), Firmware: "0.0.1"}
+		route := routes[item.ID]
 		var created *accessory.A
 		switch item.Type {
 		case device.TypeSwitch:
@@ -113,9 +132,9 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 			a.A.Id = accessoryIDs[item.ID]
 			fault := characteristic.NewStatusFault()
 			a.Switch.AddC(fault.C)
-			deviceID := item.ID
+			deviceID := sourceID(item.ID)
 			a.Switch.On.OnSetRemoteValue(func(value bool) error {
-				return writeHomeKitProperty(devices, logger, deviceID, "switch", "power", device.BoolValue(value))
+				return writeHomeKitProperty(devices, logger, deviceID, route.targetID, route.consumerDeviceID, "switch", "power", device.BoolValue(value))
 			})
 			bindings.switches[item.ID], bindings.faults[item.ID] = a.Switch.On, fault
 			bindings.accessories = append(bindings.accessories, a.A)
@@ -125,14 +144,14 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 			a.A.Id = accessoryIDs[item.ID]
 			fault := characteristic.NewStatusFault()
 			a.Lightbulb.AddC(fault.C)
-			deviceID := item.ID
+			deviceID := sourceID(item.ID)
 			a.Lightbulb.On.OnSetRemoteValue(func(value bool) error {
-				return writeHomeKitProperty(devices, logger, deviceID, "switch", "power", device.BoolValue(value))
+				return writeHomeKitProperty(devices, logger, deviceID, route.targetID, route.consumerDeviceID, "switch", "power", device.BoolValue(value))
 			})
 			if _, found := item.Property("main", "light", "brightness"); found {
 				current := characteristic.NewBrightness()
 				current.OnSetRemoteValue(func(value int) error {
-					return writeHomeKitProperty(devices, logger, deviceID, "light", "brightness", device.NumberValue(float64(value)))
+					return writeHomeKitProperty(devices, logger, deviceID, route.targetID, route.consumerDeviceID, "light", "brightness", device.NumberValue(float64(value)))
 				})
 				a.Lightbulb.AddC(current.C)
 				bindings.brightness[item.ID] = current
@@ -140,7 +159,7 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 			if _, found := item.Property("main", "light", "color-temperature"); found {
 				current := characteristic.NewColorTemperature()
 				current.OnSetRemoteValue(func(value int) error {
-					return writeHomeKitProperty(devices, logger, deviceID, "light", "color-temperature", device.IntValue(int64(value)))
+					return writeHomeKitProperty(devices, logger, deviceID, route.targetID, route.consumerDeviceID, "light", "color-temperature", device.IntValue(int64(value)))
 				})
 				a.Lightbulb.AddC(current.C)
 				bindings.colorTemps[item.ID] = current
@@ -148,7 +167,7 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 			if _, found := item.Property("main", "light", "hue"); found {
 				current := characteristic.NewHue()
 				current.OnSetRemoteValue(func(value float64) error {
-					return writeHomeKitProperty(devices, logger, deviceID, "light", "hue", device.NumberValue(value))
+					return writeHomeKitProperty(devices, logger, deviceID, route.targetID, route.consumerDeviceID, "light", "hue", device.NumberValue(value))
 				})
 				a.Lightbulb.AddC(current.C)
 				bindings.hues[item.ID] = current
@@ -156,7 +175,7 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 			if _, found := item.Property("main", "light", "saturation"); found {
 				current := characteristic.NewSaturation()
 				current.OnSetRemoteValue(func(value float64) error {
-					return writeHomeKitProperty(devices, logger, deviceID, "light", "saturation", device.NumberValue(value))
+					return writeHomeKitProperty(devices, logger, deviceID, route.targetID, route.consumerDeviceID, "light", "saturation", device.NumberValue(value))
 				})
 				a.Lightbulb.AddC(current.C)
 				bindings.saturations[item.ID] = current
@@ -169,9 +188,9 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 			a.A.Id = accessoryIDs[item.ID]
 			fault := characteristic.NewStatusFault()
 			a.Outlet.AddC(fault.C)
-			deviceID := item.ID
+			deviceID := sourceID(item.ID)
 			a.Outlet.On.OnSetRemoteValue(func(value bool) error {
-				return writeHomeKitProperty(devices, logger, deviceID, "switch", "power", device.BoolValue(value))
+				return writeHomeKitProperty(devices, logger, deviceID, route.targetID, route.consumerDeviceID, "switch", "power", device.BoolValue(value))
 			})
 			bindings.switches[item.ID], bindings.outletInUse[item.ID], bindings.faults[item.ID] = a.Outlet.On, a.Outlet.OutletInUse, fault
 			bindings.accessories = append(bindings.accessories, a.A)
@@ -241,20 +260,20 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 			fan.AddC(speed.C)
 			fan.AddC(fault.C)
 			a.AddS(fan.S)
-			deviceID := item.ID
+			deviceID := sourceID(item.ID)
 			fan.Active.OnSetRemoteValue(func(value int) error {
-				return writeHomeKitProperty(devices, logger, deviceID, "fan", "active", device.BoolValue(value == characteristic.ActiveActive))
+				return writeHomeKitProperty(devices, logger, deviceID, route.targetID, route.consumerDeviceID, "fan", "active", device.BoolValue(value == characteristic.ActiveActive))
 			})
 			target.OnSetRemoteValue(func(value int) error {
-				return writeHomeKitProperty(devices, logger, deviceID, "fan", "target-state", device.EnumValue(fanTargetName(value)))
+				return writeHomeKitProperty(devices, logger, deviceID, route.targetID, route.consumerDeviceID, "fan", "target-state", device.EnumValue(fanTargetName(value)))
 			})
 			speed.OnSetRemoteValue(func(value float64) error {
-				return writeHomeKitProperty(devices, logger, deviceID, "fan", "rotation-speed", device.NumberValue(value))
+				return writeHomeKitProperty(devices, logger, deviceID, route.targetID, route.consumerDeviceID, "fan", "rotation-speed", device.NumberValue(value))
 			})
 			if _, found := item.Property("main", "fan", "swing-mode"); found {
 				current := characteristic.NewSwingMode()
 				current.OnSetRemoteValue(func(value int) error {
-					return writeHomeKitProperty(devices, logger, deviceID, "fan", "swing-mode", device.BoolValue(value == characteristic.SwingModeSwingEnabled))
+					return writeHomeKitProperty(devices, logger, deviceID, route.targetID, route.consumerDeviceID, "fan", "swing-mode", device.BoolValue(value == characteristic.SwingModeSwingEnabled))
 				})
 				fan.AddC(current.C)
 				bindings.swingModes[item.ID] = current
@@ -262,7 +281,7 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 			if _, found := item.Property("main", "fan", "rotation-direction"); found {
 				current := characteristic.NewRotationDirection()
 				current.OnSetRemoteValue(func(value int) error {
-					return writeHomeKitProperty(devices, logger, deviceID, "fan", "rotation-direction", device.EnumValue(rotationDirectionName(value)))
+					return writeHomeKitProperty(devices, logger, deviceID, route.targetID, route.consumerDeviceID, "fan", "rotation-direction", device.EnumValue(rotationDirectionName(value)))
 				})
 				fan.AddC(current.C)
 				bindings.directions[item.ID] = current
@@ -270,7 +289,7 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 			if _, found := item.Property("main", "fan", "lock-physical-controls"); found {
 				current := characteristic.NewLockPhysicalControls()
 				current.OnSetRemoteValue(func(value int) error {
-					return writeHomeKitProperty(devices, logger, deviceID, "fan", "lock-physical-controls", device.BoolValue(value == characteristic.LockPhysicalControlsControlLockEnabled))
+					return writeHomeKitProperty(devices, logger, deviceID, route.targetID, route.consumerDeviceID, "fan", "lock-physical-controls", device.BoolValue(value == characteristic.LockPhysicalControlsControlLockEnabled))
 				})
 				fan.AddC(current.C)
 				bindings.controlLocks[item.ID] = current
@@ -292,20 +311,20 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 			filter.AddC(filterFault.C)
 			a.AirPurifier.AddS(filter.S)
 			a.A.AddS(filter.S)
-			deviceID := item.ID
+			deviceID := sourceID(item.ID)
 			a.AirPurifier.Active.OnSetRemoteValue(func(value int) error {
-				return writeHomeKitProperty(devices, logger, deviceID, "air-purifier", "active", device.BoolValue(value == characteristic.ActiveActive))
+				return writeHomeKitProperty(devices, logger, deviceID, route.targetID, route.consumerDeviceID, "air-purifier", "active", device.BoolValue(value == characteristic.ActiveActive))
 			})
 			a.AirPurifier.TargetAirPurifierState.OnSetRemoteValue(func(value int) error {
-				return writeHomeKitProperty(devices, logger, deviceID, "air-purifier", "target-state", device.EnumValue(airTargetName(value)))
+				return writeHomeKitProperty(devices, logger, deviceID, route.targetID, route.consumerDeviceID, "air-purifier", "target-state", device.EnumValue(airTargetName(value)))
 			})
 			speed.OnSetRemoteValue(func(value float64) error {
-				return writeHomeKitProperty(devices, logger, deviceID, "air-purifier", "rotation-speed", device.NumberValue(value))
+				return writeHomeKitProperty(devices, logger, deviceID, route.targetID, route.consumerDeviceID, "air-purifier", "rotation-speed", device.NumberValue(value))
 			})
 			if _, found := item.Property("main", "air-purifier", "swing-mode"); found {
 				current := characteristic.NewSwingMode()
 				current.OnSetRemoteValue(func(value int) error {
-					return writeHomeKitProperty(devices, logger, deviceID, "air-purifier", "swing-mode", device.BoolValue(value == characteristic.SwingModeSwingEnabled))
+					return writeHomeKitProperty(devices, logger, deviceID, route.targetID, route.consumerDeviceID, "air-purifier", "swing-mode", device.BoolValue(value == characteristic.SwingModeSwingEnabled))
 				})
 				a.AirPurifier.AddC(current.C)
 				bindings.swingModes[item.ID] = current
@@ -313,7 +332,7 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 			if _, found := item.Property("main", "air-purifier", "lock-physical-controls"); found {
 				current := characteristic.NewLockPhysicalControls()
 				current.OnSetRemoteValue(func(value int) error {
-					return writeHomeKitProperty(devices, logger, deviceID, "air-purifier", "lock-physical-controls", device.BoolValue(value == characteristic.LockPhysicalControlsControlLockEnabled))
+					return writeHomeKitProperty(devices, logger, deviceID, route.targetID, route.consumerDeviceID, "air-purifier", "lock-physical-controls", device.BoolValue(value == characteristic.LockPhysicalControlsControlLockEnabled))
 				})
 				a.AirPurifier.AddC(current.C)
 				bindings.controlLocks[item.ID] = current
@@ -350,9 +369,9 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 			a.A.Id = accessoryIDs[item.ID]
 			fault := characteristic.NewStatusFault()
 			a.WindowCovering.AddC(fault.C)
-			deviceID := item.ID
+			deviceID := sourceID(item.ID)
 			a.WindowCovering.TargetPosition.OnSetRemoteValue(func(value int) error {
-				return writeHomeKitProperty(devices, logger, deviceID, "window-covering", "target-position", device.IntValue(int64(value)))
+				return writeHomeKitProperty(devices, logger, deviceID, route.targetID, route.consumerDeviceID, "window-covering", "target-position", device.IntValue(int64(value)))
 			})
 			if _, found := item.Property("main", "window-covering", "obstruction-detected"); found {
 				current := characteristic.NewObstructionDetected()
@@ -634,10 +653,16 @@ func (b *accessoryBindings) update(item device.Device) uint64 {
 	return pushes
 }
 
-func writeHomeKitProperty(devices *application.DeviceService, logger *slog.Logger, deviceID, capabilityID, propertyID string, value device.PropertyValue) error {
+func writeHomeKitProperty(devices *application.DeviceService, logger *slog.Logger, deviceID, targetID, consumerDeviceID, capabilityID, propertyID string, value device.PropertyValue) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, _, err := devices.ExecuteConsumerProperty(ctx, "homekit", deviceID, "main", capabilityID, propertyID, value); err != nil {
+	var err error
+	if targetID != "" && consumerDeviceID != "" {
+		_, _, err = devices.ExecuteConsumerPropertyInstance(ctx, "homekit", targetID, consumerDeviceID, deviceID, "main", capabilityID, propertyID, value)
+	} else {
+		_, _, err = devices.ExecuteConsumerProperty(ctx, "homekit", deviceID, "main", capabilityID, propertyID, value)
+	}
+	if err != nil {
 		logger.Error("HomeKit property write failed", "device_id", deviceID, "capability_id", capabilityID, "property_id", propertyID, "error", err)
 		return err
 	}
@@ -766,22 +791,52 @@ func assignPersistentIIDs(ctx context.Context, targetID, deviceID string, a *acc
 }
 
 func New(ctx context.Context, config Config, devices *application.DeviceService, logger *slog.Logger) (*Target, error) {
-	items, err := devices.List(ctx)
+	sourceItems, err := devices.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list devices: %w", err)
 	}
-	for index := range items {
-		projected, projectErr := devices.ProjectForConsumer("homekit", items[index])
+	projectedSources := make(map[string]device.Device, len(sourceItems))
+	rawSources := make(map[string]device.Device, len(sourceItems))
+	for index := range sourceItems {
+		rawSources[sourceItems[index].ID] = sourceItems[index]
+		projected, projectErr := devices.ProjectForConsumer("homekit", sourceItems[index])
 		if projectErr != nil {
-			logger.Error("HomeKit consumer projection failed", "device_id", items[index].ID, "error", projectErr)
+			logger.Error("HomeKit consumer projection failed", "device_id", sourceItems[index].ID, "error", projectErr)
 			continue
 		}
-		items[index] = projected
+		projectedSources[sourceItems[index].ID] = projected
 	}
 
+	items := make([]device.Device, 0)
+	routes := make(map[string]accessoryRoute)
 	selected := make(map[string]bool, len(config.DeviceIDs))
-	for _, id := range config.DeviceIDs {
-		selected[id] = true
+	if len(config.Devices) > 0 {
+		for _, virtual := range config.Devices {
+			if !virtual.Enabled {
+				continue
+			}
+			raw, ok := rawSources[virtual.SourceDeviceID]
+			if !ok {
+				return nil, fmt.Errorf("target virtual device %q references missing unified device %q", virtual.ID, virtual.SourceDeviceID)
+			}
+			source, projectErr := devices.ProjectForConsumerInstance("homekit", config.ID, virtual.ID, raw)
+			if projectErr != nil {
+				return nil, fmt.Errorf("project target virtual device %q: %w", virtual.ID, projectErr)
+			}
+			if virtual.Type != "" && virtual.Type != source.Type {
+				return nil, fmt.Errorf("target virtual device %q type %q does not match unified device type %q", virtual.ID, virtual.Type, source.Type)
+			}
+			routes[virtual.ID] = accessoryRoute{sourceDeviceID: source.ID, targetID: config.ID, consumerDeviceID: virtual.ID}
+			source.ID, source.Name = virtual.ID, virtual.Name
+			items = append(items, source)
+		}
+	} else {
+		for _, id := range config.DeviceIDs {
+			selected[id] = true
+		}
+		for _, source := range projectedSources {
+			items = append(items, source)
+		}
 	}
 	accessoryIDs := make(map[string]uint64)
 	if config.IdentityStore != nil {
@@ -800,7 +855,7 @@ func New(ctx context.Context, config Config, devices *application.DeviceService,
 		Name: config.Name, SerialNumber: "homeloom-" + config.ID,
 		Manufacturer: "HomeLoom", Model: "HomeLoom Demo", Firmware: "0.0.1",
 	})
-	bindings := newAccessoryBindings(items, selected, accessoryIDs, devices, logger)
+	bindings := newAccessoryBindings(items, selected, accessoryIDs, devices, logger, routes)
 	if config.IdentityStore != nil {
 		for deviceID, current := range bindings.byDevice {
 			if err := assignPersistentIIDs(ctx, config.ID, deviceID, current, config.IdentityStore); err != nil {
@@ -835,7 +890,7 @@ func New(ctx context.Context, config Config, devices *application.DeviceService,
 
 	target := &Target{
 		server: server, logger: logger, pin: config.Pin, id: config.ID,
-		pairing: PairingInfo{Code: formatPin(config.Pin), SetupURI: setupURI, QR: qr, Devices: append([]string(nil), config.DeviceIDs...)},
+		pairing: PairingInfo{Code: formatPin(config.Pin), SetupURI: setupURI, QR: qr, Devices: virtualDeviceIDs(config, items)},
 	}
 	target.cancelSubscription = devices.Subscribe(func(item device.Device) {
 		projected, projectErr := devices.ProjectForConsumer("homekit", item)
@@ -843,9 +898,35 @@ func New(ctx context.Context, config Config, devices *application.DeviceService,
 			logger.Error("HomeKit consumer projection failed", "device_id", item.ID, "error", projectErr)
 			return
 		}
-		devices.RecordHomeKitPushes(bindings.update(projected))
+		if len(config.Devices) == 0 {
+			devices.RecordHomeKitPushes(bindings.update(projected))
+			return
+		}
+		for _, virtual := range config.Devices {
+			if !virtual.Enabled || virtual.SourceDeviceID != item.ID {
+				continue
+			}
+			scoped, scopedErr := devices.ProjectForConsumerInstance("homekit", config.ID, virtual.ID, item)
+			if scopedErr != nil {
+				logger.Error("HomeKit scoped consumer projection failed", "target_id", config.ID, "consumer_device_id", virtual.ID, "device_id", item.ID, "error", scopedErr)
+				continue
+			}
+			scoped.ID, scoped.Name = virtual.ID, virtual.Name
+			devices.RecordHomeKitPushes(bindings.update(scoped))
+		}
 	})
 	return target, nil
+}
+
+func virtualDeviceIDs(config Config, items []device.Device) []string {
+	if len(config.Devices) == 0 {
+		return append([]string(nil), config.DeviceIDs...)
+	}
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		result = append(result, item.ID)
+	}
+	return result
 }
 
 func CheckAddressAvailable(address string) error {

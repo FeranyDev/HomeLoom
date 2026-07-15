@@ -1,6 +1,14 @@
 export type TargetType = 'apple-hap' | 'matter'
 export type TargetStatus = 'disabled' | 'starting' | 'running' | 'error'
 
+export interface TargetVirtualDevice {
+	id: string
+	name: string
+	type: import('./device').DeviceType
+	sourceDeviceId: string
+	enabled: boolean
+}
+
 export interface Target {
   id: string
   type: TargetType
@@ -12,6 +20,7 @@ export interface Target {
   pairingCode?: string
   setupUri?: string
   deviceIds: string[]
+	devices: TargetVirtualDevice[]
 }
 
 export interface TargetInput {
@@ -23,4 +32,5 @@ export interface TargetInput {
 	pin: string
 	setupId: string
 	deviceIds: string[]
+	devices: TargetVirtualDevice[]
 }

@@ -22,19 +22,23 @@ func (p ParameterPath) String() string {
 }
 
 type ModelParameter struct {
-	Path           ParameterPath  `json:"path"`
-	Name           string         `json:"name"`
-	Level          ParameterLevel `json:"level"`
-	Type           ValueType      `json:"type"`
-	Unit           string         `json:"unit,omitempty"`
-	Readable       bool           `json:"readable"`
-	Writable       bool           `json:"writable"`
-	Notifiable     bool           `json:"notifiable"`
-	Enum           []string       `json:"enum,omitempty"`
-	Publisher      ParameterRole  `json:"publisher"`
-	Consumer       ParameterRole  `json:"consumer"`
-	PublisherNotes string         `json:"publisherNotes,omitempty"`
-	ConsumerNotes  string         `json:"consumerNotes,omitempty"`
+	Path              ParameterPath  `json:"path"`
+	Name              string         `json:"name"`
+	Level             ParameterLevel `json:"level"`
+	Type              ValueType      `json:"type"`
+	Unit              string         `json:"unit,omitempty"`
+	Readable          bool           `json:"readable"`
+	Writable          bool           `json:"writable"`
+	Notifiable        bool           `json:"notifiable"`
+	Min               *float64       `json:"min,omitempty"`
+	Max               *float64       `json:"max,omitempty"`
+	Step              *float64       `json:"step,omitempty"`
+	StaleAfterSeconds int            `json:"staleAfterSeconds,omitempty"`
+	Enum              []string       `json:"enum,omitempty"`
+	Publisher         ParameterRole  `json:"publisher"`
+	Consumer          ParameterRole  `json:"consumer"`
+	PublisherNotes    string         `json:"publisherNotes,omitempty"`
+	ConsumerNotes     string         `json:"consumerNotes,omitempty"`
 }
 
 type ParameterRole struct {

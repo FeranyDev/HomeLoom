@@ -57,7 +57,7 @@ describe('BindingManager', () => {
     const api = { listBindings: vi.fn(async () => []), listProfiles: vi.fn(async () => []), create, update: vi.fn(), remove: vi.fn(), catalog }
     render(<BindingManager device={device} api={api} />)
     await screen.findByText('Virtual Switch的双段属性路由')
-    await userEvent.click(screen.getByRole('button', { name: '② 统一模型 → Consumer' }))
+    await userEvent.click(screen.getByRole('button', { name: /② 统一模型.*Consumer/ }))
     await waitFor(() => expect(screen.getByLabelText('当前映射设备')).toHaveValue('Virtual Switch · virtual-main / virtual-switch-1'))
     expect(screen.queryByLabelText('Consumer 映射设备')).not.toBeInTheDocument()
     const save = await screen.findByRole('button', { name: /保存第.*二.*段路由/ })
@@ -66,6 +66,22 @@ describe('BindingManager', () => {
     await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
       stage: 'consumer', providerId: 'virtual-main', deviceId: 'virtual-switch-1', deviceType: 'switch',
       consumerId: 'homekit', consumerProperty: 'Switch.On', modelEndpointId: 'main', modelCapabilityId: 'switch', modelPropertyId: 'power',
+    })))
+  })
+
+  it('isolates Consumer routes for one bridge-owned virtual device', async () => {
+    const current: MappingBinding = { id: 'bridge-current', stage: 'consumer', providerId: device.providerId, deviceId: device.id, deviceType: 'switch', modelEndpointId: 'main', modelCapabilityId: 'switch', modelPropertyId: 'power', targetId: 'apple-main', consumerDeviceId: 'living-switch', consumerId: 'homekit', consumerProperty: 'Switch.On', enabled: true }
+    const other: MappingBinding = { ...current, id: 'bridge-other', targetId: 'apple-guest', consumerDeviceId: 'guest-switch' }
+    const create = vi.fn(async (input) => ({ ...input, id: 'bridge-new' }))
+    const api = { listBindings: vi.fn(async () => [current, other]), listProfiles: vi.fn(async () => []), create, update: vi.fn(), remove: vi.fn(), catalog }
+    render(<BindingManager device={device} api={api} initialStage="consumer" consumerOnly consumerLabel="客厅虚拟开关 · 属性映射" targetId="apple-main" consumerDeviceId="living-switch" />)
+    await screen.findByText('客厅虚拟开关 · 属性映射')
+    await waitFor(() => expect(screen.getByText('1 / 1 生效')).toBeInTheDocument())
+    expect(screen.getByText('apple-main / living-switch')).toBeInTheDocument()
+    expect(screen.queryByText('apple-guest / guest-switch')).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /保存第.*二.*段路由/ }))
+    await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'consumer', providerId: 'virtual-main', deviceId: 'virtual-switch-1', targetId: 'apple-main', consumerDeviceId: 'living-switch', consumerId: 'homekit', consumerProperty: 'Switch.On',
     })))
   })
 
@@ -85,8 +101,8 @@ describe('BindingManager', () => {
     render(<BindingManager device={device} api={api} />)
     await screen.findByText('Virtual Switch的双段属性路由')
     await waitFor(() => expect(screen.getByText('1 / 1 生效')).toBeInTheDocument())
-    expect(screen.getByText('Power')).toBeInTheDocument()
-    expect(screen.queryByText('Other Power')).not.toBeInTheDocument()
+    expect(screen.getByText(/Power · power/)).toBeInTheDocument()
+    expect(screen.queryByText(/Other Power/)).not.toBeInTheDocument()
     expect(screen.queryByText(/other-main\.switch\.other-power/)).not.toBeInTheDocument()
   })
 

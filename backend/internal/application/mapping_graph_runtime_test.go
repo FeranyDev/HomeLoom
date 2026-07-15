@@ -185,6 +185,50 @@ func TestConsumerRouteProjectsAndReversesConversion(t *testing.T) {
 	}
 }
 
+func TestConsumerRouteIsScopedToTargetVirtualDevice(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "target-consumer.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, _ := application.NewProfileService(ctx, store)
+	profile := mapping.Profile{SchemaVersion: 1, ID: "target-invert", Version: 1, Kind: mapping.KindTarget, InputType: device.ValueTypeBool, OutputType: device.ValueTypeBool, Transforms: []mapping.Transform{{Type: mapping.TransformInvert}}}
+	if _, err := profiles.Create(ctx, profile); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := profiles.CreateBinding(ctx, mapping.Binding{
+		ID: "bridge-switch-on", Stage: mapping.StageConsumer, ProfileID: profile.ID,
+		ProviderID: "provider-1", DeviceID: "switch-1", DeviceType: device.TypeSwitch,
+		ModelEndpointID: "main", ModelCapabilityID: "switch", ModelPropertyID: "power",
+		TargetID: "apple-main", ConsumerDeviceID: "virtual-switch",
+		ConsumerID: "homekit", ConsumerProperty: "Switch.On", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	item := device.Device{SchemaVersion: 1, ID: "switch-1", ProviderID: "provider-1", Name: "Switch", Type: device.TypeSwitch, Availability: device.AvailabilityOnline, Online: true, LastUpdateAt: time.Now().UTC(), Endpoints: []device.Endpoint{{ID: "main", Name: "Main", Type: "main", Capabilities: []device.Capability{{ID: "switch", Type: "switch", Properties: []device.Property{{Definition: device.PropertyDefinition{ID: "power", Name: "Power", Type: device.ValueTypeBool, Readable: true, Writable: true, Notifiable: true}, Value: device.BoolValue(false)}}}}}}}
+	projected, err := profiles.ProjectConsumerDeviceInstance("homekit", "apple-main", "virtual-switch", item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	power, _ := projected.Property("main", "switch", "power")
+	if power.Value.Bool == nil || !*power.Value.Bool {
+		t.Fatalf("scoped projected value = %#v", power.Value)
+	}
+	other, err := profiles.ProjectConsumerDeviceInstance("homekit", "apple-main", "other-switch", item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherPower, _ := other.Property("main", "switch", "power")
+	if otherPower.Value.Bool == nil || *otherPower.Value.Bool {
+		t.Fatalf("target virtual-device route leaked: %#v", otherPower.Value)
+	}
+	path, value, bindingID, applied, err := profiles.ResolveConsumerWriteInstance("provider-1", "switch-1", "apple-main", "virtual-switch", "homekit", device.TypeSwitch, "main", "switch", "power", device.BoolValue(false))
+	if err != nil || !applied || bindingID != "bridge-switch-on" || path.String() != "main/switch/power" || value.Bool == nil || !*value.Bool {
+		t.Fatalf("scoped reverse = %s %#v %q %v %v", path, value, bindingID, applied, err)
+	}
+}
+
 func TestCustomUnifiedPropertyPersistsInModelCatalog(t *testing.T) {
 	ctx := context.Background()
 	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "custom-model.db"))

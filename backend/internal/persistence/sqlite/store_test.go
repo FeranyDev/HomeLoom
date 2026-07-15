@@ -10,8 +10,10 @@ import (
 	"time"
 
 	domainaudit "github.com/feranydev/homeloom/backend/internal/domain/audit"
+	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	"github.com/feranydev/homeloom/backend/internal/domain/target"
+	"github.com/feranydev/homeloom/backend/internal/mapping"
 )
 
 func TestAuditEventsArePersistedNewestFirst(t *testing.T) {
@@ -472,7 +474,7 @@ func TestTargetSaveBindingsAndDelete(t *testing.T) {
 	item := target.Config{
 		ID: "apple-second", Type: "apple-hap", Name: "Second", Enabled: false,
 		Address: ":51827", Pin: "00203004", SetupID: "HLM2", StorePath: "./hap/second",
-		DeviceIDs: []string{"virtual-switch-1"},
+		Devices: []target.VirtualDevice{{ID: "living-switch", Name: "客厅开关", Type: device.TypeSwitch, SourceDeviceID: "virtual-switch-1", Enabled: true}},
 	}
 	if err := store.SaveTarget(ctx, item); err != nil {
 		t.Fatalf("SaveTarget() error = %v", err)
@@ -481,8 +483,29 @@ func TestTargetSaveBindingsAndDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTargets() error = %v", err)
 	}
-	if len(items) != 2 || len(items[1].DeviceIDs) != 1 || items[1].DeviceIDs[0] != "virtual-switch-1" {
+	if len(items) != 2 || len(items[1].Devices) != 1 || items[1].Devices[0].ID != "living-switch" || items[1].Devices[0].SourceDeviceID != "virtual-switch-1" || len(items[1].DeviceIDs) != 1 || items[1].DeviceIDs[0] != "virtual-switch-1" {
 		t.Fatalf("saved targets = %#v", items)
+	}
+	binding := mapping.Binding{ID: "living-switch-on", Stage: mapping.StageConsumer, ProviderID: "virtual-main", DeviceID: "virtual-switch-1", DeviceType: device.TypeSwitch, ModelEndpointID: "main", ModelCapabilityID: "switch", ModelPropertyID: "power", TargetID: item.ID, ConsumerDeviceID: "living-switch", ConsumerID: "homekit", ConsumerProperty: "Switch.On", Enabled: true}
+	if err := store.SaveMappingBinding(ctx, binding); err != nil {
+		t.Fatal(err)
+	}
+	item.Devices[0].SourceDeviceID = "virtual-switch-2"
+	if err := store.SaveTarget(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+	bindings, err := store.ListMappingBindings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, current := range bindings {
+		if current.ID == binding.ID {
+			t.Fatal("mapping for the previous virtual-device source was retained")
+		}
+	}
+	binding.ID, binding.DeviceID = "living-switch-on-new", "virtual-switch-2"
+	if err := store.SaveMappingBinding(ctx, binding); err != nil {
+		t.Fatal(err)
 	}
 	if err := store.DeleteTarget(ctx, item.ID); err != nil {
 		t.Fatalf("DeleteTarget() error = %v", err)
@@ -490,6 +513,15 @@ func TestTargetSaveBindingsAndDelete(t *testing.T) {
 	items, err = store.ListTargets(ctx)
 	if err != nil || len(items) != 1 {
 		t.Fatalf("targets after delete = %#v, %v", items, err)
+	}
+	bindings, err = store.ListMappingBindings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, current := range bindings {
+		if current.ID == binding.ID {
+			t.Fatal("target-scoped mapping survived target deletion")
+		}
 	}
 }
 

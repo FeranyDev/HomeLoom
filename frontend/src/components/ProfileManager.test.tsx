@@ -21,7 +21,7 @@ describe('ProfileManager', () => {
   it('imports profile documents as one batch', async () => {
     const api = { list: vi.fn().mockResolvedValue([]), create: vi.fn(), update: vi.fn(), remove: vi.fn(), importMany: vi.fn().mockResolvedValue([]) }
     render(<ProfileManager api={api} />)
-    await screen.findByText('Profile 管理')
+    await screen.findByText(/Profile.*管理/)
     await userEvent.click(screen.getByRole('button', { name: '导入 JSON' }))
     await userEvent.click(screen.getByRole('button', { name: '验证并导入' }))
     expect(api.importMany).toHaveBeenCalledWith([expect.objectContaining({ id: 'custom-profile', version: 1 })])

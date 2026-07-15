@@ -574,7 +574,7 @@ components:
         commandHistoryLimit: { type: integer, minimum: 100, maximum: 10000, description: Maximum in-memory command records; lowering it immediately removes the oldest terminal records. }
     ExportTargetConfig:
       type: object
-      required: [id, type, name, enabled, deviceIds]
+      required: [id, type, name, enabled, deviceIds, devices]
       properties:
         id: { type: string }
         type: { type: string }
@@ -582,7 +582,8 @@ components:
         enabled: { type: boolean }
         address: { type: string }
         setupId: { type: string }
-        deviceIds: { type: array, items: { type: string } }
+        deviceIds: { type: array, deprecated: true, description: Compatibility view containing enabled unified source device IDs., items: { type: string } }
+        devices: { type: array, items: { $ref: "#/components/schemas/TargetVirtualDevice" } }
     ConfigurationExport:
       type: object
       required: [formatVersion, generatedAt, providers, targets, settings, profiles, bindings, customModelProperties]
@@ -781,6 +782,8 @@ components:
         modelCapabilityId: { type: string }
         modelPropertyId: { type: string }
         consumerId: { type: string }
+        targetId: { type: string, description: Concrete Target bridge ID for a bridge-owned Consumer route. Must be supplied with consumerDeviceId. }
+        consumerDeviceId: { type: string, description: Concrete virtual-device ID within targetId. Makes Consumer mappings independent per bridge device. }
         consumerProperty: { type: string }
         enabled: { type: boolean }
     CustomModelProperty:
@@ -937,6 +940,15 @@ components:
         roomName: { type: string }
         specType: { type: string }
         online: { type: boolean }
+    TargetVirtualDevice:
+      type: object
+      required: [id, name, type, sourceDeviceId, enabled]
+      properties:
+        id: { type: string, description: Stable Consumer-side device identity within one bridge. }
+        name: { type: string }
+        type: { type: string, description: Unified model type. }
+        sourceDeviceId: { type: string, description: Concrete unified-registry device backing this virtual device. }
+        enabled: { type: boolean }
     TargetInput:
       type: object
       required: [type, name, enabled]
@@ -949,7 +961,8 @@ components:
         pin: { type: string }
         setupId: { type: string }
         storePath: { type: string }
-        deviceIds: { type: array, items: { type: string } }
+        deviceIds: { type: array, deprecated: true, description: Legacy source-device bindings; migrated into virtual devices when devices is empty., items: { type: string } }
+        devices: { type: array, items: { $ref: "#/components/schemas/TargetVirtualDevice" } }
     Error:
       type: object
       required: [code, message, requestId]

@@ -11,13 +11,17 @@ import (
 // Core registry. Explicit Consumer bindings can source any standard or custom
 // unified-model property and place it at the Consumer's default adapter path.
 func (s *ProfileService) ProjectConsumerDevice(consumerID string, item device.Device) (device.Device, error) {
+	return s.ProjectConsumerDeviceInstance(consumerID, "", "", item)
+}
+
+func (s *ProfileService) ProjectConsumerDeviceInstance(consumerID, targetID, consumerDeviceID string, item device.Device) (device.Device, error) {
 	result := cloneDevice(item)
 	contract, supported := consumerContract(consumerID, item.Type)
 	if !supported {
 		return result, nil
 	}
 	for _, parameter := range contract.Parameters {
-		binding, profile, applied, err := s.resolveConsumerBinding(item.ProviderID, item.ID, consumerID, item.Type, parameter.Target)
+		binding, profile, applied, err := s.resolveConsumerBinding(item.ProviderID, item.ID, targetID, consumerDeviceID, consumerID, item.Type, parameter.Target)
 		if err != nil {
 			return device.Device{}, err
 		}
@@ -49,6 +53,10 @@ func (s *ProfileService) ProjectConsumerDevice(consumerID string, item device.De
 // ResolveConsumerWrite maps the adapter's stable default path back to the
 // configured unified-model source and reverses the Consumer conversion.
 func (s *ProfileService) ResolveConsumerWrite(providerID, deviceID, consumerID string, deviceType device.Type, endpointID, capabilityID, propertyID string, value device.PropertyValue) (device.ParameterPath, device.PropertyValue, string, bool, error) {
+	return s.ResolveConsumerWriteInstance(providerID, deviceID, "", "", consumerID, deviceType, endpointID, capabilityID, propertyID, value)
+}
+
+func (s *ProfileService) ResolveConsumerWriteInstance(providerID, deviceID, targetID, consumerDeviceID, consumerID string, deviceType device.Type, endpointID, capabilityID, propertyID string, value device.PropertyValue) (device.ParameterPath, device.PropertyValue, string, bool, error) {
 	identity := device.ParameterPath{EndpointID: endpointID, CapabilityID: capabilityID, PropertyID: propertyID}
 	contract, supported := consumerContract(consumerID, deviceType)
 	if !supported {
@@ -58,7 +66,7 @@ func (s *ProfileService) ResolveConsumerWrite(providerID, deviceID, consumerID s
 		if parameter.Source != identity {
 			continue
 		}
-		binding, profile, applied, err := s.resolveConsumerBinding(providerID, deviceID, consumerID, deviceType, parameter.Target)
+		binding, profile, applied, err := s.resolveConsumerBinding(providerID, deviceID, targetID, consumerDeviceID, consumerID, deviceType, parameter.Target)
 		if err != nil || !applied {
 			return identity, value, binding.ID, applied, err
 		}
@@ -74,8 +82,8 @@ func (s *ProfileService) ResolveConsumerWrite(providerID, deviceID, consumerID s
 	return identity, value, "", false, nil
 }
 
-func (s *ProfileService) resolveConsumerBinding(providerID, deviceID, consumerID string, deviceType device.Type, target string) (mapping.Binding, mapping.Profile, bool, error) {
-	key := (mapping.Binding{Stage: mapping.StageConsumer, ProviderID: providerID, DeviceID: deviceID, ConsumerID: consumerID, DeviceType: deviceType, ConsumerProperty: target}).Key()
+func (s *ProfileService) resolveConsumerBinding(providerID, deviceID, targetID, consumerDeviceID, consumerID string, deviceType device.Type, target string) (mapping.Binding, mapping.Profile, bool, error) {
+	key := (mapping.Binding{Stage: mapping.StageConsumer, ProviderID: providerID, DeviceID: deviceID, TargetID: targetID, ConsumerDeviceID: consumerDeviceID, ConsumerID: consumerID, DeviceType: deviceType, ConsumerProperty: target}).Key()
 	s.mu.RLock()
 	id, ok := s.bindingsByKey[key]
 	if !ok || !s.bindings[id].Enabled {

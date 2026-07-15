@@ -82,7 +82,7 @@ func (m *Manager) Apply(ctx context.Context, config target.Config) (application.
 
 	next, err := m.factory(ctx, homekit.Config{
 		ID: config.ID, Name: config.Name, Address: config.Address, Pin: config.Pin,
-		SetupID: config.SetupID, StorePath: config.StorePath, DeviceIDs: config.DeviceIDs, IdentityStore: m.identities,
+		SetupID: config.SetupID, StorePath: config.StorePath, DeviceIDs: config.DeviceIDs, Devices: config.Devices, IdentityStore: m.identities,
 	}, m.devices, m.logger)
 	if err != nil {
 		return application.TargetRegistration{}, err
@@ -189,6 +189,7 @@ func infoFromConfig(config target.Config, status string) application.TargetInfo 
 		ID: config.ID, Type: config.Type, Name: config.Name, Enabled: config.Enabled,
 		Status: status, Address: config.Address, SetupID: config.SetupID,
 		DeviceIDs: append([]string{}, config.DeviceIDs...),
+		Devices:   append([]target.VirtualDevice(nil), config.Devices...),
 	}
 }
 

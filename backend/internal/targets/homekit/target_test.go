@@ -17,6 +17,7 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
+	domaintarget "github.com/feranydev/homeloom/backend/internal/domain/target"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
 )
@@ -161,6 +162,19 @@ func TestAccessoryBindingsHonorSelectedDevices(t *testing.T) {
 	bindings := newAccessoryBindings(items, map[string]bool{"virtual-switch-1": true}, nil, service, logger)
 	if len(bindings.accessories) != 1 || bindings.switches["virtual-switch-1"] == nil || bindings.temperatures["virtual-temperature-1"] != nil {
 		t.Fatalf("selected bindings = %#v", bindings)
+	}
+}
+
+func TestTargetBuildsConsumerOwnedVirtualAccessoryIdentity(t *testing.T) {
+	service := application.NewDeviceService(virtual.NewProvider())
+	defer service.Close()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	target, err := New(context.Background(), Config{ID: "bridge", Name: "Bridge", Address: "127.0.0.1:0", Pin: "12345678", SetupID: "TEST", StorePath: t.TempDir(), Devices: []domaintarget.VirtualDevice{{ID: "living-switch", Name: "客厅虚拟开关", Type: device.TypeSwitch, SourceDeviceID: "virtual-switch-1", Enabled: true}}}, service, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := target.PairingInfo().Devices; len(got) != 1 || got[0] != "living-switch" {
+		t.Fatalf("virtual accessory identities = %#v", got)
 	}
 }
 

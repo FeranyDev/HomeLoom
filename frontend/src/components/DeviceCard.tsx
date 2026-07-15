@@ -1,4 +1,5 @@
 import { availabilityLabel, deviceProperty, type Device } from '../types/device'
+import { deviceTypeLabel } from '../presentationLabels'
 
 interface DeviceCardProps {
   device: Device
@@ -11,7 +12,7 @@ interface DeviceCardProps {
 
 export function DeviceCard({ device, pending, onPowerChange, onDetails, onMapping, onEnabledChange }: DeviceCardProps) {
   const hasPower = device.type === 'switch' || device.type === 'lightbulb' || device.type === 'outlet'
-  const kind = { switch: '开关', lightbulb: '灯泡', outlet: '插座', 'temperature-sensor': '温度传感器', 'humidity-sensor': '湿度传感器', 'contact-sensor': '接触传感器', 'motion-sensor': '活动传感器', fan: '风扇', 'air-purifier': '空气净化器', 'window-covering': '窗帘' }[device.type]
+  const kind = deviceTypeLabel(device.type)
   const power = deviceProperty(device, 'switch', 'power')?.bool ?? false
   const temperature = deviceProperty(device, 'temperature', 'current-temperature')?.number
   const humidity = deviceProperty(device, 'humidity', 'current-humidity')?.number

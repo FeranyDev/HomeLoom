@@ -23,12 +23,12 @@ type targetRuntimeStub struct {
 
 func (s *targetRuntimeStub) Apply(_ context.Context, item target.Config) (TargetRegistration, error) {
 	s.applied = append(s.applied, item)
-	return TargetRegistration{Info: TargetInfo{ID: item.ID, Type: item.Type, Name: item.Name, Enabled: item.Enabled, Status: "running", Address: item.Address, SetupID: item.SetupID, PairingCode: item.Pin, DeviceIDs: item.DeviceIDs}, QR: []byte("qr")}, nil
+	return TargetRegistration{Info: TargetInfo{ID: item.ID, Type: item.Type, Name: item.Name, Enabled: item.Enabled, Status: "running", Address: item.Address, SetupID: item.SetupID, PairingCode: item.Pin, DeviceIDs: item.DeviceIDs, Devices: item.Devices}, QR: []byte("qr")}, nil
 }
 func (s *targetRuntimeStub) Remove(context.Context, string) error { return nil }
 func (s *targetRuntimeStub) ResetPairing(_ context.Context, item target.Config) (TargetRegistration, error) {
 	s.reset = append(s.reset, item)
-	return TargetRegistration{Info: TargetInfo{ID: item.ID, Type: item.Type, Name: item.Name, Enabled: item.Enabled, Status: "running", Address: item.Address, SetupID: item.SetupID, PairingCode: item.Pin, DeviceIDs: item.DeviceIDs}, QR: []byte("new-qr")}, nil
+	return TargetRegistration{Info: TargetInfo{ID: item.ID, Type: item.Type, Name: item.Name, Enabled: item.Enabled, Status: "running", Address: item.Address, SetupID: item.SetupID, PairingCode: item.Pin, DeviceIDs: item.DeviceIDs, Devices: item.Devices}, QR: []byte("new-qr")}, nil
 }
 
 func (s *targetStoreStub) SaveTarget(_ context.Context, item target.Config) error {

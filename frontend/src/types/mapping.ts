@@ -32,12 +32,14 @@ export interface MappingBinding {
   providerId?: string; deviceId?: string; endpointId?: string; capabilityId?: string; propertyId?: string
   deviceType?: DeviceType; modelEndpointId: string; modelCapabilityId: string; modelPropertyId: string
   consumerId?: string; consumerProperty?: string
+	targetId?: string; consumerDeviceId?: string
 }
 
 export interface ModelPath { endpointId: string; capabilityId: string; propertyId: string }
 export interface ModelParameter {
   path: ModelPath; name: string; level: ParameterLevel; type: ValueType; unit?: string
   readable: boolean; writable: boolean; notifiable: boolean; enum?: string[]
+  min?: number; max?: number; step?: number; staleAfterSeconds?: number
   publisher: { level: ParameterLevel; behavior: string }; consumer: { level: ParameterLevel; behavior: string }
   publisherNotes?: string; consumerNotes?: string
 }

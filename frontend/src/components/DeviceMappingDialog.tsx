@@ -10,7 +10,7 @@ export function DeviceMappingDialog({ device, onClose }: { device: Device; onClo
   }, [onClose])
 
   return <div className="modal-backdrop"><section className="device-mapping-dialog" role="dialog" aria-label={`${device.name}映射配置`}>
-    <div className="form-heading"><div><p className="eyebrow">DEVICE MAPPING</p><h2>{device.name}</h2><small>{device.providerId} / {device.id} · {device.type}</small></div><button onClick={onClose}>关闭</button></div>
-    <BindingManager device={device} />
+    <div className="form-heading"><div><p className="eyebrow">设备映射（DEVICE MAPPING）</p><h2>{device.name}</h2><small>{device.providerId} / {device.id} · {device.type}</small></div><button onClick={onClose}>关闭</button></div>
+    <BindingManager device={device} providerOnly />
   </section></div>
 }
