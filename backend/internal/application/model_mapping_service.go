@@ -12,11 +12,25 @@ import (
 var (
 	ErrCustomModelPropertyNotFound = errors.New("custom model property not found")
 	ErrCustomModelPropertyExists   = errors.New("custom model property path already exists")
+	ErrCustomModelNotFound         = errors.New("custom unified model not found")
+	ErrCustomModelExists           = errors.New("unified model already exists")
 )
 
 func (s *ProfileService) ModelContracts() []device.ModelContract {
 	contracts := device.ModelContracts()
 	s.mu.RLock()
+	for _, item := range s.customModels {
+		contracts = append(contracts, device.ModelContract{
+			DeviceType: item.DeviceType,
+			Name:       item.Name,
+			Version:    item.Version,
+			Parameters: []device.ModelParameter{},
+			Custom: device.CustomParameterPolicy{
+				Publisher: device.ParameterRole{Level: device.ParameterCustom, Behavior: "preserve-and-mark-custom"},
+				Consumer:  device.ParameterRole{Level: device.ParameterCustom, Behavior: "explicit-path-mapping-only"},
+			},
+		})
+	}
 	for _, item := range s.customProperties {
 		for index := range contracts {
 			if contracts[index].DeviceType == item.DeviceType {
@@ -31,7 +45,70 @@ func (s *ProfileService) ModelContracts() []device.ModelContract {
 			return contracts[index].Parameters[i].Path.String() < contracts[index].Parameters[j].Path.String()
 		})
 	}
+	sort.Slice(contracts, func(i, j int) bool { return contracts[i].DeviceType < contracts[j].DeviceType })
 	return contracts
+}
+
+func (s *ProfileService) ListCustomModels() []mapping.CustomModel {
+	s.mu.RLock()
+	result := make([]mapping.CustomModel, 0, len(s.customModels))
+	for _, item := range s.customModels {
+		result = append(result, item)
+	}
+	s.mu.RUnlock()
+	sort.Slice(result, func(i, j int) bool { return result[i].DeviceType < result[j].DeviceType })
+	return result
+}
+
+func (s *ProfileService) CreateCustomModel(ctx context.Context, item mapping.CustomModel) (mapping.CustomModel, error) {
+	if err := mapping.ValidateCustomModel(item); err != nil {
+		return mapping.CustomModel{}, customModelValidationError(err)
+	}
+	s.mu.Lock()
+	if _, builtIn := device.ModelContractFor(item.DeviceType); builtIn {
+		s.mu.Unlock()
+		return mapping.CustomModel{}, ErrCustomModelExists
+	}
+	if _, exists := s.customModels[item.DeviceType]; exists {
+		s.mu.Unlock()
+		return mapping.CustomModel{}, ErrCustomModelExists
+	}
+	if err := s.store.SaveCustomModel(ctx, item); err != nil {
+		s.mu.Unlock()
+		return mapping.CustomModel{}, err
+	}
+	s.customModels[item.DeviceType] = item
+	s.mu.Unlock()
+	s.notifyChanged(ctx)
+	return item, nil
+}
+
+func (s *ProfileService) DeleteCustomModel(ctx context.Context, deviceType device.Type) error {
+	s.mu.Lock()
+	if _, exists := s.customModels[deviceType]; !exists {
+		s.mu.Unlock()
+		return ErrCustomModelNotFound
+	}
+	for _, item := range s.customProperties {
+		if item.DeviceType == deviceType {
+			s.mu.Unlock()
+			return ErrProfileInUse
+		}
+	}
+	for _, binding := range s.bindings {
+		if binding.DeviceType == deviceType {
+			s.mu.Unlock()
+			return ErrProfileInUse
+		}
+	}
+	if err := s.store.DeleteCustomModel(ctx, string(deviceType)); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	delete(s.customModels, deviceType)
+	s.mu.Unlock()
+	s.notifyChanged(ctx)
+	return nil
 }
 
 func (s *ProfileService) ResolveModelDefinition(deviceType device.Type, path device.ParameterPath, fallback device.PropertyDefinition) (device.PropertyDefinition, bool) {
@@ -89,6 +166,9 @@ func (s *ProfileService) CreateCustomModelProperty(ctx context.Context, item map
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.modelExistsLocked(item.DeviceType) {
+		return mapping.CustomModelProperty{}, customModelValidationError(NewValidationError("invalid custom model property", map[string]string{"deviceType": "must reference an existing unified device model"}))
+	}
 	if _, standard := s.modelParameterLocked(item.DeviceType, item.Path()); standard {
 		return mapping.CustomModelProperty{}, ErrCustomModelPropertyExists
 	}
@@ -114,6 +194,10 @@ func (s *ProfileService) UpdateCustomModelProperty(ctx context.Context, id strin
 		return mapping.CustomModelProperty{}, customModelValidationError(err)
 	}
 	s.mu.Lock()
+	if !s.modelExistsLocked(item.DeviceType) {
+		s.mu.Unlock()
+		return mapping.CustomModelProperty{}, customModelValidationError(NewValidationError("invalid custom model property", map[string]string{"deviceType": "must reference an existing unified device model"}))
+	}
 	var current mapping.CustomModelProperty
 	found := false
 	for _, candidate := range s.customProperties {
@@ -199,4 +283,12 @@ func customModelValidationError(err error) error {
 		return err
 	}
 	return NewValidationError("invalid custom model property", validation.Fields)
+}
+
+func (s *ProfileService) modelExistsLocked(deviceType device.Type) bool {
+	if _, builtIn := device.ModelContractFor(deviceType); builtIn {
+		return true
+	}
+	_, custom := s.customModels[deviceType]
+	return custom
 }

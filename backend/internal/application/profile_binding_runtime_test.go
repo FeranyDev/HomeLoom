@@ -138,6 +138,37 @@ func TestPropertyBindingTransformsNumericDefinition(t *testing.T) {
 	}
 }
 
+func TestPropertyBindingTransformsNumericDefinitionToEnumBands(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "range-enum.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, _ := application.NewProfileService(ctx, store)
+	maximumCold, maximumComfortable := 18.0, 28.0
+	profile := mapping.Profile{SchemaVersion: 1, ID: "comfort-band", Version: 1, Kind: mapping.KindProvider, InputType: device.ValueTypeNumber, OutputType: device.ValueTypeEnum, Transforms: []mapping.Transform{{Type: mapping.TransformRangeEnum, Bands: []mapping.RangeBand{
+		{Max: &maximumCold, Value: "cold", Reverse: 10},
+		{Max: &maximumComfortable, Value: "comfortable", Reverse: 24},
+		{Value: "hot", Reverse: 32},
+	}}}}
+	if _, err := profiles.Create(ctx, profile); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := profiles.CreateBinding(ctx, mapping.Binding{ID: "comfort-binding", ProfileID: profile.ID, ProviderID: "virtual-main", DeviceID: "room-temperature", EndpointID: "main", CapabilityID: "sensor", PropertyID: "value", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	minimum, maximum, step := -40.0, 100.0, 0.1
+	definition := device.PropertyDefinition{ID: "value", Name: "Temperature", Type: device.ValueTypeNumber, Unit: "celsius", Min: &minimum, Max: &maximum, Step: &step, Readable: true}
+	mapped, bindingID, applied, err := profiles.TransformPropertyDefinition("virtual-main", "room-temperature", "main", "sensor", "value", definition)
+	if err != nil || !applied || bindingID != "comfort-binding" {
+		t.Fatalf("transform = %#v, %q, %v, %v", mapped, bindingID, applied, err)
+	}
+	if mapped.Type != device.ValueTypeEnum || mapped.Unit != "" || mapped.Min != nil || mapped.Max != nil || mapped.Step != nil || len(mapped.Enum) != 3 || mapped.Enum[0] != "cold" || mapped.Enum[1] != "comfortable" || mapped.Enum[2] != "hot" {
+		t.Fatalf("mapped definition = %#v", mapped)
+	}
+}
+
 func assertPower(t *testing.T, items []device.Device, expected bool) {
 	t.Helper()
 	for _, item := range items {

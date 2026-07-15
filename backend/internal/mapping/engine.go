@@ -3,6 +3,8 @@ package mapping
 import (
 	"fmt"
 	"math"
+	"strconv"
+	"strings"
 
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 )
@@ -46,9 +48,14 @@ func Preview(request PreviewRequest) (PreviewResult, error) {
 			steps = append(steps, Step{Index: index, Transform: string(transform.Type), Input: &input, Output: cloneValue(output)})
 		}
 	} else {
+		types := make([]device.ValueType, len(request.Profile.Transforms)+1)
+		types[0] = request.Profile.InputType
+		for index, transform := range request.Profile.Transforms {
+			types[index+1] = transformOutputType(types[index], transform)
+		}
 		for index := len(request.Profile.Transforms) - 1; index >= 0; index-- {
 			input := cloneValue(current)
-			output, err := applyReverse(request.Profile.Transforms[index], current)
+			output, err := applyReverse(request.Profile.Transforms[index], current, types[index])
 			if err != nil {
 				return PreviewResult{}, transformError(index, err)
 			}
@@ -94,12 +101,61 @@ func applyForward(transform Transform, value device.PropertyValue) (device.Prope
 	case TransformUnit:
 		factor, offset, _ := unitFormula(transform.FromUnit, transform.ToUnit)
 		return finiteNumber(numericValue(value)*factor + offset)
+	case TransformRangeEnum:
+		number := numericValue(value)
+		for _, band := range transform.Bands {
+			if band.Max == nil || number <= *band.Max {
+				return device.EnumValue(band.Value), nil
+			}
+		}
+		return device.PropertyValue{}, fmt.Errorf("numeric value %v has no range band", number)
+	case TransformThreshold:
+		return device.BoolValue(thresholdMatches(numericValue(value), *transform.Threshold, transform.Operator)), nil
+	case TransformBoolEnum:
+		if *value.Bool {
+			return device.EnumValue(transform.TrueValue), nil
+		}
+		return device.EnumValue(transform.FalseValue), nil
+	case TransformEnumBool:
+		switch *value.String {
+		case transform.TrueValue:
+			return device.BoolValue(true), nil
+		case transform.FalseValue:
+			return device.BoolValue(false), nil
+		default:
+			return device.PropertyValue{}, fmt.Errorf("enum value %q is neither trueValue nor falseValue", *value.String)
+		}
+	case TransformMapRange:
+		mapped := *transform.OutputMin + (numericValue(value)-*transform.InputMin)*(*transform.OutputMax-*transform.OutputMin)/(*transform.InputMax-*transform.InputMin)
+		return finiteNumber(mapped)
+	case TransformRound:
+		number := numericValue(value)
+		switch transform.Mode {
+		case "floor":
+			number = math.Floor(number)
+		case "ceil":
+			number = math.Ceil(number)
+		default:
+			number = math.Round(number)
+		}
+		if number < math.MinInt64 || number > math.MaxInt64 {
+			return device.PropertyValue{}, fmt.Errorf("rounded result is outside int64 range")
+		}
+		return device.IntValue(int64(number)), nil
+	case TransformParseNumber:
+		number, err := strconv.ParseFloat(strings.TrimSpace(*value.String), 64)
+		if err != nil {
+			return device.PropertyValue{}, fmt.Errorf("parse number %q: %w", *value.String, err)
+		}
+		return finiteNumber(number)
+	case TransformNumberString:
+		return device.StringValue(strconv.FormatFloat(numericValue(value), 'g', -1, 64)), nil
 	default:
 		return device.PropertyValue{}, fmt.Errorf("unsupported transform %q", transform.Type)
 	}
 }
 
-func applyReverse(transform Transform, value device.PropertyValue) (device.PropertyValue, error) {
+func applyReverse(transform Transform, value device.PropertyValue, expected device.ValueType) (device.PropertyValue, error) {
 	switch transform.Type {
 	case TransformInvert:
 		return device.BoolValue(!*value.Bool), nil
@@ -110,13 +166,58 @@ func applyReverse(transform Transform, value device.PropertyValue) (device.Prope
 	case TransformEnum:
 		for source, target := range transform.Values {
 			if target == *value.String {
-				return stringValueForType(source, value.Type), nil
+				return stringValueForType(source, expected), nil
 			}
 		}
 		return device.PropertyValue{}, fmt.Errorf("enum value %q has no reverse mapping", *value.String)
 	case TransformUnit:
 		factor, offset, _ := unitFormula(transform.FromUnit, transform.ToUnit)
 		return finiteNumber((numericValue(value) - offset) / factor)
+	case TransformRangeEnum:
+		for _, band := range transform.Bands {
+			if band.Value == *value.String {
+				return finiteNumber(band.Reverse)
+			}
+		}
+		return device.PropertyValue{}, fmt.Errorf("enum value %q has no reverse range", *value.String)
+	case TransformThreshold:
+		if *value.Bool {
+			return finiteNumber(*transform.TrueNumber)
+		}
+		return finiteNumber(*transform.FalseNumber)
+	case TransformBoolEnum:
+		switch *value.String {
+		case transform.TrueValue:
+			return device.BoolValue(true), nil
+		case transform.FalseValue:
+			return device.BoolValue(false), nil
+		default:
+			return device.PropertyValue{}, fmt.Errorf("enum value %q is neither trueValue nor falseValue", *value.String)
+		}
+	case TransformEnumBool:
+		if *value.Bool {
+			return stringValueForType(transform.TrueValue, expected), nil
+		}
+		return stringValueForType(transform.FalseValue, expected), nil
+	case TransformMapRange:
+		mapped := *transform.InputMin + (numericValue(value)-*transform.OutputMin)*(*transform.InputMax-*transform.InputMin)/(*transform.OutputMax-*transform.OutputMin)
+		return finiteNumber(mapped)
+	case TransformRound:
+		return finiteNumber(numericValue(value))
+	case TransformParseNumber:
+		return device.StringValue(strconv.FormatFloat(numericValue(value), 'g', -1, 64)), nil
+	case TransformNumberString:
+		number, err := strconv.ParseFloat(strings.TrimSpace(*value.String), 64)
+		if err != nil {
+			return device.PropertyValue{}, fmt.Errorf("parse number %q: %w", *value.String, err)
+		}
+		if expected == device.ValueTypeInt {
+			if math.Trunc(number) != number || number < math.MinInt64 || number > math.MaxInt64 {
+				return device.PropertyValue{}, fmt.Errorf("number %q is not a valid int64", *value.String)
+			}
+			return device.IntValue(int64(number)), nil
+		}
+		return finiteNumber(number)
 	default:
 		return device.PropertyValue{}, fmt.Errorf("unsupported transform %q", transform.Type)
 	}

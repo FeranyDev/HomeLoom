@@ -14,6 +14,7 @@ import (
 
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	domaintarget "github.com/feranydev/homeloom/backend/internal/domain/target"
+	"github.com/feranydev/homeloom/backend/internal/mapping"
 	homekitqr "github.com/kradalby/homekit-qr"
 )
 
@@ -388,6 +389,8 @@ func validateTarget(item domaintarget.Config) error {
 		if current.Type != "" {
 			if _, supported := device.ModelContractFor(current.Type); !supported {
 				fields[prefix+".type"] = "must reference a supported unified device model"
+			} else if known, supported := mapping.ConsumerModelSupport(descriptor.ConsumerID, current.Type); known && !supported {
+				fields[prefix+".type"] = fmt.Sprintf("unified model %q is not supported by consumer %q", current.Type, descriptor.ConsumerID)
 			}
 		}
 		if seenIDs[current.ID] {

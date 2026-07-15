@@ -479,6 +479,7 @@ func TestDeviceModelContractsExposePublisherAndConsumerLevels(t *testing.T) {
 	newTestServer().Handler().ServeHTTP(response, request)
 	for _, expected := range []string{
 		`"deviceType":"lightbulb"`, `"propertyId":"power"`, `"level":"required"`,
+		`"deviceType":"thermostat"`, `"propertyId":"target-temperature"`, `"name":"恒温器"`, `"builtIn":true`,
 		`"propertyId":"brightness"`, `"level":"optional"`, `"behavior":"must-publish"`,
 		`"behavior":"must-map"`, `"behavior":"explicit-path-mapping-only"`,
 	} {
@@ -1041,6 +1042,47 @@ func TestMappingCatalogCustomPropertyAndConsumerRouteAPI(t *testing.T) {
 	server.Handler().ServeHTTP(response, consumerBinding)
 	if response.Code != http.StatusCreated || !bytes.Contains(response.Body.Bytes(), []byte(`"stage":"consumer"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"consumerProperty":"Switch.On"`)) {
 		t.Fatalf("consumer binding = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestCustomUnifiedModelAPI(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "custom-model-api.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, err := application.NewProfileService(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	devices := application.NewDeviceService(virtual.NewProvider(), profiles)
+	defer devices.Close()
+	server := NewServer(":0", devices, application.NewTargetService(nil, nil), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server.SetProfileService(profiles)
+
+	create := httptest.NewRequest(http.MethodPost, "/api/v1/device-models/custom-models", bytes.NewBufferString(`{"deviceType":"air-quality-monitor","name":"空气质量监测器","version":1}`))
+	create.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, create)
+	if response.Code != http.StatusCreated || !bytes.Contains(response.Body.Bytes(), []byte(`"deviceType":"air-quality-monitor"`)) {
+		t.Fatalf("custom model create = %d %s", response.Code, response.Body.String())
+	}
+
+	list := httptest.NewRequest(http.MethodGet, "/api/v1/device-models", nil)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, list)
+	for _, expected := range []string{`"name":"空气质量监测器"`, `"builtIn":false`, `"parameters":[]`} {
+		if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(expected)) {
+			t.Fatalf("custom model list = %d %s", response.Code, response.Body.String())
+		}
+	}
+
+	remove := httptest.NewRequest(http.MethodDelete, "/api/v1/device-models/custom-models/air-quality-monitor", nil)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, remove)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("custom model delete = %d %s", response.Code, response.Body.String())
 	}
 }
 

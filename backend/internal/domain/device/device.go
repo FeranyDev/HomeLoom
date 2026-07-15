@@ -31,6 +31,23 @@ const (
 	TypeFan                       Type = "fan"
 	TypeAirPurifier               Type = "air-purifier"
 	TypeWindowCovering            Type = "window-covering"
+	TypeIlluminanceSensor         Type = "illuminance-sensor"
+	TypeOccupancySensor           Type = "occupancy-sensor"
+	TypeLeakSensor                Type = "leak-sensor"
+	TypeSmokeSensor               Type = "smoke-sensor"
+	TypeCarbonMonoxideSensor      Type = "carbon-monoxide-sensor"
+	TypeCarbonDioxideSensor       Type = "carbon-dioxide-sensor"
+	TypeAirQualitySensor          Type = "air-quality-sensor"
+	TypeThermostat                Type = "thermostat"
+	TypeAirConditioner            Type = "air-conditioner"
+	TypeHeaterCooler              Type = "heater-cooler"
+	TypeHumidifierDehumidifier    Type = "humidifier-dehumidifier"
+	TypeLock                      Type = "lock"
+	TypeGarageDoor                Type = "garage-door"
+	TypeSecuritySystem            Type = "security-system"
+	TypeValve                     Type = "valve"
+	TypeSpeaker                   Type = "speaker"
+	TypeRobotVacuum               Type = "robot-vacuum"
 )
 
 const (

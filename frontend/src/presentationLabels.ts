@@ -8,15 +8,26 @@ const deviceTypes: Record<DeviceType, string> = {
 	'temperature-humidity-sensor': '温湿度传感器',
 	'contact-sensor': '接触传感器', 'motion-sensor': '活动传感器',
 	fan: '风扇', 'air-purifier': '空气净化器', 'window-covering': '窗帘',
+	'illuminance-sensor': '照度传感器', 'occupancy-sensor': '占用传感器', 'leak-sensor': '漏水传感器',
+	'smoke-sensor': '烟雾传感器', 'carbon-monoxide-sensor': '一氧化碳传感器',
+	'carbon-dioxide-sensor': '二氧化碳传感器', 'air-quality-sensor': '空气质量传感器',
+	thermostat: '恒温器', 'air-conditioner': '空调', 'heater-cooler': '冷暖设备', 'humidifier-dehumidifier': '加湿除湿器',
+	lock: '门锁', 'garage-door': '车库门', 'security-system': '安防系统', valve: '阀门',
+	speaker: '扬声器', 'robot-vacuum': '扫地机器人',
 }
 
 const valueTypes: Record<ValueType, string> = { bool: '布尔值', int: '整数', number: '数值', string: '文本', enum: '枚举' }
 const parameterLevels: Record<ParameterLevel, string> = { required: '必需', optional: '可选', custom: '自定义' }
 const targetTypes: Record<TargetType, string> = { 'apple-hap': 'Apple 家庭桥', matter: 'Matter 桥' }
-const transformTypes: Record<MappingTransformType, string> = { invert: '布尔反转', scale: '数值缩放', clamp: '范围裁剪', enum: '枚举映射', unit: '单位转换' }
+const transformTypes: Record<MappingTransformType, string> = {
+	invert: '布尔反转', scale: '数值缩放', clamp: '范围裁剪', enum: '枚举映射', unit: '单位转换',
+	'range-enum': '数值分段转枚举', threshold: '数值阈值转布尔', 'bool-enum': '布尔转枚举', 'enum-bool': '枚举转布尔',
+	'map-range': '区间线性映射', round: '数值取整', 'parse-number': '文本解析为数值', 'number-string': '数值格式化为文本',
+}
 const unitNames: Record<string, string> = {
 	percent: '百分比', degree: '角度', mired: '微倒度', watt: '瓦特', 'kilowatt-hour': '千瓦时',
 	'microgram-per-cubic-meter': '微克/立方米', celsius: '摄氏度', fahrenheit: '华氏度',
+	lux: '勒克斯', ppm: '百万分比', second: '秒',
 }
 
 const resourceNames: Record<string, string> = {
@@ -31,7 +42,21 @@ const resourceNames: Record<string, string> = {
 	filter: '滤芯', 'life-level': '剩余寿命', 'change-indication': '更换提示', 'window-covering': '窗帘',
 	'current-position': '当前位置', 'target-position': '目标位置', 'position-state': '运动状态',
 	'obstruction-detected': '障碍物检测', battery: '电池', level: '电量', low: '低电量', security: '安全状态', tampered: '防拆状态',
-	sensor: '传感器', value: '传感器值',
+	sensor: '传感器', value: '传感器值', illuminance: '照度', 'current-illuminance': '当前照度',
+	occupancy: '占用', 'occupancy-detected': '占用状态', leak: '漏水', 'leak-detected': '漏水状态',
+	smoke: '烟雾', 'smoke-detected': '烟雾状态', 'carbon-monoxide': '一氧化碳', 'carbon-dioxide': '二氧化碳',
+	detected: '告警状态', 'current-level': '当前浓度', 'peak-level': '峰值浓度', 'pm10-density': 'PM10 浓度',
+	'carbon-dioxide-level': '二氧化碳浓度', 'nitrogen-dioxide-density': '二氧化氮浓度', 'ozone-density': '臭氧浓度',
+	thermostat: '恒温器', 'target-mode': '目标模式', 'target-temperature': '目标温度',
+	'heating-threshold': '制热阈值', 'cooling-threshold': '制冷阈值', 'display-units': '显示温标',
+	'air-conditioner': '空调', 'vertical-swing': '上下扫风', 'horizontal-swing': '左右扫风',
+	'wind-direction': '导风方向', 'auxiliary-heat': '辅热', 'sleep-mode': '睡眠模式',
+	'heater-cooler': '冷暖设备', 'humidifier-dehumidifier': '加湿除湿器', 'target-humidity': '目标湿度',
+	'water-level': '水位', lock: '门锁', jammed: '锁舌卡住', 'garage-door': '车库门',
+	'security-system': '安防系统', 'alarm-type': '告警类型', valve: '阀门', 'valve-type': '阀门类型',
+	'set-duration': '设定时长', 'remaining-duration': '剩余时长', speaker: '扬声器', volume: '音量',
+	mute: '静音', 'current-media-state': '当前媒体状态', 'target-media-state': '目标媒体状态', 'input-source': '输入源',
+	'robot-vacuum': '扫地机器人', 'cleaning-progress': '清洁进度', fault: '故障代码', charging: '正在充电',
 }
 
 const serviceNames: Record<string, string> = {

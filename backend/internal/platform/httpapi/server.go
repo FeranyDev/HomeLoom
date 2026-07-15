@@ -441,6 +441,35 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		}
 		return c.JSON(http.StatusOK, map[string]any{"data": device.ModelContracts()})
 	})
+	e.GET("/api/v1/device-models/custom-models", func(c echo.Context) error {
+		if server.profiles == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "custom unified models are unavailable")
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": server.profiles.ListCustomModels()})
+	})
+	e.POST("/api/v1/device-models/custom-models", func(c echo.Context) error {
+		if server.profiles == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "custom unified models are unavailable")
+		}
+		var item mapping.CustomModel
+		if err := c.Bind(&item); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid custom unified model")
+		}
+		created, err := server.profiles.CreateCustomModel(c.Request().Context(), item)
+		if err != nil {
+			return profileHTTPError(err)
+		}
+		return c.JSON(http.StatusCreated, map[string]any{"data": created})
+	})
+	e.DELETE("/api/v1/device-models/custom-models/:deviceType", func(c echo.Context) error {
+		if server.profiles == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "custom unified models are unavailable")
+		}
+		if err := server.profiles.DeleteCustomModel(c.Request().Context(), device.Type(c.Param("deviceType"))); err != nil {
+			return profileHTTPError(err)
+		}
+		return c.NoContent(http.StatusNoContent)
+	})
 	e.GET("/api/v1/mapping/catalog", func(c echo.Context) error {
 		models := device.ModelContracts()
 		if server.profiles != nil {
@@ -1593,10 +1622,10 @@ func profileHTTPError(err error) error {
 	if errors.Is(err, application.ErrBindingNotFound) {
 		return echo.NewHTTPError(http.StatusNotFound, "mapping binding not found")
 	}
-	if errors.Is(err, application.ErrCustomModelPropertyNotFound) {
+	if errors.Is(err, application.ErrCustomModelPropertyNotFound) || errors.Is(err, application.ErrCustomModelNotFound) {
 		return echo.NewHTTPError(http.StatusNotFound, "custom model property not found")
 	}
-	if errors.Is(err, application.ErrProfileExists) || errors.Is(err, application.ErrProfileBuiltIn) || errors.Is(err, application.ErrProfileInUse) || errors.Is(err, application.ErrBindingExists) || errors.Is(err, application.ErrCustomModelPropertyExists) {
+	if errors.Is(err, application.ErrProfileExists) || errors.Is(err, application.ErrProfileBuiltIn) || errors.Is(err, application.ErrProfileInUse) || errors.Is(err, application.ErrBindingExists) || errors.Is(err, application.ErrCustomModelPropertyExists) || errors.Is(err, application.ErrCustomModelExists) {
 		return echo.NewHTTPError(http.StatusConflict, err.Error())
 	}
 	var validation *application.ValidationError

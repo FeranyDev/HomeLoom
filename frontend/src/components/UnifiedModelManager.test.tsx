@@ -7,11 +7,11 @@ import { UnifiedModelManager } from './UnifiedModelManager'
 
 vi.mock('../api/mapping', () => ({
   listModelContracts: vi.fn(), listCustomModelProperties: vi.fn(), createCustomModelProperty: vi.fn(),
-  updateCustomModelProperty: vi.fn(), deleteCustomModelProperty: vi.fn(),
+  updateCustomModelProperty: vi.fn(), deleteCustomModelProperty: vi.fn(), createCustomModel: vi.fn(), deleteCustomModel: vi.fn(),
 }))
 
 const model: ModelContract = {
-  deviceType: 'lightbulb', version: 1,
+  deviceType: 'lightbulb', version: 1, builtIn: true,
   custom: {
     publisher: { level: 'custom', behavior: 'preserve-and-mark-custom' },
     consumer: { level: 'custom', behavior: 'explicit-path-mapping-only' },
@@ -46,5 +46,31 @@ describe('UnifiedModelManager', () => {
     await userEvent.click(screen.getByRole('button', { name: /可选（optional）/ }))
     expect(screen.queryByText(/开关状态（开关 · power）/)).not.toBeInTheDocument()
     expect(screen.getByText(/亮度.*brightness/, { selector: 'strong' })).toBeInTheDocument()
+  })
+
+  it('offers a prominent create entry for the selected model', async () => {
+    render(<UnifiedModelManager />)
+    await screen.findByRole('heading', { name: '模型与属性字段配置' })
+    await userEvent.click(screen.getByRole('button', { name: '＋ 新增自定义属性' }))
+    expect(screen.getByRole('dialog', { name: '自定义统一模型属性' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '新建自定义属性' })).toBeInTheDocument()
+    expect(screen.getByLabelText('设备模型（deviceType）')).toHaveValue('lightbulb')
+    expect(screen.getByLabelText('设备模型（deviceType）')).toBeDisabled()
+  })
+
+  it('creates a complete database-backed unified model before configuring properties', async () => {
+    vi.mocked(api.createCustomModel).mockResolvedValue({ deviceType: 'air-quality-monitor', name: '空气质量监测器', version: 1 })
+    vi.mocked(api.listModelContracts)
+      .mockResolvedValueOnce([model])
+      .mockResolvedValueOnce([model, { deviceType: 'air-quality-monitor', name: '空气质量监测器', version: 1, builtIn: false, parameters: [], custom: model.custom }])
+    render(<UnifiedModelManager />)
+    await screen.findByRole('heading', { name: '模型与属性字段配置' })
+    await userEvent.click(screen.getByRole('button', { name: '＋ 新增统一模型' }))
+    await userEvent.type(screen.getByPlaceholderText('air-quality-monitor'), 'air-quality-monitor')
+    await userEvent.type(screen.getByPlaceholderText('空气质量监测器'), '空气质量监测器')
+    await userEvent.click(screen.getByRole('button', { name: '创建并配置属性' }))
+    expect(api.createCustomModel).toHaveBeenCalledWith({ deviceType: 'air-quality-monitor', name: '空气质量监测器', version: 1 })
+    expect(await screen.findByRole('heading', { name: '空气质量监测器（air-quality-monitor）' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '＋ 新增自定义属性' })).toBeInTheDocument()
   })
 })

@@ -28,6 +28,27 @@ Consumer 可以把统一模型中的可选参数提升为自己的必须参数�
 | Fan | 启用、当前状态 | 目标模式、转速、摇头、旋转方向、物理控制锁 |
 | Air Purifier | 启用、当前状态 | 目标模式、转速、摆风、控制锁、空气质量、PM2.5、VOC、滤芯状态 |
 | Window Covering | 当前位置、目标位置、运动状态 | 障碍物检测 |
+| Illuminance Sensor | 当前照度 | 电量、低电量 |
+| Occupancy Sensor | 占用状态 | 电量、低电量、防拆 |
+| Leak Sensor | 漏水状态 | 电量、低电量、防拆 |
+| Smoke Sensor | 烟雾状态 | 电量、低电量、防拆 |
+| Carbon Monoxide Sensor | 一氧化碳告警 | 当前浓度、峰值浓度、电量、低电量、防拆 |
+| Carbon Dioxide Sensor | 二氧化碳告警 | 当前浓度、峰值浓度、电量、低电量 |
+| Air Quality Sensor | 当前空气质量 | PM2.5、PM10、VOC、CO₂、NO₂、臭氧浓度 |
+| Thermostat | 当前状态、目标模式、当前温度、目标温度 | 制热/制冷阈值、当前湿度、显示温标 |
+| Air Conditioner | 启用、当前状态、运行模式、当前温度、目标温度 | 风速档位/百分比、上下/左右扫风、导风方向、辅热、睡眠模式、湿度、温标、故障和滤网状态 |
+| Heater Cooler | 启用、当前状态、目标模式、当前温度 | 制热/制冷阈值、风速、摆风、控制锁 |
+| Humidifier Dehumidifier | 启用、当前状态、目标模式、当前湿度、目标湿度 | 水位、控制锁 |
+| Lock | 当前锁定状态、目标锁定状态 | 卡住状态、电量、低电量、防拆 |
+| Garage Door | 当前门状态、目标门状态 | 障碍物检测 |
+| Security System | 当前布防状态、目标布防状态 | 告警类型、防拆 |
+| Valve | 启用、使用状态、阀门类型 | 设定时长、剩余时长 |
+| Speaker | 启用、音量、静音 | 当前/目标媒体状态、输入源 |
+| Robot Vacuum | 启用、当前状态、目标模式 | 清洁进度、吸力、故障、充电与电量状态 |
+
+内置模型目录和 Consumer 能力目录相互独立。统一模型描述 HomeLoom 内部的稳定语义基准；HomeKit、Matter 或其他 Consumer 只声明自己实际支持的模型和属性，不会因为目录新增模型而被强制实现或伪装成 HomeKit 设备。
+
+`thermostat`、`air-conditioner` 和 `heater-cooler` 分别表示温控策略器、完整空调设备和简单冷暖执行设备。空调拥有独立启用状态、制冷/制热/除湿/送风模式、目标温度以及风速扫风能力，不再借用 `heater-cooler` 模型。
 
 ## 运行时边界
 

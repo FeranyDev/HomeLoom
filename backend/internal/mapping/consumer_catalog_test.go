@@ -65,4 +65,13 @@ func TestConsumerContractRegistryDoesNotFallBackToHomeKit(t *testing.T) {
 	if !found || contract.ConsumerID != "homekit" {
 		t.Fatalf("registered HomeKit contract = %#v, found=%v", contract, found)
 	}
+	if known, supported := ConsumerModelSupport("homekit", device.TypeSwitch); !known || !supported {
+		t.Fatalf("HomeKit switch support = known %v, supported %v", known, supported)
+	}
+	if known, supported := ConsumerModelSupport("homekit", device.TypeRobotVacuum); !known || supported {
+		t.Fatalf("HomeKit robot vacuum support = known %v, supported %v", known, supported)
+	}
+	if known, supported := ConsumerModelSupport("matter", device.TypeSwitch); known || supported {
+		t.Fatalf("unregistered Matter support = known %v, supported %v", known, supported)
+	}
 }

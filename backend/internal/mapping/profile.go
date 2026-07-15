@@ -20,11 +20,19 @@ const (
 	KindCapability ProfileKind = "capability"
 	KindTarget     ProfileKind = "target"
 
-	TransformInvert TransformType = "invert"
-	TransformScale  TransformType = "scale"
-	TransformClamp  TransformType = "clamp"
-	TransformEnum   TransformType = "enum"
-	TransformUnit   TransformType = "unit"
+	TransformInvert       TransformType = "invert"
+	TransformScale        TransformType = "scale"
+	TransformClamp        TransformType = "clamp"
+	TransformEnum         TransformType = "enum"
+	TransformUnit         TransformType = "unit"
+	TransformRangeEnum    TransformType = "range-enum"
+	TransformThreshold    TransformType = "threshold"
+	TransformBoolEnum     TransformType = "bool-enum"
+	TransformEnumBool     TransformType = "enum-bool"
+	TransformMapRange     TransformType = "map-range"
+	TransformRound        TransformType = "round"
+	TransformParseNumber  TransformType = "parse-number"
+	TransformNumberString TransformType = "number-string"
 
 	DirectionForward Direction = "forward"
 	DirectionReverse Direction = "reverse"
@@ -42,14 +50,35 @@ type Profile struct {
 }
 
 type Transform struct {
-	Type     TransformType     `json:"type"`
-	Factor   *float64          `json:"factor,omitempty"`
-	Offset   *float64          `json:"offset,omitempty"`
-	Min      *float64          `json:"min,omitempty"`
-	Max      *float64          `json:"max,omitempty"`
-	Values   map[string]string `json:"values,omitempty"`
-	FromUnit string            `json:"fromUnit,omitempty"`
-	ToUnit   string            `json:"toUnit,omitempty"`
+	Type        TransformType     `json:"type"`
+	Factor      *float64          `json:"factor,omitempty"`
+	Offset      *float64          `json:"offset,omitempty"`
+	Min         *float64          `json:"min,omitempty"`
+	Max         *float64          `json:"max,omitempty"`
+	Values      map[string]string `json:"values,omitempty"`
+	FromUnit    string            `json:"fromUnit,omitempty"`
+	ToUnit      string            `json:"toUnit,omitempty"`
+	Bands       []RangeBand       `json:"bands,omitempty"`
+	Threshold   *float64          `json:"threshold,omitempty"`
+	Operator    string            `json:"operator,omitempty"`
+	TrueNumber  *float64          `json:"trueNumber,omitempty"`
+	FalseNumber *float64          `json:"falseNumber,omitempty"`
+	TrueValue   string            `json:"trueValue,omitempty"`
+	FalseValue  string            `json:"falseValue,omitempty"`
+	InputMin    *float64          `json:"inputMin,omitempty"`
+	InputMax    *float64          `json:"inputMax,omitempty"`
+	OutputMin   *float64          `json:"outputMin,omitempty"`
+	OutputMax   *float64          `json:"outputMax,omitempty"`
+	Mode        string            `json:"mode,omitempty"`
+}
+
+// RangeBand is an ordered numeric band. Max is inclusive; a nil Max is the
+// final catch-all band. Reverse is the canonical numeric value used when a
+// Consumer writes the enum value back to a Provider.
+type RangeBand struct {
+	Max     *float64 `json:"max,omitempty"`
+	Value   string   `json:"value"`
+	Reverse float64  `json:"reverse"`
 }
 
 type PreviewRequest struct {
@@ -178,6 +207,83 @@ func Validate(profile Profile) error {
 				fields[path] = "unsupported unit conversion"
 			}
 			current = device.ValueTypeNumber
+		case TransformRangeEnum:
+			if !numericType(current) {
+				fields[path] = "range-enum requires int or number input"
+			}
+			validateRangeBands(fields, path, transform.Bands)
+			current = device.ValueTypeEnum
+		case TransformThreshold:
+			if !numericType(current) {
+				fields[path] = "threshold requires int or number input"
+			}
+			if transform.Threshold == nil || !finite(*transform.Threshold) {
+				fields[path+".threshold"] = "must be a finite number"
+			}
+			if transform.Operator != "gte" && transform.Operator != "gt" && transform.Operator != "lte" && transform.Operator != "lt" {
+				fields[path+".operator"] = "must be gte, gt, lte, or lt"
+			}
+			if transform.TrueNumber == nil || !finitePointer(transform.TrueNumber) {
+				fields[path+".trueNumber"] = "must be a finite reverse value"
+			}
+			if transform.FalseNumber == nil || !finitePointer(transform.FalseNumber) {
+				fields[path+".falseNumber"] = "must be a finite reverse value"
+			}
+			if transform.Threshold != nil && transform.TrueNumber != nil && transform.FalseNumber != nil && finite(*transform.Threshold) && finite(*transform.TrueNumber) && finite(*transform.FalseNumber) {
+				if !thresholdMatches(*transform.TrueNumber, *transform.Threshold, transform.Operator) {
+					fields[path+".trueNumber"] = "reverse value must evaluate to true"
+				}
+				if thresholdMatches(*transform.FalseNumber, *transform.Threshold, transform.Operator) {
+					fields[path+".falseNumber"] = "reverse value must evaluate to false"
+				}
+			}
+			current = device.ValueTypeBool
+		case TransformBoolEnum:
+			if current != device.ValueTypeBool {
+				fields[path] = "bool-enum requires bool input"
+			}
+			validateBooleanLabels(fields, path, transform.TrueValue, transform.FalseValue)
+			current = device.ValueTypeEnum
+		case TransformEnumBool:
+			if current != device.ValueTypeEnum && current != device.ValueTypeString {
+				fields[path] = "enum-bool requires enum or string input"
+			}
+			validateBooleanLabels(fields, path, transform.TrueValue, transform.FalseValue)
+			current = device.ValueTypeBool
+		case TransformMapRange:
+			if !numericType(current) {
+				fields[path] = "map-range requires int or number input"
+			}
+			for name, value := range map[string]*float64{"inputMin": transform.InputMin, "inputMax": transform.InputMax, "outputMin": transform.OutputMin, "outputMax": transform.OutputMax} {
+				if value == nil || !finitePointer(value) {
+					fields[path+"."+name] = "must be a finite number"
+				}
+			}
+			if transform.InputMin != nil && transform.InputMax != nil && *transform.InputMin == *transform.InputMax {
+				fields[path] = "input range must not be zero"
+			}
+			if transform.OutputMin != nil && transform.OutputMax != nil && *transform.OutputMin == *transform.OutputMax {
+				fields[path] = "output range must not be zero for reverse mapping"
+			}
+			current = device.ValueTypeNumber
+		case TransformRound:
+			if !numericType(current) {
+				fields[path] = "round requires int or number input"
+			}
+			if transform.Mode != "nearest" && transform.Mode != "floor" && transform.Mode != "ceil" {
+				fields[path+".mode"] = "must be nearest, floor, or ceil"
+			}
+			current = device.ValueTypeInt
+		case TransformParseNumber:
+			if current != device.ValueTypeString {
+				fields[path] = "parse-number requires string input"
+			}
+			current = device.ValueTypeNumber
+		case TransformNumberString:
+			if !numericType(current) {
+				fields[path] = "number-string requires int or number input"
+			}
+			current = device.ValueTypeString
 		default:
 			fields[path+".type"] = "unsupported transform"
 		}
@@ -204,4 +310,95 @@ func float64Value(value *float64, fallback float64) float64 {
 		return fallback
 	}
 	return *value
+}
+
+func finite(value float64) bool { return !math.IsNaN(value) && !math.IsInf(value, 0) }
+
+func finitePointer(value *float64) bool { return value != nil && finite(*value) }
+
+func validateBooleanLabels(fields map[string]string, path, trueValue, falseValue string) {
+	if strings.TrimSpace(trueValue) == "" || strings.TrimSpace(falseValue) == "" {
+		fields[path] = "trueValue and falseValue must not be empty"
+	} else if trueValue == falseValue {
+		fields[path] = "trueValue and falseValue must be different"
+	}
+}
+
+func validateRangeBands(fields map[string]string, path string, bands []RangeBand) {
+	if len(bands) < 2 {
+		fields[path+".bands"] = "must contain at least two ordered bands"
+		return
+	}
+	seen := make(map[string]struct{}, len(bands))
+	var previousMax *float64
+	for index, band := range bands {
+		bandPath := fmt.Sprintf("%s.bands.%d", path, index)
+		if strings.TrimSpace(band.Value) == "" {
+			fields[bandPath+".value"] = "must not be empty"
+		}
+		if _, duplicate := seen[band.Value]; duplicate {
+			fields[bandPath+".value"] = "must be unique for reverse mapping"
+		}
+		seen[band.Value] = struct{}{}
+		if !finite(band.Reverse) {
+			fields[bandPath+".reverse"] = "must be finite"
+		}
+		if band.Max == nil {
+			if index != len(bands)-1 {
+				fields[bandPath+".max"] = "only the final band may omit max"
+			}
+		} else {
+			if !finite(*band.Max) {
+				fields[bandPath+".max"] = "must be finite"
+			}
+			if previousMax != nil && *band.Max <= *previousMax {
+				fields[bandPath+".max"] = "must be greater than the previous max"
+			}
+		}
+		if previousMax != nil && band.Reverse <= *previousMax {
+			fields[bandPath+".reverse"] = "must be greater than the previous max"
+		}
+		if band.Max != nil && band.Reverse > *band.Max {
+			fields[bandPath+".reverse"] = "must be within this band"
+		}
+		if band.Max != nil {
+			value := *band.Max
+			previousMax = &value
+		}
+	}
+	if bands[len(bands)-1].Max != nil {
+		fields[path+".bands"] = "final band must omit max to cover remaining values"
+	}
+}
+
+func thresholdMatches(value, threshold float64, operator string) bool {
+	switch operator {
+	case "gte":
+		return value >= threshold
+	case "gt":
+		return value > threshold
+	case "lte":
+		return value <= threshold
+	case "lt":
+		return value < threshold
+	default:
+		return false
+	}
+}
+
+func transformOutputType(input device.ValueType, transform Transform) device.ValueType {
+	switch transform.Type {
+	case TransformScale, TransformClamp, TransformUnit, TransformMapRange, TransformParseNumber:
+		return device.ValueTypeNumber
+	case TransformRangeEnum, TransformBoolEnum:
+		return device.ValueTypeEnum
+	case TransformThreshold, TransformEnumBool:
+		return device.ValueTypeBool
+	case TransformRound:
+		return device.ValueTypeInt
+	case TransformNumberString:
+		return device.ValueTypeString
+	default:
+		return input
+	}
 }

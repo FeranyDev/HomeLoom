@@ -1,4 +1,13 @@
-export type DeviceType = 'switch' | 'single-property-sensor' | 'temperature-humidity-sensor' | 'lightbulb' | 'outlet' | 'contact-sensor' | 'motion-sensor' | 'fan' | 'air-purifier' | 'window-covering'
+export const builtInDeviceTypes = [
+  'switch', 'single-property-sensor', 'temperature-humidity-sensor', 'lightbulb', 'outlet',
+  'contact-sensor', 'motion-sensor', 'fan', 'air-purifier', 'window-covering',
+  'illuminance-sensor', 'occupancy-sensor', 'leak-sensor', 'smoke-sensor',
+  'carbon-monoxide-sensor', 'carbon-dioxide-sensor', 'air-quality-sensor',
+  'thermostat', 'air-conditioner', 'heater-cooler', 'humidifier-dehumidifier', 'lock', 'garage-door',
+  'security-system', 'valve', 'speaker', 'robot-vacuum',
+] as const
+export type BuiltInDeviceType = typeof builtInDeviceTypes[number]
+export type DeviceType = BuiltInDeviceType | (string & {})
 export type ValueType = 'bool' | 'int' | 'number' | 'string' | 'enum'
 export type DeviceAvailability = 'online' | 'offline' | 'unknown'
 export type ParameterLevel = 'required' | 'optional' | 'custom'

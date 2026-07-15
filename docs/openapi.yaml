@@ -610,7 +610,7 @@ components:
       type: object
       required: [type]
       properties:
-        type: { type: string, enum: [invert, scale, clamp, enum, unit] }
+        type: { type: string, enum: [invert, scale, clamp, enum, unit, range-enum, threshold, bool-enum, enum-bool, map-range, round, parse-number, number-string] }
         factor: { type: number }
         offset: { type: number }
         min: { type: number }
@@ -618,6 +618,27 @@ components:
         values: { type: object, additionalProperties: { type: string } }
         fromUnit: { type: string, enum: [celsius, fahrenheit, kelvin, ratio, percent] }
         toUnit: { type: string, enum: [celsius, fahrenheit, kelvin, ratio, percent] }
+        bands:
+          type: array
+          items: { $ref: "#/components/schemas/MappingRangeBand" }
+        threshold: { type: number }
+        operator: { type: string, enum: [gte, gt, lte, lt] }
+        trueNumber: { type: number }
+        falseNumber: { type: number }
+        trueValue: { type: string }
+        falseValue: { type: string }
+        inputMin: { type: number }
+        inputMax: { type: number }
+        outputMin: { type: number }
+        outputMax: { type: number }
+        mode: { type: string, enum: [nearest, floor, ceil] }
+    MappingRangeBand:
+      type: object
+      required: [value, reverse]
+      properties:
+        max: { type: number, description: Inclusive upper bound. Omit only on the final catch-all band. }
+        value: { type: string }
+        reverse: { type: number, description: Canonical Provider value used for reverse writes. }
     MappingProfile:
       type: object
       required: [schemaVersion, id, version, kind, inputType, outputType, transforms]
@@ -747,10 +768,12 @@ components:
         consumer: { $ref: "#/components/schemas/ParameterRole" }
     DeviceModelContract:
       type: object
-      required: [deviceType, version, parameters, custom]
+      required: [deviceType, version, builtIn, parameters, custom]
       properties:
         deviceType: { type: string }
+        name: { type: string }
         version: { type: integer, minimum: 1 }
+        builtIn: { type: boolean }
         parameters: { type: array, items: { $ref: "#/components/schemas/ModelParameter" } }
         custom:
           type: object

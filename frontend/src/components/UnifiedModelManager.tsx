@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { listModelContracts } from '../api/mapping'
+import { createCustomModel, deleteCustomModel, listModelContracts } from '../api/mapping'
 import { bilingual, deviceTypeLabel, parameterLevelLabel, permissionLabel, propertyDisplayLabel, resourceLabel, unitLabel, valueTypeLabel } from '../presentationLabels'
 import type { DeviceType, ParameterLevel } from '../types/device'
 import type { ModelContract, ModelParameter } from '../types/mapping'
@@ -19,24 +19,33 @@ function countLevel(model: ModelContract, level: ParameterLevel): number {
   return model.parameters.filter((parameter) => parameter.level === level).length
 }
 
+function modelLabel(model: ModelContract): string {
+  return model.name ? bilingual(model.deviceType, model.name) : deviceTypeLabel(model.deviceType)
+}
+
 function valueConstraint(parameter: ModelParameter): string {
   if (parameter.enum?.length) return `枚举（enum）：${parameter.enum.join(' / ')}`
   const parts = [parameter.min !== undefined && `最小值（min）${parameter.min}`, parameter.max !== undefined && `最大值（max）${parameter.max}`, parameter.step !== undefined && `步长（step）${parameter.step}`].filter(Boolean)
   return parts.length ? parts.join(' · ') : '无额外约束'
 }
 
-export function UnifiedModelManager() {
+export function UnifiedModelManager({ onModelCountChange }: { onModelCountChange?: (count: number) => void } = {}) {
   const [models, setModels] = useState<ModelContract[]>([])
   const [selectedType, setSelectedType] = useState<DeviceType | null>(null)
   const [level, setLevel] = useState<LevelFilter>('all')
   const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [customCreateRevision, setCustomCreateRevision] = useState(0)
+  const [creatingModel, setCreatingModel] = useState(false)
+  const [modelDraft, setModelDraft] = useState({ deviceType: '', name: '', version: 1 })
 
   const refresh = useCallback(async () => {
     try {
       const result = await listModelContracts()
       setModels(result)
+      onModelCountChange?.(result.length)
+      window.dispatchEvent(new CustomEvent<number>('homeloom:model-count', { detail: result.length }))
       setSelectedType((current) => current && result.some((model) => model.deviceType === current) ? current : result[0]?.deviceType ?? null)
       setError('')
     } catch (cause) {
@@ -44,9 +53,22 @@ export function UnifiedModelManager() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [onModelCountChange])
 
   useEffect(() => { void refresh() }, [refresh])
+  const saveModel = async () => {
+    try {
+      const created = await createCustomModel(modelDraft)
+      setCreatingModel(false)
+      setModelDraft({ deviceType: '', name: '', version: 1 })
+      await refresh()
+      setSelectedType(created.deviceType)
+    } catch (cause) { setError(cause instanceof Error ? cause.message : '新增统一模型失败') }
+  }
+  const removeModel = async (model: ModelContract) => {
+    if (!window.confirm(`删除统一模型 ${modelLabel(model)}？`)) return
+    try { await deleteCustomModel(model.deviceType); await refresh() } catch (cause) { setError(cause instanceof Error ? cause.message : '删除统一模型失败') }
+  }
   const selected = models.find((model) => model.deviceType === selectedType)
   const visibleParameters = useMemo(() => {
     if (!selected) return []
@@ -73,22 +95,25 @@ export function UnifiedModelManager() {
 
   return <section className="unified-model-manager">
     <header className="model-catalog-heading">
-      <div><p className="eyebrow">统一智能设备模型（UNIFIED DEVICE MODELS）</p><h3>模型与属性字段配置</h3><p>统一模型是 Provider 与 Consumer 之间唯一的语义基准。内置的必需、可选字段保持只读；自定义字段保存到数据库并实时进入映射目录。</p></div>
-      <div className="model-catalog-totals"><strong>{models.length}</strong><span>设备模型</span><strong>{models.reduce((total, model) => total + model.parameters.length, 0)}</strong><span>属性字段</span></div>
+      <div><p className="eyebrow">统一智能设备模型（UNIFIED DEVICE MODELS）</p><h3>模型与属性字段配置</h3><p>统一模型是 Provider 与 Consumer 之间唯一的语义基准。内置的必需、可选字段保持只读；自定义模型与字段保存到数据库并实时进入映射目录。</p></div>
+      <div className="model-catalog-summary"><div className="model-catalog-totals"><strong>{models.length}</strong><span>设备模型</span><strong>{models.reduce((total, model) => total + model.parameters.length, 0)}</strong><span>属性字段</span></div><button className="add-button" onClick={() => { setCreatingModel(true); setError('') }}>＋ 新增统一模型</button></div>
     </header>
     {error && <p className="inline-error" role="alert">{error}</p>}
+    {creatingModel && <div className="custom-model-editor" role="dialog" aria-label="新增统一模型"><div className="form-heading"><div><p className="eyebrow">统一模型（UNIFIED MODEL）</p><h3>新增统一模型</h3></div><button onClick={() => setCreatingModel(false)}>关闭</button></div><p>先创建稳定的模型标识，再为它添加 Endpoint / Capability / Property 三级属性。模型创建后立即进入 Provider 与 Consumer 映射目录。</p><div className="custom-model-fields"><label>模型标识（deviceType）<input value={modelDraft.deviceType} onChange={(event) => setModelDraft({ ...modelDraft, deviceType: event.target.value })} placeholder="air-quality-monitor" /></label><label>显示名称（name）<input value={modelDraft.name} onChange={(event) => setModelDraft({ ...modelDraft, name: event.target.value })} placeholder="空气质量监测器" /></label><label>模型版本（version）<input type="number" min="1" value={modelDraft.version} onChange={(event) => setModelDraft({ ...modelDraft, version: Number(event.target.value) })} /></label></div><button className="add-button" onClick={() => void saveModel()}>创建并配置属性</button></div>}
     <div className="model-catalog-layout">
       <aside className="model-type-list" aria-label="统一设备模型列表">
         {models.map((model) => <button key={model.deviceType} className={selectedType === model.deviceType ? 'is-selected' : ''} onClick={() => { setSelectedType(model.deviceType); setLevel('all'); setQuery('') }}>
-          <span>{deviceTypeLabel(model.deviceType)}</span><code>v{model.version}</code>
+          <span>{modelLabel(model)}</span><code>v{model.version}</code>
           <small><i className="is-required">{countLevel(model, 'required')}</i> 必需 · <i className="is-optional">{countLevel(model, 'optional')}</i> 可选 · <i className="is-custom">{countLevel(model, 'custom')}</i> 自定义</small>
         </button>)}
       </aside>
       {selected && <div className="model-contract-panel">
         <header className="model-contract-heading">
-          <div><span>当前模型（deviceType）</span><h3>{deviceTypeLabel(selected.deviceType)}</h3><code>{selected.deviceType} · schema v{selected.version}</code></div>
+          <div><span>当前模型（deviceType）</span><h3>{modelLabel(selected)}</h3><code>{selected.deviceType} · schema v{selected.version}</code>{!selected.builtIn && <button className="danger-link model-delete-action" onClick={() => void removeModel(selected)}>删除自定义模型</button>}</div>
           <div className="model-contract-policy"><span>自定义字段默认策略</span><small>提供端（Publisher）：{behaviorLabel(selected.custom.publisher.behavior)}</small><small>消费端（Consumer）：{behaviorLabel(selected.custom.consumer.behavior)}</small></div>
+          <div className="model-contract-actions"><button className="add-button" onClick={() => setCustomCreateRevision((current) => current + 1)}>＋ 新增自定义属性</button><small>为当前模型新增 Endpoint / Capability / Property 三级字段</small></div>
         </header>
+        <CustomModelPropertyManager deviceType={selected.deviceType} embedded createRevision={customCreateRevision} onChanged={() => void refresh()} />
         <div className="model-field-toolbar">
           <div role="tablist" aria-label="属性字段级别">
             {(['all', 'required', 'optional', 'custom'] as LevelFilter[]).map((item) => <button key={item} className={level === item ? 'is-active' : ''} onClick={() => setLevel(item)}>{item === 'all' ? `全部（${selected.parameters.length}）` : `${parameterLevelLabel(item)}（${countLevel(selected, item)}）`}</button>)}
@@ -118,7 +143,6 @@ export function UnifiedModelManager() {
           </section>)}
           {visibleParameters.length === 0 && <div className="empty-state">没有符合当前筛选条件的属性字段。</div>}
         </div>
-        <CustomModelPropertyManager deviceType={selected.deviceType} embedded onChanged={() => void refresh()} />
       </div>}
     </div>
   </section>

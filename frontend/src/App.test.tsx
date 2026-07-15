@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   listProviders: vi.fn(), saveProvider: vi.fn(), deleteProvider: vi.fn(), restartProvider: vi.fn(), testProviderConnection: vi.fn(),
   getDiagnostics: vi.fn(), getRuntimeSettings: vi.fn(), listAuditEvents: vi.fn(), listCommands: vi.fn(), saveRuntimeSettings: vi.fn(),
   getSystemVersion: vi.fn(),
+  listModelContracts: vi.fn(), listCustomModelProperties: vi.fn(),
 }))
 
 vi.mock('./api/auth', () => ({ getAuthStatus: api.getAuthStatus, login: api.login, logout: api.logout, setupAdministrator: api.setupAdministrator }))
@@ -27,6 +28,10 @@ vi.mock('./api/diagnostics', () => ({
   subscribeAuditEvents: () => () => {}, subscribeCommands: () => () => {},
 }))
 vi.mock('./api/system', () => ({ getSystemVersion: api.getSystemVersion }))
+vi.mock('./api/mapping', async (importOriginal) => {
+  const original = await importOriginal<typeof import('./api/mapping')>()
+  return { ...original, listModelContracts: api.listModelContracts, listCustomModelProperties: api.listCustomModelProperties }
+})
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -39,6 +44,8 @@ beforeEach(() => {
   api.listAuditEvents.mockResolvedValue([])
   api.getSystemVersion.mockResolvedValue({ version: 'test', commit: 'abc', buildTime: 'now' })
   api.getRuntimeSettings.mockResolvedValue(null)
+  api.listModelContracts.mockResolvedValue(Array.from({ length: 27 }, (_, index) => ({ deviceType: `model-${index + 1}`, name: `模型 ${index + 1}`, version: 1, builtIn: true, parameters: [], custom: { publisher: { level: 'custom', behavior: 'preserve-and-mark-custom' }, consumer: { level: 'custom', behavior: 'explicit-path-mapping-only' } } })))
+  api.listCustomModelProperties.mockResolvedValue([])
   api.logout.mockResolvedValue(undefined)
 })
 
@@ -77,6 +84,15 @@ describe('App integration', () => {
     await user.click(screen.getByRole('button', { name: '退出' }))
     await waitFor(() => expect(api.logout).toHaveBeenCalledOnce())
     expect(await screen.findByRole('button', { name: '登录' })).toBeInTheDocument()
+  })
+
+  it('reads the unified model summary count from the model catalog', async () => {
+    api.getAuthStatus.mockResolvedValue({ initialized: true, authenticated: true, username: 'admin' })
+    render(<App />)
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: '统一模型' }))
+    expect(await screen.findByLabelText('27 统一设备模型')).toBeInTheDocument()
+    expect(api.listModelContracts).toHaveBeenCalled()
   })
 
   it('returns an authenticated dashboard to login on a global unauthorized event', async () => {

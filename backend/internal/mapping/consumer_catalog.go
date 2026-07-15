@@ -80,6 +80,23 @@ func ConsumerContract(consumerID string, deviceType device.Type) (device.Consume
 	return device.ConsumerModelContract{}, false
 }
 
+// ConsumerModelSupport distinguishes an unknown Consumer adapter from a known
+// adapter that intentionally does not implement a unified model.
+func ConsumerModelSupport(consumerID string, deviceType device.Type) (known, supported bool) {
+	for _, adapter := range BuiltInConsumerAdapters() {
+		if adapter.Catalog.ID != consumerID {
+			continue
+		}
+		for _, contract := range adapter.Contracts {
+			if contract.DeviceType == deviceType {
+				return true, true
+			}
+		}
+		return true, false
+	}
+	return false, false
+}
+
 func FindConsumerProperty(consumerID string, deviceType device.Type, propertyID string) (ConsumerProperty, bool) {
 	for _, catalog := range BuiltInConsumerCatalogs() {
 		if catalog.ID != consumerID {

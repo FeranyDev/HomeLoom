@@ -14,7 +14,7 @@ const sourceDevice = { ...device, catalog: { complete: true, source: 'miot-spec-
 describe('BindingManager', () => {
   const catalog = vi.fn(async () => ({
     providers: [sourceDevice],
-    models: [{ deviceType: 'switch' as const, version: 1, custom: { publisher: { level: 'custom' as const, behavior: 'preserve' }, consumer: { level: 'custom' as const, behavior: 'explicit' } }, parameters: [{ path: { endpointId: 'main', capabilityId: 'switch', propertyId: 'power' }, name: '开关', level: 'required' as const, type: 'bool' as const, readable: true, writable: true, notifiable: true, publisher: { level: 'required' as const, behavior: 'must-publish' }, consumer: { level: 'required' as const, behavior: 'must-map' } }] }],
+    models: [{ deviceType: 'switch' as const, version: 1, builtIn: true, custom: { publisher: { level: 'custom' as const, behavior: 'preserve' }, consumer: { level: 'custom' as const, behavior: 'explicit' } }, parameters: [{ path: { endpointId: 'main', capabilityId: 'switch', propertyId: 'power' }, name: '开关', level: 'required' as const, type: 'bool' as const, readable: true, writable: true, notifiable: true, publisher: { level: 'required' as const, behavior: 'must-publish' }, consumer: { level: 'required' as const, behavior: 'must-map' } }] }],
     consumers: [{ id: 'homekit', name: 'Apple Home / HomeKit', properties: [{ id: 'Switch.On', name: 'Switch.On', deviceType: 'switch' as const, defaultModelPath: { endpointId: 'main', capabilityId: 'switch', propertyId: 'power' }, level: 'required' as const, type: 'bool' as const, readable: true, writable: true, notifiable: true }] }],
   }))
 

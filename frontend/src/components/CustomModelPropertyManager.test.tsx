@@ -33,4 +33,13 @@ describe('CustomModelPropertyManager', () => {
     })))
     expect(changed).toHaveBeenCalled()
   })
+
+  it('opens creation from an external model-level action', async () => {
+    const { rerender } = render(<CustomModelPropertyManager deviceType="fan" onChanged={vi.fn()} createRevision={0} />)
+    await screen.findByText(/这个模型还没有自定义属性/)
+    rerender(<CustomModelPropertyManager deviceType="fan" onChanged={vi.fn()} createRevision={1} />)
+    expect(screen.getByRole('dialog', { name: '自定义统一模型属性' })).toBeInTheDocument()
+    expect(screen.getByLabelText('设备模型（deviceType）')).toHaveValue('fan')
+    expect(screen.getByLabelText('设备模型（deviceType）')).toBeDisabled()
+  })
 })

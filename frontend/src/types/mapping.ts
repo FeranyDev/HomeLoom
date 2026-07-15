@@ -1,7 +1,9 @@
 import type { Device, DeviceType, ParameterLevel, PropertyDefinition, PropertyValue, ValueType } from './device'
 
 export type MappingDirection = 'forward' | 'reverse'
-export type MappingTransformType = 'invert' | 'scale' | 'clamp' | 'enum' | 'unit'
+export type MappingTransformType = 'invert' | 'scale' | 'clamp' | 'enum' | 'unit' | 'range-enum' | 'threshold' | 'bool-enum' | 'enum-bool' | 'map-range' | 'round' | 'parse-number' | 'number-string'
+
+export interface MappingRangeBand { max?: number; value: string; reverse: number }
 
 export interface MappingTransform {
   type: MappingTransformType
@@ -12,6 +14,18 @@ export interface MappingTransform {
   values?: Record<string, string>
   fromUnit?: string
   toUnit?: string
+  bands?: MappingRangeBand[]
+  threshold?: number
+  operator?: 'gte' | 'gt' | 'lte' | 'lt'
+  trueNumber?: number
+  falseNumber?: number
+  trueValue?: string
+  falseValue?: string
+  inputMin?: number
+  inputMax?: number
+  outputMin?: number
+  outputMax?: number
+  mode?: 'nearest' | 'floor' | 'ceil'
 }
 
 export interface MappingProfile {
@@ -43,7 +57,8 @@ export interface ModelParameter {
   publisher: { level: ParameterLevel; behavior: string }; consumer: { level: ParameterLevel; behavior: string }
   publisherNotes?: string; consumerNotes?: string
 }
-export interface ModelContract { deviceType: DeviceType; version: number; parameters: ModelParameter[]; custom: { publisher: { level: ParameterLevel; behavior: string }; consumer: { level: ParameterLevel; behavior: string } } }
+export interface ModelContract { deviceType: DeviceType; name?: string; version: number; builtIn: boolean; parameters: ModelParameter[]; custom: { publisher: { level: ParameterLevel; behavior: string }; consumer: { level: ParameterLevel; behavior: string } } }
+export interface CustomModel { deviceType: DeviceType; name: string; version: number }
 export interface ConsumerProperty {
   id: string; name: string; deviceType: DeviceType; defaultModelPath: ModelPath; level: ParameterLevel; type: ValueType
   readable: boolean; writable: boolean; notifiable: boolean

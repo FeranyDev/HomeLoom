@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { createCustomModelProperty, deleteCustomModelProperty, listCustomModelProperties, updateCustomModelProperty } from '../api/mapping'
-import type { DeviceType, ValueType } from '../types/device'
+import { builtInDeviceTypes, type DeviceType, type ValueType } from '../types/device'
 import type { CustomModelProperty } from '../types/mapping'
 import { deviceTypeLabel, parameterLevelLabel, permissionLabel, propertyDisplayLabel, unitLabel, valueTypeLabel } from '../presentationLabels'
 
-const deviceTypes: DeviceType[] = ['switch', 'lightbulb', 'outlet', 'single-property-sensor', 'temperature-humidity-sensor', 'contact-sensor', 'motion-sensor', 'fan', 'air-purifier', 'window-covering']
+const deviceTypes: DeviceType[] = [...builtInDeviceTypes]
 const valueTypes: ValueType[] = ['bool', 'int', 'number', 'string', 'enum']
 
 function emptyProperty(deviceType: DeviceType = 'switch'): CustomModelProperty {
@@ -19,9 +19,10 @@ interface CustomModelPropertyManagerProps {
   onChanged: () => void
   deviceType?: DeviceType
   embedded?: boolean
+  createRevision?: number
 }
 
-export function CustomModelPropertyManager({ onChanged, deviceType, embedded = false }: CustomModelPropertyManagerProps) {
+export function CustomModelPropertyManager({ onChanged, deviceType, embedded = false, createRevision = 0 }: CustomModelPropertyManagerProps) {
   const [items, setItems] = useState<CustomModelProperty[]>([])
   const [editing, setEditing] = useState<CustomModelProperty | null>(null)
   const [originalID, setOriginalID] = useState('')
@@ -31,6 +32,11 @@ export function CustomModelPropertyManager({ onChanged, deviceType, embedded = f
   const refresh = useCallback(async () => { try { setItems(await listCustomModelProperties()); setError('') } catch (cause) { setError(cause instanceof Error ? cause.message : '读取自定义属性失败') } }, [])
   useEffect(() => { void refresh() }, [refresh])
   useEffect(() => { setEditing(null); setOriginalID('') }, [deviceType])
+  useEffect(() => {
+    if (createRevision < 1) return
+    const next = emptyProperty(deviceType)
+    setEditing(next); setOriginalID(''); setEnumText(''); setError('')
+  }, [createRevision, deviceType])
   const edit = (item?: CustomModelProperty) => { const next = item ? structuredClone(item) : emptyProperty(deviceType); setEditing(next); setOriginalID(item?.id ?? ''); setEnumText(next.definition.enum?.join(', ') ?? ''); setError('') }
   const patchDefinition = (patch: Partial<CustomModelProperty['definition']>) => setEditing((current) => current ? ({ ...current, definition: { ...current.definition, ...patch } }) : current)
   const save = async () => {
@@ -53,7 +59,7 @@ export function CustomModelPropertyManager({ onChanged, deviceType, embedded = f
     {editing && <div className="custom-property-editor" role="dialog" aria-label="自定义统一模型属性"><div className="form-heading"><div><p className="eyebrow">三级属性（THREE-LEVEL PROPERTY）</p><h3>{originalID ? '编辑自定义属性' : '新建自定义属性'}</h3></div><button onClick={() => setEditing(null)}>关闭</button></div>
       <div className="custom-property-grid">
         <label>配置标识（ID）<input value={editing.id} disabled={Boolean(originalID)} onChange={(event) => setEditing({ ...editing, id: event.target.value })} placeholder="custom-air-co2" /></label>
-        <label>设备模型（deviceType）<select value={editing.deviceType} disabled={Boolean(deviceType)} onChange={(event) => setEditing({ ...editing, deviceType: event.target.value as DeviceType })}>{deviceTypes.map((item) => <option key={item} value={item}>{deviceTypeLabel(item)}</option>)}</select></label>
+        <label>设备模型（deviceType）<select value={editing.deviceType} disabled={Boolean(deviceType)} onChange={(event) => setEditing({ ...editing, deviceType: event.target.value as DeviceType })}>{!deviceTypes.includes(editing.deviceType) && <option value={editing.deviceType}>{deviceTypeLabel(editing.deviceType)}</option>}{deviceTypes.map((item) => <option key={item} value={item}>{deviceTypeLabel(item)}</option>)}</select></label>
         <fieldset><legend>第一级 · 端点（Endpoint）</legend><label>标识（ID）<input value={editing.endpointId} onChange={(event) => setEditing({ ...editing, endpointId: event.target.value })} /></label><label>名称（name）<input value={editing.endpointName} onChange={(event) => setEditing({ ...editing, endpointName: event.target.value })} /></label><label>类型（type）<input value={editing.endpointType} onChange={(event) => setEditing({ ...editing, endpointType: event.target.value })} /></label></fieldset>
         <fieldset><legend>第二级 · 能力（Capability）</legend><label>标识（ID）<input value={editing.capabilityId} onChange={(event) => setEditing({ ...editing, capabilityId: event.target.value })} /></label><label>类型（type）<input value={editing.capabilityType} onChange={(event) => setEditing({ ...editing, capabilityType: event.target.value })} /></label></fieldset>
         <fieldset><legend>第三级 · 属性（Property）</legend><label>标识（ID）<input value={editing.definition.id} onChange={(event) => patchDefinition({ id: event.target.value })} /></label><label>名称（name）<input value={editing.definition.name} onChange={(event) => patchDefinition({ name: event.target.value })} /></label><label>值类型（type）<select value={editing.definition.type} onChange={(event) => patchDefinition({ type: event.target.value as ValueType })}>{valueTypes.map((item) => <option key={item} value={item}>{valueTypeLabel(item)}</option>)}</select></label><label>单位（unit）<input value={editing.definition.unit ?? ''} onChange={(event) => patchDefinition({ unit: event.target.value || undefined })} /></label>{editing.definition.type === 'enum' && <label>枚举值（enum）<input value={enumText} onChange={(event) => setEnumText(event.target.value)} placeholder="auto, manual" /></label>}<label>最小值（min）<input type="number" value={editing.definition.min ?? ''} onChange={(event) => patchDefinition({ min: event.target.value === '' ? undefined : Number(event.target.value) })} /></label><label>最大值（max）<input type="number" value={editing.definition.max ?? ''} onChange={(event) => patchDefinition({ max: event.target.value === '' ? undefined : Number(event.target.value) })} /></label><label>步长（step）<input type="number" value={editing.definition.step ?? ''} onChange={(event) => patchDefinition({ step: event.target.value === '' ? undefined : Number(event.target.value) })} /></label><label>状态过期秒数（staleAfterSeconds）<input type="number" min="0" value={editing.definition.staleAfterSeconds ?? ''} onChange={(event) => patchDefinition({ staleAfterSeconds: event.target.value === '' ? undefined : Number(event.target.value) })} /></label><div className="permission-checks"><label><input type="checkbox" checked={editing.definition.readable} onChange={(event) => patchDefinition({ readable: event.target.checked })} />可读（R）</label><label><input type="checkbox" checked={editing.definition.writable} onChange={(event) => patchDefinition({ writable: event.target.checked })} />可写（W）</label><label><input type="checkbox" checked={editing.definition.notifiable} onChange={(event) => patchDefinition({ notifiable: event.target.checked })} />通知（N）</label></div></fieldset>

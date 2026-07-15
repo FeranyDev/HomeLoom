@@ -114,8 +114,8 @@ func ValidateBinding(b Binding) error {
 			}
 		}
 		if b.DeviceType != "" {
-			if _, ok := device.ModelContractFor(b.DeviceType); !ok {
-				fields["binding.deviceType"] = "must reference a supported unified device model"
+			if !device.ValidStableID(string(b.DeviceType)) {
+				fields["binding.deviceType"] = "must be a stable lowercase identifier"
 			}
 		}
 	} else if stage == StageConsumer {
@@ -137,8 +137,8 @@ func ValidateBinding(b Binding) error {
 		if b.ConsumerDeviceID != "" && !targetScopeID.MatchString(b.ConsumerDeviceID) {
 			fields["binding.consumerDeviceId"] = "may contain only letters, numbers, underscores and hyphens"
 		}
-		if _, ok := device.ModelContractFor(b.DeviceType); !ok {
-			fields["binding.deviceType"] = "must reference a supported unified device model"
+		if !device.ValidStableID(string(b.DeviceType)) {
+			fields["binding.deviceType"] = "must be a stable lowercase identifier"
 		}
 		if strings.TrimSpace(b.ConsumerProperty) == "" || len(b.ConsumerProperty) > 160 {
 			fields["binding.consumerProperty"] = "must be between 1 and 160 characters"

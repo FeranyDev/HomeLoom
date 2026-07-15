@@ -72,6 +72,23 @@ func AllModelDeviceConfigs() []DeviceConfig {
 		{ID: "virtual-fan-1", Name: "卧室风扇", Type: "fan", Online: boolValue(true), Active: boolValue(false), Speed: numberValue(35), Mode: "manual", SwingMode: boolValue(true), Direction: "clockwise", ControlLock: boolValue(false)},
 		{ID: "virtual-air-purifier-1", Name: "客厅净化器", Type: "air-purifier", Online: boolValue(true), Active: boolValue(true), Speed: numberValue(60), Mode: "auto", SwingMode: boolValue(false), ControlLock: boolValue(false), AirQuality: "good", PM25: numberValue(12), VOC: numberValue(80), FilterLife: numberValue(82), FilterChange: boolValue(false)},
 		{ID: "virtual-window-covering-1", Name: "南窗帘", Type: "window-covering", Online: boolValue(true), Position: intValue(50), Obstruction: boolValue(false)},
+		{ID: "virtual-illuminance-1", Name: "客厅照度", Type: "illuminance-sensor", Online: boolValue(true)},
+		{ID: "virtual-occupancy-1", Name: "书房占用", Type: "occupancy-sensor", Online: boolValue(true)},
+		{ID: "virtual-leak-1", Name: "厨房漏水", Type: "leak-sensor", Online: boolValue(true)},
+		{ID: "virtual-smoke-1", Name: "客厅烟雾", Type: "smoke-sensor", Online: boolValue(true)},
+		{ID: "virtual-carbon-monoxide-1", Name: "一氧化碳监测", Type: "carbon-monoxide-sensor", Online: boolValue(true)},
+		{ID: "virtual-carbon-dioxide-1", Name: "二氧化碳监测", Type: "carbon-dioxide-sensor", Online: boolValue(true)},
+		{ID: "virtual-air-quality-1", Name: "全屋空气质量", Type: "air-quality-sensor", Online: boolValue(true)},
+		{ID: "virtual-thermostat-1", Name: "客厅恒温器", Type: "thermostat", Online: boolValue(true)},
+		{ID: "virtual-air-conditioner-1", Name: "客厅空调", Type: "air-conditioner", Online: boolValue(true)},
+		{ID: "virtual-heater-cooler-1", Name: "卧室冷暖风机", Type: "heater-cooler", Online: boolValue(true)},
+		{ID: "virtual-humidifier-1", Name: "书房加湿器", Type: "humidifier-dehumidifier", Online: boolValue(true)},
+		{ID: "virtual-lock-1", Name: "入户门锁", Type: "lock", Online: boolValue(true)},
+		{ID: "virtual-garage-door-1", Name: "车库门", Type: "garage-door", Online: boolValue(true)},
+		{ID: "virtual-security-system-1", Name: "家庭安防", Type: "security-system", Online: boolValue(true)},
+		{ID: "virtual-valve-1", Name: "花园水阀", Type: "valve", Online: boolValue(true)},
+		{ID: "virtual-speaker-1", Name: "客厅扬声器", Type: "speaker", Online: boolValue(true)},
+		{ID: "virtual-robot-vacuum-1", Name: "扫地机器人", Type: "robot-vacuum", Online: boolValue(true)},
 	}
 }
 
@@ -264,6 +281,13 @@ func configuredDevice(providerID string, item DeviceConfig) (device.Device, erro
 		}
 		return finish(created), nil
 	default:
+		if _, supported := device.ModelContractFor(device.Type(item.Type)); supported {
+			created, err := contractDevice(item.ID, providerID, item.Name, device.Type(item.Type), online)
+			if err != nil {
+				return device.Device{}, fmt.Errorf("device %q: %w", item.ID, err)
+			}
+			return finish(created), nil
+		}
 		return device.Device{}, fmt.Errorf("device %q has unsupported type %q", item.ID, item.Type)
 	}
 }

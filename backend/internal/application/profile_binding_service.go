@@ -182,6 +182,12 @@ func (s *ProfileService) TransformPropertyDefinition(providerID, deviceID, endpo
 	}
 	result := definition
 	result.Type = profile.OutputType
+	if profile.OutputType != device.ValueTypeNumber && profile.OutputType != device.ValueTypeInt {
+		result.Min, result.Max, result.Step, result.Unit = nil, nil, nil, ""
+	}
+	if profile.OutputType != device.ValueTypeEnum {
+		result.Enum = nil
+	}
 	mapNumber := func(value float64) (float64, error) {
 		input := device.NumberValue(value)
 		if profile.InputType == device.ValueTypeInt {
@@ -199,7 +205,7 @@ func (s *ProfileService) TransformPropertyDefinition(providerID, deviceID, endpo
 		}
 		return *preview.Value.Number, nil
 	}
-	if profile.InputType == device.ValueTypeNumber || profile.InputType == device.ValueTypeInt {
+	if (profile.InputType == device.ValueTypeNumber || profile.InputType == device.ValueTypeInt) && (profile.OutputType == device.ValueTypeNumber || profile.OutputType == device.ValueTypeInt) {
 		var minimum, maximum *float64
 		if definition.Min != nil {
 			value, mapErr := mapNumber(*definition.Min)
@@ -229,10 +235,15 @@ func (s *ProfileService) TransformPropertyDefinition(providerID, deviceID, endpo
 				return device.PropertyDefinition{}, binding.ID, true, fmt.Errorf("binding %q step: %w", binding.ID, stepErr)
 			}
 			step := math.Abs(stepped - zero)
-			result.Step = &step
+			if step > 0 {
+				result.Step = &step
+			} else if profile.OutputType == device.ValueTypeInt {
+				integerStep := 1.0
+				result.Step = &integerStep
+			}
 		}
 	}
-	if profile.InputType == device.ValueTypeEnum && len(definition.Enum) > 0 {
+	if profile.InputType == device.ValueTypeEnum && profile.OutputType == device.ValueTypeEnum && len(definition.Enum) > 0 {
 		result.Enum = make([]string, 0, len(definition.Enum))
 		for _, raw := range definition.Enum {
 			input := device.EnumValue(raw)
@@ -246,12 +257,51 @@ func (s *ProfileService) TransformPropertyDefinition(providerID, deviceID, endpo
 			result.Enum = append(result.Enum, *preview.Value.String)
 		}
 	}
+	if profile.OutputType == device.ValueTypeEnum {
+		values := append([]string(nil), definition.Enum...)
+		for _, transform := range profile.Transforms {
+			switch transform.Type {
+			case mapping.TransformRangeEnum:
+				values = values[:0]
+				for _, band := range transform.Bands {
+					values = append(values, band.Value)
+				}
+			case mapping.TransformBoolEnum:
+				values = []string{transform.FalseValue, transform.TrueValue}
+			case mapping.TransformEnum:
+				mapped := make([]string, 0, len(values))
+				for _, value := range values {
+					if target, exists := transform.Values[value]; exists {
+						mapped = append(mapped, target)
+					}
+				}
+				values = mapped
+			}
+		}
+		result.Enum = uniqueStrings(values)
+	}
 	for _, transform := range profile.Transforms {
 		if transform.Type == mapping.TransformUnit {
 			result.Unit = transform.ToUnit
 		}
 	}
 	return result, binding.ID, true, nil
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 func (s *ProfileService) ResolvePropertyPath(providerID, deviceID, endpointID, capabilityID, propertyID string, direction mapping.Direction) (device.ParameterPath, string, bool, error) {
@@ -299,6 +349,9 @@ func (s *ProfileService) validateBindingLocked(item mapping.Binding) error {
 		return bindingValidationError(err)
 	}
 	modelParameter, modelExists := s.modelParameterLocked(item.DeviceType, item.ModelPath())
+	if item.DeviceType != "" && !s.modelExistsLocked(item.DeviceType) {
+		return NewValidationError("invalid mapping binding", map[string]string{"deviceType": "unified model not found"})
+	}
 	if item.DeviceType != "" && !modelExists {
 		return NewValidationError("invalid mapping binding", map[string]string{"modelPropertyId": "unified model property not found"})
 	}

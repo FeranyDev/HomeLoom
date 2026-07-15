@@ -21,4 +21,31 @@ describe('Xiaomi temperature/humidity mapping', () => {
 			expect.objectContaining({ capabilityId: 'humidity', propertyId: 'current-humidity' }),
 		])
 	})
+
+	it('infers expanded environmental, security and appliance models', () => {
+		expect(inferXiaomiDeviceType({ did: '5', name: '米家水浸卫士' })).toBe('leak-sensor')
+		expect(inferXiaomiDeviceType({ did: '6', name: '智能门锁 Pro' })).toBe('lock')
+		expect(inferXiaomiDeviceType({ did: '7', name: '扫地机器人' })).toBe('robot-vacuum')
+		expect(inferXiaomiDeviceType({ did: '8', name: '二氧化碳监测器' })).toBe('carbon-dioxide-sensor')
+		expect(inferXiaomiDeviceType({ did: '9', name: '米家空调伴侣 Pro' })).toBe('air-conditioner')
+	})
+
+	it('creates every required path for an expanded model', () => {
+		expect(requiredXiaomiProperties('thermostat')).toEqual([
+			expect.objectContaining({ capabilityId: 'thermostat', propertyId: 'current-state', writable: false }),
+			expect.objectContaining({ capabilityId: 'thermostat', propertyId: 'target-mode', writable: true }),
+			expect.objectContaining({ capabilityId: 'temperature', propertyId: 'current-temperature', writable: false }),
+			expect.objectContaining({ capabilityId: 'temperature', propertyId: 'target-temperature', writable: true }),
+		])
+	})
+
+	it('creates the complete required air-conditioner mapping baseline', () => {
+		expect(requiredXiaomiProperties('air-conditioner')).toEqual([
+			expect.objectContaining({ capabilityId: 'air-conditioner', propertyId: 'active', writable: true }),
+			expect.objectContaining({ capabilityId: 'air-conditioner', propertyId: 'current-state', writable: false }),
+			expect.objectContaining({ capabilityId: 'air-conditioner', propertyId: 'target-mode', writable: true }),
+			expect.objectContaining({ capabilityId: 'temperature', propertyId: 'current-temperature', writable: false }),
+			expect.objectContaining({ capabilityId: 'temperature', propertyId: 'target-temperature', writable: true }),
+		])
+	})
 })

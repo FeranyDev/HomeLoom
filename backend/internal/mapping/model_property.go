@@ -33,8 +33,8 @@ func ValidateCustomModelProperty(item CustomModelProperty) error {
 	if !device.ValidStableID(item.ID) {
 		fields["id"] = "must be a stable lowercase identifier"
 	}
-	if _, ok := device.ModelContractFor(item.DeviceType); !ok {
-		fields["deviceType"] = "must reference a supported unified device model"
+	if !device.ValidStableID(string(item.DeviceType)) {
+		fields["deviceType"] = "must be a stable lowercase identifier"
 	}
 	for name, value := range map[string]string{
 		"endpointId": item.EndpointID, "capabilityId": item.CapabilityID, "definition.id": item.Definition.ID,

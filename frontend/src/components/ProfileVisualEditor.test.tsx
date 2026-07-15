@@ -56,4 +56,27 @@ describe('ProfileVisualEditor', () => {
     expect(screen.getByRole('button', { name: /布尔反转/ })).toBeEnabled()
     expect(screen.getByRole('button', { name: /数值缩放/ })).toBeDisabled()
   })
+
+  it('visually configures numeric ranges as a reversible enum', async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined)
+    const runPreview = vi.fn().mockResolvedValue({
+      profileId: identityProfile.id, profileVersion: 1, direction: 'forward',
+      value: { type: 'enum', string: 'comfortable' },
+      steps: [{ index: 0, transform: 'range-enum', input: { type: 'int', int: 20 }, output: { type: 'enum', string: 'comfortable' } }],
+    })
+    render(<ProfileVisualEditor initialProfile={identityProfile} editing={false} saving={false} onClose={vi.fn()} onSave={onSave} runPreview={runPreview} />)
+
+    await userEvent.click(screen.getByRole('button', { name: /数值分段转枚举/ }))
+    expect(screen.getByLabelText('第 1 步分段上限 1')).toHaveValue(18)
+    expect(screen.getByLabelText('第 1 步分段枚举 2')).toHaveValue('comfortable')
+    expect(screen.getByLabelText('第 1 步分段反向值 3')).toHaveValue(32)
+    expect(screen.getByRole('button', { name: '反向（reverse）' })).toBeEnabled()
+
+    await userEvent.click(screen.getByRole('button', { name: '运行当前草稿' }))
+    expect(runPreview).toHaveBeenCalledWith(expect.objectContaining({ profile: expect.objectContaining({ outputType: 'enum', transforms: [expect.objectContaining({ type: 'range-enum', bands: expect.any(Array) })] }) }))
+    expect(await screen.findByText('20 → comfortable')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: '保存并热更新' }))
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ inputType: 'int', outputType: 'enum', transforms: [expect.objectContaining({ type: 'range-enum' })] }))
+  })
 })

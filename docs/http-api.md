@@ -130,6 +130,12 @@ Core 会根据 Capability 中的 `CommandDefinition` 校验必填参数、未声
 - `clamp`：范围裁剪，因为信息丢失而明确拒绝反向执行；
 - `enum`：一对一枚举映射，重复目标值会在校验阶段拒绝；
 - `unit`：摄氏、华氏、开尔文以及比例、百分比转换。
+- `range-enum`：按有序数值上限生成枚举，并为每个枚举配置反向写入代表值；
+- `threshold`：用 `gte/gt/lte/lt` 阈值将数值转换为布尔，并配置 true/false 反向代表值；
+- `bool-enum` / `enum-bool`：布尔与双值枚举或文本双向转换；
+- `map-range`：把一个数值区间线性映射到另一个区间；
+- `round`：四舍五入、向下或向上取整为 `int`；
+- `parse-number` / `number-string`：数字文本与数值双向转换。
 
 响应包含最终 typed value 和每一步的输入、输出及 transform 索引。错误 Profile 使用统一字段错误结构返回，字段路径例如 `profile.transforms.0.factor`，便于前端准确定位。反向预览逆序运行 transform，用于提前验证 Target 控制写回 Provider 的可逆性。
 
@@ -137,7 +143,7 @@ Profile 管理入口为 `GET/POST /api/v1/mapping/profiles` 和 `GET/PUT/DELETE 
 
 HomeLoom 随程序提供 provider、capability 和 target 三类内置示例 Profile。内置 ID 只读且不能被用户配置覆盖。`POST /api/v1/mapping/profiles/import` 会先验证完整批次，再使用单个 SQLite 事务写入，任何一项错误都不会产生部分导入。`GET /api/v1/mapping/profiles/export` 只导出用户 Profile，生成的文件可以直接重新导入；全局脱敏配置导出和诊断包则包含内置与用户 Profile，便于还原排障上下文。
 
-运行时属性绑定入口为 `GET/POST /api/v1/mapping/bindings` 和 `GET/PUT/DELETE /api/v1/mapping/bindings/{id}`。绑定存储于 SQLite `mapping_bindings`，精确指定 Provider、设备、Endpoint、Capability 和 Property 路径；ID 可以省略并由后端生成。启用后，Provider 快照和读取结果执行 `forward` 转换，属性控制执行 `reverse` 转换。保存、启停或删除会同步重新发现并处理当前 Provider 快照，不重启 Provider 或 Target。首版运行时绑定要求 Profile 不是 target kind、输入输出类型一致且每一步可逆；因此 `clamp` 不能绑定到真实读写链路。正在被绑定引用的用户 Profile 不能删除，也不能更新为不兼容流水线。
+运行时属性绑定入口为 `GET/POST /api/v1/mapping/bindings` 和 `GET/PUT/DELETE /api/v1/mapping/bindings/{id}`。绑定存储于 SQLite `mapping_bindings`，精确指定 Provider、设备、Endpoint、Capability 和 Property 路径；ID 可以省略并由后端生成。启用后，Provider 快照和读取结果执行 `forward` 转换，属性控制执行 `reverse` 转换。保存、启停或删除会同步重新发现并处理当前 Provider 快照，不重启 Provider 或 Target。运行时绑定允许输入和输出类型不同，但每一步必须能够生成合法的反向写入值；因此仅正向的 `clamp` 不能绑定到真实读写链路。分段枚举和阈值转换通过显式 `reverse`/`trueNumber`/`falseNumber` 保存反向代表值。正在被绑定引用的用户 Profile 不能删除，也不能更新为不兼容流水线。
 
 诊断响应的 `mappingApplied` 和 `mappingErrors` 分别统计运行时转换命中与失败。转换失败的 Provider 事件不会覆盖内存中的上一份有效设备状态；错误配置仍保存在数据库中，便于管理员修正而不会触发服务重启循环。全局脱敏配置导出和 SQLite 备份均包含属性绑定。
 

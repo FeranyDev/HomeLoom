@@ -33,6 +33,7 @@ type ConfigurationExport struct {
 	Settings              RuntimeSettings               `json:"settings"`
 	Profiles              []ProfileInfo                 `json:"profiles"`
 	Bindings              []mapping.Binding             `json:"bindings"`
+	CustomModels          []mapping.CustomModel         `json:"customModels"`
 	CustomModelProperties []mapping.CustomModelProperty `json:"customModelProperties"`
 }
 
@@ -68,7 +69,7 @@ func (s *ExportService) Configuration() ConfigurationExport {
 }
 
 func (s *ExportService) configurationAt(generatedAt time.Time) ConfigurationExport {
-	result := ConfigurationExport{FormatVersion: exportFormatVersion, GeneratedAt: generatedAt, Providers: []providerconfig.Config{}, Targets: []ExportTargetConfig{}, Profiles: []ProfileInfo{}, Bindings: []mapping.Binding{}, CustomModelProperties: []mapping.CustomModelProperty{}}
+	result := ConfigurationExport{FormatVersion: exportFormatVersion, GeneratedAt: generatedAt, Providers: []providerconfig.Config{}, Targets: []ExportTargetConfig{}, Profiles: []ProfileInfo{}, Bindings: []mapping.Binding{}, CustomModels: []mapping.CustomModel{}, CustomModelProperties: []mapping.CustomModelProperty{}}
 	if s.providers != nil {
 		result.Providers = s.providers.ExportConfigs()
 	}
@@ -84,6 +85,7 @@ func (s *ExportService) configurationAt(generatedAt time.Time) ConfigurationExpo
 	if s.profiles != nil {
 		result.Profiles = s.profiles.List()
 		result.Bindings = s.profiles.ListBindings()
+		result.CustomModels = s.profiles.ListCustomModels()
 		result.CustomModelProperties = s.profiles.ListCustomModelProperties()
 	}
 	return result

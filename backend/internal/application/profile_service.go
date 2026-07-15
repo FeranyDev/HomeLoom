@@ -32,6 +32,9 @@ type ProfileStore interface {
 	ListCustomModelProperties(context.Context) ([]mapping.CustomModelProperty, error)
 	SaveCustomModelProperty(context.Context, mapping.CustomModelProperty) error
 	DeleteCustomModelProperty(context.Context, string) error
+	ListCustomModels(context.Context) ([]mapping.CustomModel, error)
+	SaveCustomModel(context.Context, mapping.CustomModel) error
+	DeleteCustomModel(context.Context, string) error
 }
 
 type ProfileInfo struct {
@@ -47,12 +50,13 @@ type ProfileService struct {
 	bindingsByKey    map[string]string
 	bindingsByModel  map[string]string
 	customProperties map[string]mapping.CustomModelProperty
+	customModels     map[device.Type]mapping.CustomModel
 	store            ProfileStore
 	changeHandler    func(context.Context)
 }
 
 func NewProfileService(ctx context.Context, store ProfileStore) (*ProfileService, error) {
-	service := &ProfileService{profiles: make(map[string]mapping.Profile), builtIns: make(map[string]mapping.Profile), bindings: make(map[string]mapping.Binding), bindingsByKey: make(map[string]string), bindingsByModel: make(map[string]string), customProperties: make(map[string]mapping.CustomModelProperty), store: store}
+	service := &ProfileService{profiles: make(map[string]mapping.Profile), builtIns: make(map[string]mapping.Profile), bindings: make(map[string]mapping.Binding), bindingsByKey: make(map[string]string), bindingsByModel: make(map[string]string), customProperties: make(map[string]mapping.CustomModelProperty), customModels: make(map[device.Type]mapping.CustomModel), store: store}
 	for _, item := range BuiltInProfiles() {
 		if err := mapping.Validate(item); err != nil {
 			return nil, fmt.Errorf("validate built-in mapping profile %q: %w", item.ID, err)
@@ -72,6 +76,19 @@ func NewProfileService(ctx context.Context, store ProfileStore) (*ProfileService
 		}
 		service.profiles[item.ID] = cloneProfile(item)
 	}
+	customModels, err := store.ListCustomModels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range customModels {
+		if err := mapping.ValidateCustomModel(item); err != nil {
+			return nil, fmt.Errorf("validate stored custom unified model %q: %w", item.DeviceType, err)
+		}
+		if _, builtIn := device.ModelContractFor(item.DeviceType); builtIn {
+			return nil, fmt.Errorf("stored custom unified model %q conflicts with a built-in model", item.DeviceType)
+		}
+		service.customModels[item.DeviceType] = item
+	}
 	customProperties, err := store.ListCustomModelProperties(ctx)
 	if err != nil {
 		return nil, err
@@ -82,6 +99,11 @@ func NewProfileService(ctx context.Context, store ProfileStore) (*ProfileService
 		}
 		if _, duplicate := service.customProperties[item.Key()]; duplicate {
 			return nil, fmt.Errorf("stored custom model property %q duplicates path %s", item.ID, item.Path())
+		}
+		if _, builtIn := device.ModelContractFor(item.DeviceType); !builtIn {
+			if _, custom := service.customModels[item.DeviceType]; !custom {
+				return nil, fmt.Errorf("stored custom model property %q references unknown model %q", item.ID, item.DeviceType)
+			}
 		}
 		service.customProperties[item.Key()] = item
 	}

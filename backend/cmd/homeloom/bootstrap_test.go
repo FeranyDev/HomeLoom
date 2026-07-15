@@ -49,12 +49,9 @@ func TestInitializeAllVirtualModelsPersistsEverySupportedTypeOnce(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[device.Type]bool{
-		device.TypeSwitch: false, device.TypeLightbulb: false, device.TypeOutlet: false,
-		device.TypeSinglePropertySensor:      false,
-		device.TypeTemperatureHumiditySensor: false,
-		device.TypeContactSensor:             false, device.TypeMotionSensor: false,
-		device.TypeFan: false, device.TypeAirPurifier: false, device.TypeWindowCovering: false,
+	want := make(map[device.Type]bool, len(device.ModelContracts()))
+	for _, contract := range device.ModelContracts() {
+		want[contract.DeviceType] = false
 	}
 	for _, item := range items {
 		if _, exists := want[item.Type]; !exists || want[item.Type] {

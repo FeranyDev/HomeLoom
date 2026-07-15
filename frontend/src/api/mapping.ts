@@ -1,5 +1,5 @@
 import { requestData } from './client'
-import type { CustomModelProperty, MappingBinding, MappingCatalog, MappingPreviewRequest, MappingPreviewResult, MappingProfile, MappingProfileInfo, ModelContract } from '../types/mapping'
+import type { CustomModel, CustomModelProperty, MappingBinding, MappingCatalog, MappingPreviewRequest, MappingPreviewResult, MappingProfile, MappingProfileInfo, ModelContract } from '../types/mapping'
 
 export const previewMapping = (input: MappingPreviewRequest): Promise<MappingPreviewResult> => requestData('/api/v1/mapping/preview', { method: 'POST', body: JSON.stringify(input) })
 export const listMappingProfiles = (): Promise<MappingProfileInfo[]> => requestData('/api/v1/mapping/profiles')
@@ -12,7 +12,9 @@ export const createMappingBinding = (binding: Omit<MappingBinding, 'id'> & { id?
 export const updateMappingBinding = (id: string, binding: MappingBinding): Promise<MappingBinding> => requestData(`/api/v1/mapping/bindings/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(binding) })
 export const deleteMappingBinding = (id: string): Promise<void> => requestData(`/api/v1/mapping/bindings/${encodeURIComponent(id)}`, { method: 'DELETE' })
 export const getMappingCatalog = (): Promise<MappingCatalog> => requestData('/api/v1/mapping/catalog')
-export const listModelContracts = (): Promise<ModelContract[]> => requestData('/api/v1/device-models')
+export const listModelContracts = (signal?: AbortSignal): Promise<ModelContract[]> => requestData('/api/v1/device-models', { signal })
+export const createCustomModel = (item: CustomModel): Promise<CustomModel> => requestData('/api/v1/device-models/custom-models', { method: 'POST', body: JSON.stringify(item) })
+export const deleteCustomModel = (deviceType: string): Promise<void> => requestData(`/api/v1/device-models/custom-models/${encodeURIComponent(deviceType)}`, { method: 'DELETE' })
 export const listCustomModelProperties = (): Promise<CustomModelProperty[]> => requestData('/api/v1/device-models/custom-properties')
 export const createCustomModelProperty = (item: CustomModelProperty): Promise<CustomModelProperty> => requestData('/api/v1/device-models/custom-properties', { method: 'POST', body: JSON.stringify(item) })
 export const updateCustomModelProperty = (id: string, item: CustomModelProperty): Promise<CustomModelProperty> => requestData(`/api/v1/device-models/custom-properties/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(item) })

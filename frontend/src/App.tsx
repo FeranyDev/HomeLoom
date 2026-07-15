@@ -27,6 +27,7 @@ import { ProviderWorkspace } from './components/ProviderWorkspace'
 import { XiaomiDeviceManager } from './components/XiaomiDeviceManager'
 import { DeviceMappingDialog } from './components/DeviceMappingDialog'
 import { BrandMark } from './components/BrandMark'
+import { listModelContracts } from './api/mapping'
 
 export function App() {
 	const [auth, setAuth] = useState<AuthStatus | null>(null)
@@ -64,6 +65,7 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
 	const [commands, setCommands] = useState<DeviceCommand[]>([])
 	const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([])
 	const [runtimeSettings, setRuntimeSettings] = useState<RuntimeSettings | null>(null)
+	const [modelCount, setModelCount] = useState(0)
 	const commandHistoryLimit = useRef(1000)
 	const [page, setPage] = usePageRoute()
 	const [targetForm, setTargetForm] = useState<{ open: boolean, target: Target | null }>({ open: false, target: null })
@@ -82,7 +84,7 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
-	  const [deviceData, targetData, providerData, diagnosticData, commandData, auditData, versionData, settingsData] = await Promise.all([listDevices(signal), listTargets(signal), listProviders(signal), getDiagnostics(signal), listCommands(signal), listAuditEvents(signal).catch(() => []), getSystemVersion(signal).catch(() => null), getRuntimeSettings(signal).catch(() => null)])
+	  const [deviceData, targetData, providerData, diagnosticData, commandData, auditData, versionData, settingsData, modelData] = await Promise.all([listDevices(signal), listTargets(signal), listProviders(signal), getDiagnostics(signal), listCommands(signal), listAuditEvents(signal).catch(() => []), getSystemVersion(signal).catch(() => null), getRuntimeSettings(signal).catch(() => null), listModelContracts(signal)])
 	  setDevices(deviceData)
 	  setTargets(targetData)
 	  setProviders(providerData)
@@ -92,6 +94,7 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
 	  setAuditEvents(auditData)
 	  setVersion(versionData)
 	  setRuntimeSettings(settingsData)
+	  setModelCount(modelData.length)
       setError(null)
     } catch (cause) {
       if (cause instanceof DOMException && cause.name === 'AbortError') return
@@ -118,6 +121,15 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
 	  unsubscribeTargets()
     }
   }, [refresh])
+
+	useEffect(() => {
+		const updateModelCount = (event: Event) => {
+			const count = (event as CustomEvent<unknown>).detail
+			if (typeof count === 'number' && Number.isInteger(count) && count >= 0) setModelCount(count)
+		}
+		window.addEventListener('homeloom:model-count', updateModelCount)
+		return () => window.removeEventListener('homeloom:model-count', updateModelCount)
+	}, [])
 
   async function handlePowerChange(device: Device, value: boolean) {
     setPendingIds((current) => new Set(current).add(device.id))
@@ -176,7 +188,7 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
 	async function handleRuntimeSettingsSave(next: RuntimeSettings) { try { const saved = await saveRuntimeSettings(next); commandHistoryLimit.current = saved.commandHistoryLimit; setCommands((current) => current.slice(0, saved.commandHistoryLimit)); setRuntimeSettings(saved); notify('success', '运行时设置已保存并实时生效') } catch (cause) { notify('error', cause instanceof Error ? cause.message : '保存运行时设置失败'); throw cause } }
 	const xiaomiDeviceProvider = xiaomiDeviceProviderID ? providers.find((item) => item.id === xiaomiDeviceProviderID && item.type === 'xiaomi') ?? null : null
 	const pageCopy = page === 'devices' ? { title: '把家的状态织在一起。', intro: '设备状态驻留内存，映射从每台设备独立进入配置。', eyebrow: 'DEVICES', section: '设备中心' } : page === 'providers' ? { title: '让所有数据源有序接入。', intro: 'Virtual、MQTT 与小米中枢使用同一套配置、连接、发现和发布生命周期。', eyebrow: 'PROVIDERS', section: 'Provider 管理' } : page === 'targets' ? { title: '一个目标，或很多个目标。', intro: '每个目标实例选择独立的 Consumer 适配器、设备身份和属性目录；协议专属配置互不混用。', eyebrow: 'TARGETS', section: '桥接中心' } : page === 'mapping' ? { title: '定义一次，处处使用。', intro: '集中查看统一设备模型，配置端点、能力和属性三级字段；设备路由仍从对应设备进入。', eyebrow: 'UNIFIED MODELS', section: '统一模型配置' } : { title: '看见系统的每一次呼吸。', intro: '观察事件队列、设备连接和命令生命周期。', eyebrow: 'SYSTEM', section: '系统诊断' }
-	const summary = page === 'devices' ? devices.filter((item) => item.availability === 'online').length : page === 'providers' ? providers.filter((item) => item.status === 'running').length : page === 'targets' ? targets.filter((item) => item.status === 'running').length : page === 'mapping' ? 10 : diagnostics?.eventsProcessed ?? 0
+	const summary = page === 'devices' ? devices.filter((item) => item.availability === 'online').length : page === 'providers' ? providers.filter((item) => item.status === 'running').length : page === 'targets' ? targets.filter((item) => item.status === 'running').length : page === 'mapping' ? modelCount : diagnostics?.eventsProcessed ?? 0
 	const filteredDevices = devices.filter((item) => { const matchesText = `${item.name} ${item.id} ${item.providerId}`.toLowerCase().includes(deviceQuery.trim().toLowerCase()); const matchesStatus = deviceStatus === 'all' || (deviceStatus === 'disabled' ? item.disabled : deviceStatus === 'removed' ? item.removed : item.availability === deviceStatus && !item.disabled && !item.removed); return matchesText && matchesStatus })
 	const selectedDevice = selectedDeviceID ? devices.find((item) => item.id === selectedDeviceID) ?? null : null
 	const mappingDevice = mappingDeviceID ? devices.find((item) => item.id === mappingDeviceID) ?? null : null

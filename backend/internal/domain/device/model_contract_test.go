@@ -112,7 +112,16 @@ func TestConsumerProjectionGradesRequiredOptionalAndCustomMappings(t *testing.T)
 }
 
 func TestModelCatalogCoversEverySupportedType(t *testing.T) {
-	want := map[Type]bool{TypeSwitch: false, TypeLightbulb: false, TypeOutlet: false, TypeSinglePropertySensor: false, TypeTemperatureHumiditySensor: false, TypeContactSensor: false, TypeMotionSensor: false, TypeFan: false, TypeAirPurifier: false, TypeWindowCovering: false}
+	want := map[Type]bool{
+		TypeSwitch: false, TypeLightbulb: false, TypeOutlet: false, TypeSinglePropertySensor: false,
+		TypeTemperatureHumiditySensor: false, TypeContactSensor: false, TypeMotionSensor: false,
+		TypeFan: false, TypeAirPurifier: false, TypeWindowCovering: false,
+		TypeIlluminanceSensor: false, TypeOccupancySensor: false, TypeLeakSensor: false,
+		TypeSmokeSensor: false, TypeCarbonMonoxideSensor: false, TypeCarbonDioxideSensor: false,
+		TypeAirQualitySensor: false, TypeThermostat: false, TypeAirConditioner: false, TypeHeaterCooler: false,
+		TypeHumidifierDehumidifier: false, TypeLock: false, TypeGarageDoor: false,
+		TypeSecuritySystem: false, TypeValve: false, TypeSpeaker: false, TypeRobotVacuum: false,
+	}
 	for _, contract := range ModelContracts() {
 		if _, exists := want[contract.DeviceType]; !exists || len(contract.Parameters) == 0 {
 			t.Fatalf("unexpected contract %#v", contract)
@@ -122,6 +131,63 @@ func TestModelCatalogCoversEverySupportedType(t *testing.T) {
 	for deviceType, found := range want {
 		if !found {
 			t.Fatalf("missing contract for %q", deviceType)
+		}
+	}
+}
+
+func TestExpandedModelContractsExposeCompleteMetadata(t *testing.T) {
+	if got := len(ModelContracts()); got != 27 {
+		t.Fatalf("built-in model count = %d, want 27", got)
+	}
+	for _, contract := range ModelContracts() {
+		if contract.Name == "" || contract.Version < 1 || !contract.BuiltIn {
+			t.Errorf("incomplete model metadata: %#v", contract)
+		}
+		for _, parameter := range contract.Parameters {
+			if parameter.Path.EndpointID == "" || parameter.Path.CapabilityID == "" || parameter.Path.PropertyID == "" || parameter.Name == "" {
+				t.Errorf("incomplete parameter path in %q: %#v", contract.DeviceType, parameter)
+			}
+			if parameter.Type == ValueTypeEnum && len(parameter.Enum) == 0 {
+				t.Errorf("enum parameter has no values in %q: %s", contract.DeviceType, parameter.Path)
+			}
+			if parameter.Min != nil && parameter.Max != nil && *parameter.Min > *parameter.Max {
+				t.Errorf("invalid range in %q: %#v", contract.DeviceType, parameter)
+			}
+		}
+	}
+
+	thermostat, ok := ModelContractFor(TypeThermostat)
+	if !ok {
+		t.Fatal("thermostat contract is missing")
+	}
+	paths := make(map[string]ModelParameter, len(thermostat.Parameters))
+	for _, parameter := range thermostat.Parameters {
+		paths[parameter.Path.String()] = parameter
+	}
+	if target := paths["main/temperature/target-temperature"]; target.Level != ParameterRequired || !target.Writable || target.Unit != "celsius" {
+		t.Errorf("thermostat target temperature = %#v", target)
+	}
+	if mode := paths["main/thermostat/target-mode"]; mode.Type != ValueTypeEnum || !mode.Writable || len(mode.Enum) != 4 {
+		t.Errorf("thermostat target mode = %#v", mode)
+	}
+
+	airConditioner, ok := ModelContractFor(TypeAirConditioner)
+	if !ok {
+		t.Fatal("air conditioner contract is missing")
+	}
+	airConditionerPaths := make(map[string]ModelParameter, len(airConditioner.Parameters))
+	for _, parameter := range airConditioner.Parameters {
+		airConditionerPaths[parameter.Path.String()] = parameter
+	}
+	if target := airConditionerPaths["main/temperature/target-temperature"]; target.Level != ParameterRequired || !target.Writable || target.Min == nil || *target.Min != 16 || target.Max == nil || *target.Max != 32 {
+		t.Errorf("air conditioner target temperature = %#v", target)
+	}
+	if mode := airConditionerPaths["main/air-conditioner/target-mode"]; mode.Type != ValueTypeEnum || !mode.Writable || len(mode.Enum) != 6 {
+		t.Errorf("air conditioner target mode = %#v", mode)
+	}
+	for _, path := range []string{"main/air-conditioner/fan-speed", "main/air-conditioner/vertical-swing", "main/air-conditioner/horizontal-swing", "main/air-conditioner/auxiliary-heat", "main/air-conditioner/sleep-mode", "main/filter/life-level"} {
+		if _, found := airConditionerPaths[path]; !found {
+			t.Errorf("air conditioner optional parameter %s is missing", path)
 		}
 	}
 }

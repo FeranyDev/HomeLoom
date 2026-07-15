@@ -7,7 +7,7 @@ import type { MappingDirection, MappingPreviewRequest, MappingPreviewResult, Map
 type PreviewFunction = (input: MappingPreviewRequest) => Promise<MappingPreviewResult>
 
 const valueTypes: ValueType[] = ['bool', 'int', 'number', 'string', 'enum']
-const transformTypes: MappingTransformType[] = ['invert', 'scale', 'unit', 'enum', 'clamp']
+const transformTypes: MappingTransformType[] = ['invert', 'scale', 'map-range', 'round', 'unit', 'range-enum', 'threshold', 'bool-enum', 'enum-bool', 'enum', 'parse-number', 'number-string', 'clamp']
 const unitRoutes = [
   ['celsius', 'fahrenheit'], ['fahrenheit', 'celsius'], ['celsius', 'kelvin'],
   ['kelvin', 'celsius'], ['ratio', 'percent'], ['percent', 'ratio'],
@@ -16,8 +16,14 @@ const unitRoutes = [
 ] as const
 
 function outputType(input: ValueType, transforms: MappingTransform[]): ValueType {
-  return transforms.reduce<ValueType>((current, transform) =>
-    transform.type === 'scale' || transform.type === 'unit' || transform.type === 'clamp' ? 'number' : current, input)
+  return transforms.reduce<ValueType>((current, transform) => {
+    if (transform.type === 'scale' || transform.type === 'unit' || transform.type === 'clamp' || transform.type === 'map-range' || transform.type === 'parse-number') return 'number'
+    if (transform.type === 'range-enum' || transform.type === 'bool-enum') return 'enum'
+    if (transform.type === 'threshold' || transform.type === 'enum-bool') return 'bool'
+    if (transform.type === 'round') return 'int'
+    if (transform.type === 'number-string') return 'string'
+    return current
+  }, input)
 }
 
 function defaultTransform(type: MappingTransformType): MappingTransform {
@@ -25,12 +31,22 @@ function defaultTransform(type: MappingTransformType): MappingTransform {
   if (type === 'unit') return { type, fromUnit: 'celsius', toUnit: 'fahrenheit' }
   if (type === 'enum') return { type, values: { off: 'inactive', on: 'active' } }
   if (type === 'clamp') return { type, min: 0, max: 100 }
+  if (type === 'range-enum') return { type, bands: [{ max: 18, value: 'cold', reverse: 10 }, { max: 28, value: 'comfortable', reverse: 24 }, { value: 'hot', reverse: 32 }] }
+  if (type === 'threshold') return { type, threshold: 20, operator: 'gte', trueNumber: 25, falseNumber: 10 }
+  if (type === 'bool-enum') return { type, trueValue: 'active', falseValue: 'inactive' }
+  if (type === 'enum-bool') return { type, trueValue: 'active', falseValue: 'inactive' }
+  if (type === 'map-range') return { type, inputMin: 0, inputMax: 100, outputMin: 0, outputMax: 1 }
+  if (type === 'round') return { type, mode: 'nearest' }
   return { type }
 }
 
 function supported(type: MappingTransformType, input: ValueType): boolean {
   if (type === 'invert') return input === 'bool'
   if (type === 'enum') return input === 'enum' || input === 'string'
+  if (type === 'bool-enum') return input === 'bool'
+  if (type === 'enum-bool') return input === 'enum' || input === 'string'
+  if (type === 'parse-number') return input === 'string'
+  if (type === 'number-string') return input === 'int' || input === 'number'
   return input === 'int' || input === 'number'
 }
 
@@ -46,6 +62,13 @@ function valueText(value: PropertyValue): string {
   if (value.int !== undefined) return String(value.int)
   if (value.number !== undefined) return Number(value.number.toFixed(6)).toString()
   return value.string ?? '—'
+}
+
+function thresholdResult(value: number, threshold: number, operator: MappingTransform['operator']): boolean {
+  if (operator === 'gt') return value > threshold
+  if (operator === 'lte') return value <= threshold
+  if (operator === 'lt') return value < threshold
+  return value >= threshold
 }
 
 function localErrors(profile: MappingProfile): string[] {
@@ -66,6 +89,33 @@ function localErrors(profile: MappingProfile): string[] {
       if (new Set(values.map(([, target]) => target)).size !== values.length) errors.push(`第 ${index + 1} 步枚举目标值必须唯一，才能反向转换。`)
     }
     if (transform.type === 'unit' && !unitRoutes.some(([from, to]) => from === transform.fromUnit && to === transform.toUnit) && transform.fromUnit !== transform.toUnit) errors.push(`第 ${index + 1} 步单位路径不受支持。`)
+    if (transform.type === 'range-enum') {
+      const bands = transform.bands ?? []
+      if (bands.length < 2) errors.push(`第 ${index + 1} 步至少需要两个数值分段。`)
+      if (bands.length > 0 && bands[bands.length - 1].max !== undefined) errors.push(`第 ${index + 1} 步最后一个分段的上限必须留空。`)
+      if (bands.slice(0, -1).some((band) => !Number.isFinite(band.max))) errors.push(`第 ${index + 1} 步除最后一段外都必须填写有限上限。`)
+      if (new Set(bands.map((band) => band.value)).size !== bands.length || bands.some((band) => !band.value.trim())) errors.push(`第 ${index + 1} 步分段枚举值必须非空且唯一。`)
+      bands.forEach((band, bandIndex) => {
+        const previous = bandIndex > 0 ? bands[bandIndex - 1].max : undefined
+        if (band.max !== undefined && previous !== undefined && band.max <= previous) errors.push(`第 ${index + 1} 步分段上限必须严格递增。`)
+        if (!Number.isFinite(band.reverse) || (previous !== undefined && band.reverse <= previous) || (band.max !== undefined && band.reverse > band.max)) errors.push(`第 ${index + 1} 步每个反向代表值必须位于对应分段内。`)
+      })
+    }
+    if (transform.type === 'threshold') {
+      if (!Number.isFinite(transform.threshold) || !Number.isFinite(transform.trueNumber) || !Number.isFinite(transform.falseNumber)) errors.push(`第 ${index + 1} 步阈值及反向代表值必须是有限数值。`)
+      if (!transform.operator) errors.push(`第 ${index + 1} 步必须选择阈值比较方式。`)
+      if (Number.isFinite(transform.threshold) && Number.isFinite(transform.trueNumber) && Number.isFinite(transform.falseNumber) && transform.operator) {
+        if (!thresholdResult(transform.trueNumber!, transform.threshold!, transform.operator)) errors.push(`第 ${index + 1} 步 true 反向值必须满足阈值条件。`)
+        if (thresholdResult(transform.falseNumber!, transform.threshold!, transform.operator)) errors.push(`第 ${index + 1} 步 false 反向值不能满足阈值条件。`)
+      }
+    }
+    if ((transform.type === 'bool-enum' || transform.type === 'enum-bool') && (!transform.trueValue?.trim() || !transform.falseValue?.trim() || transform.trueValue === transform.falseValue)) errors.push(`第 ${index + 1} 步 true / false 对应值必须非空且不同。`)
+    if (transform.type === 'map-range') {
+      const values = [transform.inputMin, transform.inputMax, transform.outputMin, transform.outputMax]
+      if (values.some((value) => !Number.isFinite(value))) errors.push(`第 ${index + 1} 步四个区间边界必须是有限数值。`)
+      if (transform.inputMin === transform.inputMax || transform.outputMin === transform.outputMax) errors.push(`第 ${index + 1} 步输入和输出区间长度都不能为零。`)
+    }
+    if (transform.type === 'round' && !transform.mode) errors.push(`第 ${index + 1} 步必须选择取整方式。`)
     current = outputType(current, [transform])
   })
   if (current !== profile.outputType) errors.push(`转换链实际输出 ${valueTypeLabel(current)}，与配置的 ${valueTypeLabel(profile.outputType)} 不一致。`)
@@ -88,12 +138,20 @@ function TransformEditor({ transform, index, count, onChange, onMove, onRemove }
   onChange: (value: MappingTransform) => void; onMove: (offset: -1 | 1) => void; onRemove: () => void
 }) {
   const values = Object.entries(transform.values ?? {})
+  const bands = transform.bands ?? []
   return <article className="profile-transform-card">
     <header><span>{String(index + 1).padStart(2, '0')}</span><div><strong>{transformTypeLabel(transform.type)}</strong><small>{transform.type === 'clamp' ? '仅支持正向预览；当前设备属性映射要求可逆' : '支持正向与反向执行（forward / reverse）'}</small></div><div><button aria-label={`上移第 ${index + 1} 步`} disabled={index === 0} onClick={() => onMove(-1)}>↑</button><button aria-label={`下移第 ${index + 1} 步`} disabled={index === count - 1} onClick={() => onMove(1)}>↓</button><button aria-label={`删除第 ${index + 1} 步`} onClick={onRemove}>×</button></div></header>
     {transform.type === 'scale' && <div className="profile-transform-fields"><label>缩放系数（factor）<input aria-label={`第 ${index + 1} 步缩放系数`} type="number" step="any" value={transform.factor ?? 1} onChange={(event) => onChange({ ...transform, factor: Number(event.target.value) })} /></label><label>偏移量（offset）<input aria-label={`第 ${index + 1} 步偏移量`} type="number" step="any" value={transform.offset ?? 0} onChange={(event) => onChange({ ...transform, offset: Number(event.target.value) })} /></label></div>}
     {transform.type === 'clamp' && <div className="profile-transform-fields"><label>最小值（min）<input aria-label={`第 ${index + 1} 步最小值`} type="number" step="any" value={transform.min ?? ''} onChange={(event) => onChange({ ...transform, min: event.target.value === '' ? undefined : Number(event.target.value) })} /></label><label>最大值（max）<input aria-label={`第 ${index + 1} 步最大值`} type="number" step="any" value={transform.max ?? ''} onChange={(event) => onChange({ ...transform, max: event.target.value === '' ? undefined : Number(event.target.value) })} /></label></div>}
     {transform.type === 'unit' && <label className="profile-unit-route">单位路径（fromUnit → toUnit）<select aria-label={`第 ${index + 1} 步单位路径`} value={`${transform.fromUnit}:${transform.toUnit}`} onChange={(event) => { const [fromUnit, toUnit] = event.target.value.split(':'); onChange({ type: 'unit', fromUnit, toUnit }) }}>{unitRoutes.map(([from, to]) => <option key={`${from}:${to}`} value={`${from}:${to}`}>{from} → {to}</option>)}</select></label>}
     {transform.type === 'enum' && <div className="profile-enum-map"><div className="profile-enum-head"><span>来源值（source）</span><span>目标值（target）</span><span /></div>{values.map(([source, target], row) => <div key={`${source}-${row}`}><input aria-label={`第 ${index + 1} 步来源值 ${row + 1}`} value={source} onChange={(event) => { const next = Object.fromEntries(values.map(([key, value], item) => item === row ? [event.target.value, value] : [key, value])); onChange({ ...transform, values: next }) }} /><span>→</span><input aria-label={`第 ${index + 1} 步目标值 ${row + 1}`} value={target} onChange={(event) => { const next = Object.fromEntries(values.map(([key, value], item) => item === row ? [key, event.target.value] : [key, value])); onChange({ ...transform, values: next }) }} /><button aria-label={`删除第 ${index + 1} 步枚举行 ${row + 1}`} onClick={() => onChange({ ...transform, values: Object.fromEntries(values.filter((_, item) => item !== row)) })}>×</button></div>)}<button onClick={() => onChange({ ...transform, values: { ...(transform.values ?? {}), [`value-${values.length + 1}`]: `mapped-${values.length + 1}` } })}>＋ 添加枚举值</button></div>}
+    {transform.type === 'range-enum' && <div className="profile-range-bands"><div className="profile-range-head"><span>数值上限（≤ max）</span><span>枚举输出（value）</span><span>反向代表值（reverse）</span><span /></div>{bands.map((band, row) => <div key={row}><input aria-label={`第 ${index + 1} 步分段上限 ${row + 1}`} type="number" step="any" placeholder={row === bands.length - 1 ? '+∞（留空）' : undefined} value={band.max ?? ''} onChange={(event) => onChange({ ...transform, bands: bands.map((item, itemIndex) => itemIndex === row ? { ...item, max: event.target.value === '' ? undefined : Number(event.target.value) } : item) })} /><input aria-label={`第 ${index + 1} 步分段枚举 ${row + 1}`} value={band.value} onChange={(event) => onChange({ ...transform, bands: bands.map((item, itemIndex) => itemIndex === row ? { ...item, value: event.target.value } : item) })} /><input aria-label={`第 ${index + 1} 步分段反向值 ${row + 1}`} type="number" step="any" value={band.reverse} onChange={(event) => onChange({ ...transform, bands: bands.map((item, itemIndex) => itemIndex === row ? { ...item, reverse: Number(event.target.value) } : item) })} /><button aria-label={`删除第 ${index + 1} 步分段 ${row + 1}`} onClick={() => onChange({ ...transform, bands: bands.filter((_, itemIndex) => itemIndex !== row) })}>×</button></div>)}<p>按顺序匹配“数值 ≤ 上限”；最后一行上限留空表示剩余范围。反向写入枚举时使用代表值。</p><button onClick={() => { const fallback = bands.at(-1) ?? { value: 'high', reverse: 100 }; const previousMax = bands.length > 1 ? bands[bands.length - 2].max ?? 0 : 0; const max = previousMax + 10; onChange({ ...transform, bands: [...bands.slice(0, -1), { max, value: `band-${bands.length}`, reverse: previousMax + 5 }, fallback] }) }}>＋ 在最终分段前添加</button></div>}
+    {transform.type === 'threshold' && <div className="profile-transform-fields profile-threshold-fields"><label>比较方式（operator）<select aria-label={`第 ${index + 1} 步比较方式`} value={transform.operator ?? 'gte'} onChange={(event) => onChange({ ...transform, operator: event.target.value as MappingTransform['operator'] })}><option value="gte">大于等于（≥）</option><option value="gt">大于（&gt;）</option><option value="lte">小于等于（≤）</option><option value="lt">小于（&lt;）</option></select></label><label>阈值（threshold）<input aria-label={`第 ${index + 1} 步阈值`} type="number" step="any" value={transform.threshold ?? ''} onChange={(event) => onChange({ ...transform, threshold: Number(event.target.value) })} /></label><label>true 反向值<input aria-label={`第 ${index + 1} 步 true 反向值`} type="number" step="any" value={transform.trueNumber ?? ''} onChange={(event) => onChange({ ...transform, trueNumber: Number(event.target.value) })} /></label><label>false 反向值<input aria-label={`第 ${index + 1} 步 false 反向值`} type="number" step="any" value={transform.falseNumber ?? ''} onChange={(event) => onChange({ ...transform, falseNumber: Number(event.target.value) })} /></label></div>}
+    {(transform.type === 'bool-enum' || transform.type === 'enum-bool') && <div className="profile-transform-fields"><label>true 对应值<input aria-label={`第 ${index + 1} 步 true 对应值`} value={transform.trueValue ?? ''} onChange={(event) => onChange({ ...transform, trueValue: event.target.value })} /></label><label>false 对应值<input aria-label={`第 ${index + 1} 步 false 对应值`} value={transform.falseValue ?? ''} onChange={(event) => onChange({ ...transform, falseValue: event.target.value })} /></label></div>}
+    {transform.type === 'map-range' && <div className="profile-transform-fields profile-range-fields"><label>输入最小值（inputMin）<input aria-label={`第 ${index + 1} 步输入最小值`} type="number" step="any" value={transform.inputMin ?? ''} onChange={(event) => onChange({ ...transform, inputMin: Number(event.target.value) })} /></label><label>输入最大值（inputMax）<input aria-label={`第 ${index + 1} 步输入最大值`} type="number" step="any" value={transform.inputMax ?? ''} onChange={(event) => onChange({ ...transform, inputMax: Number(event.target.value) })} /></label><label>输出最小值（outputMin）<input aria-label={`第 ${index + 1} 步输出最小值`} type="number" step="any" value={transform.outputMin ?? ''} onChange={(event) => onChange({ ...transform, outputMin: Number(event.target.value) })} /></label><label>输出最大值（outputMax）<input aria-label={`第 ${index + 1} 步输出最大值`} type="number" step="any" value={transform.outputMax ?? ''} onChange={(event) => onChange({ ...transform, outputMax: Number(event.target.value) })} /></label></div>}
+    {transform.type === 'round' && <label className="profile-unit-route">取整方式（mode）<select aria-label={`第 ${index + 1} 步取整方式`} value={transform.mode ?? 'nearest'} onChange={(event) => onChange({ ...transform, mode: event.target.value as MappingTransform['mode'] })}><option value="nearest">四舍五入（nearest）</option><option value="floor">向下取整（floor）</option><option value="ceil">向上取整（ceil）</option></select></label>}
+    {transform.type === 'parse-number' && <p className="profile-transform-note">将数字文本解析为 number；反向写入时生成不带多余零的规范文本。</p>}
+    {transform.type === 'number-string' && <p className="profile-transform-note">将 int / number 格式化为文本；反向写入时解析并校验数值类型。</p>}
     {transform.type === 'invert' && <p className="profile-transform-note">布尔值自动执行 true ↔ false，无需附加参数。</p>}
   </article>
 }

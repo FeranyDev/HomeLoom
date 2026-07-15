@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	"github.com/feranydev/homeloom/backend/internal/domain/target"
 )
 
@@ -124,6 +125,7 @@ func TestTargetSaveRejectsInvalidConfiguration(t *testing.T) {
 		{ID: "bad/id", Type: "apple-hap"},
 		{ID: "id", Type: "unsupported", Name: "name"},
 		{ID: "id", Type: "apple-hap", Name: "name", Pin: "abc", Address: ":1", SetupID: "ABCD"},
+		{ID: "id", Type: "apple-hap", Name: "name", Pin: "12345678", Address: ":1", SetupID: "ABCD", StorePath: "data/hap/id", Devices: []target.VirtualDevice{{ID: "vacuum", Name: "Vacuum", Type: device.TypeRobotVacuum, SourceDeviceID: "vacuum-source"}}},
 	}
 	for _, item := range cases {
 		if _, err := service.Save(context.Background(), item); err == nil {
