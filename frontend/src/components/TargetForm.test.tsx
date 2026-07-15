@@ -6,14 +6,23 @@ import { ApiError } from '../api/client'
 import type { Target } from '../types/target'
 
 describe('TargetForm', () => {
-  it('creates bridge configuration without embedding source device bindings', async () => {
+  it('creates target configuration without embedding Consumer devices', async () => {
     const onSave = vi.fn().mockResolvedValue(undefined)
     render(<TargetForm target={null} onCancel={vi.fn()} onSave={onSave} />)
-    expect(screen.getByText('保存桥后单独配置')).toBeInTheDocument()
+    expect(screen.getByText('保存目标实例后单独配置')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '保存到数据库' }))
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
       id: '', address: '', pin: '', setupId: '', deviceIds: [], devices: [],
     }), false)
+  })
+
+  it('only shows protocol-specific fields for the selected Target adapter', async () => {
+    render(<TargetForm target={null} onCancel={vi.fn()} onSave={vi.fn()} />)
+    expect(screen.getByLabelText(/HomeKit 设置标识/)).toBeInTheDocument()
+    await userEvent.selectOptions(screen.getByLabelText(/目标类型/), 'matter')
+    expect(screen.queryByLabelText(/HomeKit 设置标识/)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/HAP 监听地址/)).not.toBeInTheDocument()
+    expect(screen.getByText(/matter.*尚未实现运行时/i)).toBeInTheDocument()
   })
 
   it('shows server field errors and refills an existing target', async () => {

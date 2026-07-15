@@ -43,9 +43,9 @@ function propertyValueText(value: PropertyValue): string {
   return value.string ?? '—'
 }
 
-export function BindingManager({ device, profileRevision = 0, catalogRevision = 0, api = defaultAPI, initialStage = 'provider', providerOnly = false, consumerOnly = false, consumerLabel, targetId, consumerDeviceId }: {
+export function BindingManager({ device, profileRevision = 0, catalogRevision = 0, api = defaultAPI, initialStage = 'provider', providerOnly = false, consumerOnly = false, consumerLabel, targetId, consumerDeviceId, consumerId }: {
   device: Device; profileRevision?: number; catalogRevision?: number; api?: BindingAPI
-  initialStage?: 'provider' | 'consumer'; providerOnly?: boolean; consumerOnly?: boolean; consumerLabel?: string; targetId?: string; consumerDeviceId?: string
+  initialStage?: 'provider' | 'consumer'; providerOnly?: boolean; consumerOnly?: boolean; consumerLabel?: string; targetId?: string; consumerDeviceId?: string; consumerId?: string
 }) {
   const [stage, setStage] = useState<'provider' | 'consumer'>(consumerOnly ? 'consumer' : initialStage)
   const fallbackMetadata: SourceCatalogMetadata = { complete: false, source: 'device-snapshot', error: '原始属性目录尚未加载' }
@@ -63,9 +63,9 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
   const refresh = useCallback(async () => {
     try {
       const [nextBindings, nextProfiles, nextCatalog] = await Promise.all([api.listBindings(), api.listProfiles(), api.catalog()])
-      setBindings(nextBindings.filter((item) => item.providerId === device.providerId && item.deviceId === device.id && (consumerOnly ? item.stage === 'consumer' && item.targetId === targetId && item.consumerDeviceId === consumerDeviceId : providerOnly ? item.stage === 'provider' : !item.targetId && !item.consumerDeviceId))); setProfiles(nextProfiles); setCatalog(nextCatalog); setError('')
+      setBindings(nextBindings.filter((item) => item.providerId === device.providerId && item.deviceId === device.id && (consumerOnly ? item.stage === 'consumer' && item.targetId === targetId && item.consumerDeviceId === consumerDeviceId && (!consumerId || item.consumerId === consumerId) : providerOnly ? item.stage === 'provider' : !item.targetId && !item.consumerDeviceId))); setProfiles(nextProfiles); setCatalog(nextCatalog); setError('')
     } catch (cause) { setError(routeError(cause)) }
-  }, [api, consumerDeviceId, consumerOnly, device.id, device.providerId, providerOnly, targetId])
+  }, [api, consumerDeviceId, consumerId, consumerOnly, device.id, device.providerId, providerOnly, targetId])
   useEffect(() => { void refresh() }, [profileRevision, catalogRevision, refresh])
 
   const catalogDevice = catalog.providers.find((item) => item.providerId === device.providerId && item.id === device.id) ?? fallbackCatalogDevice
@@ -79,7 +79,8 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
   const model = catalog.models.find((item) => item.deviceType === effectiveType)
   const parameters = useMemo(() => model?.parameters ?? [], [model])
   const modelParameter = parameters.find((item) => pathKey(item.path) === modelKey)
-  const consumers = catalog.consumers.flatMap((item) => item.properties.map((property) => ({ consumer: item, property }))).filter((item) => item.property.deviceType === effectiveType)
+  const consumerCatalogs = consumerId ? catalog.consumers.filter((item) => item.id === consumerId) : catalog.consumers
+  const consumers = consumerCatalogs.flatMap((item) => item.properties.map((property) => ({ consumer: item, property }))).filter((item) => item.property.deviceType === effectiveType)
   const consumer = consumers.find((item) => `${item.consumer.id}/${item.property.id}` === consumerKey)
   const inputType = stage === 'provider' ? source?.definition.type : modelParameter?.type
   const outputType = stage === 'provider' ? modelParameter?.type : consumer?.property.type
@@ -118,7 +119,7 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
   const remove = async (item: MappingBinding) => { if (!window.confirm(`删除映射路由 ${item.id}？`)) return; try { await api.remove(item.id); await refresh() } catch (cause) { setError(routeError(cause)) } }
 
   return <section className="binding-manager mapping-graph">
-    <div className="profile-heading"><div><p className="eyebrow">设备映射（DEVICE MAPPING） · {device.providerId}</p><h3>{consumerLabel ?? (providerOnly ? `${device.name} · 来源属性映射` : `${device.name}的双段属性路由`)}</h3><p>{consumerOnly ? '从来源设备的统一模型属性绑定到桥内虚拟设备属性；每条属性可独立选择转换配置（Profile）。' : providerOnly ? '将这台提供端（Provider）设备的完整来源属性绑定到统一模型；消费端（Consumer）映射在对应桥的虚拟设备中配置。' : '本编辑器只读取和修改当前设备。提供端（Provider）与消费端（Consumer）通过统一模型通信，两段路由可分别转换、启停和热更新。'}</p></div><span>{bindings.filter((item) => item.enabled).length} / {bindings.length} 生效</span></div>
+    <div className="profile-heading"><div><p className="eyebrow">设备映射（DEVICE MAPPING） · {device.providerId}</p><h3>{consumerLabel ?? (providerOnly ? `${device.name} · 来源属性映射` : `${device.name}的双段属性路由`)}</h3><p>{consumerOnly ? `从来源设备的统一模型属性绑定到当前目标设备的 ${consumerId ?? 'Consumer'} 属性；每条属性可独立选择转换配置（Profile）。` : providerOnly ? '将这台提供端（Provider）设备的完整来源属性绑定到统一模型；消费端（Consumer）映射在对应目标实例的设备中配置。' : '本编辑器只读取和修改当前设备。提供端（Provider）与消费端（Consumer）通过统一模型通信，两段路由可分别转换、启停和热更新。'}</p></div><span>{bindings.filter((item) => item.enabled).length} / {bindings.length} 生效</span></div>
     {!consumerOnly && !providerOnly && <div className="mapping-stage-tabs" role="tablist"><button className={stage === 'provider' ? 'is-active' : ''} onClick={() => setStage('provider')}>① 提供端（Provider）→ 统一模型</button><button className={stage === 'consumer' ? 'is-active' : ''} onClick={() => setStage('consumer')}>② 统一模型 → 消费端（Consumer）</button></div>}
     {error && <p className="inline-error" role="alert">{error}</p>}
     <div className="mapping-lanes">
@@ -130,8 +131,8 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
         <div className="mapping-node-list">{parameters.map((item) => <button key={pathKey(item.path)} className={pathKey(item.path) === modelKey ? 'is-selected' : ''} onClick={() => setModelKey(pathKey(item.path))}><span className={`parameter-level is-${item.level}`}>{parameterLevelLabel(item.level)}</span><strong>{propertyDisplayLabel(item.name, item.path.propertyId)}</strong><code>{item.path.endpointId} / {item.path.capabilityId} / {item.path.propertyId}</code><small>{valueTypeLabel(item.type)}{item.unit ? ` · 单位 ${item.unit}` : ''} · {permissionLabel(item.readable, item.writable, item.notifiable)}</small></button>)}</div>
       </section>
       <div className="mapping-arrow"><span>→</span><small>{stage === 'consumer' ? profileId || 'identity' : '统一状态'}</small></div>
-      <section className={`mapping-lane ${stage === 'consumer' ? '' : 'is-context'}`}><header><span>消费端（CONSUMERS）</span><strong>目标完整属性</strong><small>{consumers.length} 个属性</small></header>
-        {stage === 'consumer' ? <div className="mapping-node-list">{consumers.map((item) => { const key = `${item.consumer.id}/${item.property.id}`; return <button key={key} className={key === consumerKey ? 'is-selected' : ''} onClick={() => setConsumerKey(key)}><span>{item.consumer.name}（{item.consumer.id}）</span><strong>{consumerPropertyLabel(item.property.id)}</strong><code>{item.property.id}</code><small>{valueTypeLabel(item.property.type)} · {parameterLevelLabel(item.property.level)} · {permissionLabel(item.property.readable, item.property.writable, item.property.notifiable)}</small></button> })}</div> : <div className="mapping-context"><b>消费端边界（Consumer）</b><p>HomeKit 当前展示全部可提供的服务 / 特征（Service / Characteristic）属性。</p></div>}
+      <section className={`mapping-lane ${stage === 'consumer' ? '' : 'is-context'}`}><header><span>消费端（CONSUMERS）</span><strong>{consumerCatalogs.map((item) => item.name).join(' / ') || consumerId || '目标完整属性'}</strong><small>{consumers.length} 个属性</small></header>
+        {stage === 'consumer' ? consumers.length > 0 ? <div className="mapping-node-list">{consumers.map((item) => { const key = `${item.consumer.id}/${item.property.id}`; return <button key={key} className={key === consumerKey ? 'is-selected' : ''} onClick={() => setConsumerKey(key)}><span>{item.consumer.name}（{item.consumer.id}）</span><strong>{consumerPropertyLabel(item.property.id)}</strong><code>{item.property.id}</code><small>{valueTypeLabel(item.property.type)} · {parameterLevelLabel(item.property.level)} · {permissionLabel(item.property.readable, item.property.writable, item.property.notifiable)}</small></button> })}</div> : <div className="mapping-context"><b>暂无消费端属性目录</b><p>目标适配器 {consumerId ?? '未指定'} 尚未发布该设备模型的属性，不能回退使用其他消费者的属性。</p></div> : <div className="mapping-context"><b>消费端边界（Consumer）</b><p>属性目录由具体目标适配器发布，统一模型层不预设 HomeKit、Matter 或其他协议字段。</p></div>}
       </section>
     </div>
     <div className="mapping-route-toolbar"><label>转换配置（Profile）<select aria-label="映射转换 Profile" value={profileId} onChange={(event) => setProfileId(event.target.value)}><option value="">恒等转换（identity）· 不转换</option>{compatibleProfiles.map((item) => <option key={item.id} value={item.id}>{item.id} · {item.transforms.map((transform) => transform.type).join(' → ') || 'identity'}</option>)}</select></label><div><small>{inputType && outputType ? `类型：${valueTypeLabel(inputType)} → ${valueTypeLabel(outputType)}` : '请选择两端属性'}</small><button className="add-button" disabled={saving || !modelParameter || (stage === 'provider' ? !source : !consumer || !consumerDevice) || (!profileId && inputType !== outputType)} onClick={() => void create()}>{saving ? '保存中…' : `＋ 保存第 ${stage === 'provider' ? '一' : '二'} 段路由`}</button></div></div>

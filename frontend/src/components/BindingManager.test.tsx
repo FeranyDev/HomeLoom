@@ -74,7 +74,7 @@ describe('BindingManager', () => {
     const other: MappingBinding = { ...current, id: 'bridge-other', targetId: 'apple-guest', consumerDeviceId: 'guest-switch' }
     const create = vi.fn(async (input) => ({ ...input, id: 'bridge-new' }))
     const api = { listBindings: vi.fn(async () => [current, other]), listProfiles: vi.fn(async () => []), create, update: vi.fn(), remove: vi.fn(), catalog }
-    render(<BindingManager device={device} api={api} initialStage="consumer" consumerOnly consumerLabel="客厅虚拟开关 · 属性映射" targetId="apple-main" consumerDeviceId="living-switch" />)
+    render(<BindingManager device={device} api={api} initialStage="consumer" consumerOnly consumerId="homekit" consumerLabel="客厅虚拟开关 · 属性映射" targetId="apple-main" consumerDeviceId="living-switch" />)
     await screen.findByText('客厅虚拟开关 · 属性映射')
     await waitFor(() => expect(screen.getByText('1 / 1 生效')).toBeInTheDocument())
     expect(screen.getByText('apple-main / living-switch')).toBeInTheDocument()
@@ -83,6 +83,24 @@ describe('BindingManager', () => {
     await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
       stage: 'consumer', providerId: 'virtual-main', deviceId: 'virtual-switch-1', targetId: 'apple-main', consumerDeviceId: 'living-switch', consumerId: 'homekit', consumerProperty: 'Switch.On',
     })))
+  })
+
+  it('uses only the Consumer catalog selected by the Target adapter', async () => {
+    const create = vi.fn(async (input) => ({ ...input, id: 'matter-new' }))
+    const currentHomeKit: MappingBinding = { id: 'homekit-route', stage: 'consumer', providerId: device.providerId, deviceId: device.id, deviceType: 'switch', modelEndpointId: 'main', modelCapabilityId: 'switch', modelPropertyId: 'power', targetId: 'matter-main', consumerDeviceId: 'matter-switch', consumerId: 'homekit', consumerProperty: 'Switch.On', enabled: true }
+    const api = {
+      listBindings: vi.fn(async () => [currentHomeKit]), listProfiles: vi.fn(async () => []), create, update: vi.fn(), remove: vi.fn(),
+      catalog: vi.fn(async () => ({ ...(await catalog()), consumers: [
+        ...(await catalog()).consumers,
+        { id: 'matter', name: 'Matter', properties: [{ id: 'OnOff.OnOff', name: 'OnOff.OnOff', deviceType: 'switch' as const, defaultModelPath: { endpointId: 'main', capabilityId: 'switch', propertyId: 'power' }, level: 'required' as const, type: 'bool' as const, readable: true, writable: true, notifiable: true }] },
+      ] })),
+    }
+    render(<BindingManager device={device} api={api} initialStage="consumer" consumerOnly consumerId="matter" targetId="matter-main" consumerDeviceId="matter-switch" />)
+    expect((await screen.findAllByText('OnOff.OnOff')).length).toBeGreaterThan(0)
+    expect(screen.queryByText('Switch.On')).not.toBeInTheDocument()
+    expect(screen.getByText('0 / 0 生效')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /保存第.*二.*段路由/ }))
+    await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({ consumerId: 'matter', consumerProperty: 'OnOff.OnOff' })))
   })
 
   it('hides other devices and their routes from the device editor', async () => {

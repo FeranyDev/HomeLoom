@@ -67,7 +67,7 @@ describe('App integration', () => {
 
     await user.click(await screen.findByRole('button', { name: '桥接中心' }))
     expect(await screen.findByRole('heading', { name: '桥接中心' })).toBeInTheDocument()
-    expect(screen.getByText('还没有桥')).toBeInTheDocument()
+    expect(screen.getByText('还没有目标实例')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Provider' }))
     expect(await screen.findByRole('heading', { name: 'Provider 管理' })).toBeInTheDocument()
     expect(screen.getByText('还没有 Provider')).toBeInTheDocument()

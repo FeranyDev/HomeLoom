@@ -53,3 +53,16 @@ func TestSinglePropertySensorOffersSelectableHomeKitSemantics(t *testing.T) {
 		t.Fatalf("single sensor consumer properties = %d", matched)
 	}
 }
+
+func TestConsumerContractRegistryDoesNotFallBackToHomeKit(t *testing.T) {
+	if _, found := ConsumerContract("matter", device.TypeSwitch); found {
+		t.Fatal("unregistered Matter consumer unexpectedly resolved to HomeKit")
+	}
+	if _, found := FindConsumerProperty("matter", device.TypeSwitch, "Switch.On"); found {
+		t.Fatal("unregistered Matter property unexpectedly resolved to HomeKit")
+	}
+	contract, found := ConsumerContract("homekit", device.TypeSwitch)
+	if !found || contract.ConsumerID != "homekit" {
+		t.Fatalf("registered HomeKit contract = %#v, found=%v", contract, found)
+	}
+}

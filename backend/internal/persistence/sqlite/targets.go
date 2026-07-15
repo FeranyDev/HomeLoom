@@ -49,8 +49,8 @@ func (s *Store) SaveTarget(ctx context.Context, item target.Config) error {
 			return fmt.Errorf("save target virtual device: %w", err)
 		}
 	}
-	// Consumer routes belong to one concrete bridge-owned virtual device. Drop
-	// routes whose virtual device was removed or whose unified source changed;
+	// Consumer routes belong to one concrete Target-owned Consumer device. Drop
+	// routes whose Consumer device was removed or whose unified source changed;
 	// otherwise they would remain hidden, but still persisted as orphaned state.
 	if _, err := transaction.ExecContext(ctx, `
 		DELETE FROM mapping_bindings

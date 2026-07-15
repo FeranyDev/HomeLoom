@@ -53,11 +53,29 @@ func TestTargetSaveGeneratesOptionalFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
-	if info.ID == "" || info.Name == "" || info.Address == "" || info.SetupID == "" || info.PairingCode == "" {
+	if info.ID == "" || info.Name == "" || info.ConsumerID != "homekit" || info.Address == "" || info.SetupID == "" || info.PairingCode == "" {
 		t.Fatalf("generated target info = %#v", info)
 	}
 	if len(store.saved) != 1 || store.saved[0].StorePath != "data/hap/"+info.ID {
 		t.Fatalf("stored target = %#v", store.saved)
+	}
+}
+
+func TestTargetDefaultsFollowSelectedAdapter(t *testing.T) {
+	store := &targetStoreStub{}
+	service := NewTargetService(nil, store)
+	info, err := service.Save(context.Background(), target.Config{Type: "matter", Enabled: false})
+	if err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if len(info.ID) < len("matter-") || info.ID[:len("matter-")] != "matter-" {
+		t.Fatalf("Matter target ID = %q", info.ID)
+	}
+	if info.Name != "HomeLoom Matter Bridge" || info.ConsumerID != "matter" || info.Address != "" || info.SetupID != "" || info.PairingCode != "" {
+		t.Fatalf("Matter target defaults leaked HomeKit fields: %#v", info)
+	}
+	if len(store.saved) != 1 || store.saved[0].StorePath != "" || store.saved[0].Pin != "" {
+		t.Fatalf("stored Matter target = %#v", store.saved)
 	}
 }
 

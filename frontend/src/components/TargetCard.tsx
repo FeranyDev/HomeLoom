@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { pairingQRUrl } from '../api/targets'
 import type { Target } from '../types/target'
 import { targetTypeLabel } from '../presentationLabels'
+import { targetDescriptor } from '../targetDescriptors'
 
 interface TargetCardProps {
   target: Target
@@ -21,7 +22,9 @@ const statusLabels = {
 
 export function TargetCard({ target, onEdit, onDelete, onRegeneratePairing, onClearPairingIdentity, onManageDevices }: TargetCardProps) {
 	const [showQR, setShowQR] = useState(false)
-  const canPair = target.type === 'apple-hap' && target.enabled && Boolean(target.setupUri)
+  const descriptor = targetDescriptor(target.type)
+  const consumerId = target.consumerId ?? descriptor.consumerId
+  const canPair = descriptor.supportsHomeKitPairing && target.enabled && Boolean(target.setupUri)
 
   return (
     <article className="target-card">
@@ -34,20 +37,20 @@ export function TargetCard({ target, onEdit, onDelete, onRegeneratePairing, onCl
         <p className="target-id">{target.id}</p>
         <h2>{target.name}</h2>
         <dl className="target-details">
-          <div><dt>监听地址</dt><dd>{target.address || '—'}</dd></div>
-          <div><dt>虚拟设备</dt><dd>{target.devices?.length ?? target.deviceIds.length} 台</dd></div>
-          <div><dt>配对码</dt><dd className="pairing-code">{target.pairingCode || '—'}</dd></div>
+          <div><dt>消费适配器</dt><dd>{descriptor.consumerName}（{consumerId}）</dd></div>
+          <div><dt>消费端设备</dt><dd>{target.devices?.length ?? target.deviceIds.length} 台</dd></div>
+          {descriptor.supportsHomeKitPairing && <><div><dt>HAP 监听地址</dt><dd>{target.address || '—'}</dd></div><div><dt>HomeKit 配对码</dt><dd className="pairing-code">{target.pairingCode || '—'}</dd></div></>}
         </dl>
 		<div className="target-actions">
 		  <button onClick={() => onEdit(target)}>编辑配置</button>
-		  <button onClick={() => onManageDevices(target)}>配置虚拟设备</button>
-		  {target.type === 'apple-hap' && <button onClick={() => onRegeneratePairing(target)}>重新生成配对参数</button>}
-		  {target.type === 'apple-hap' && <button className="is-danger" onClick={() => onClearPairingIdentity(target)}>清除配对身份</button>}
+		  <button onClick={() => onManageDevices(target)}>配置消费端设备</button>
+		  {descriptor.supportsHomeKitPairing && <button onClick={() => onRegeneratePairing(target)}>重新生成 HomeKit 配对参数</button>}
+		  {descriptor.supportsHomeKitPairing && <button className="is-danger" onClick={() => onClearPairingIdentity(target)}>清除 HomeKit 配对身份</button>}
 		  <button className="is-danger" onClick={() => onDelete(target)}>删除</button>
 		</div>
       </div>
 
-      <div className={`pairing-panel ${canPair ? '' : 'is-unavailable'}`}>
+	  {descriptor.supportsHomeKitPairing ? <div className={`pairing-panel ${canPair ? '' : 'is-unavailable'}`}>
 		{canPair && showQR ? (
           <>
             <img src={pairingQRUrl(target.id)} alt={`${target.name} HomeKit 配对二维码`} />
@@ -65,11 +68,11 @@ export function TargetCard({ target, onEdit, onDelete, onRegeneratePairing, onCl
         ) : (
           <>
             <div className="qr-placeholder">QR</div>
-            <strong>{target.type === 'matter' ? '类型尚未实现' : '启用后生成二维码'}</strong>
-            <span>每个桥拥有独立的配对资料</span>
+            <strong>启用后生成 HomeKit 二维码</strong>
+            <span>每个 Apple HAP 目标拥有独立配对资料</span>
           </>
         )}
-      </div>
+      </div> : <div className="pairing-panel is-unavailable target-adapter-panel"><div className="qr-placeholder">{descriptor.consumerId.slice(0, 1).toUpperCase()}</div><strong>{descriptor.consumerName} 消费端</strong><span>{descriptor.implemented ? '适配器已就绪' : '运行时与属性目录尚未实现，不会回退到 HomeKit'}</span></div>}
     </article>
   )
 }

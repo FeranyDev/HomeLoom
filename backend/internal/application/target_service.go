@@ -22,6 +22,7 @@ var ErrTargetNotFound = errors.New("target not found")
 type TargetInfo struct {
 	ID          string                       `json:"id"`
 	Type        string                       `json:"type"`
+	ConsumerID  string                       `json:"consumerId"`
 	Name        string                       `json:"name"`
 	Enabled     bool                         `json:"enabled"`
 	Status      string                       `json:"status"`
@@ -101,6 +102,7 @@ func (s *TargetService) Refresh(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("refresh target %q: %w", item.ID, err)
 		}
+		registration.Info.ConsumerID = targetConsumerID(item.Type)
 		s.mu.Lock()
 		s.targets[item.ID] = registration
 		s.mu.Unlock()
@@ -126,7 +128,7 @@ func (s *TargetService) Save(ctx context.Context, item domaintarget.Config) (Tar
 		return TargetInfo{}, err
 	}
 	info := TargetInfo{
-		ID: item.ID, Type: item.Type, Name: item.Name, Enabled: item.Enabled,
+		ID: item.ID, Type: item.Type, ConsumerID: targetConsumerID(item.Type), Name: item.Name, Enabled: item.Enabled,
 		Status: "disabled", Address: item.Address, SetupID: item.SetupID,
 		DeviceIDs: append([]string{}, item.DeviceIDs...),
 		Devices:   append([]domaintarget.VirtualDevice(nil), item.Devices...),
@@ -139,8 +141,9 @@ func (s *TargetService) Save(ctx context.Context, item domaintarget.Config) (Tar
 			registration.Info.Error = applyErr.Error()
 		} else {
 			registration = applied
+			registration.Info.ConsumerID = targetConsumerID(item.Type)
 		}
-	} else if item.Type == "apple-hap" {
+	} else if descriptor, found := domaintarget.DescriptorForType(item.Type); found && descriptor.SupportsHomeKitPairing {
 		qrConfig := homekitqr.QRCodeConfig{SetupURIConfig: homekitqr.SetupURIConfig{
 			Category: homekitqr.CategoryBridge, Flag: 2, PairingCode: item.Pin, SetupID: item.SetupID,
 		}, Size: 320}
@@ -178,15 +181,23 @@ func (s *TargetService) withDefaults(item domaintarget.Config) (domaintarget.Con
 		if err != nil {
 			return item, fmt.Errorf("generate target id: %w", err)
 		}
-		item.ID = "apple-" + suffix
+		prefix := "target"
+		if descriptor, found := domaintarget.DescriptorForType(item.Type); found {
+			prefix = descriptor.DefaultIDPrefix
+		}
+		item.ID = prefix + "-" + suffix
 	}
 	if !validTargetID.MatchString(item.ID) {
 		return item, NewValidationError("invalid target configuration", map[string]string{"id": "may contain only letters, numbers, underscores and hyphens"})
 	}
 	if item.Name == "" {
-		item.Name = "HomeLoom Bridge"
+		item.Name = "HomeLoom Target"
+		if descriptor, found := domaintarget.DescriptorForType(item.Type); found {
+			item.Name = descriptor.DefaultName
+		}
 	}
-	if item.Type == "apple-hap" {
+	descriptor, _ := domaintarget.DescriptorForType(item.Type)
+	if descriptor.SupportsHomeKitPairing {
 		if item.Address == "" {
 			item.Address = s.nextAddress()
 		}
@@ -284,7 +295,8 @@ func (s *TargetService) RegeneratePairing(ctx context.Context, id string) (Targe
 	if !ok {
 		return TargetInfo{}, fmt.Errorf("%w: %s", ErrTargetNotFound, id)
 	}
-	if config.Type != "apple-hap" {
+	descriptor, _ := domaintarget.DescriptorForType(config.Type)
+	if !descriptor.SupportsHomeKitPairing {
 		return TargetInfo{}, fmt.Errorf("target %q does not support HomeKit pairing", id)
 	}
 	pin, err := randomString("0123456789", 8)
@@ -306,7 +318,8 @@ func (s *TargetService) ClearPairingIdentity(ctx context.Context, id string) (Ta
 	if !ok {
 		return TargetInfo{}, fmt.Errorf("%w: %s", ErrTargetNotFound, id)
 	}
-	if config.Type != "apple-hap" {
+	descriptor, _ := domaintarget.DescriptorForType(config.Type)
+	if !descriptor.SupportsHomeKitPairing {
 		return TargetInfo{}, fmt.Errorf("target %q does not support HomeKit pairing", id)
 	}
 	if s.runtime == nil {
@@ -334,10 +347,11 @@ func validateTarget(item domaintarget.Config) error {
 			fields["name"] = "required"
 		}
 	}
-	if item.Type != "apple-hap" && item.Type != "matter" {
+	descriptor, supportedType := domaintarget.DescriptorForType(item.Type)
+	if !supportedType {
 		fields["type"] = fmt.Sprintf("unsupported target type %q", item.Type)
 	}
-	if item.Type == "apple-hap" {
+	if descriptor.SupportsHomeKitPairing {
 		if item.Address == "" {
 			fields["address"] = "required"
 		}
@@ -377,7 +391,7 @@ func validateTarget(item domaintarget.Config) error {
 			}
 		}
 		if seenIDs[current.ID] {
-			fields[prefix+".id"] = "must be unique within the bridge"
+			fields[prefix+".id"] = "must be unique within the target instance"
 		}
 		seenIDs[current.ID] = true
 	}
@@ -385,6 +399,11 @@ func validateTarget(item domaintarget.Config) error {
 		return NewValidationError("invalid target configuration", fields)
 	}
 	return nil
+}
+
+func targetConsumerID(targetType string) string {
+	descriptor, _ := domaintarget.DescriptorForType(targetType)
+	return descriptor.ConsumerID
 }
 
 func (s *TargetService) List() []TargetInfo {

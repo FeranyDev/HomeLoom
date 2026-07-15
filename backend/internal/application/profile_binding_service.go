@@ -304,17 +304,8 @@ func (s *ProfileService) validateBindingLocked(item mapping.Binding) error {
 	}
 	var consumerProperty *mapping.ConsumerProperty
 	if item.EffectiveStage() == mapping.StageConsumer {
-		for _, catalog := range mapping.BuiltInConsumerCatalogs() {
-			if catalog.ID != item.ConsumerID {
-				continue
-			}
-			for index := range catalog.Properties {
-				candidate := &catalog.Properties[index]
-				if candidate.DeviceType == item.DeviceType && candidate.ID == item.ConsumerProperty {
-					consumerProperty = candidate
-					break
-				}
-			}
+		if candidate, found := mapping.FindConsumerProperty(item.ConsumerID, item.DeviceType, item.ConsumerProperty); found {
+			consumerProperty = &candidate
 		}
 		if consumerProperty == nil {
 			return NewValidationError("invalid mapping binding", map[string]string{"consumerProperty": "consumer property not found"})

@@ -104,10 +104,7 @@ func (s *ProfileService) resolveConsumerBinding(providerID, deviceID, targetID, 
 }
 
 func consumerContract(consumerID string, deviceType device.Type) (device.ConsumerModelContract, bool) {
-	if consumerID == "homekit" {
-		return mapping.HomeKitConsumerContract(deviceType)
-	}
-	return device.ConsumerModelContract{}, false
+	return mapping.ConsumerContract(consumerID, deviceType)
 }
 
 func cloneDevice(item device.Device) device.Device {

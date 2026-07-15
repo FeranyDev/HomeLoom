@@ -12,6 +12,7 @@ export interface TargetVirtualDevice {
 export interface Target {
   id: string
   type: TargetType
+  consumerId?: string
   name: string
   enabled: boolean
   status: TargetStatus

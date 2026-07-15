@@ -20,8 +20,32 @@ type ConsumerCatalog struct {
 	Properties []ConsumerProperty `json:"properties"`
 }
 
+type ConsumerAdapter struct {
+	Catalog   ConsumerCatalog
+	Contracts []device.ConsumerModelContract
+}
+
 func BuiltInConsumerCatalogs() []ConsumerCatalog {
+	adapters := BuiltInConsumerAdapters()
+	result := make([]ConsumerCatalog, 0, len(adapters))
+	for _, adapter := range adapters {
+		result = append(result, adapter.Catalog)
+	}
+	return result
+}
+
+// BuiltInConsumerAdapters is the registry boundary between the unified model
+// and concrete Target implementations. Adding a Consumer does not require
+// application services to know its protocol or property vocabulary.
+func BuiltInConsumerAdapters() []ConsumerAdapter {
 	contracts := HomeKitConsumerContracts()
+	return []ConsumerAdapter{{
+		Catalog:   consumerCatalog("homekit", "Apple Home / HomeKit", contracts),
+		Contracts: contracts,
+	}}
+}
+
+func consumerCatalog(id, name string, contracts []device.ConsumerModelContract) ConsumerCatalog {
 	properties := make([]ConsumerProperty, 0, 48)
 	for _, contract := range contracts {
 		model, _ := device.ModelContractFor(contract.DeviceType)
@@ -39,7 +63,35 @@ func BuiltInConsumerCatalogs() []ConsumerCatalog {
 			})
 		}
 	}
-	return []ConsumerCatalog{{ID: "homekit", Name: "Apple Home / HomeKit", Properties: properties}}
+	return ConsumerCatalog{ID: id, Name: name, Properties: properties}
+}
+
+func ConsumerContract(consumerID string, deviceType device.Type) (device.ConsumerModelContract, bool) {
+	for _, adapter := range BuiltInConsumerAdapters() {
+		if adapter.Catalog.ID != consumerID {
+			continue
+		}
+		for _, contract := range adapter.Contracts {
+			if contract.DeviceType == deviceType {
+				return contract, true
+			}
+		}
+	}
+	return device.ConsumerModelContract{}, false
+}
+
+func FindConsumerProperty(consumerID string, deviceType device.Type, propertyID string) (ConsumerProperty, bool) {
+	for _, catalog := range BuiltInConsumerCatalogs() {
+		if catalog.ID != consumerID {
+			continue
+		}
+		for _, property := range catalog.Properties {
+			if property.DeviceType == deviceType && property.ID == propertyID {
+				return property, true
+			}
+		}
+	}
+	return ConsumerProperty{}, false
 }
 
 func HomeKitConsumerContracts() []device.ConsumerModelContract {
@@ -103,10 +155,5 @@ func HomeKitConsumerContracts() []device.ConsumerModelContract {
 }
 
 func HomeKitConsumerContract(deviceType device.Type) (device.ConsumerModelContract, bool) {
-	for _, contract := range HomeKitConsumerContracts() {
-		if contract.DeviceType == deviceType {
-			return contract, true
-		}
-	}
-	return device.ConsumerModelContract{}, false
+	return ConsumerContract("homekit", deviceType)
 }

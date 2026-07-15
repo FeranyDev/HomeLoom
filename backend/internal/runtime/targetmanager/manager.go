@@ -185,8 +185,9 @@ func (m *Manager) setStatus(id, status string) {
 }
 
 func infoFromConfig(config target.Config, status string) application.TargetInfo {
+	descriptor, _ := target.DescriptorForType(config.Type)
 	return application.TargetInfo{
-		ID: config.ID, Type: config.Type, Name: config.Name, Enabled: config.Enabled,
+		ID: config.ID, Type: config.Type, ConsumerID: descriptor.ConsumerID, Name: config.Name, Enabled: config.Enabled,
 		Status: status, Address: config.Address, SetupID: config.SetupID,
 		DeviceIDs: append([]string{}, config.DeviceIDs...),
 		Devices:   append([]target.VirtualDevice(nil), config.Devices...),
