@@ -63,7 +63,7 @@ export function XiaomiDeviceManager({ provider, onClose, onSave }: {
 	}
 
 	return <section className="xiaomi-device-manager">
-		<header><div><p className="eyebrow">XIAOMI · SUBDEVICES</p><h3>{provider.name} · 子设备</h3><p>子设备目录只通过已经建立的 MQTT 连接读取，映射保存后进入统一设备模型。</p></div><button onClick={onClose}>返回米家中枢</button></header>
+		<header><div><p className="eyebrow">XIAOMI · SUBDEVICES</p><h3>{provider.name} · 子设备</h3><p>子设备目录只通过已经建立的 MQTT 连接读取，映射保存后进入统一设备模型。</p></div><button onClick={onClose}>返回 Provider</button></header>
 		<div className="xiaomi-device-manager__status"><span className={`status-dot ${connected ? 'is-online' : ''}`} /><div><strong>{connected ? 'MQTT 已连接' : 'MQTT 尚未连接'}</strong><small>{provider.id} · {String(provider.config.host || '未配置中枢')}:{Number(provider.config.port || 8883)}</small></div><button disabled={!connected || discovering} onClick={() => void discover()}>{discovering ? '正在读取…' : hubDevices.length ? '刷新子设备' : '从中枢读取子设备'}</button></div>
 		{!connected && <p className="inline-error" role="alert">请先返回中枢配置，完成 OAuth、证书和 MQTT 连接，并启用 Provider；连接状态变为 running 后才能读取子设备。</p>}
 		{error && <p className="inline-error" role="alert">{error}</p>}{result && <p className="test-success">{result}</p>}

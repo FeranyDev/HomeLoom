@@ -14,7 +14,7 @@ describe('ProviderCard simulation', () => {
     const input = screen.getByLabelText('温度温度'); await userEvent.clear(input); await userEvent.type(input, '19.5'); await userEvent.click(screen.getByRole('button', { name: '上报' })); expect(onSimulate).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'temp-1' }), { temperature: 19.5 })
 		await userEvent.click(screen.getByRole('button', { name: '重复事件' })); expect(onSimulate).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'temp-1' }), { repeat: 2 })
 		await userEvent.click(screen.getByRole('button', { name: '旧序列事件' })); expect(onSimulate).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'temp-1' }), { sequence: 1 })
-    await userEvent.click(screen.getByRole('button', { name: '重新启动' })); expect(onRestart).toHaveBeenCalledWith(provider)
+    await userEvent.click(screen.getByRole('button', { name: '重新连接' })); expect(onRestart).toHaveBeenCalledWith(provider)
   })
 
   it('sends humidity, contact, and motion changes', async () => {

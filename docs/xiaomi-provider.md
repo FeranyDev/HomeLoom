@@ -22,7 +22,7 @@ HomeLoom 的 Xiaomi Provider 通过小米中枢网关的局域网 MQTT 5/MIPS �
 
 ## 配置入口
 
-在 Web 管理页打开顶层“米家”页面（`#/xiaomi`）。接入流程拆分为“账号与中枢配置”和“子设备管理”两个独立页面，严格按以下顺序进行：
+在 Web 管理页打开统一的“Provider”页面（`#/providers`）。Xiaomi 与 Virtual、MQTT 共用配置、连接、发现、发布的运行生命周期；Xiaomi 的接入流程仍拆分为“账号与中枢配置”和“子设备管理”两个独立视图，严格按以下顺序进行：
 
 1. 填写有权使用的数值型 OAuth Client ID 和账号地区；Redirect URL 固定为 `http://homeassistant.local:8123`；
 2. 点击“打开小米授权页面”，在新窗口中登录并完成授权；
