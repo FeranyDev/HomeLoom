@@ -101,6 +101,8 @@ miot-{SIID} / service-{SIID} / property-{PIID}
 
 `miot_spec_cache` 表按完整实例 URN 保存原始 JSON 和获取时间。相同型号后续启动优先读取数据库，不重复访问远端。若设备没有 `specType`、型号无法在 released 实例索引中解析或网络不可用且无缓存，接口会返回 `catalog.complete=false` 和具体错误；页面显示“来源属性（不完整）”，不会再把已配置属性宣称为完整目录。
 
+来源目录中的每个 Property 还包含内存态值标记：实际读取、写入确认或 MQTT 通知后才设置 `known=true`。前端据此展示“当前值”；设备不可用时展示“上次值”；首次读取失败则展示“当前值未知”和错误原因。MIoT Spec 缓存不保存设备状态值。
+
 ## 运行语义
 
 - SQLite 保存期望配置、OAuth 身份、Token、证书和 MIoT 映射；

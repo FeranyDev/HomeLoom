@@ -515,7 +515,7 @@ func (s *DeviceService) ProviderCatalog(ctx context.Context) ([]providersdk.Sour
 		}
 		result := make([]providersdk.SourceCatalogDevice, 0, len(fallback))
 		for _, item := range fallback {
-			result = append(result, providersdk.SourceCatalogDevice{Device: item, Catalog: providersdk.SourceCatalogMetadata{Complete: false, Source: "unified-registry-fallback", Error: err.Error()}})
+			result = append(result, providersdk.SourceCatalogDevice{Device: item, Catalog: providersdk.SourceCatalogMetadata{Complete: false, Source: "unified-registry-fallback", Error: err.Error(), Values: providersdk.SnapshotValueStatuses(item)}})
 		}
 		return result, nil
 	}
@@ -523,7 +523,7 @@ func (s *DeviceService) ProviderCatalog(ctx context.Context) ([]providersdk.Sour
 		items := s.registry.List()
 		result := make([]providersdk.SourceCatalogDevice, 0, len(items))
 		for _, item := range items {
-			result = append(result, providersdk.SourceCatalogDevice{Device: item, Catalog: providersdk.SourceCatalogMetadata{Complete: false, Source: "unified-registry-fallback", Error: "provider does not expose a native source catalog"}})
+			result = append(result, providersdk.SourceCatalogDevice{Device: item, Catalog: providersdk.SourceCatalogMetadata{Complete: false, Source: "unified-registry-fallback", Error: "provider does not expose a native source catalog", Values: providersdk.SnapshotValueStatuses(item)}})
 		}
 		return result, nil
 	}
@@ -535,7 +535,7 @@ func (s *DeviceService) ProviderCatalog(ctx context.Context) ([]providersdk.Sour
 		if len(fallback) > 0 {
 			result := make([]providersdk.SourceCatalogDevice, 0, len(fallback))
 			for _, item := range fallback {
-				result = append(result, providersdk.SourceCatalogDevice{Device: item, Catalog: providersdk.SourceCatalogMetadata{Complete: false, Source: "unified-registry-fallback", Error: err.Error()}})
+				result = append(result, providersdk.SourceCatalogDevice{Device: item, Catalog: providersdk.SourceCatalogMetadata{Complete: false, Source: "unified-registry-fallback", Error: err.Error(), Values: providersdk.SnapshotValueStatuses(item)}})
 			}
 			return result, nil
 		}
@@ -543,7 +543,7 @@ func (s *DeviceService) ProviderCatalog(ctx context.Context) ([]providersdk.Sour
 	}
 	result := make([]providersdk.SourceCatalogDevice, 0, len(items))
 	for _, item := range items {
-		result = append(result, providersdk.SourceCatalogDevice{Device: item, Catalog: providersdk.SourceCatalogMetadata{Complete: true, Source: "provider-discovery", FetchedAt: time.Now().UTC()}})
+		result = append(result, providersdk.SourceCatalogDevice{Device: item, Catalog: providersdk.SourceCatalogMetadata{Complete: true, Source: "provider-discovery", FetchedAt: time.Now().UTC(), Values: providersdk.SnapshotValueStatuses(item)}})
 	}
 	return result, nil
 }
@@ -1137,11 +1137,6 @@ func (s *DeviceService) mapSnapshot(item device.Device) (device.Device, error) {
 	result.Endpoints = nil
 	for _, endpoint := range item.Endpoints {
 		for _, capability := range endpoint.Capabilities {
-			if len(capability.Commands) > 0 || len(capability.Events) > 0 {
-				target := ensureCapability(&result, device.ParameterPath{EndpointID: endpoint.ID, CapabilityID: capability.ID}, endpoint.Name, endpoint.Type, capability.Type)
-				target.Commands = append([]device.CommandDefinition(nil), capability.Commands...)
-				target.Events = append([]device.EventDefinition(nil), capability.Events...)
-			}
 			for _, sourceProperty := range capability.Properties {
 				property := sourceProperty
 				definition, _, _, definitionErr := s.propertyMapper.TransformPropertyDefinition(item.ProviderID, item.ID, endpoint.ID, capability.ID, property.Definition.ID, property.Definition)
@@ -1160,7 +1155,14 @@ func (s *DeviceService) mapSnapshot(item device.Device) (device.Device, error) {
 				}
 				definition.ID = targetPath.PropertyID
 				if resolver, ok := s.propertyMapper.(ModelDefinitionMapper); ok {
-					definition, _ = resolver.ResolveModelDefinition(item.Type, targetPath, definition)
+					var modelProperty bool
+					definition, modelProperty = resolver.ResolveModelDefinition(item.Type, targetPath, definition)
+					if !modelProperty {
+						// Native Provider attributes are intentionally kept out of the
+						// unified registry. They remain available through ProviderCatalog
+						// and only enter the model after an explicit standard/custom route.
+						continue
+					}
 				}
 				property.Definition, property.Value = definition, value
 				target := ensureCapability(&result, targetPath, endpoint.Name, endpoint.Type, capability.Type)

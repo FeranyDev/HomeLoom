@@ -147,6 +147,10 @@ func TestProviderLoadsCompleteMIoTSourceCatalog(t *testing.T) {
 	if !ok || property.Definition.Name != "Temperature" || property.Definition.Min == nil || *property.Definition.Min != -20 {
 		t.Fatalf("native temperature property=%#v", property)
 	}
+	valueStatus := catalog[0].Catalog.Values[providersdk.SourceValueKey("miot-2", "service-2", "property-2")]
+	if !valueStatus.Known || !valueStatus.Available || valueStatus.ObservedAt.IsZero() {
+		t.Fatalf("native temperature status=%#v", valueStatus)
+	}
 	capability := catalog[0].Endpoints[len(catalog[0].Endpoints)-1].Capabilities[0]
 	if len(capability.Commands) != 1 || len(capability.Events) != 1 {
 		t.Fatalf("native definitions=%#v", capability)

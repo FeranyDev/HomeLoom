@@ -49,7 +49,9 @@ export interface ConsumerProperty {
 export interface ConsumerCatalog { id: string; name: string; properties: ConsumerProperty[] }
 export interface SourceCatalogMetadata {
   complete: boolean; source: string; specType?: string; model?: string; fetchedAt?: string; error?: string
+  values?: Record<string, SourceValueStatus>
 }
+export interface SourceValueStatus { known: boolean; available: boolean; observedAt?: string; error?: string }
 export interface SourceCatalogDevice extends Device { catalog?: SourceCatalogMetadata }
 export interface MappingCatalog { providers: SourceCatalogDevice[]; models: ModelContract[]; consumers: ConsumerCatalog[] }
 export interface CustomModelProperty {

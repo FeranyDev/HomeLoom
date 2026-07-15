@@ -9,7 +9,7 @@ const device: Device = {
   schemaVersion: 1, id: 'virtual-switch-1', providerId: 'virtual-main', name: 'Virtual Switch', type: 'switch', availability: 'online', online: true, lastUpdateAt: new Date().toISOString(),
   endpoints: [{ id: 'main', name: 'Main', type: 'main', capabilities: [{ id: 'switch', type: 'switch', properties: [{ definition: { id: 'power', name: 'Power', type: 'bool', readable: true, writable: true, notifiable: true }, value: { type: 'bool', bool: false } }] }] }],
 }
-const sourceDevice = { ...device, catalog: { complete: true, source: 'miot-spec-cache', specType: 'urn:miot-spec-v2:device:switch:0000A003:vendor-v1:1' } }
+const sourceDevice = { ...device, catalog: { complete: true, source: 'miot-spec-cache', specType: 'urn:miot-spec-v2:device:switch:0000A003:vendor-v1:1', values: { 'main/switch/power': { known: true, available: true, observedAt: new Date().toISOString() } } } }
 
 describe('BindingManager', () => {
   const catalog = vi.fn(async () => ({
@@ -28,6 +28,7 @@ describe('BindingManager', () => {
     render(<BindingManager device={device} api={api} />)
     await screen.findByText('Virtual Switch的双段属性路由')
     expect(await screen.findByText('完整 · miot-spec-cache')).toBeInTheDocument()
+    expect(screen.getByText('当前 false')).toBeInTheDocument()
     await waitFor(() => expect(screen.getByRole('option', { name: /builtin-active-low/ })).toBeInTheDocument())
     await userEvent.selectOptions(screen.getByLabelText('映射转换 Profile'), 'builtin-active-low')
     await userEvent.click(screen.getByRole('button', { name: /保存第.*一.*段路由/ }))
@@ -87,5 +88,14 @@ describe('BindingManager', () => {
     expect(screen.getByText('Power')).toBeInTheDocument()
     expect(screen.queryByText('Other Power')).not.toBeInTheDocument()
     expect(screen.queryByText(/other-main\.switch\.other-power/)).not.toBeInTheDocument()
+  })
+
+  it('does not present an unread initialization value as current', async () => {
+    const unknownSource = { ...sourceDevice, catalog: { ...sourceDevice.catalog, values: { 'main/switch/power': { known: false, available: false, error: 'read timed out' } } } }
+    const api = { listBindings: vi.fn(async () => []), listProfiles: vi.fn(async () => []), create: vi.fn(), update: vi.fn(), remove: vi.fn(), catalog: vi.fn(async () => ({ ...(await catalog()), providers: [unknownSource] })) }
+    render(<BindingManager device={device} api={api} />)
+    await screen.findByText('当前值未知')
+    expect(screen.queryByText('当前 false')).not.toBeInTheDocument()
+    expect(screen.getByText('read timed out')).toBeInTheDocument()
   })
 })

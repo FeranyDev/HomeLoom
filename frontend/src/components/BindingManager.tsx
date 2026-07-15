@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import * as mappingApi from '../api/mapping'
-import type { Device, DeviceType, PropertyDefinition } from '../types/device'
-import type { MappingBinding, MappingCatalog, MappingProfileInfo, SourceCatalogDevice, SourceCatalogMetadata } from '../types/mapping'
+import type { Device, DeviceType, PropertyDefinition, PropertyValue } from '../types/device'
+import type { MappingBinding, MappingCatalog, MappingProfileInfo, SourceCatalogDevice, SourceCatalogMetadata, SourceValueStatus } from '../types/mapping'
 
 type ProviderProperty = {
   key: string; providerId: string; deviceId: string; deviceName: string; deviceType: DeviceType
   endpointId: string; capabilityId: string; propertyId: string; definition: PropertyDefinition
+  value: PropertyValue; valueStatus: SourceValueStatus
 }
 
 type BindingAPI = {
@@ -23,12 +24,22 @@ const defaultAPI: BindingAPI = {
 const pathKey = (path: { endpointId: string; capabilityId: string; propertyId: string }) => `${path.endpointId}/${path.capabilityId}/${path.propertyId}`
 const routeError = (cause: unknown) => cause instanceof Error ? cause.message : '映射路由操作失败'
 
-function providerProperties(devices: Device[]): ProviderProperty[] {
+function providerProperties(devices: Device[], metadata: SourceCatalogMetadata): ProviderProperty[] {
+  const inferKnown = metadata.source === 'provider-discovery' || metadata.source === 'device-snapshot' || metadata.source === 'unified-registry-fallback'
   return devices.flatMap((item) => item.endpoints.flatMap((endpoint) => endpoint.capabilities.flatMap((capability) => capability.properties.map((property) => ({
     key: `${item.providerId}/${item.id}/${endpoint.id}/${capability.id}/${property.definition.id}`,
     providerId: item.providerId, deviceId: item.id, deviceName: item.name, deviceType: item.type,
     endpointId: endpoint.id, capabilityId: capability.id, propertyId: property.definition.id, definition: property.definition,
+    value: property.value,
+    valueStatus: metadata.values?.[`${endpoint.id}/${capability.id}/${property.definition.id}`] ?? { known: inferKnown, available: inferKnown && item.online, observedAt: inferKnown ? item.lastUpdateAt : undefined },
   })))))
+}
+
+function propertyValueText(value: PropertyValue): string {
+  if (value.bool !== undefined) return value.bool ? 'true' : 'false'
+  if (value.int !== undefined) return String(value.int)
+  if (value.number !== undefined) return Number.isFinite(value.number) ? String(value.number) : '—'
+  return value.string ?? '—'
 }
 
 function permissionText(item: { readable: boolean; writable: boolean; notifiable: boolean }) {
@@ -61,7 +72,7 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
 
   const catalogDevice = catalog.providers.find((item) => item.providerId === device.providerId && item.id === device.id) ?? fallbackCatalogDevice
   const catalogMetadata = catalogDevice.catalog ?? fallbackMetadata
-  const sources = useMemo(() => providerProperties([catalogDevice]), [catalogDevice])
+  const sources = useMemo(() => providerProperties([catalogDevice], catalogMetadata), [catalogDevice, catalogMetadata])
   const sourceCommands = catalogDevice.endpoints.flatMap((endpoint) => endpoint.capabilities.flatMap((capability) => capability.commands?.map((command) => ({ endpoint, capability, command })) ?? []))
   const sourceEvents = catalogDevice.endpoints.flatMap((endpoint) => endpoint.capabilities.flatMap((capability) => capability.events?.map((event) => ({ endpoint, capability, event })) ?? []))
   const source = sources.find((item) => item.key === sourceKey)
@@ -114,7 +125,7 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
     {error && <p className="inline-error" role="alert">{error}</p>}
     <div className="mapping-lanes">
       <section className={`mapping-lane ${stage === 'provider' ? '' : 'is-context'}`}><header><span>PROVIDERS</span><strong>{catalogMetadata.complete ? '来源完整属性' : '来源属性（不完整）'}</strong><small>{sources.length} 属性 · {sourceCommands.length} Action · {sourceEvents.length} Event</small><span className={`catalog-status ${catalogMetadata.complete ? 'is-complete' : 'is-incomplete'}`}>{catalogMetadata.complete ? `完整 · ${catalogMetadata.source}` : `不完整 · ${catalogMetadata.source}`}</span>{catalogMetadata.specType && <code>{catalogMetadata.specType}</code>}{catalogMetadata.error && <small className="catalog-error">{catalogMetadata.error}</small>}</header>
-        {stage === 'provider' ? <><div className="mapping-node-list">{sources.map((item) => <button key={item.key} className={item.key === sourceKey ? 'is-selected' : ''} onClick={() => setSourceKey(item.key)}><span>{item.deviceName}</span><strong>{item.definition.name}</strong><code>{item.providerId} / {item.endpointId}.{item.capabilityId}.{item.propertyId}</code><small>{item.definition.type}{item.definition.unit ? ` · ${item.definition.unit}` : ''} · {permissionText(item.definition)}</small></button>)}</div>{(sourceCommands.length > 0 || sourceEvents.length > 0) && <details className="source-definition-summary"><summary>查看全部 Action / Event</summary>{sourceCommands.map(({ endpoint, capability, command }) => <div key={`${endpoint.id}/${capability.id}/${command.id}`}><b>Action · {command.name}</b><code>{endpoint.id}.{capability.id}.{command.id}</code><small>{command.parameters?.length ?? 0} 个输入参数</small></div>)}{sourceEvents.map(({ endpoint, capability, event }) => <div key={`${endpoint.id}/${capability.id}/${event.id}`}><b>Event · {event.name}</b><code>{endpoint.id}.{capability.id}.{event.id}</code><small>{event.payload}</small></div>)}</details>}</> : <div className="mapping-context"><b>Provider 边界</b><p>Consumer 不直接读取 Provider 字段，避免平台之间形成隐式耦合。</p></div>}
+        {stage === 'provider' ? <><div className="mapping-node-list">{sources.map((item) => <button key={item.key} className={item.key === sourceKey ? 'is-selected' : ''} onClick={() => setSourceKey(item.key)}><span>{item.deviceName}</span><strong>{item.definition.name}</strong><em className={`source-current-value ${item.valueStatus.known && item.valueStatus.available ? 'is-current' : item.valueStatus.known ? 'is-stale' : 'is-unknown'}`}>{item.valueStatus.known ? `${item.valueStatus.available ? '当前' : '上次'} ${propertyValueText(item.value)}${item.definition.unit ? ` ${item.definition.unit}` : ''}` : '当前值未知'}</em><code>{item.providerId} / {item.endpointId}.{item.capabilityId}.{item.propertyId}</code><small>{item.definition.type}{item.definition.unit ? ` · ${item.definition.unit}` : ''} · {permissionText(item.definition)}{item.valueStatus.observedAt ? ` · ${new Date(item.valueStatus.observedAt).toLocaleTimeString('zh-CN')}` : ''}</small>{item.valueStatus.error && <small className="catalog-error">{item.valueStatus.error}</small>}</button>)}</div>{(sourceCommands.length > 0 || sourceEvents.length > 0) && <details className="source-definition-summary"><summary>查看全部 Action / Event</summary>{sourceCommands.map(({ endpoint, capability, command }) => <div key={`${endpoint.id}/${capability.id}/${command.id}`}><b>Action · {command.name}</b><code>{endpoint.id}.{capability.id}.{command.id}</code><small>{command.parameters?.length ?? 0} 个输入参数</small></div>)}{sourceEvents.map(({ endpoint, capability, event }) => <div key={`${endpoint.id}/${capability.id}/${event.id}`}><b>Event · {event.name}</b><code>{endpoint.id}.{capability.id}.{event.id}</code><small>{event.payload}</small></div>)}</details>}</> : <div className="mapping-context"><b>Provider 边界</b><p>Consumer 不直接读取 Provider 字段，避免平台之间形成隐式耦合。</p></div>}
       </section>
       <div className="mapping-arrow"><span>→</span><small>{stage === 'provider' ? profileId || 'identity' : '统一语义'}</small></div>
       <section className="mapping-lane is-model"><header><span>UNIFIED MODEL</span><strong>三级属性基准</strong><label>当前设备<input aria-label="当前映射设备" value={`${device.name} · ${device.providerId} / ${device.id}`} disabled /></label><label>设备模型<select aria-label="统一设备模型" value={effectiveType} disabled>{catalog.models.map((item) => <option key={item.deviceType}>{item.deviceType}</option>)}</select></label></header>

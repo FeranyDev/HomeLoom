@@ -200,7 +200,7 @@ func (m *Manager) SourceCatalog(ctx context.Context) ([]providersdk.SourceCatalo
 		}
 		for _, item := range items {
 			item.ProviderID = id
-			result = append(result, providersdk.SourceCatalogDevice{Device: item, Catalog: providersdk.SourceCatalogMetadata{Complete: true, Source: "provider-discovery", FetchedAt: time.Now().UTC()}})
+			result = append(result, providersdk.SourceCatalogDevice{Device: item, Catalog: providersdk.SourceCatalogMetadata{Complete: true, Source: "provider-discovery", FetchedAt: time.Now().UTC(), Values: providersdk.SnapshotValueStatuses(item)}})
 		}
 	}
 	sort.Slice(result, func(i, j int) bool {

@@ -172,6 +172,10 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .mapping-node-list button:hover { border-color: #b6bbb2; background: #fff; }
 .mapping-node-list button.is-selected { border-color: #667465; background: #fff; box-shadow: 3px 3px 0 #c9d0c6; }
 .mapping-node-list button > span:not(.parameter-level), .mapping-node-list button > small { color: #858a82; font-size: 10px; }
+.source-current-value { justify-self: start; padding: 3px 6px; border: 1px solid #c3c5be; color: #686e66; font: normal 10px ui-monospace, monospace; }
+.source-current-value.is-current { border-color: #8ca087; background: #e5ebe2; color: #486049; }
+.source-current-value.is-stale { border-color: #b7a17d; background: #f1eadc; color: #765f3e; }
+.source-current-value.is-unknown { border-color: #b9b9b3; background: #ecebe6; color: #7c7f78; }
 .mapping-node-list code { overflow: hidden; color: #6e746b; font-size: 10px; text-overflow: ellipsis; }
 .source-definition-summary { border-top: 1px solid #d5d4cc; padding: 12px; }
 .source-definition-summary summary { color: #626960; cursor: pointer; font-size: 11px; }

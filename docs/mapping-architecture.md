@@ -26,9 +26,13 @@ Provider Manager 只校验快照的结构、稳定 ID、值类型和约束，不
 
 Xiaomi Provider 在 MQTT 连接建立并取得 `getDevList` 后，根据 `specType` 或 `model` 解析公开 MIoT Spec V2 实例。实例原文缓存于 SQLite `miot_spec_cache`，未进入旧式配置的原生属性使用 `miot-{SIID}/service-{SIID}/property-{PIID}` 稳定路径，并支持读取、写入和属性通知。无法解析 Spec 时保留兼容配置，但明确返回不完整状态。
 
+原始目录同时返回逐属性的临时值状态。`known=true, available=true` 表示本次运行中已经从 Provider 读取或收到通知，页面显示“当前值”；设备离线但仍有历史观察值时显示“上次值”；尚未成功读取时显示“当前值未知”，不会把类型零值占位误报为设备状态。值和观察时间只驻留内存，重启后重新获取。
+
 ## 统一模型边界
 
 内置模型目录定义 required 和 optional 参数。数据库表 `custom_model_properties` 保存 custom 参数，内容包含设备类型、三级路径、显示名称、值类型、单位、最小值、最大值、步长、枚举及 R/W/N 权限。自定义路径不能覆盖标准路径，正在被路由使用时不能删除。
+
+设备注册表和设备中心详情只接收命中该模型目录的三级属性：内置 required/optional 属性，以及已登记的 custom 属性。未命中模型目录的 Provider 原始 Property、Action 和 Event 不会再被自动标记为 custom 混入设备详情，仍完整保留在对应设备的“配置映射”来源目录中。
 
 ## Consumer 边界
 

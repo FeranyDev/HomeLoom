@@ -22,9 +22,10 @@ func newRawMappingProvider() *rawMappingProvider {
 	return &rawMappingProvider{item: device.Device{
 		SchemaVersion: 1, ID: "raw-switch-1", ProviderID: "raw-main", Name: "Raw Switch", Type: device.TypeSwitch,
 		Availability: device.AvailabilityOnline, Online: true, LastUpdateAt: time.Now().UTC(),
-		Endpoints: []device.Endpoint{{ID: "main", Name: "Main", Type: "main", Capabilities: []device.Capability{{ID: "vendor", Type: "vendor", Properties: []device.Property{{
-			Definition: device.PropertyDefinition{ID: "raw-power", Name: "Raw power", Type: device.ValueTypeBool, Readable: true, Writable: true, Notifiable: true}, Value: device.BoolValue(false),
-		}}}}}},
+		Endpoints: []device.Endpoint{{ID: "main", Name: "Main", Type: "main", Capabilities: []device.Capability{{ID: "vendor", Type: "vendor", Properties: []device.Property{
+			{Definition: device.PropertyDefinition{ID: "raw-power", Name: "Raw power", Type: device.ValueTypeBool, Readable: true, Writable: true, Notifiable: true}, Value: device.BoolValue(false)},
+			{Definition: device.PropertyDefinition{ID: "firmware-channel", Name: "Firmware channel", Type: device.ValueTypeString, Readable: true}, Value: device.StringValue("stable")},
+		}}}}},
 	}}
 }
 
@@ -81,11 +82,61 @@ func TestProviderRouteRelocatesRawPathAndResolvesReverseWrite(t *testing.T) {
 	if _, ok := items[0].Property("main", "vendor", "raw-power"); ok {
 		t.Fatal("raw Provider property leaked into the unified model projection")
 	}
+	if _, ok := items[0].Property("main", "vendor", "firmware-channel"); ok {
+		t.Fatal("unmapped Provider attribute leaked into the unified model projection")
+	}
+	catalog, err := service.ProviderCatalog(ctx)
+	if err != nil || len(catalog) != 1 {
+		t.Fatalf("Provider catalog = %#v, %v", catalog, err)
+	}
+	if _, ok := catalog[0].Property("main", "vendor", "firmware-channel"); !ok {
+		t.Fatal("unmapped Provider attribute missing from mapping catalog")
+	}
 	if _, _, err := service.ExecuteProperty(ctx, "raw-switch-1", "main", "switch", "power", device.BoolValue(true)); err != nil {
 		t.Fatal(err)
 	}
 	if provider.lastWrite.CapabilityID != "vendor" || provider.lastWrite.PropertyID != "raw-power" || provider.lastWrite.Value.Bool == nil || !*provider.lastWrite.Value.Bool {
 		t.Fatalf("raw write = %#v", provider.lastWrite)
+	}
+}
+
+func TestRegisteredCustomPropertyEntersUnifiedProjection(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "custom-projection.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, err := application.NewProfileService(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	custom := mapping.CustomModelProperty{
+		ID: "switch-firmware-channel", DeviceType: device.TypeSwitch,
+		EndpointID: "main", EndpointName: "Main", EndpointType: "main",
+		CapabilityID: "device-info", CapabilityType: "device-info",
+		Definition: device.PropertyDefinition{ID: "firmware-channel", Name: "Firmware channel", Type: device.ValueTypeString, Readable: true},
+	}
+	if _, err := profiles.CreateCustomModelProperty(ctx, custom); err != nil {
+		t.Fatal(err)
+	}
+	for _, binding := range []mapping.Binding{
+		{ID: "route-custom-power", Stage: mapping.StageProvider, DeviceType: device.TypeSwitch, ProviderID: "raw-main", DeviceID: "raw-switch-1", EndpointID: "main", CapabilityID: "vendor", PropertyID: "raw-power", ModelEndpointID: "main", ModelCapabilityID: "switch", ModelPropertyID: "power", Enabled: true},
+		{ID: "route-custom-firmware", Stage: mapping.StageProvider, DeviceType: device.TypeSwitch, ProviderID: "raw-main", DeviceID: "raw-switch-1", EndpointID: "main", CapabilityID: "vendor", PropertyID: "firmware-channel", ModelEndpointID: "main", ModelCapabilityID: "device-info", ModelPropertyID: "firmware-channel", Enabled: true},
+	} {
+		if _, err := profiles.CreateBinding(ctx, binding); err != nil {
+			t.Fatal(err)
+		}
+	}
+	service := application.NewDeviceService(newRawMappingProvider(), profiles)
+	defer service.Close()
+	items, err := service.List(ctx)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("devices = %#v, %v", items, err)
+	}
+	property, ok := items[0].Property("main", "device-info", "firmware-channel")
+	if !ok || property.Definition.ParameterLevel != device.ParameterCustom || property.Value.String == nil || *property.Value.String != "stable" {
+		t.Fatalf("custom unified property = %#v", property)
 	}
 }
 

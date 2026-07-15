@@ -34,6 +34,7 @@ type Provider struct {
 	rawProperties map[string]PropertyMapping
 	rawActions    map[string]ActionMapping
 	catalog       map[string]providersdk.SourceCatalogMetadata
+	valueStatus   map[string]providersdk.SourceValueStatus
 	listeners     map[uint64]func(device.Device)
 	next          uint64
 	sequence      uint64
@@ -64,7 +65,7 @@ func newProvider(id, name string, config Config, factory clientFactory) (*Provid
 }
 
 func newProviderWithResolver(id, name string, config Config, factory clientFactory, resolver *SpecResolver) (*Provider, error) {
-	provider := &Provider{id: id, name: name, config: config, factory: factory, resolver: resolver, devices: make(map[string]device.Device), byDID: make(map[string]string), rawProperties: make(map[string]PropertyMapping), rawActions: make(map[string]ActionMapping), catalog: make(map[string]providersdk.SourceCatalogMetadata), listeners: make(map[uint64]func(device.Device))}
+	provider := &Provider{id: id, name: name, config: config, factory: factory, resolver: resolver, devices: make(map[string]device.Device), byDID: make(map[string]string), rawProperties: make(map[string]PropertyMapping), rawActions: make(map[string]ActionMapping), catalog: make(map[string]providersdk.SourceCatalogMetadata), valueStatus: make(map[string]providersdk.SourceValueStatus), listeners: make(map[uint64]func(device.Device))}
 	for _, configured := range config.Devices {
 		item := buildDevice(id, configured)
 		if err := item.NormalizeModelParameters(); err != nil {
@@ -447,7 +448,10 @@ func (p *Provider) refreshAll(ctx context.Context) {
 				if !readable {
 					continue
 				}
-				_, _ = p.ReadProperty(ctx, providersdk.PropertyReadRequest{DeviceID: current.device.ID, EndpointID: current.mapTo.EndpointID, CapabilityID: current.mapTo.CapabilityID, PropertyID: current.mapTo.PropertyID})
+				_, err := p.ReadProperty(ctx, providersdk.PropertyReadRequest{DeviceID: current.device.ID, EndpointID: current.mapTo.EndpointID, CapabilityID: current.mapTo.CapabilityID, PropertyID: current.mapTo.PropertyID})
+				if err != nil {
+					p.markValueError(current.device.ID, current.mapTo, err)
+				}
 			}
 		}()
 	}
@@ -509,6 +513,7 @@ func (p *Provider) updateProperty(id string, mapping PropertyMapping, value devi
 	p.mu.Lock()
 	item := p.devices[id]
 	item.SetProperty(mapping.EndpointID, mapping.CapabilityID, mapping.PropertyID, value)
+	p.valueStatus[sourcePropertyKey(id, mapping.EndpointID, mapping.CapabilityID, mapping.PropertyID)] = providersdk.SourceValueStatus{Known: true, Available: true, ObservedAt: time.Now().UTC()}
 	p.sequence++
 	item.Sequence = p.sequence
 	item.LastUpdateAt = time.Now().UTC()
@@ -516,6 +521,15 @@ func (p *Provider) updateProperty(id string, mapping PropertyMapping, value devi
 	p.devices[id] = item
 	p.mu.Unlock()
 	return item.Clone()
+}
+
+func (p *Provider) markValueError(id string, mapping PropertyMapping, cause error) {
+	p.mu.Lock()
+	key := sourcePropertyKey(id, mapping.EndpointID, mapping.CapabilityID, mapping.PropertyID)
+	status := p.valueStatus[key]
+	status.Available, status.Error = false, cause.Error()
+	p.valueStatus[key] = status
+	p.mu.Unlock()
 }
 
 func (p *Provider) broadcast(item device.Device) {

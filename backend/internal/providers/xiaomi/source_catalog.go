@@ -139,7 +139,23 @@ func (p *Provider) SourceCatalog(context.Context) ([]providersdk.SourceCatalogDe
 	p.mu.RLock()
 	result := make([]providersdk.SourceCatalogDevice, 0, len(p.devices))
 	for id, item := range p.devices {
-		result = append(result, providersdk.SourceCatalogDevice{Device: item.Clone(), Catalog: p.catalog[id]})
+		metadata := p.catalog[id]
+		metadata.Values = make(map[string]providersdk.SourceValueStatus)
+		prefix := id + "\x00"
+		for key, status := range p.valueStatus {
+			if !strings.HasPrefix(key, prefix) {
+				continue
+			}
+			parts := strings.Split(strings.TrimPrefix(key, prefix), "\x00")
+			if len(parts) != 3 {
+				continue
+			}
+			if !item.IsOnline() {
+				status.Available = false
+			}
+			metadata.Values[providersdk.SourceValueKey(parts[0], parts[1], parts[2])] = status
+		}
+		result = append(result, providersdk.SourceCatalogDevice{Device: item.Clone(), Catalog: metadata})
 	}
 	p.mu.RUnlock()
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })

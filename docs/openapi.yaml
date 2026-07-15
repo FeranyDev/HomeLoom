@@ -840,6 +840,18 @@ components:
         model: { type: string }
         fetchedAt: { type: string, format: date-time }
         error: { type: string, description: Why a complete native catalog could not be produced. }
+        values:
+          type: object
+          description: Ephemeral per-property value status keyed by endpoint/capability/property. Values are rebuilt from Provider reads and events after restart.
+          additionalProperties: { $ref: "#/components/schemas/SourceValueStatus" }
+    SourceValueStatus:
+      type: object
+      required: [known, available]
+      properties:
+        known: { type: boolean, description: False means the typed value in the property document is only an initialization placeholder. }
+        available: { type: boolean, description: True when the value was read or observed while the source device was available. }
+        observedAt: { type: string, format: date-time }
+        error: { type: string, description: Most recent read error when the value is unavailable. }
     Device:
       type: object
       required: [schemaVersion, id, providerId, name, type, availability, online, endpoints, lastUpdateAt]

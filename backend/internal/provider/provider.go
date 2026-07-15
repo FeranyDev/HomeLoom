@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
@@ -58,12 +59,36 @@ type Discoverer interface {
 // native capabilities of one device. A Provider must not claim Complete when
 // the catalog only mirrors user-configured mappings.
 type SourceCatalogMetadata struct {
-	Complete  bool      `json:"complete"`
-	Source    string    `json:"source"`
-	SpecType  string    `json:"specType,omitempty"`
-	Model     string    `json:"model,omitempty"`
-	FetchedAt time.Time `json:"fetchedAt,omitempty"`
-	Error     string    `json:"error,omitempty"`
+	Complete  bool                         `json:"complete"`
+	Source    string                       `json:"source"`
+	SpecType  string                       `json:"specType,omitempty"`
+	Model     string                       `json:"model,omitempty"`
+	FetchedAt time.Time                    `json:"fetchedAt,omitempty"`
+	Error     string                       `json:"error,omitempty"`
+	Values    map[string]SourceValueStatus `json:"values,omitempty"`
+}
+
+type SourceValueStatus struct {
+	Known      bool      `json:"known"`
+	Available  bool      `json:"available"`
+	ObservedAt time.Time `json:"observedAt,omitempty"`
+	Error      string    `json:"error,omitempty"`
+}
+
+func SourceValueKey(endpointID, capabilityID, propertyID string) string {
+	return strings.Join([]string{endpointID, capabilityID, propertyID}, "/")
+}
+
+func SnapshotValueStatuses(item device.Device) map[string]SourceValueStatus {
+	result := make(map[string]SourceValueStatus)
+	for _, endpoint := range item.Endpoints {
+		for _, capability := range endpoint.Capabilities {
+			for _, property := range capability.Properties {
+				result[SourceValueKey(endpoint.ID, capability.ID, property.Definition.ID)] = SourceValueStatus{Known: true, Available: item.IsOnline(), ObservedAt: item.LastUpdateAt}
+			}
+		}
+	}
+	return result
 }
 
 // SourceCatalogDevice keeps the normal device shape so existing clients can
