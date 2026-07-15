@@ -1,5 +1,6 @@
 import { availabilityLabel, deviceProperty, type Device } from '../types/device'
 import { deviceTypeLabel } from '../presentationLabels'
+import { DeviceTypeIcon } from './DeviceTypeIcon'
 
 interface DeviceCardProps {
   device: Device
@@ -26,18 +27,22 @@ export function DeviceCard({ device, pending, onPowerChange, onDetails, onMappin
   const speed = deviceProperty(device, advancedCapability, 'rotation-speed')?.number
   const filterLife = deviceProperty(device, 'filter', 'life-level')?.number
   const position = deviceProperty(device, 'window-covering', 'current-position')?.int
+	const headingID = `device-${device.id.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+	const updatedAt = new Date(device.lastUpdateAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 
   return (
-    <article className="device-card">
+    <article className={`device-card is-${device.type}`} aria-labelledby={headingID}>
       <div className="device-card__topline">
         <span className={`status-dot is-${device.availability}`} />
         <span>{device.removed ? '来源已删除' : device.disabled ? '已禁用' : availabilityLabel(device.availability)}</span>
-        <span className="provider">{device.providerId}</span>
+		<span className="provider">{device.providerId}</span>
       </div>
-      <h2>{device.name}</h2>
-      <p className="device-kind">{kind}</p>
+	  <div className="device-card__identity">
+		<DeviceTypeIcon type={device.type} />
+		<div><h2 id={headingID}>{device.name}</h2><p className="device-kind">{kind}</p></div>
+	  </div>
 
-      {hasPower ? (
+	  <div className="device-card__value">{hasPower ? (
         <button
           className={`power-button ${power ? 'is-on' : ''}`}
           disabled={pending || !device.online}
@@ -55,9 +60,10 @@ export function DeviceCard({ device, pending, onPowerChange, onDetails, onMappin
         : device.type === 'fan' || device.type === 'air-purifier' ? <div className={`sensor-state ${device.online && active ? 'is-active' : ''}`}><strong>{!device.online ? '不可用' : `${active ? '运行中' : '已停止'} · ${speed?.toFixed(0) ?? 0}%`}</strong><span>{device.type === 'fan' ? 'FAN' : `AIR · 滤芯 ${filterLife?.toFixed(0) ?? '—'}%`}</span></div>
         : device.type === 'window-covering' ? <div className="temperature"><strong>{device.online ? position ?? '—' : '—'}</strong><span>%</span></div>
         : <div className={`sensor-state ${device.online && (contact || motion) ? 'is-active' : ''}`}><strong>{!device.online ? '不可用' : device.type === 'contact-sensor' ? (contact ? '已闭合' : '已打开') : (motion ? '检测到活动' : '无活动')}</strong><span>{device.type === 'contact-sensor' ? 'CONTACT' : 'MOTION'}</span></div>
-      }
+      }</div>
 
-      <footer><span>更新于 {new Date(device.lastUpdateAt).toLocaleTimeString('zh-CN')}</span><div><button onClick={() => onDetails(device)}>查看详情</button>{onMapping && !device.removed && <button onClick={() => onMapping(device)}>配置映射</button>}{onEnabledChange && !device.removed && <button disabled={pending} onClick={() => onEnabledChange(device, Boolean(device.disabled))}>{device.disabled ? '重新启用' : '禁用设备'}</button>}</div></footer>
+	  <dl className="device-card__metadata"><div><dt>Provider</dt><dd>{device.providerId}</dd></div><div><dt>统一模型</dt><dd>{device.type}</dd></div><div><dt>上次更新</dt><dd>{updatedAt}</dd></div></dl>
+	  <footer><div className="device-card__actions"><button onClick={() => onDetails(device)}>查看详情</button>{onMapping && !device.removed && <button className="is-primary" onClick={() => onMapping(device)}>配置映射</button>}</div>{onEnabledChange && !device.removed && <button className="device-card__disable" disabled={pending} onClick={() => onEnabledChange(device, Boolean(device.disabled))}>{device.disabled ? '重新启用' : '禁用设备'}</button>}</footer>
     </article>
   )
 }

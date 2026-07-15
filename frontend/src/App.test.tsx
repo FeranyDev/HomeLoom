@@ -86,4 +86,17 @@ describe('App integration', () => {
     window.dispatchEvent(new Event('homeloom:unauthorized'))
     expect(await screen.findByRole('button', { name: '登录' })).toBeInTheDocument()
   })
+
+	it('exposes the redesigned workspace with semantic navigation and device list regions', async () => {
+		api.getAuthStatus.mockResolvedValue({ initialized: true, authenticated: true, username: 'admin' })
+		render(<App />)
+
+		const navigation = await screen.findByRole('navigation', { name: '主要导航' })
+		expect(navigation).toBeInTheDocument()
+		expect(screen.getByRole('main')).toHaveAttribute('id', 'main-content')
+		expect(screen.getByRole('button', { name: '设备' })).toHaveAttribute('aria-current', 'page')
+		expect(screen.getAllByRole('button').filter((button) => button.getAttribute('aria-current') === 'page')).toHaveLength(1)
+		expect(await screen.findByRole('region', { name: '设备列表' })).toBeInTheDocument()
+		expect(screen.getByRole('status')).toHaveTextContent('0 / 0')
+	})
 })

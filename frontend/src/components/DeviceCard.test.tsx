@@ -14,6 +14,7 @@ describe('DeviceCard device types', () => {
 		const device = sensorDevice('single-property-sensor', 'sensor', 'value', { type: 'number', number: 20 }, 'celsius')
 		const onMapping = vi.fn()
 		render(<DeviceCard device={device} pending={false} onPowerChange={() => {}} onDetails={() => {}} onMapping={onMapping} />)
+		expect(screen.getByRole('article', { name: 'single-property-sensor' })).toBeInTheDocument()
 		await userEvent.click(screen.getByRole('button', { name: '配置映射' }))
 		expect(onMapping).toHaveBeenCalledWith(device)
 	})

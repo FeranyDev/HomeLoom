@@ -13,9 +13,19 @@ describe('ProfileManager', () => {
     expect(await screen.findByText('builtin-active-low')).toBeInTheDocument()
     expect(screen.getByText('内置只读')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '编辑' }))
-    expect((screen.getByLabelText('Profile JSON') as HTMLTextAreaElement).value).toContain('"version": 2')
+    expect(screen.getByLabelText('Profile 版本')).toHaveValue(2)
+    expect(screen.getByText('配置结构有效')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '保存并热更新' }))
     expect(api.update).toHaveBeenCalledWith('custom-map', expect.objectContaining({ id: 'custom-map', version: 2 }))
+  })
+
+  it('keeps raw JSON available as an advanced editing mode', async () => {
+    const api = { list: vi.fn().mockResolvedValue([custom]), create: vi.fn(), update: vi.fn().mockResolvedValue({ ...custom, version: 2 }), remove: vi.fn(), importMany: vi.fn() }
+    render(<ProfileManager api={api} />)
+    await screen.findByText('custom-map')
+    await userEvent.click(screen.getByRole('button', { name: '编辑' }))
+    await userEvent.click(screen.getByRole('tab', { name: '高级 JSON' }))
+    expect((screen.getByLabelText('Profile JSON') as HTMLTextAreaElement).value).toContain('"version": 2')
   })
 
   it('imports profile documents as one batch', async () => {

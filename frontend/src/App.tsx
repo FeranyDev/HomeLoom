@@ -26,6 +26,7 @@ import { AuthScreen } from './components/AuthScreen'
 import { ProviderWorkspace } from './components/ProviderWorkspace'
 import { XiaomiDeviceManager } from './components/XiaomiDeviceManager'
 import { DeviceMappingDialog } from './components/DeviceMappingDialog'
+import { BrandMark } from './components/BrandMark'
 
 export function App() {
 	const [auth, setAuth] = useState<AuthStatus | null>(null)
@@ -174,7 +175,7 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
 	async function handleCommandExecute(device: Device, endpointId: string, capabilityId: string, commandId: string, parameters: Record<string, PropertyValue>, idempotencyKey: string) { try { const updated = await executeDeviceCommand(device.id, endpointId, capabilityId, commandId, parameters, idempotencyKey); setDevices((current) => current.map((item) => item.id === updated.id ? updated : item)); const [diagnosticData, commandData] = await Promise.all([getDiagnostics(), listCommands()]); setDiagnostics(diagnosticData); setCommands(commandData); setError(null); notify('success', `${device.name}.${commandId} 执行成功`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '命令执行失败'); throw cause } }
 	async function handleRuntimeSettingsSave(next: RuntimeSettings) { try { const saved = await saveRuntimeSettings(next); commandHistoryLimit.current = saved.commandHistoryLimit; setCommands((current) => current.slice(0, saved.commandHistoryLimit)); setRuntimeSettings(saved); notify('success', '运行时设置已保存并实时生效') } catch (cause) { notify('error', cause instanceof Error ? cause.message : '保存运行时设置失败'); throw cause } }
 	const xiaomiDeviceProvider = xiaomiDeviceProviderID ? providers.find((item) => item.id === xiaomiDeviceProviderID && item.type === 'xiaomi') ?? null : null
-	const pageCopy = page === 'devices' ? { title: <>把家的状态<br />织在一起。</>, intro: '设备状态驻留内存，映射从每台设备独立进入配置。', eyebrow: 'DEVICES', section: '设备中心' } : page === 'providers' ? { title: <>数据源，统一<br />接入与运行。</>, intro: 'Virtual、MQTT 与小米中枢使用同一套配置、连接、发现和发布生命周期。', eyebrow: 'PROVIDERS', section: 'Provider 管理' } : page === 'targets' ? { title: <>一座桥，或<br />很多座桥。</>, intro: '按设备或平台拆分桥实例。每座桥拥有独立身份、端口、配对资料和二维码。', eyebrow: 'TARGETS', section: '桥接中心' } : page === 'mapping' ? { title: <>定义一次，<br />处处使用。</>, intro: '集中查看统一设备模型，配置端点、能力和属性三级字段；设备路由仍从对应设备进入。', eyebrow: 'UNIFIED MODELS', section: '统一模型配置' } : { title: <>看见系统的<br />每一次呼吸。</>, intro: '观察事件队列、设备连接和命令生命周期。', eyebrow: 'SYSTEM', section: '系统诊断' }
+	const pageCopy = page === 'devices' ? { title: '把家的状态织在一起。', intro: '设备状态驻留内存，映射从每台设备独立进入配置。', eyebrow: 'DEVICES', section: '设备中心' } : page === 'providers' ? { title: '让所有数据源有序接入。', intro: 'Virtual、MQTT 与小米中枢使用同一套配置、连接、发现和发布生命周期。', eyebrow: 'PROVIDERS', section: 'Provider 管理' } : page === 'targets' ? { title: '一座桥，或很多座桥。', intro: '按设备或平台拆分桥实例。每座桥拥有独立身份、端口、配对资料和二维码。', eyebrow: 'TARGETS', section: '桥接中心' } : page === 'mapping' ? { title: '定义一次，处处使用。', intro: '集中查看统一设备模型，配置端点、能力和属性三级字段；设备路由仍从对应设备进入。', eyebrow: 'UNIFIED MODELS', section: '统一模型配置' } : { title: '看见系统的每一次呼吸。', intro: '观察事件队列、设备连接和命令生命周期。', eyebrow: 'SYSTEM', section: '系统诊断' }
 	const summary = page === 'devices' ? devices.filter((item) => item.availability === 'online').length : page === 'providers' ? providers.filter((item) => item.status === 'running').length : page === 'targets' ? targets.filter((item) => item.status === 'running').length : page === 'mapping' ? 10 : diagnostics?.eventsProcessed ?? 0
 	const filteredDevices = devices.filter((item) => { const matchesText = `${item.name} ${item.id} ${item.providerId}`.toLowerCase().includes(deviceQuery.trim().toLowerCase()); const matchesStatus = deviceStatus === 'all' || (deviceStatus === 'disabled' ? item.disabled : deviceStatus === 'removed' ? item.removed : item.availability === deviceStatus && !item.disabled && !item.removed); return matchesText && matchesStatus })
 	const selectedDevice = selectedDeviceID ? devices.find((item) => item.id === selectedDeviceID) ?? null : null
@@ -185,8 +186,8 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
 	<a className="skip-link" href="#main-content">跳到主要内容</a>
     <main id="main-content" tabIndex={-1}>
 	  <nav className="top-nav" aria-label="主要导航">
-	    <a className="wordmark" href="#/devices">HomeLoom</a>
-	    <div>
+	    <a className="wordmark" href="#/devices" aria-label="HomeLoom 设备中心"><BrandMark /></a>
+	    <div className="nav-links">
 	      <button aria-current={page === 'devices' ? 'page' : undefined} className={page === 'devices' ? 'is-active' : ''} onClick={() => setPage('devices')}>设备</button>
 	      <button aria-current={page === 'providers' ? 'page' : undefined} className={page === 'providers' ? 'is-active' : ''} onClick={() => setPage('providers')}>Provider</button>
 	      <button aria-current={page === 'targets' ? 'page' : undefined} className={page === 'targets' ? 'is-active' : ''} onClick={() => setPage('targets')}>桥接中心</button>
@@ -200,7 +201,7 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
           <p className="eyebrow">HOMELOOM · DEMO 01</p>
 		  <h1>{pageCopy.title}</h1><p className="intro">{pageCopy.intro}</p>
         </div>
-        <div className="summary">
+		<div className="summary" aria-label={`${summary} ${page === 'devices' ? '在线设备' : page === 'providers' ? '运行中 Provider' : page === 'targets' ? '运行中的桥' : page === 'mapping' ? '统一设备模型' : '已处理事件'}`}>
 		  <span>{summary}</span><small>{page === 'devices' ? '在线设备' : page === 'providers' ? '运行中 Provider' : page === 'targets' ? '运行中的桥' : page === 'mapping' ? '统一设备模型' : '已处理事件'}</small>
         </div>
       </header>
@@ -209,15 +210,15 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
         <div>
 		  <p className="eyebrow">{pageCopy.eyebrow}</p><h2>{pageCopy.section}</h2>
         </div>
-		<div className="heading-actions">{page === 'providers' && !xiaomiDeviceProvider && <button className="add-button" onClick={() => setProviderForm({ open: true, provider: null })}>＋ 新建 Provider</button>}{page === 'targets' && <button className="add-button" onClick={() => setTargetForm({ open: true, target: null })}>＋ 新建桥</button>}<button className="refresh-button" onClick={() => void refresh()} disabled={loading}>刷新状态</button></div>
+		<div className="heading-actions">{page === 'providers' && !xiaomiDeviceProvider && <button className="add-button" onClick={() => setProviderForm({ open: true, provider: null })}>＋ 新建 Provider</button>}{page === 'targets' && <button className="add-button" onClick={() => setTargetForm({ open: true, target: null })}>＋ 新建桥</button>}{page !== 'devices' && <button className="refresh-button" onClick={() => void refresh()} disabled={loading}>刷新状态</button>}</div>
       </section>
-	  {page === 'devices' && <div className="device-filters"><input aria-label="搜索设备" value={deviceQuery} onChange={(event) => setDeviceQuery(event.target.value)} placeholder="搜索名称、ID 或 Provider" /><select aria-label="设备状态" value={deviceStatus} onChange={(event) => setDeviceStatus(event.target.value as typeof deviceStatus)}><option value="all">全部状态</option><option value="online">仅在线</option><option value="offline">暂时离线</option><option value="unknown">可用性未知</option><option value="disabled">人工禁用</option><option value="removed">来源已删除</option></select><span>{filteredDevices.length} / {devices.length}</span></div>}
+	  {page === 'devices' && <div className="device-filters"><label className="device-search"><i aria-hidden="true" /><input aria-label="搜索设备" value={deviceQuery} onChange={(event) => setDeviceQuery(event.target.value)} placeholder="搜索名称、ID 或 Provider" /></label><select aria-label="设备状态" value={deviceStatus} onChange={(event) => setDeviceStatus(event.target.value as typeof deviceStatus)}><option value="all">全部状态</option><option value="online">仅在线</option><option value="offline">暂时离线</option><option value="unknown">可用性未知</option><option value="disabled">人工禁用</option><option value="removed">来源已删除</option></select><span className="device-count" role="status">{filteredDevices.length} / {devices.length}</span><button className="refresh-button" onClick={() => void refresh()} disabled={loading}>刷新</button></div>}
 
       {error && <div className="error-banner" role="alert">{error}，请确认后端已在 8090 端口运行。</div>}
       {loading ? (
         <LoadingState />
       ) : (
-		page === 'devices' ? <section className="device-grid">
+		page === 'devices' ? <section className="device-grid" aria-label="设备列表">
 		  {filteredDevices.map((device) => (
             <DeviceCard
               key={device.id}
