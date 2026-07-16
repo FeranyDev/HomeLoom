@@ -136,6 +136,12 @@ func main() {
 		logger.Error("xiaomi provider factory registration failed", "error", err)
 		os.Exit(1)
 	}
+	if err := factory.Register(xiaomi.XiaomiMIoTCloudProviderType, func(config providerconfig.Config) (providersdk.Provider, error) {
+		return xiaomi.NewCloudProviderFromConfigWithSpecResolver(config, xiaomiSpecs)
+	}); err != nil {
+		logger.Error("xiaomi MIoT cloud provider factory registration failed", "error", err)
+		os.Exit(1)
+	}
 	providerInstances := make([]providersdk.Provider, 0, len(providerConfigs))
 	for _, providerConfig := range providerConfigs {
 		if !providerConfig.Enabled {
@@ -174,6 +180,7 @@ func main() {
 		os.Exit(1)
 	}
 	providerService := application.NewProviderService(providerConfigs, store, factory, providerManager)
+	providerService.StartCredentialMaintenance(ctx)
 	targetConfigs, err := store.ListTargets(ctx)
 	if err != nil {
 		logger.Error("target configuration load failed", "error", err)

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -58,13 +59,14 @@ type Stats struct {
 }
 
 var (
-	_ providersdk.Provider        = (*Provider)(nil)
-	_ providersdk.Discoverer      = (*Provider)(nil)
-	_ providersdk.PropertyReader  = (*Provider)(nil)
-	_ providersdk.PropertyWriter  = (*Provider)(nil)
-	_ providersdk.CommandExecutor = (*Provider)(nil)
-	_ providersdk.EventSubscriber = (*Provider)(nil)
-	_ providersdk.MetricsReporter = (*Provider)(nil)
+	_ providersdk.Provider         = (*Provider)(nil)
+	_ providersdk.LiveReconfigurer = (*Provider)(nil)
+	_ providersdk.Discoverer       = (*Provider)(nil)
+	_ providersdk.PropertyReader   = (*Provider)(nil)
+	_ providersdk.PropertyWriter   = (*Provider)(nil)
+	_ providersdk.CommandExecutor  = (*Provider)(nil)
+	_ providersdk.EventSubscriber  = (*Provider)(nil)
+	_ providersdk.MetricsReporter  = (*Provider)(nil)
 )
 
 func NewProviderFromConfig(item providerconfig.Config) (*Provider, error) {
@@ -83,7 +85,10 @@ func newProviderFromConfig(item providerconfig.Config, factory transportFactory)
 }
 
 func (p *Provider) Manifest() providersdk.Manifest {
-	return providersdk.Manifest{ID: p.id, Type: "mqtt", Name: p.name, Version: "0.1.0"}
+	p.mu.RLock()
+	name := p.name
+	p.mu.RUnlock()
+	return providersdk.Manifest{ID: p.id, Type: "mqtt", Name: name, Version: "0.1.0"}
 }
 
 func (p *Provider) Capabilities() providersdk.Capabilities {
@@ -167,6 +172,24 @@ func (p *Provider) Close(ctx context.Context) error {
 		}
 	}
 	return closeErr
+}
+
+// Reconfigure keeps the established broker session when only presentation
+// metadata changed. MQTT child devices are learned through discovery messages
+// on that same session and never require Provider replacement.
+func (p *Provider) Reconfigure(_ context.Context, replacement providersdk.Provider) (bool, error) {
+	next, ok := replacement.(*Provider)
+	if !ok || next.id != p.id {
+		return false, nil
+	}
+	p.mu.Lock()
+	if !reflect.DeepEqual(p.config, next.config) {
+		p.mu.Unlock()
+		return false, nil
+	}
+	p.name = next.name
+	p.mu.Unlock()
+	return true, nil
 }
 
 func (p *Provider) DiscoverDevices(context.Context) ([]device.Device, error) {

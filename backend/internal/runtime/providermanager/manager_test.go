@@ -24,10 +24,70 @@ func (failingProvider) Close(context.Context) error            { return nil }
 
 type flakyProvider struct{ attempts atomic.Int32 }
 
+type exclusiveConnection struct{ active atomic.Int32 }
+
+type exclusiveProvider struct {
+	id         string
+	connection *exclusiveConnection
+	fail       bool
+}
+
+func (p *exclusiveProvider) Manifest() providersdk.Manifest {
+	return providersdk.Manifest{ID: p.id, Type: "exclusive-test", Name: p.id}
+}
+func (*exclusiveProvider) Capabilities() providersdk.Capabilities { return providersdk.Capabilities{} }
+func (p *exclusiveProvider) Initialize(context.Context) error {
+	if p.fail {
+		return errors.New("replacement connection failed")
+	}
+	if p.connection.active.Add(1) != 1 {
+		p.connection.active.Add(-1)
+		return errors.New("duplicate provider connection")
+	}
+	return nil
+}
+func (p *exclusiveProvider) Close(context.Context) error {
+	p.connection.active.CompareAndSwap(1, 0)
+	return nil
+}
+
+type strictRetryProvider struct {
+	active            atomic.Bool
+	initializations   atomic.Int32
+	closes            atomic.Int32
+	discoveryFailures atomic.Int32
+}
+
+func (*strictRetryProvider) Manifest() providersdk.Manifest {
+	return providersdk.Manifest{ID: "strict-retry", Type: "test", Name: "Strict retry"}
+}
+func (*strictRetryProvider) Capabilities() providersdk.Capabilities {
+	return providersdk.Capabilities{Discovery: true}
+}
+func (p *strictRetryProvider) Initialize(context.Context) error {
+	if !p.active.CompareAndSwap(false, true) {
+		return errors.New("provider is already initialized")
+	}
+	p.initializations.Add(1)
+	return nil
+}
+func (p *strictRetryProvider) Close(context.Context) error {
+	p.active.Store(false)
+	p.closes.Add(1)
+	return nil
+}
+func (p *strictRetryProvider) DiscoverDevices(context.Context) ([]device.Device, error) {
+	if p.discoveryFailures.CompareAndSwap(1, 0) {
+		return nil, errors.New("temporary discovery failure")
+	}
+	return nil, nil
+}
+
 type liveProvider struct {
 	id           string
 	name         string
 	items        []device.Device
+	discoveryErr error
 	initialized  atomic.Int32
 	reconfigured atomic.Int32
 }
@@ -44,6 +104,9 @@ func (p *liveProvider) Initialize(context.Context) error {
 }
 func (*liveProvider) Close(context.Context) error { return nil }
 func (p *liveProvider) DiscoverDevices(context.Context) ([]device.Device, error) {
+	if p.discoveryErr != nil {
+		return nil, p.discoveryErr
+	}
 	result := make([]device.Device, len(p.items))
 	for index := range p.items {
 		result[index] = p.items[index].Clone()
@@ -55,7 +118,7 @@ func (p *liveProvider) Reconfigure(_ context.Context, replacement providersdk.Pr
 	if !ok {
 		return false, nil
 	}
-	p.name, p.items = next.name, next.items
+	p.name, p.items, p.discoveryErr = next.name, next.items, next.discoveryErr
 	p.reconfigured.Add(1)
 	return true, nil
 }
@@ -218,6 +281,79 @@ func TestManagerUsesLiveReconfigurationWithoutInitializingReplacement(t *testing
 	}
 }
 
+func TestManagerNeverOverlapsConnectionsWhenReplacingProvider(t *testing.T) {
+	ctx := context.Background()
+	connection := &exclusiveConnection{}
+	current := &exclusiveProvider{id: "exclusive", connection: connection}
+	manager, err := providermanager.New(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close(ctx)
+	if err := manager.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	replacement := &exclusiveProvider{id: "exclusive", connection: connection}
+	if err := manager.Apply(ctx, replacement); err != nil {
+		t.Fatal(err)
+	}
+	if connection.active.Load() != 1 {
+		t.Fatalf("active connections = %d", connection.active.Load())
+	}
+}
+
+func TestManagerRestoresPreviousConnectionWhenReplacementFails(t *testing.T) {
+	ctx := context.Background()
+	connection := &exclusiveConnection{}
+	current := &exclusiveProvider{id: "exclusive", connection: connection}
+	manager, err := providermanager.New(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close(ctx)
+	if err := manager.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	replacement := &exclusiveProvider{id: "exclusive", connection: connection, fail: true}
+	if err := manager.Apply(ctx, replacement); err == nil {
+		t.Fatal("failed replacement was accepted")
+	}
+	info := manager.ProviderInfos()[0]
+	if connection.active.Load() != 1 || info.Status != "running" {
+		t.Fatalf("active=%d info=%#v", connection.active.Load(), info)
+	}
+}
+
+func TestManagerRecoversErroredLiveProviderThroughReconfiguration(t *testing.T) {
+	ctx := context.Background()
+	current := &liveProvider{id: "live-main", name: "Current", discoveryErr: errors.New("temporary discovery failure")}
+	manager, err := providermanager.New(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close(ctx)
+	if err := manager.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.DiscoverDevices(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if status := manager.ProviderInfos()[0].Status; status != "error" {
+		t.Fatalf("status after discovery failure = %q", status)
+	}
+	replacement := &liveProvider{id: "live-main", name: "Recovered"}
+	if err := manager.Apply(ctx, replacement); err != nil {
+		t.Fatal(err)
+	}
+	info := manager.ProviderInfos()[0]
+	if info.Status != "running" || info.Manifest.Name != "Recovered" {
+		t.Fatalf("runtime info = %#v", info)
+	}
+	if current.reconfigured.Load() != 1 || replacement.initialized.Load() != 0 {
+		t.Fatalf("reconfigured=%d replacement initializes=%d", current.reconfigured.Load(), replacement.initialized.Load())
+	}
+}
+
 func TestManagerIsolatesProviderInitializationFailure(t *testing.T) {
 	manager, err := providermanager.New(failingProvider{id: "broken"}, virtual.NewProvider())
 	if err != nil {
@@ -260,4 +396,32 @@ func TestManagerAutomaticallyRetriesFailedProvider(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("provider did not recover: %#v", manager.ProviderInfos()[0])
+}
+
+func TestManagerClosesActiveProviderBeforeRetryInitialization(t *testing.T) {
+	provider := &strictRetryProvider{}
+	provider.discoveryFailures.Store(1)
+	manager, err := providermanager.New(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close(context.Background())
+	if err := manager.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.DiscoverDevices(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		info := manager.ProviderInfos()[0]
+		if info.Status == "running" && provider.initializations.Load() == 2 {
+			if provider.closes.Load() != 1 {
+				t.Fatalf("close count = %d", provider.closes.Load())
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("provider did not recover: info=%#v initializations=%d closes=%d", manager.ProviderInfos()[0], provider.initializations.Load(), provider.closes.Load())
 }

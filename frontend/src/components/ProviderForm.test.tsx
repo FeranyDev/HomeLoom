@@ -80,6 +80,17 @@ describe('ProviderForm', () => {
 		expect(screen.getByText(/独立的“管理子设备”页面/)).toBeInTheDocument()
 	})
 
+	it('builds a distinctly labelled third-party MIoT cloud provider', async () => {
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		render(<ProviderForm provider={null} onCancel={() => {}} onSave={onSave} />)
+		await userEvent.selectOptions(screen.getByLabelText('类型'), 'xiaomi-miot-cloud')
+		await userEvent.type(screen.getByLabelText('小米 MIoT 云账号'), 'owner@example.com')
+		await userEvent.type(screen.getByLabelText('小米 MIoT 云密码'), 'account-password')
+		expect(screen.getByText(/并非预留的官方 Xiaomi Home Cloud Provider/)).toBeInTheDocument()
+		await userEvent.click(screen.getByRole('button', { name: '保存并应用' }))
+		expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ type: 'xiaomi-miot-cloud', config: expect.objectContaining({ region: 'cn', username: 'owner@example.com', password: 'account-password', pollIntervalSeconds: 30, devices: [] }) }), false)
+	})
+
 	it('completes Xiaomi OAuth from a pasted callback URL', async () => {
 		const popup = { location: { href: '' }, close: vi.fn() } as unknown as Window
 		vi.spyOn(window, 'open').mockReturnValue(popup)

@@ -22,6 +22,7 @@ type Provider struct {
 }
 
 var _ providersdk.Provider = (*Provider)(nil)
+var _ providersdk.LiveReconfigurer = (*Provider)(nil)
 var _ providersdk.Discoverer = (*Provider)(nil)
 var _ providersdk.PropertyReader = (*Provider)(nil)
 var _ providersdk.PropertyWriter = (*Provider)(nil)
@@ -30,7 +31,10 @@ var _ providersdk.EventSubscriber = (*Provider)(nil)
 var _ providersdk.Simulator = (*Provider)(nil)
 
 func (p *Provider) Manifest() providersdk.Manifest {
-	return providersdk.Manifest{ID: p.id, Type: "virtual", Name: p.name, Version: "0.1.0"}
+	p.mu.RLock()
+	name := p.name
+	p.mu.RUnlock()
+	return providersdk.Manifest{ID: p.id, Type: "virtual", Name: name, Version: "0.1.0"}
 }
 
 func (p *Provider) Capabilities() providersdk.Capabilities {
@@ -39,6 +43,39 @@ func (p *Provider) Capabilities() providersdk.Capabilities {
 
 func (p *Provider) Initialize(context.Context) error { return nil }
 func (p *Provider) Close(context.Context) error      { return nil }
+
+// Reconfigure updates the configured device catalog in place. Existing
+// runtime values are retained for matching properties so adding a virtual
+// child device does not reset the rest of the simulated home.
+func (p *Provider) Reconfigure(_ context.Context, replacement providersdk.Provider) (bool, error) {
+	next, ok := replacement.(*Provider)
+	if !ok || next.id != p.id {
+		return false, nil
+	}
+	p.mu.Lock()
+	updated := make(map[string]device.Device, len(next.devices))
+	for id, item := range next.devices {
+		item = item.Clone()
+		if previous, exists := p.devices[id]; exists && previous.Type == item.Type {
+			item.Availability, item.Online = previous.Availability, previous.Online
+			item.Sequence, item.LastUpdateAt = previous.Sequence, previous.LastUpdateAt
+			for _, endpoint := range item.Endpoints {
+				for _, capability := range endpoint.Capabilities {
+					for _, property := range capability.Properties {
+						old, found := previous.Property(endpoint.ID, capability.ID, property.Definition.ID)
+						if found && old.Definition.Type == property.Definition.Type {
+							item.SetProperty(endpoint.ID, capability.ID, property.Definition.ID, old.Value)
+						}
+					}
+				}
+			}
+		}
+		updated[id] = item
+	}
+	p.name, p.config, p.devices = next.name, next.config, updated
+	p.mu.Unlock()
+	return true, nil
+}
 
 func (p *Provider) DiscoverDevices(ctx context.Context) ([]device.Device, error) { return p.List(ctx) }
 
@@ -256,11 +293,14 @@ func (p *Provider) SetPower(ctx context.Context, id string, power bool) (device.
 }
 
 func (p *Provider) waitForWrite(ctx context.Context) error {
-	if p.config.RejectWrites {
+	p.mu.RLock()
+	config := p.config
+	p.mu.RUnlock()
+	if config.RejectWrites {
 		return providersdk.ErrWriteRejected
 	}
-	if p.config.LatencyMS > 0 {
-		timer := time.NewTimer(time.Duration(p.config.LatencyMS) * time.Millisecond)
+	if config.LatencyMS > 0 {
+		timer := time.NewTimer(time.Duration(config.LatencyMS) * time.Millisecond)
 		defer timer.Stop()
 		select {
 		case <-ctx.Done():

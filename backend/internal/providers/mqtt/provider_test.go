@@ -92,6 +92,45 @@ func newUninitializedTestProvider(t *testing.T) (*Provider, *fakeTransport) {
 	return provider, transport
 }
 
+func TestProviderReconfiguresNameWithoutReplacingBrokerSession(t *testing.T) {
+	current, transport := newTestProvider(t)
+	replacementTransport := &fakeTransport{}
+	replacement, err := newProviderFromConfig(providerconfig.Config{ID: "mqtt-main", Name: "Updated MQTT", Config: json.RawMessage(`{"brokerUrl":"mqtt://broker:1883","topicPrefix":"house","qos":1,"retainedStateMaxAgeSeconds":60}`)}, func(_ Config, _ *url.URL, _ *tls.Config, handlers transportHandlers) mqttTransport {
+		replacementTransport.handlers = handlers
+		return replacementTransport
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handled, err := current.Reconfigure(context.Background(), replacement)
+	if err != nil || !handled {
+		t.Fatalf("Reconfigure() = %v, %v", handled, err)
+	}
+	if current.Manifest().Name != "Updated MQTT" {
+		t.Fatalf("manifest=%#v config=%#v", current.Manifest(), current.config)
+	}
+	transport.mu.Lock()
+	closed := transport.closed
+	transport.mu.Unlock()
+	if closed || replacementTransport.handlers.onMessage != nil {
+		t.Fatalf("current closed=%v replacement transport initialized=%v", closed, replacementTransport.handlers.onMessage != nil)
+	}
+}
+
+func TestProviderRequiresReplacementWhenBrokerConnectionChanges(t *testing.T) {
+	current, _ := newUninitializedTestProvider(t)
+	replacement, err := newProviderFromConfig(providerconfig.Config{ID: "mqtt-main", Name: "MQTT", Config: json.RawMessage(`{"brokerUrl":"mqtt://other-broker:1883","topicPrefix":"house","qos":1}`)}, func(_ Config, _ *url.URL, _ *tls.Config, handlers transportHandlers) mqttTransport {
+		return &fakeTransport{handlers: handlers}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handled, err := current.Reconfigure(context.Background(), replacement)
+	if err != nil || handled {
+		t.Fatalf("Reconfigure() = %v, %v", handled, err)
+	}
+}
+
 func TestProviderDiscoveryStateAvailabilityAndRemoval(t *testing.T) {
 	provider, transport := newTestProvider(t)
 	events := make(chan device.Device, 16)

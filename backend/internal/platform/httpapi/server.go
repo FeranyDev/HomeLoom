@@ -1144,6 +1144,26 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		}
 		return c.JSON(http.StatusOK, map[string]any{"data": items})
 	})
+	e.GET("/api/v1/xiaomi-miot-cloud/providers/:id/devices", func(c echo.Context) error {
+		if providers == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "provider management is unavailable")
+		}
+		instance, ok := providers.RuntimeProvider(c.Param("id"))
+		if !ok {
+			return echo.NewHTTPError(http.StatusConflict, "Xiaomi MIoT cloud provider must be enabled and connected before discovering devices")
+		}
+		live, ok := instance.(*xiaomi.CloudProvider)
+		if !ok {
+			return echo.NewHTTPError(http.StatusBadRequest, "provider is not a Xiaomi MIoT third-party cloud provider")
+		}
+		ctx, cancel := context.WithTimeout(c.Request().Context(), 30*time.Second)
+		defer cancel()
+		items, err := live.DiscoverCloudDevices(ctx)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": items})
+	})
 	e.DELETE("/api/v1/providers/:id", func(c echo.Context) error {
 		if providers == nil {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "provider management is unavailable")

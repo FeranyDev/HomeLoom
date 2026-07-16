@@ -1,6 +1,7 @@
 package application
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -31,22 +32,36 @@ type ProviderRuntime interface {
 
 type ProviderInfo struct {
 	providerconfig.Config
-	Status         string                   `json:"status"`
-	Error          string                   `json:"error,omitempty"`
-	Manifest       *providersdk.Manifest    `json:"manifest,omitempty"`
-	Capabilities   providersdk.Capabilities `json:"capabilities"`
-	RetryCount     int                      `json:"retryCount"`
-	NextRetryAt    *time.Time               `json:"nextRetryAt,omitempty"`
-	TransitionedAt time.Time                `json:"transitionedAt,omitempty"`
-	Metrics        map[string]uint64        `json:"metrics,omitempty"`
+	Status            string                        `json:"status"`
+	Error             string                        `json:"error,omitempty"`
+	Manifest          *providersdk.Manifest         `json:"manifest,omitempty"`
+	Capabilities      providersdk.Capabilities      `json:"capabilities"`
+	RetryCount        int                           `json:"retryCount"`
+	NextRetryAt       *time.Time                    `json:"nextRetryAt,omitempty"`
+	TransitionedAt    time.Time                     `json:"transitionedAt,omitempty"`
+	Metrics           map[string]uint64             `json:"metrics,omitempty"`
+	Credentials       *providersdk.CredentialStatus `json:"credentials,omitempty"`
+	CredentialError   string                        `json:"credentialError,omitempty"`
+	CredentialRetryAt *time.Time                    `json:"credentialRetryAt,omitempty"`
+}
+
+type credentialRetry struct {
+	count        int
+	next         time.Time
+	err          string
+	applyPending bool
 }
 
 type ProviderService struct {
-	mu      sync.RWMutex
-	configs map[string]providerconfig.Config
-	store   ProviderStore
-	factory *providersdk.Factory
-	runtime ProviderRuntime
+	mu                sync.RWMutex
+	configs           map[string]providerconfig.Config
+	store             ProviderStore
+	factory           *providersdk.Factory
+	runtime           ProviderRuntime
+	maintenanceOnce   sync.Once
+	maintenanceWake   chan struct{}
+	credentialRun     sync.Mutex
+	credentialRetries map[string]credentialRetry
 }
 
 // ResolveTransientConfig restores redacted secrets from the durable provider
@@ -87,7 +102,7 @@ func (s *ProviderService) RuntimeProvider(id string) (providersdk.Provider, bool
 }
 
 func NewProviderService(configs []providerconfig.Config, store ProviderStore, factory *providersdk.Factory, runtime ProviderRuntime) *ProviderService {
-	s := &ProviderService{configs: make(map[string]providerconfig.Config), store: store, factory: factory, runtime: runtime}
+	s := &ProviderService{configs: make(map[string]providerconfig.Config), store: store, factory: factory, runtime: runtime, maintenanceWake: make(chan struct{}, 1), credentialRetries: make(map[string]credentialRetry)}
 	for _, item := range configs {
 		s.configs[item.ID] = item
 	}
@@ -112,6 +127,18 @@ func (s *ProviderService) List() []ProviderInfo {
 			manifest := live.Manifest
 			info.Manifest, info.Capabilities, info.Status, info.Error = &manifest, live.Capabilities, live.Status, live.Error
 			info.RetryCount, info.NextRetryAt, info.TransitionedAt, info.Metrics = live.RetryCount, live.NextRetryAt, live.TransitionedAt, live.Metrics
+		}
+		s.mu.RLock()
+		raw := s.configs[item.ID]
+		retry := s.credentialRetries[item.ID]
+		s.mu.RUnlock()
+		if status, ok := s.credentialStatus(raw, time.Now()); ok {
+			info.Credentials = &status
+		}
+		if retry.err != "" {
+			info.CredentialError = retry.err
+			next := retry.next
+			info.CredentialRetryAt = &next
 		}
 		result = append(result, info)
 	}
@@ -195,7 +222,9 @@ func (s *ProviderService) Save(ctx context.Context, item providerconfig.Config) 
 	}
 	s.mu.Lock()
 	s.configs[item.ID] = item
+	delete(s.credentialRetries, item.ID)
 	s.mu.Unlock()
+	s.wakeCredentialMaintenance()
 	if item.Enabled {
 		if err := s.runtime.Apply(ctx, instance); err != nil {
 			return ProviderInfo{}, err
@@ -215,6 +244,202 @@ func (s *ProviderService) Save(ctx context.Context, item providerconfig.Config) 
 	return ProviderInfo{}, fmt.Errorf("provider %q was not saved", item.ID)
 }
 
+// StartCredentialMaintenance starts one background scheduler for renewable
+// Provider credentials. It wakes immediately after configuration changes and
+// otherwise sleeps until the next token/certificate renewal boundary.
+func (s *ProviderService) StartCredentialMaintenance(ctx context.Context) {
+	s.maintenanceOnce.Do(func() { go s.credentialMaintenanceLoop(ctx) })
+}
+
+// RefreshDueCredentials performs one scheduler pass and is also suitable for
+// an explicit administrative refresh. Failed providers are isolated and use
+// exponential retry without delaying healthy providers.
+func (s *ProviderService) RefreshDueCredentials(ctx context.Context, now time.Time) (time.Time, error) {
+	s.credentialRun.Lock()
+	defer s.credentialRun.Unlock()
+	if s.factory == nil || s.store == nil || s.runtime == nil {
+		return now.Add(time.Hour), errors.New("provider credential maintenance is unavailable")
+	}
+	s.mu.RLock()
+	items := make([]providerconfig.Config, 0, len(s.configs))
+	for _, item := range s.configs {
+		if item.Enabled {
+			items = append(items, item)
+		}
+	}
+	s.mu.RUnlock()
+	next := now.Add(time.Hour)
+	var firstErr error
+	for _, item := range items {
+		s.mu.RLock()
+		retry := s.credentialRetries[item.ID]
+		s.mu.RUnlock()
+		if retry.next.After(now) {
+			next = earlierProviderTime(next, retry.next)
+			continue
+		}
+		instance, err := s.factory.Create(item)
+		if err != nil {
+			continue
+		}
+		maintainer, ok := instance.(providersdk.CredentialMaintainer)
+		if !ok {
+			continue
+		}
+		if retry.applyPending {
+			if err := s.runtime.Apply(ctx, instance); err != nil {
+				retry = s.recordCredentialFailure(item.ID, now, err, true)
+				next = earlierProviderTime(next, retry.next)
+				if firstErr == nil {
+					firstErr = fmt.Errorf("apply renewed provider %q credentials: %w", item.ID, err)
+				}
+				continue
+			}
+			s.mu.Lock()
+			delete(s.credentialRetries, item.ID)
+			s.mu.Unlock()
+		}
+		status, err := maintainer.CredentialStatus(now)
+		if err != nil {
+			retry = s.recordCredentialFailure(item.ID, now, err, false)
+			next = earlierProviderTime(next, retry.next)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if !status.Managed {
+			continue
+		}
+		if status.RefreshAt.After(now) {
+			next = earlierProviderTime(next, status.RefreshAt)
+			continue
+		}
+		updatedConfig, err := maintainer.RenewCredentials(ctx)
+		if err != nil {
+			retry = s.recordCredentialFailure(item.ID, now, err, false)
+			next = earlierProviderTime(next, retry.next)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("renew provider %q credentials: %w", item.ID, err)
+			}
+			continue
+		}
+		updated := item
+		updated.Config = updatedConfig
+		replacement, err := s.factory.Create(updated)
+		if err != nil {
+			retry = s.recordCredentialFailure(item.ID, now, err, false)
+			next = earlierProviderTime(next, retry.next)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		s.mu.RLock()
+		current := s.configs[item.ID]
+		s.mu.RUnlock()
+		if !bytes.Equal(current.Config, item.Config) {
+			next = earlierProviderTime(next, now.Add(time.Minute))
+			continue
+		}
+		if err := s.store.SaveProvider(ctx, updated); err != nil {
+			retry = s.recordCredentialFailure(item.ID, now, err, false)
+			next = earlierProviderTime(next, retry.next)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		s.mu.Lock()
+		s.configs[item.ID] = updated
+		delete(s.credentialRetries, item.ID)
+		s.mu.Unlock()
+		if err := s.runtime.Apply(ctx, replacement); err != nil {
+			retry = s.recordCredentialFailure(item.ID, now, err, true)
+			next = earlierProviderTime(next, retry.next)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if renewed, ok := replacement.(providersdk.CredentialMaintainer); ok {
+			if renewedStatus, statusErr := renewed.CredentialStatus(now); statusErr == nil && renewedStatus.Managed {
+				next = earlierProviderTime(next, renewedStatus.RefreshAt)
+			}
+		}
+	}
+	return next, firstErr
+}
+
+func (s *ProviderService) credentialStatus(item providerconfig.Config, now time.Time) (providersdk.CredentialStatus, bool) {
+	if s.factory == nil || item.ID == "" {
+		return providersdk.CredentialStatus{}, false
+	}
+	instance, err := s.factory.Create(item)
+	if err != nil {
+		return providersdk.CredentialStatus{}, false
+	}
+	maintainer, ok := instance.(providersdk.CredentialMaintainer)
+	if !ok {
+		return providersdk.CredentialStatus{}, false
+	}
+	status, err := maintainer.CredentialStatus(now)
+	return status, err == nil && status.Managed
+}
+
+func (s *ProviderService) recordCredentialFailure(id string, now time.Time, cause error, applyPending bool) credentialRetry {
+	s.mu.Lock()
+	retry := s.credentialRetries[id]
+	retry.count++
+	delay := time.Minute << min(retry.count-1, 5)
+	if delay > 30*time.Minute {
+		delay = 30 * time.Minute
+	}
+	retry.next, retry.err = now.Add(delay), cause.Error()
+	retry.applyPending = applyPending
+	s.credentialRetries[id] = retry
+	s.mu.Unlock()
+	return retry
+}
+
+func (s *ProviderService) credentialMaintenanceLoop(ctx context.Context) {
+	next := time.Now()
+	for {
+		delay := time.Until(next)
+		if delay < 0 {
+			delay = 0
+		}
+		if delay > time.Hour {
+			delay = time.Hour
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-s.maintenanceWake:
+			timer.Stop()
+		case <-timer.C:
+		}
+		refreshAt, _ := s.RefreshDueCredentials(ctx, time.Now())
+		next = refreshAt
+	}
+}
+
+func (s *ProviderService) wakeCredentialMaintenance() {
+	select {
+	case s.maintenanceWake <- struct{}{}:
+	default:
+	}
+}
+
+func earlierProviderTime(left, right time.Time) time.Time {
+	if left.IsZero() || right.Before(left) {
+		return right
+	}
+	return left
+}
+
 func (s *ProviderService) Delete(ctx context.Context, id string) error {
 	s.mu.RLock()
 	item, exists := s.configs[id]
@@ -232,7 +457,9 @@ func (s *ProviderService) Delete(ctx context.Context, id string) error {
 	}
 	s.mu.Lock()
 	delete(s.configs, id)
+	delete(s.credentialRetries, id)
 	s.mu.Unlock()
+	s.wakeCredentialMaintenance()
 	return nil
 }
 

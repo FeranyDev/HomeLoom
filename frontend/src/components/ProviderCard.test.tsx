@@ -7,6 +7,22 @@ import type { Provider } from '../types/provider'
 const provider: Provider = { id: 'virtual-main', type: 'virtual', name: 'Virtual', enabled: true, config: {}, status: 'running', retryCount: 0, capabilities: { discovery: true, propertyRead: true, propertyWrite: true, events: true } }
 
 describe('ProviderCard simulation', () => {
+	it('shows renewable credential deadlines without exposing credential values', () => {
+		const xiaomi: Provider = { ...provider, id: 'xiaomi-main', type: 'xiaomi', config: { oauth: { clientId: '1', oauthUuid: 'uuid', virtualDid: '2' }, clientId: '2', clientCertificate: '********', privateKey: '********' }, credentials: { managed: true, refreshAt: '2026-07-16T10:00:00Z', tokenExpiresAt: '2026-07-16T12:00:00Z', certificateExpiresAt: '2026-08-16T12:00:00Z' }, credentialError: 'cloud unavailable', credentialRetryAt: '2026-07-16T10:01:00Z' }
+		render(<ProviderCard provider={xiaomi} devices={[]} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} />)
+		expect(screen.getByText('凭据自动续期')).toBeInTheDocument()
+		expect(screen.getByRole('alert')).toHaveTextContent('续期失败：cloud unavailable')
+		expect(screen.queryByText('********')).not.toBeInTheDocument()
+	})
+
+	it('distinguishes the third-party MIoT cloud from central hub and future official cloud', () => {
+		const cloud: Provider = { ...provider, id: 'xiaomi-miot-cloud-main', type: 'xiaomi-miot-cloud', name: 'MIoT 云', config: { region: 'cn', username: 'owner@example.com', password: '********', pollIntervalSeconds: 30, devices: [] }, capabilities: { ...provider.capabilities, events: false } }
+		render(<ProviderCard provider={cloud} devices={[]} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} onManageDevices={vi.fn()} />)
+		expect(screen.getByText('小米 MIoT 云 · 第三方兼容 · xiaomi-miot-cloud-main')).toBeInTheDocument()
+		expect(screen.getByText('轮询 30 秒 · 非官方兼容接口')).toBeInTheDocument()
+		expect(screen.queryByText('小米中枢网关')).not.toBeInTheDocument()
+	})
+
   it('sends ephemeral availability and temperature changes', async () => {
     const onSimulate = vi.fn().mockResolvedValue(undefined); const onRestart = vi.fn().mockResolvedValue(undefined)
     render(<ProviderCard provider={provider} devices={[{ schemaVersion: 1, id: 'temp-1', providerId: provider.id, name: '温度', type: 'single-property-sensor', availability: 'online', online: true, endpoints: [{ id: 'main', name: 'Main', type: 'sensor', capabilities: [{ id: 'sensor', type: 'sensor', properties: [{ definition: { id: 'value', name: '传感器值', type: 'number', unit: 'celsius', readable: true, writable: false, notifiable: true }, value: { type: 'number', number: 20 } }] }] }], lastUpdateAt: '' }]} onEdit={() => {}} onDelete={() => {}} onRestart={onRestart} onSimulate={onSimulate} />)

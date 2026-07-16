@@ -24,7 +24,7 @@ Provider Manager 只校验快照的结构、稳定 ID、值类型和约束，不
 
 映射目录读取独立的 Provider 原始目录契约，而不是把统一模型注册表反向当成来源。每台设备带有 `catalog.complete/source/specType/fetchedAt/error` 元数据；只有 Provider 能枚举原生 schema 时才允许标记完整。页面展示全部 Endpoint、Capability、Property、Action、Event、权限、单位和类型。Provider 目录不可用时回退数据必须标记为不完整。
 
-Xiaomi Provider 在 MQTT 连接建立并取得 `getDevList` 后，根据 `specType` 或 `model` 解析公开 MIoT Spec V2 实例。实例原文缓存于 SQLite `miot_spec_cache`，未进入旧式配置的原生属性使用 `miot-{SIID}/service-{SIID}/property-{PIID}` 稳定路径，并支持读取、写入和属性通知。无法解析 Spec 时保留兼容配置，但明确返回不完整状态。
+小米中枢 Provider 在 MQTT 连接建立并取得 `getDevList` 后，根据 `specType` 或 `model` 解析公开 MIoT Spec V2 实例；平行的 `xiaomi-miot-cloud` Provider 从账号设备目录取得型号后使用相同 Spec 解析，但属性值通过云端轮询读取。实例原文缓存于 SQLite `miot_spec_cache`，未进入旧式配置的原生属性使用 `miot-{SIID}/service-{SIID}/property-{PIID}` 稳定路径。无法解析 Spec 时保留兼容配置，但明确返回不完整状态。两种 Provider 不按 DID 自动合并。
 
 原始目录同时返回逐属性的临时值状态。`known=true, available=true` 表示本次运行中已经从 Provider 读取或收到通知，页面显示“当前值”；设备离线但仍有历史观察值时显示“上次值”；尚未成功读取时显示“当前值未知”，不会把类型零值占位误报为设备状态。值和观察时间只驻留内存，重启后重新获取。
 

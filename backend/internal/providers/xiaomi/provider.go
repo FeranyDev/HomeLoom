@@ -47,6 +47,14 @@ type Provider struct {
 	errors   atomic.Uint64
 }
 
+var (
+	_ providersdk.Provider             = (*Provider)(nil)
+	_ providersdk.LiveReconfigurer     = (*Provider)(nil)
+	_ providersdk.CredentialMaintainer = (*Provider)(nil)
+	_ providersdk.Discoverer           = (*Provider)(nil)
+	_ providersdk.SourceCataloger      = (*Provider)(nil)
+)
+
 func NewProviderFromConfig(item providerconfig.Config) (*Provider, error) {
 	return NewProviderFromConfigWithSpecResolver(item, NewSpecResolver(nil))
 }
@@ -93,7 +101,11 @@ func (p *Provider) Initialize(ctx context.Context) error {
 	p.mu.Lock()
 	if p.client != nil {
 		p.mu.Unlock()
-		return errors.New("Xiaomi provider is already initialized")
+		// Initialize is a lifecycle assertion rather than a request to open a
+		// second MQTT session. Runtime reconciliation and retry scheduling may
+		// converge on an already healthy instance, so match the idempotent
+		// contract used by the other long-running Providers.
+		return nil
 	}
 	lifecycle, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	client := p.factory()
@@ -184,7 +196,9 @@ func (p *Provider) Reconfigure(ctx context.Context, replacement providersdk.Prov
 	p.mu.Lock()
 	if p.client == nil {
 		p.mu.Unlock()
-		return true, providersdk.ErrProviderUnavailable
+		// Nothing is live to reconfigure. Let the manager initialize the
+		// replacement instance through its normal lifecycle instead.
+		return false, nil
 	}
 	updated := make(map[string]device.Device, len(next.devices))
 	for id, item := range next.devices {
@@ -194,7 +208,7 @@ func (p *Provider) Reconfigure(ctx context.Context, replacement providersdk.Prov
 		}
 		updated[id] = item
 	}
-	p.name, p.config, p.devices = next.name, next.config, updated
+	p.name, p.config, p.factory, p.devices = next.name, next.config, next.factory, updated
 	p.rawProperties, p.rawActions, p.catalog = next.rawProperties, next.rawActions, next.catalog
 	p.byDID = make(map[string]string, len(next.byDID))
 	for did, id := range next.byDID {
@@ -220,6 +234,16 @@ func (p *Provider) Reconfigure(ctx context.Context, replacement providersdk.Prov
 
 func equalConnectionConfig(left, right Config) bool {
 	left.Devices, right.Devices = nil, nil
+	left.ClientCertificate, right.ClientCertificate = "", ""
+	left.PrivateKey, right.PrivateKey = "", ""
+	if left.OAuth != nil && right.OAuth != nil {
+		leftOAuth, rightOAuth := *left.OAuth, *right.OAuth
+		leftOAuth.AccessToken, rightOAuth.AccessToken = "", ""
+		leftOAuth.RefreshToken, rightOAuth.RefreshToken = "", ""
+		leftOAuth.RefreshAfter, rightOAuth.RefreshAfter = 0, 0
+		leftOAuth.ExpiresAt, rightOAuth.ExpiresAt = 0, 0
+		left.OAuth, right.OAuth = &leftOAuth, &rightOAuth
+	}
 	return reflect.DeepEqual(left, right)
 }
 
@@ -231,7 +255,7 @@ func preserveDeviceState(next, previous device.Device) device.Device {
 			for _, property := range capability.Properties {
 				old, ok := previous.Property(endpoint.ID, capability.ID, property.Definition.ID)
 				if ok && old.Definition.Type == property.Definition.Type {
-					next.SetProperty(endpoint.ID, capability.ID, property.Definition.ID, old.Value)
+					setObservedProperty(&next, endpoint.ID, capability.ID, property.Definition.ID, old.Value)
 				}
 			}
 		}
@@ -331,6 +355,13 @@ func (p *Provider) WriteProperty(ctx context.Context, request providersdk.Proper
 	if !ok || property.Definition.Type != request.Value.Type {
 		return device.Device{}, providersdk.ErrPropertyInvalid
 	}
+	// Observed MIoT values can use an out-of-range sentinel (for example a
+	// target temperature of 0 while an air conditioner is off). The source
+	// snapshot widens its displayed bounds to remain structurally valid, but
+	// writes must still honor the original MIoT specification.
+	property.Definition.Min = mapping.Min
+	property.Definition.Max = mapping.Max
+	property.Definition.Step = mapping.Step
 	property.Value = request.Value
 	if err := property.Validate(); err != nil {
 		return device.Device{}, providersdk.ErrPropertyInvalid
@@ -512,7 +543,7 @@ func (p *Provider) handleIncoming(incoming hubIncoming) {
 func (p *Provider) updateProperty(id string, mapping PropertyMapping, value device.PropertyValue) device.Device {
 	p.mu.Lock()
 	item := p.devices[id]
-	item.SetProperty(mapping.EndpointID, mapping.CapabilityID, mapping.PropertyID, value)
+	setObservedProperty(&item, mapping.EndpointID, mapping.CapabilityID, mapping.PropertyID, value)
 	p.valueStatus[sourcePropertyKey(id, mapping.EndpointID, mapping.CapabilityID, mapping.PropertyID)] = providersdk.SourceValueStatus{Known: true, Available: true, ObservedAt: time.Now().UTC()}
 	p.sequence++
 	item.Sequence = p.sequence
@@ -696,9 +727,9 @@ func zeroValue(mapping PropertyMapping) device.PropertyValue {
 	case device.ValueTypeBool:
 		return device.BoolValue(false)
 	case device.ValueTypeInt:
-		return device.IntValue(0)
+		return device.IntValue(int64(boundedZero(mapping.Min, mapping.Max)))
 	case device.ValueTypeNumber:
-		return device.NumberValue(0)
+		return device.NumberValue(boundedZero(mapping.Min, mapping.Max))
 	case device.ValueTypeEnum:
 		values := make([]string, 0, len(mapping.Enum))
 		for value := range mapping.Enum {
@@ -711,6 +742,65 @@ func zeroValue(mapping PropertyMapping) device.PropertyValue {
 		return device.EnumValue("")
 	default:
 		return device.StringValue("")
+	}
+}
+
+func boundedZero(minimum, maximum *float64) float64 {
+	value := float64(0)
+	if minimum != nil && value < *minimum {
+		value = *minimum
+	}
+	if maximum != nil && value > *maximum {
+		value = *maximum
+	}
+	return value
+}
+
+// setObservedProperty preserves the exact native value while keeping the
+// transport model internally consistent. Some MIoT devices publish sentinel
+// values outside the value-range declared by their public specification.
+func setObservedProperty(item *device.Device, endpointID, capabilityID, propertyID string, value device.PropertyValue) bool {
+	for endpointIndex := range item.Endpoints {
+		endpoint := &item.Endpoints[endpointIndex]
+		if endpoint.ID != endpointID {
+			continue
+		}
+		for capabilityIndex := range endpoint.Capabilities {
+			capability := &endpoint.Capabilities[capabilityIndex]
+			if capability.ID != capabilityID {
+				continue
+			}
+			for propertyIndex := range capability.Properties {
+				property := &capability.Properties[propertyIndex]
+				if property.Definition.ID != propertyID {
+					continue
+				}
+				property.Value = value
+				switch value.Type {
+				case device.ValueTypeInt:
+					if value.Int != nil {
+						widenObservedRange(&property.Definition, float64(*value.Int))
+					}
+				case device.ValueTypeNumber:
+					if value.Number != nil {
+						widenObservedRange(&property.Definition, *value.Number)
+					}
+				}
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func widenObservedRange(definition *device.PropertyDefinition, value float64) {
+	if definition.Min != nil && value < *definition.Min {
+		minimum := value
+		definition.Min = &minimum
+	}
+	if definition.Max != nil && value > *definition.Max {
+		maximum := value
+		definition.Max = &maximum
 	}
 }
 

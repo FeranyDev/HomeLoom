@@ -147,9 +147,15 @@ HomeLoom 随程序提供 provider、capability 和 target 三类内置示例 Pro
 
 诊断响应的 `mappingApplied` 和 `mappingErrors` 分别统计运行时转换命中与失败。转换失败的 Provider 事件不会覆盖内存中的上一份有效设备状态；错误配置仍保存在数据库中，便于管理员修正而不会触发服务重启循环。全局脱敏配置导出和 SQLite 备份均包含属性绑定。
 
+## 小米设备目录
+
+`GET /api/v1/xiaomi/providers/{id}/devices` 只接受正在运行的 `xiaomi` 中枢 Provider，并复用其现有 MQTT 连接读取子设备。`GET /api/v1/xiaomi-miot-cloud/providers/{id}/devices` 只接受正在运行的 `xiaomi-miot-cloud` 第三方兼容 Provider，并复用其现有账号会话读取云端设备。两个接口不互相回退，也不会按 DID 合并目录；未来官方 `xiaomi-home-cloud` 使用独立类型和接口。
+
 ## Provider 敏感配置
 
-Provider 配置仍以完整值保存在 SQLite 中，但管理 API 会递归识别 password、secret、token、API key、private key 和 credential 类字段，并以 `********` 返回。编辑时保留该占位符会沿用数据库中的原值；输入新值会替换原值。新建 Provider 时不能把占位符当作真实密钥提交。数组对象优先按稳定 `id` 恢复密钥，避免配置重排后发生错配。
+Provider 配置仍以完整值保存在 SQLite 中，但管理 API 会递归识别 password、secret、token、API key、private key、credential 和 Xiaomi `ssecurity` 字段，并以 `********` 返回。编辑时保留该占位符会沿用数据库中的原值；输入新值会替换原值。新建 Provider 时不能把占位符当作真实密钥提交。数组对象优先按稳定 `id` 恢复密钥，避免配置重排后发生错配。
+
+支持自动续期的 Provider 会额外返回 `credentials` 状态，只包含 `managed`、`refreshAt`、`tokenExpiresAt` 和 `certificateExpiresAt`。续期失败通过 `credentialError` 与 `credentialRetryAt` 展示；这些字段不包含 Access Token、Refresh Token、证书或私钥。Xiaomi Token 在有效期 70% 处刷新，客户端证书在剩余有效期 20%（最多提前 7 天）时续签并热应用。
 
 配置导出使用独立 DTO，不复用包含运行时配对资料的 Target 页面响应。它保留排障所需的 Target ID、类型、名称、地址、Setup ID 和设备绑定，但始终排除 PIN、Setup URI 与本地身份存储路径；Provider 配置沿用递归凭据脱敏。诊断包只在此安全快照之上增加构建信息、当前聚合指标和不含请求体的审计元数据。两个下载响应均携带 `Cache-Control: no-store` 与 `Content-Disposition: attachment`。
 

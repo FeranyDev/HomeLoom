@@ -649,6 +649,22 @@ func TestXiaomiSubdeviceDirectoryRequiresRunningXiaomiProvider(t *testing.T) {
 	}
 }
 
+func TestXiaomiMIoTCloudDirectoryIsNotAliasedToCentralHub(t *testing.T) {
+	server := newProviderManagementTestServer(t)
+	wrongType := httptest.NewRequest(http.MethodGet, "/api/v1/xiaomi-miot-cloud/providers/virtual-main/devices", nil)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, wrongType)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "third-party cloud") {
+		t.Fatalf("wrong provider response = %d %s", response.Code, response.Body.String())
+	}
+	missing := httptest.NewRequest(http.MethodGet, "/api/v1/xiaomi-miot-cloud/providers/missing/devices", nil)
+	missingResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(missingResponse, missing)
+	if missingResponse.Code != http.StatusConflict || !strings.Contains(missingResponse.Body.String(), "enabled and connected") {
+		t.Fatalf("missing provider response = %d %s", missingResponse.Code, missingResponse.Body.String())
+	}
+}
+
 func TestListDevices(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/devices", nil)
 	response := httptest.NewRecorder()

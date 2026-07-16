@@ -220,6 +220,18 @@ func (c oauthClient) host() string {
 
 func (c oauthClient) exchange(ctx context.Context, code string) (oauthToken, error) {
 	payload := map[string]any{"client_id": numericOrString(c.config.ClientID), "redirect_uri": c.config.RedirectURL, "code": code, "device_id": "ha." + c.config.OAuthUUID}
+	return c.getToken(ctx, payload)
+}
+
+func (c oauthClient) refresh(ctx context.Context, refreshToken string) (oauthToken, error) {
+	if strings.TrimSpace(refreshToken) == "" {
+		return oauthToken{}, errors.New("refresh token is required")
+	}
+	payload := map[string]any{"client_id": numericOrString(c.config.ClientID), "redirect_uri": c.config.RedirectURL, "refresh_token": refreshToken}
+	return c.getToken(ctx, payload)
+}
+
+func (c oauthClient) getToken(ctx context.Context, payload map[string]any) (oauthToken, error) {
 	encoded, _ := json.Marshal(payload)
 	endpoint := url.URL{Scheme: "https", Host: c.host(), Path: xiaomiTokenPath}
 	query := endpoint.Query()
@@ -231,7 +243,10 @@ func (c oauthClient) exchange(ctx context.Context, code string) (oauthToken, err
 	}
 	response, err := c.http.Do(request)
 	if err != nil {
-		return oauthToken{}, fmt.Errorf("request Xiaomi token: %w", err)
+		// The refresh token is carried in the encoded query. net/http errors can
+		// include the complete URL, so never propagate the raw error text into
+		// Provider status or logs.
+		return oauthToken{}, errors.New("request Xiaomi token failed")
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))

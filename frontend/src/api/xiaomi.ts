@@ -56,6 +56,7 @@ export async function discoverXiaomiGateways(): Promise<XiaomiGateway[]> {
 	return requestData<XiaomiGateway[]>('/api/v1/xiaomi/gateways')
 }
 
-export async function discoverXiaomiDevices(providerId: string): Promise<XiaomiHubDevice[]> {
-	return requestData<XiaomiHubDevice[]>(`/api/v1/xiaomi/providers/${encodeURIComponent(providerId)}/devices`)
+export async function discoverXiaomiDevices(providerId: string, providerType = 'xiaomi'): Promise<XiaomiHubDevice[]> {
+	const base = providerType === 'xiaomi-miot-cloud' ? 'xiaomi-miot-cloud' : 'xiaomi'
+	return requestData<XiaomiHubDevice[]>(`/api/v1/${base}/providers/${encodeURIComponent(providerId)}/devices`)
 }

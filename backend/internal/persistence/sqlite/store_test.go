@@ -141,7 +141,7 @@ func TestProviderSecretsAreEncryptedAndSurviveRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	item := providerconfig.Config{ID: "mqtt-encrypted", Type: "mqtt", Name: "Encrypted MQTT", Enabled: true, Config: []byte(`{"brokerUrl":"mqtt://localhost:1883","username":"reader","password":"broker-password","tls":{"certFile":"client.pem","privateKey":"key-material"}}`)}
+	item := providerconfig.Config{ID: "mqtt-encrypted", Type: "mqtt", Name: "Encrypted MQTT", Enabled: true, Config: []byte(`{"brokerUrl":"mqtt://localhost:1883","username":"reader","password":"broker-password","ssecurity":"miot-security","tls":{"certFile":"client.pem","privateKey":"key-material"}}`)}
 	if err := store.SaveProvider(ctx, item); err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestProviderSecretsAreEncryptedAndSurviveRestart(t *testing.T) {
 	if err := store.database.QueryRowContext(ctx, "SELECT config_json FROM providers WHERE id = ?", item.ID).Scan(&stored); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(stored, "broker-password") || strings.Contains(stored, "key-material") || !strings.Contains(stored, encryptedPrefix) || !strings.Contains(stored, "client.pem") {
+	if strings.Contains(stored, "broker-password") || strings.Contains(stored, "key-material") || strings.Contains(stored, "miot-security") || !strings.Contains(stored, encryptedPrefix) || !strings.Contains(stored, "client.pem") {
 		t.Fatalf("stored provider config = %s", stored)
 	}
 	if err := store.Close(); err != nil {
@@ -167,7 +167,7 @@ func TestProviderSecretsAreEncryptedAndSurviveRestart(t *testing.T) {
 	for _, current := range items {
 		if current.ID == item.ID {
 			config := string(current.Config)
-			if !strings.Contains(config, `"password":"broker-password"`) || !strings.Contains(config, `"privateKey":"key-material"`) || !strings.Contains(config, `"certFile":"client.pem"`) {
+			if !strings.Contains(config, `"password":"broker-password"`) || !strings.Contains(config, `"privateKey":"key-material"`) || !strings.Contains(config, `"ssecurity":"miot-security"`) || !strings.Contains(config, `"certFile":"client.pem"`) {
 				t.Fatalf("decrypted provider config = %s", config)
 			}
 			return

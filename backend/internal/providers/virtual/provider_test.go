@@ -56,6 +56,33 @@ func TestProviderUsesDatabaseDeviceConfiguration(t *testing.T) {
 	}
 }
 
+func TestProviderAddsConfiguredDeviceThroughLiveReconfiguration(t *testing.T) {
+	current, err := NewProviderFromConfig(providerconfig.Config{ID: "virtual-lab", Name: "Lab", Config: []byte(`{"devices":[{"id":"desk-switch","type":"switch","power":false}]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := current.SetPower(context.Background(), "desk-switch", true); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := NewProviderFromConfig(providerconfig.Config{ID: "virtual-lab", Name: "Updated Lab", Config: []byte(`{"devices":[{"id":"desk-switch","type":"switch","power":false},{"id":"desk-outlet","type":"outlet","power":false}]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handled, err := current.Reconfigure(context.Background(), replacement)
+	if err != nil || !handled {
+		t.Fatalf("Reconfigure() = %v, %v", handled, err)
+	}
+	items, err := current.DiscoverDevices(context.Background())
+	if err != nil || len(items) != 2 || current.Manifest().Name != "Updated Lab" {
+		t.Fatalf("items=%#v manifest=%#v err=%v", items, current.Manifest(), err)
+	}
+	for _, item := range items {
+		if item.ID == "desk-switch" && !boolProperty(item, "switch", "power") {
+			t.Fatal("existing runtime state was reset while adding a child device")
+		}
+	}
+}
+
 func TestProviderSupportsLightbulbAndOutlet(t *testing.T) {
 	provider, err := NewProviderFromConfig(providerconfig.Config{ID: "virtual-room", Name: "Room", Config: []byte(`{"devices":[{"id":"lamp","type":"lightbulb","power":true},{"id":"socket","type":"outlet","power":false}]}`)})
 	if err != nil {

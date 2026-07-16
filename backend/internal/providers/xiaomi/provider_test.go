@@ -114,6 +114,63 @@ func TestProviderReadWriteAndNotification(t *testing.T) {
 	}
 }
 
+func TestProviderAcceptsOutOfRangeMIoTSentinelButRejectsItForWrites(t *testing.T) {
+	minimum, maximum := float64(16), float64(30)
+	readable := true
+	config := testConfig()
+	config.Devices[0].Properties = append(config.Devices[0].Properties, PropertyMapping{EndpointID: "miot-2", CapabilityID: "service-2", CapabilityType: "air-conditioner", PropertyID: "property-24", Name: "目标温度", ValueType: device.ValueTypeInt, SIID: 2, PIID: 24, Writable: true, Readable: &readable, Min: &minimum, Max: &maximum})
+	hub := &fakeHub{value: float64(0)}
+	provider, err := newProvider("xiaomi-main", "米家", config, func() hubClient { return hub })
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, _ := provider.snapshot("xiaomi-switch")
+	initialProperty, _ := initial.Property("miot-2", "service-2", "property-24")
+	if initialProperty.Value.Int == nil || *initialProperty.Value.Int != 16 || initial.ValidateStructure() != nil {
+		t.Fatalf("initial property=%#v validation=%v", initialProperty, initial.ValidateStructure())
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := provider.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close(ctx)
+	observed, err := provider.ReadProperty(ctx, providersdk.PropertyReadRequest{DeviceID: "xiaomi-switch", EndpointID: "miot-2", CapabilityID: "service-2", PropertyID: "property-24"})
+	if err != nil || observed.Value.Int == nil || *observed.Value.Int != 0 || observed.Definition.Min == nil || *observed.Definition.Min != 0 {
+		t.Fatalf("observed property=%#v err=%v", observed, err)
+	}
+	item, _ := provider.snapshot("xiaomi-switch")
+	if err := item.ValidateStructure(); err != nil {
+		t.Fatalf("out-of-range native sentinel invalidated event: %v", err)
+	}
+	if _, err := provider.WriteProperty(ctx, providersdk.PropertyWriteRequest{DeviceID: "xiaomi-switch", EndpointID: "miot-2", CapabilityID: "service-2", PropertyID: "property-24", Value: device.IntValue(0)}); err != providersdk.ErrPropertyInvalid {
+		t.Fatalf("write error=%v want %v", err, providersdk.ErrPropertyInvalid)
+	}
+}
+
+func TestProviderInitializeIsIdempotent(t *testing.T) {
+	hub := &fakeHub{value: false}
+	provider, err := newProvider("xiaomi-main", "米家", testConfig(), func() hubClient { return hub })
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := provider.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close(ctx)
+	if err := provider.Initialize(ctx); err != nil {
+		t.Fatalf("second Initialize() = %v", err)
+	}
+	hub.mu.Lock()
+	connects := hub.connects
+	hub.mu.Unlock()
+	if connects != 1 {
+		t.Fatalf("MQTT connection count = %d", connects)
+	}
+}
+
 func TestProviderLoadsCompleteMIoTSourceCatalog(t *testing.T) {
 	specType := "urn:miot-spec-v2:device:switch:0000A003:vendor-v1:1"
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -223,11 +280,73 @@ func TestProviderReconfiguresMappingsWithoutSecondConnection(t *testing.T) {
 	}
 }
 
+func TestProviderHotAppliesRenewedCredentialsForNextConnection(t *testing.T) {
+	hub := &fakeHub{value: false}
+	config := testConfig()
+	config.ClientCertificate, config.PrivateKey = "old-certificate", "old-key"
+	config.OAuth = &OAuthConfig{ClientID: "1", Region: "cn", OAuthUUID: "0123456789abcdef0123456789abcdef", VirtualDID: "2", UID: "3", AccessToken: "old-access", RefreshToken: "old-refresh", RefreshAfter: 1, ExpiresAt: 2}
+	current, err := newProvider("xiaomi-main", "米家", config, func() hubClient { return hub })
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := current.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	replacementHub := &fakeHub{value: false}
+	nextConfig := config
+	nextConfig.ClientCertificate = "renewed-certificate"
+	nextOAuth := *config.OAuth
+	nextOAuth.AccessToken, nextOAuth.RefreshToken, nextOAuth.RefreshAfter, nextOAuth.ExpiresAt = "new-access", "new-refresh", 3, 4
+	nextConfig.OAuth = &nextOAuth
+	replacement, err := newProvider("xiaomi-main", "米家", nextConfig, func() hubClient { return replacementHub })
+	if err != nil {
+		t.Fatal(err)
+	}
+	handled, err := current.Reconfigure(ctx, replacement)
+	if err != nil || !handled {
+		t.Fatalf("Reconfigure() = %v, %v", handled, err)
+	}
+	hub.mu.Lock()
+	oldConnections := hub.connects
+	hub.mu.Unlock()
+	replacementHub.mu.Lock()
+	renewedConnections := replacementHub.connects
+	replacementHub.mu.Unlock()
+	if renewedConnections != 0 || oldConnections != 1 {
+		t.Fatalf("connections before reconnect old=%d renewed=%d", oldConnections, renewedConnections)
+	}
+	if err := current.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := current.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer current.Close(ctx)
+	replacementHub.mu.Lock()
+	renewedConnections = replacementHub.connects
+	replacementHub.mu.Unlock()
+	if renewedConnections != 1 {
+		t.Fatalf("renewed credential factory connections=%d", renewedConnections)
+	}
+}
+
 func TestProviderDeclinesLiveTransportReconfiguration(t *testing.T) {
 	current, _ := newProvider("xiaomi-main", "米家", testConfig(), func() hubClient { return &fakeHub{} })
 	nextConfig := testConfig()
 	nextConfig.Host = "192.168.1.2"
 	replacement, _ := newProvider("xiaomi-main", "米家", nextConfig, func() hubClient { return &fakeHub{} })
+	handled, err := current.Reconfigure(context.Background(), replacement)
+	if err != nil || handled {
+		t.Fatalf("Reconfigure() = %v, %v", handled, err)
+	}
+}
+
+func TestProviderLetsManagerReplaceUninitializedInstance(t *testing.T) {
+	current, _ := newProvider("xiaomi-main", "米家", testConfig(), func() hubClient { return &fakeHub{} })
+	replacement, _ := newProvider("xiaomi-main", "新名称", testConfig(), func() hubClient { return &fakeHub{} })
 	handled, err := current.Reconfigure(context.Background(), replacement)
 	if err != nil || handled {
 		t.Fatalf("Reconfigure() = %v, %v", handled, err)

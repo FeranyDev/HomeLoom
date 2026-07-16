@@ -430,6 +430,15 @@ paths:
         "200": { description: Central gateway device directory, content: { application/json: { schema: { type: object, required: [data], properties: { data: { type: array, items: { $ref: "#/components/schemas/XiaomiHubDevice" } } } } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
         "409": { description: Xiaomi Provider is not enabled and connected }
+  /api/v1/xiaomi-miot-cloud/providers/{providerId}/devices:
+    parameters: [{ name: providerId, in: path, required: true, schema: { type: string } }]
+    get:
+      operationId: discoverXiaomiMIoTCloudDevices
+      description: Reuses the active xiaomi-miot-cloud account session and returns its Xiaomi account device directory. This is the third-party-compatible hass-xiaomi-miot style API, not the reserved future official Xiaomi Home Cloud Provider.
+      responses:
+        "200": { description: Xiaomi MIoT cloud account device directory, content: { application/json: { schema: { type: object, required: [data], properties: { data: { type: array, items: { $ref: "#/components/schemas/XiaomiHubDevice" } } } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { description: Xiaomi MIoT cloud Provider is not enabled and connected }
   /api/v1/providers/{providerId}:
     parameters: [{ name: providerId, in: path, required: true, schema: { type: string } }]
     put:

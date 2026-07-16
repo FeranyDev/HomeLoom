@@ -272,6 +272,9 @@ func (s *Store) transformProviderSecretValue(providerID, path string, value any,
 
 func providerConfigSecretKey(key string) bool {
 	normalized := strings.NewReplacer("_", "", "-", "", ".", "").Replace(strings.ToLower(key))
+	if normalized == "ssecurity" {
+		return true
+	}
 	for _, suffix := range []string{"password", "passphrase", "secret", "token", "apikey", "privatekey"} {
 		if strings.HasSuffix(normalized, suffix) {
 			return true

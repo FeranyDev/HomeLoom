@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -43,12 +44,33 @@ type Provider interface {
 }
 
 // LiveReconfigurer lets a running provider adopt a compatible replacement
-// configuration without tearing down its network session. Returning handled
-// false asks the runtime to perform the normal close-and-replace lifecycle.
-// Implementations must leave the current provider unchanged when returning an
-// error.
+// configuration without tearing down its network session. Providers with a
+// configurable child-device catalog must implement this contract so catalog
+// additions and mapping edits never reconnect the transport. Returning
+// handled false asks the runtime to perform a close-before-open replacement;
+// the manager never runs two connections for the same Provider ID.
+// Implementations must leave the current provider unchanged on error.
 type LiveReconfigurer interface {
 	Reconfigure(context.Context, Provider) (handled bool, err error)
+}
+
+// CredentialStatus describes renewable Provider credentials without exposing
+// their values. RefreshAt is the earliest safe renewal time across tokens and
+// certificates.
+type CredentialStatus struct {
+	Managed              bool      `json:"managed"`
+	RefreshAt            time.Time `json:"refreshAt,omitempty"`
+	TokenExpiresAt       time.Time `json:"tokenExpiresAt,omitempty"`
+	CertificateExpiresAt time.Time `json:"certificateExpiresAt,omitempty"`
+}
+
+// CredentialMaintainer is implemented by Providers whose durable credentials
+// can be renewed without user interaction. RenewCredentials returns a complete
+// replacement config document; persistence and runtime reconciliation remain
+// the application layer's responsibility.
+type CredentialMaintainer interface {
+	CredentialStatus(time.Time) (CredentialStatus, error)
+	RenewCredentials(context.Context) (json.RawMessage, error)
 }
 
 type Discoverer interface {

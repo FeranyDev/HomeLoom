@@ -12,6 +12,7 @@ import (
 )
 
 type managedProvider struct {
+	lifecycle      sync.Mutex
 	provider       providersdk.Provider
 	status         string
 	err            string
@@ -76,6 +77,11 @@ func (m *Manager) Provider(id string) (providersdk.Provider, bool) {
 
 func (m *Manager) Initialize(ctx context.Context) error {
 	m.mu.Lock()
+	if m.initialized {
+		m.mu.Unlock()
+		m.startRetryWorker()
+		return nil
+	}
 	if m.lifecycleCancel == nil {
 		m.lifecycleCtx, m.lifecycleCancel = context.WithCancel(ctx)
 	}
@@ -87,16 +93,19 @@ func (m *Manager) Initialize(ctx context.Context) error {
 		m.mu.RLock()
 		current := m.providers[id]
 		m.mu.RUnlock()
+		current.lifecycle.Lock()
 		if err := current.provider.Initialize(ctx); err != nil {
 			m.mu.Lock()
 			m.markFailureLocked(current, err)
 			m.mu.Unlock()
+			current.lifecycle.Unlock()
 			continue
 		}
 		m.mu.Lock()
 		current.status, current.err, current.transitionedAt = "running", "", time.Now().UTC()
 		m.mu.Unlock()
 		m.attach(id, current)
+		current.lifecycle.Unlock()
 	}
 	m.mu.Lock()
 	m.initialized = true
@@ -212,7 +221,9 @@ func (m *Manager) SourceCatalog(ctx context.Context) ([]providersdk.SourceCatalo
 	return result, nil
 }
 
-// Apply starts a provider and atomically replaces an instance with the same id.
+// Apply hot-reconfigures a compatible provider. If transport settings changed,
+// it closes the old instance before opening the replacement so two connections
+// with the same provider identity can never overlap.
 func (m *Manager) Apply(ctx context.Context, item providersdk.Provider) error {
 	id := item.Manifest().ID
 	if id == "" {
@@ -220,14 +231,21 @@ func (m *Manager) Apply(ctx context.Context, item providersdk.Provider) error {
 	}
 	m.mu.RLock()
 	current := m.providers[id]
-	running := current != nil && current.status == "running"
 	m.mu.RUnlock()
-	if running {
+	var previous []device.Device
+	if current != nil {
+		current.lifecycle.Lock()
+		defer current.lifecycle.Unlock()
+		m.mu.RLock()
+		unchanged := m.providers[id] == current
+		m.mu.RUnlock()
+		if !unchanged {
+			return fmt.Errorf("provider %q changed while applying configuration", id)
+		}
+		if source, ok := current.provider.(providersdk.Discoverer); ok {
+			previous, _ = source.DiscoverDevices(ctx)
+		}
 		if reconfigurer, ok := current.provider.(providersdk.LiveReconfigurer); ok {
-			var previous []device.Device
-			if source, discoverable := current.provider.(providersdk.Discoverer); discoverable {
-				previous, _ = source.DiscoverDevices(ctx)
-			}
 			handled, err := reconfigurer.Reconfigure(ctx, item)
 			if err != nil {
 				return fmt.Errorf("reconfigure provider %q: %w", id, err)
@@ -236,9 +254,26 @@ func (m *Manager) Apply(ctx context.Context, item providersdk.Provider) error {
 				return m.reconcileReconfigured(ctx, id, current, previous)
 			}
 		}
+		m.mu.Lock()
+		current.status, current.err, current.nextRetryAt, current.transitionedAt = "reconfiguring", "", time.Time{}, time.Now().UTC()
+		unsubscribe := current.unsubscribe
+		current.unsubscribe = nil
+		m.mu.Unlock()
+		if unsubscribe != nil {
+			unsubscribe()
+		}
+		if err := current.provider.Close(ctx); err != nil {
+			m.mu.Lock()
+			if m.providers[id] == current {
+				m.markFailureLocked(current, fmt.Errorf("close provider for replacement: %w", err))
+			}
+			m.mu.Unlock()
+			m.startRetryWorker()
+			return fmt.Errorf("close provider %q before replacement: %w", id, err)
+		}
 	}
 	if err := item.Initialize(ctx); err != nil {
-		return fmt.Errorf("initialize provider %q: %w", id, err)
+		return m.restoreAfterFailedReplacement(ctx, id, current, fmt.Errorf("initialize provider %q: %w", id, err))
 	}
 	created := &managedProvider{provider: item, status: "running", deviceIDs: make(map[string]struct{}), transitionedAt: time.Now().UTC()}
 	var discovered []device.Device
@@ -246,14 +281,14 @@ func (m *Manager) Apply(ctx context.Context, item providersdk.Provider) error {
 		items, err := source.DiscoverDevices(ctx)
 		if err != nil {
 			_ = item.Close(ctx)
-			return fmt.Errorf("discover provider %q: %w", id, err)
+			return m.restoreAfterFailedReplacement(ctx, id, current, fmt.Errorf("discover provider %q: %w", id, err))
 		}
 		for index := range items {
 			items[index].ProviderID = id
 			items[index].NormalizeAvailability()
 			if err := items[index].ValidateStructure(); err != nil {
 				_ = item.Close(ctx)
-				return fmt.Errorf("provider %q returned invalid device snapshot: %w", id, err)
+				return m.restoreAfterFailedReplacement(ctx, id, current, fmt.Errorf("provider %q returned invalid device snapshot: %w", id, err))
 			}
 		}
 		discovered = items
@@ -264,7 +299,7 @@ func (m *Manager) Apply(ctx context.Context, item providersdk.Provider) error {
 		if owner, exists := m.routes[snapshot.ID]; exists && owner != id {
 			m.mu.Unlock()
 			_ = item.Close(ctx)
-			return fmt.Errorf("device id %q is already owned by %q", snapshot.ID, owner)
+			return m.restoreAfterFailedReplacement(ctx, id, current, fmt.Errorf("device id %q is already owned by %q", snapshot.ID, owner))
 		}
 		created.deviceIDs[snapshot.ID] = struct{}{}
 	}
@@ -281,30 +316,42 @@ func (m *Manager) Apply(ctx context.Context, item providersdk.Provider) error {
 	}
 	m.mu.Unlock()
 	m.attach(id, created)
-	if old != nil {
-		if source, ok := old.provider.(providersdk.Discoverer); ok {
-			if previous, err := source.DiscoverDevices(ctx); err == nil {
-				for _, snapshot := range previous {
-					if _, retained := created.deviceIDs[snapshot.ID]; retained {
-						continue
-					}
-					snapshot.ProviderID = id
-					snapshot.Removed = true
-					snapshot.SetOnline(false)
-					m.broadcast(snapshot)
-				}
-			}
+	for _, snapshot := range previous {
+		if _, retained := created.deviceIDs[snapshot.ID]; retained {
+			continue
 		}
-		if old.unsubscribe != nil {
-			old.unsubscribe()
-		}
-		_ = old.provider.Close(ctx)
+		snapshot.ProviderID = id
+		snapshot.Removed = true
+		snapshot.SetOnline(false)
+		m.broadcast(snapshot)
 	}
 	for _, snapshot := range discovered {
 		snapshot.ProviderID = id
 		m.broadcast(snapshot)
 	}
 	return nil
+}
+
+func (m *Manager) restoreAfterFailedReplacement(ctx context.Context, id string, current *managedProvider, cause error) error {
+	if current == nil {
+		return cause
+	}
+	if err := current.provider.Initialize(ctx); err != nil {
+		m.mu.Lock()
+		if m.providers[id] == current {
+			m.markFailureLocked(current, fmt.Errorf("restore previous provider: %w", err))
+		}
+		m.mu.Unlock()
+		m.startRetryWorker()
+		return fmt.Errorf("%w; restore previous provider: %v", cause, err)
+	}
+	m.mu.Lock()
+	if m.providers[id] == current {
+		current.status, current.err, current.nextRetryAt, current.transitionedAt = "running", "", time.Time{}, time.Now().UTC()
+	}
+	m.mu.Unlock()
+	m.attach(id, current)
+	return cause
 }
 
 func (m *Manager) reconcileReconfigured(ctx context.Context, id string, current *managedProvider, previous []device.Device) error {
@@ -345,7 +392,7 @@ func (m *Manager) reconcileReconfigured(ctx context.Context, id string, current 
 		nextIDs[snapshot.ID] = struct{}{}
 		m.routes[snapshot.ID] = id
 	}
-	current.err, current.nextRetryAt, current.transitionedAt = "", time.Time{}, time.Now().UTC()
+	current.status, current.err, current.nextRetryAt, current.transitionedAt = "running", "", time.Time{}, time.Now().UTC()
 	m.mu.Unlock()
 
 	for _, snapshot := range previous {
@@ -365,11 +412,19 @@ func (m *Manager) reconcileReconfigured(ctx context.Context, id string, current 
 
 // Remove stops a provider and emits offline snapshots for its known devices.
 func (m *Manager) Remove(ctx context.Context, id string) error {
-	m.mu.Lock()
+	m.mu.RLock()
 	current, exists := m.providers[id]
 	if !exists {
-		m.mu.Unlock()
+		m.mu.RUnlock()
 		return fmt.Errorf("provider %q not found", id)
+	}
+	m.mu.RUnlock()
+	current.lifecycle.Lock()
+	defer current.lifecycle.Unlock()
+	m.mu.Lock()
+	if m.providers[id] != current {
+		m.mu.Unlock()
+		return fmt.Errorf("provider %q changed while removing it", id)
 	}
 	delete(m.providers, id)
 	for i, value := range m.order {
@@ -634,6 +689,8 @@ func (m *Manager) retryLoop(ctx context.Context, done chan struct{}) {
 }
 
 func (m *Manager) retryProvider(ctx context.Context, id string, current *managedProvider) {
+	current.lifecycle.Lock()
+	defer current.lifecycle.Unlock()
 	m.mu.Lock()
 	if m.providers[id] != current || current.status != "error" {
 		m.mu.Unlock()
@@ -642,6 +699,18 @@ func (m *Manager) retryProvider(ctx context.Context, id string, current *managed
 	current.status, current.transitionedAt = "retrying", time.Now().UTC()
 	current.retryCount++
 	m.mu.Unlock()
+	// An operational failure can mark a Provider as errored while its transport
+	// is still allocated. Always tear that lifecycle down before Initialize;
+	// otherwise strict Providers (notably Xiaomi's single MQTT session) reject
+	// the retry as a duplicate initialization.
+	if err := current.provider.Close(ctx); err != nil {
+		m.mu.Lock()
+		if m.providers[id] == current {
+			m.markFailureLocked(current, fmt.Errorf("close provider before retry: %w", err))
+		}
+		m.mu.Unlock()
+		return
+	}
 	if err := current.provider.Initialize(ctx); err != nil {
 		m.mu.Lock()
 		if m.providers[id] == current {
@@ -735,6 +804,7 @@ func (m *Manager) Close(ctx context.Context) error {
 		if current == nil {
 			continue
 		}
+		current.lifecycle.Lock()
 		if current.unsubscribe != nil {
 			current.unsubscribe()
 		}
@@ -745,6 +815,7 @@ func (m *Manager) Close(ctx context.Context) error {
 		current.status, current.transitionedAt = "stopped", time.Now().UTC()
 		current.unsubscribe = nil
 		m.mu.Unlock()
+		current.lifecycle.Unlock()
 	}
 	return first
 }

@@ -35,6 +35,9 @@ func RedactText(value string) string {
 
 func sensitiveKey(key string) bool {
 	normalized := strings.NewReplacer("_", "", "-", "", ".", "", " ", "").Replace(strings.ToLower(key))
+	if normalized == "ssecurity" {
+		return true
+	}
 	for _, part := range []string{"password", "passphrase", "passwd", "secret", "token", "apikey", "privatekey", "credential", "authorization", "pairingcode", "setupuri", "pin"} {
 		if strings.Contains(normalized, part) {
 			return true

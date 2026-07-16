@@ -7,6 +7,7 @@ export interface ProviderCapabilities {
 }
 
 export interface ProviderManifest { id: string; type: string; name: string; version: string }
+export interface ProviderCredentialStatus { managed: boolean; refreshAt?: string; tokenExpiresAt?: string; certificateExpiresAt?: string }
 
 export interface ProviderConfig {
   id: string
@@ -25,6 +26,9 @@ export interface Provider extends ProviderConfig {
   nextRetryAt?: string
   transitionedAt?: string
 	metrics?: Record<string, number>
+	credentials?: ProviderCredentialStatus
+	credentialError?: string
+	credentialRetryAt?: string
 }
 
 export type ProviderInput = ProviderConfig
