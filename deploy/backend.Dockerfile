@@ -21,10 +21,10 @@ RUN apk add --no-cache ca-certificates tzdata \
 WORKDIR /app
 COPY --from=build /out/homeloom /usr/local/bin/homeloom
 ENV HOMELOOM_HTTP_ADDRESS=0.0.0.0:8090 \
-    HOMELOOM_DATABASE=/data/homeloom.db
+    HOMELOOM_DATABASE_URL=postgres://homeloom:homeloom-dev@127.0.0.1:5432/homeloom?sslmode=disable \
+    HOMELOOM_MASTER_KEY=/data/homeloom.key
 VOLUME ["/data"]
 EXPOSE 8090 51826
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 CMD wget -q -O /dev/null http://127.0.0.1:8090/ready || exit 1
 USER homeloom
 ENTRYPOINT ["/usr/local/bin/homeloom"]
-

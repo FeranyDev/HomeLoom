@@ -23,7 +23,7 @@ const (
 )
 
 // Config contains the durable Xiaomi central-hub configuration. Credentials
-// and PEM material are stored in the provider JSON so SQLite's existing
+// and PEM material are stored in the provider JSON so PostgreSQL's existing
 // recursive secret encryption can protect them without a sidecar YAML/file.
 type Config struct {
 	Host               string         `json:"host"`
@@ -56,14 +56,18 @@ type OAuthConfig struct {
 }
 
 type DeviceConfig struct {
-	DID        string            `json:"did"`
-	ID         string            `json:"id,omitempty"`
-	Name       string            `json:"name"`
-	Type       device.Type       `json:"type"`
-	Model      string            `json:"model,omitempty"`
-	Room       string            `json:"room,omitempty"`
-	Properties []PropertyMapping `json:"properties"`
-	Actions    []ActionMapping   `json:"actions,omitempty"`
+	DID            string            `json:"did"`
+	ID             string            `json:"id,omitempty"`
+	Name           string            `json:"name"`
+	Type           device.Type       `json:"type"`
+	Model          string            `json:"model,omitempty"`
+	HomeID         string            `json:"homeId,omitempty"`
+	Home           string            `json:"home,omitempty"`
+	RoomID         string            `json:"roomId,omitempty"`
+	Room           string            `json:"room,omitempty"`
+	ConnectionMode string            `json:"connectionMode,omitempty"`
+	Properties     []PropertyMapping `json:"properties"`
+	Actions        []ActionMapping   `json:"actions,omitempty"`
 }
 
 type PropertyMapping struct {

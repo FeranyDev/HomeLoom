@@ -38,7 +38,7 @@ export function AuthScreen({ initialized, onSubmit }: Props) {
 		<section className="auth-card" aria-labelledby="auth-title">
 			<p className="eyebrow">HOMELOOM · ADMIN</p>
 			<h1 id="auth-title">{initialized ? '欢迎回来。' : '先系好第一根线。'}</h1>
-			<p>{initialized ? '登录后管理设备、Provider 与桥接配置。' : '创建本机唯一的管理员账户。配置和登录会话将保存在 SQLite 中。'}</p>
+			<p>{initialized ? '登录后管理设备、Provider 与桥接配置。' : '创建本机唯一的管理员账户。配置和登录会话将保存在 PostgreSQL 中。'}</p>
 			<form onSubmit={(event) => void submit(event)}>
 				<label>用户名<input autoComplete="username" autoFocus value={username} onChange={(event) => setUsername(event.target.value)} minLength={3} maxLength={64} required /></label>
 				<label>密码<input type="password" autoComplete={initialized ? 'current-password' : 'new-password'} value={password} onChange={(event) => setPassword(event.target.value)} minLength={12} maxLength={128} required /></label>

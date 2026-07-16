@@ -228,11 +228,11 @@ var modelContracts = map[Type]ModelContract{
 		optionalMeasurement("humidity", "current-humidity", "当前湿度", "percent", false, 0, 100, 0.1),
 		optional("thermostat", "display-units", "显示温标", ValueTypeEnum, "", true, "celsius", "fahrenheit"),
 	}},
-	TypeAirConditioner: {DeviceType: TypeAirConditioner, Name: "空调", Version: 1, Parameters: []ModelParameter{
+	TypeAirConditioner: {DeviceType: TypeAirConditioner, Name: "空调", Version: 2, Parameters: []ModelParameter{
 		required("air-conditioner", "active", "启用", ValueTypeBool, true),
-		requiredEnum("air-conditioner", "current-state", "当前工作状态", false, "off", "idle", "cooling", "heating", "drying", "fan-only"),
+		optionalEnum("air-conditioner", "current-state", "当前工作状态", false, "off", "idle", "cooling", "heating", "drying", "fan-only"),
 		requiredEnum("air-conditioner", "target-mode", "运行模式", true, "off", "auto", "cool", "heat", "dry", "fan"),
-		requiredMeasurement("temperature", "current-temperature", "当前温度", "celsius", -100, 200, 0.1),
+		optionalMeasurement("temperature", "current-temperature", "当前温度", "celsius", false, -100, 200, 0.1),
 		requiredWritableMeasurement("temperature", "target-temperature", "目标温度", "celsius", 16, 32, 0.5),
 		optionalEnum("air-conditioner", "fan-speed", "风速档位", true, "auto", "low", "medium", "high", "turbo"),
 		optionalMeasurement("air-conditioner", "rotation-speed", "风速百分比", "percent", true, 0, 100, 1),

@@ -6,7 +6,7 @@
 docker compose up --build -d
 ```
 
-管理界面位于 `http://主机地址:5173`，后端 API 位于 `8090`。SQLite、WAL 和 HomeKit HAP 身份通过 `homeloom-data` 卷持久化到 `/data`。
+管理界面位于 `http://主机地址:5173`，后端 API 位于 `8090`。PostgreSQL 17 数据保存在 `postgres-data` 卷；HomeKit HAP 身份和 HomeLoom 主密钥保存在 `homeloom-data` 卷。
 
 ## 为什么使用 host network
 
@@ -16,21 +16,22 @@ Docker Desktop 的 host network 行为与原生 Linux 不完全一致。macOS/Wi
 
 ## 数据与升级
 
-- 不要删除 `homeloom-data` 卷，否则 SQLite 配置、稳定 HomeKit 身份和配对关系都会丢失；
-- 升级前应停止写入并备份该卷；
-- 后端启动时自动按顺序执行 SQLite migrations；
+- 不要删除 `postgres-data`，否则 PostgreSQL 中的 Provider、Target、映射和管理员配置都会丢失；
+- 不要删除 `homeloom-data`，否则加密主密钥、稳定 HomeKit 身份和配对关系都会丢失；
+- 升级前应同时备份两个卷；
+- 后端启动时通过 GORM `AutoMigrate` 同步当前模型，不执行旧版编号 migration；
 - 回滚到旧版本前必须确认旧程序能够识别当前数据库 schema；
 - `docker compose down` 保留卷，`docker compose down -v` 会删除卷。
 
-运行中可以生成 SQLite 一致性快照：
+运行中可以生成 PostgreSQL 一致性快照：
 
 ```bash
-docker compose exec backend homeloom -backup /data/backups/homeloom.db
+docker compose exec backend homeloom -backup /data/backups/homeloom.json
 ```
 
-`-backup` 使用 SQLite `VACUUM INTO`，不会对源库执行 migrations，并将输出权限设为 `0600`。该文件包含数据库配置，但不包含 `/data/hap/...` 下的 HomeKit 密钥和配对资料。完整灾难恢复应停止 backend，同时备份整个 `homeloom-data` 卷。
+`-backup` 在 `REPEATABLE READ` 只读事务中生成逻辑 JSON 快照，并同时输出 `.json.key`，不会对源库运行 `AutoMigrate`。快照包含数据库配置，但不包含 `/data/hap/...` 下的 HomeKit 身份和配对资料。
 
-恢复数据库前应保留当前卷副本，停止 backend，替换 `.db` 后移除旧的 `-wal`/`-shm` 临时文件再启动。程序会拒绝打开高于自身支持版本的数据库，不应绕过该检查强制回滚。
+恢复数据库前应备份两个数据卷并停止 backend，然后运行 `docker compose run --rm backend -restore /data/backups/homeloom.json -restore-replace`。恢复会先验证 snapshot schema 和主密钥，再以事务替换表数据并保留恢复前逻辑快照。
 
 管理 API 使用单管理员数据库 Session 和 CSRF 防护，Compose 中的后端仅信任来自 `127.0.0.1/32`、`::1/128` 的前端 Nginx 转发头。Nginx 会覆盖 `X-Forwarded-For` 和 `X-Forwarded-Proto`；直接访问 8090 的局域网客户端不能伪造来源来绕过登录限速。
 
@@ -65,4 +66,4 @@ Compose 中的 `mosquitto` 是可选开发 Broker，使用 host network 监听 `
 docker compose up -d mosquitto
 ```
 
-其配置允许匿名连接，仅适合本机或可信隔离网络。生产环境必须改用账号、ACL 与 TLS，并在 HomeLoom 的 MQTT Provider 页面中保存对应凭据；Provider 密码会在 SQLite 中加密。
+其配置允许匿名连接，仅适合本机或可信隔离网络。生产环境必须改用账号、ACL 与 TLS，并在 HomeLoom 的 MQTT Provider 页面中保存对应凭据；Provider 密码会在 PostgreSQL 中加密。

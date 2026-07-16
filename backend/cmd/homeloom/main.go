@@ -15,7 +15,7 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/config"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	"github.com/feranydev/homeloom/backend/internal/domain/target"
-	"github.com/feranydev/homeloom/backend/internal/persistence/sqlite"
+	"github.com/feranydev/homeloom/backend/internal/persistence/postgres"
 	"github.com/feranydev/homeloom/backend/internal/platform/httpapi"
 	"github.com/feranydev/homeloom/backend/internal/platform/safelog"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
@@ -29,8 +29,8 @@ import (
 func main() {
 	configPath := flag.String("config", "", "path to a YAML configuration file")
 	showVersion := flag.Bool("version", false, "print build version and exit")
-	backupPath := flag.String("backup", "", "create a consistent SQLite backup and exit")
-	restorePath := flag.String("restore", "", "restore a validated SQLite backup and exit")
+	backupPath := flag.String("backup", "", "create a consistent PostgreSQL logical snapshot and exit")
+	restorePath := flag.String("restore", "", "restore a validated PostgreSQL logical snapshot and exit")
 	restoreReplace := flag.Bool("restore-replace", false, "explicitly allow restore to replace the configured database")
 	initializeVirtualModels := flag.Bool("init-all-virtual-models", false, "initialize one demo device for every supported Virtual Provider model")
 	flag.Parse()
@@ -57,20 +57,20 @@ func main() {
 		os.Exit(2)
 	}
 	if *restorePath != "" {
-		recoveryPath, restoreErr := sqlite.Restore(ctx, *restorePath, settings.Storage.Database, *restoreReplace)
+		recoveryPath, restoreErr := postgres.Restore(ctx, *restorePath, settings.Storage.DatabaseURL, settings.Storage.MasterKey, *restoreReplace)
 		if restoreErr != nil {
-			logger.Error("database restore failed", "source", *restorePath, "destination", settings.Storage.Database, "error", restoreErr)
+			logger.Error("database restore failed", "source", *restorePath, "error", restoreErr)
 			os.Exit(1)
 		}
-		if discardErr := sqlite.DiscardPendingRestore(settings.Storage.Database); discardErr != nil {
+		if discardErr := postgres.DiscardPendingRestore(settings.Storage.MasterKey); discardErr != nil {
 			logger.Error("database restored but stale pending restore cleanup failed", "error", discardErr)
 			os.Exit(1)
 		}
-		logger.Info("database restore completed", "source", *restorePath, "destination", settings.Storage.Database, "pre_restore_backup", recoveryPath)
+		logger.Info("database restore completed", "source", *restorePath, "pre_restore_backup", recoveryPath)
 		return
 	}
 	if *backupPath != "" {
-		store, openErr := sqlite.OpenForBackup(ctx, settings.Storage.Database)
+		store, openErr := postgres.OpenForBackup(ctx, settings.Storage.DatabaseURL, settings.Storage.MasterKey)
 		if openErr != nil {
 			logger.Error("database backup source failed", "error", openErr)
 			os.Exit(1)
@@ -81,21 +81,21 @@ func main() {
 			os.Exit(1)
 		}
 		version, _ := store.SchemaVersion(ctx)
-		logger.Info("database backup completed", "source", settings.Storage.Database, "destination", *backupPath, "schema_version", version)
+		logger.Info("database backup completed", "destination", *backupPath, "schema_version", version)
 		return
 	}
-	recoveryPath, pendingApplied, pendingErr := sqlite.ApplyPendingRestore(ctx, settings.Storage.Database)
+	recoveryPath, pendingApplied, pendingErr := postgres.ApplyPendingRestore(ctx, settings.Storage.DatabaseURL, settings.Storage.MasterKey)
 	if pendingErr != nil && !pendingApplied {
-		logger.Error("pending database restore failed", "destination", settings.Storage.Database, "error", pendingErr)
+		logger.Error("pending database restore failed", "error", pendingErr)
 		os.Exit(1)
 	}
 	if pendingErr != nil {
-		logger.Warn("pending database restore applied with staging cleanup warning", "destination", settings.Storage.Database, "error", pendingErr)
+		logger.Warn("pending database restore applied with staging cleanup warning", "error", pendingErr)
 	}
 	if pendingApplied {
-		logger.Info("pending database restore applied", "destination", settings.Storage.Database, "pre_restore_backup", recoveryPath)
+		logger.Info("pending database restore applied", "pre_restore_backup", recoveryPath)
 	}
-	store, err := sqlite.Open(ctx, settings.Storage.Database)
+	store, err := postgres.Open(ctx, settings.Storage.DatabaseURL, settings.Storage.MasterKey)
 	if err != nil {
 		logger.Error("database initialization failed", "error", err)
 		os.Exit(1)
@@ -222,7 +222,7 @@ func main() {
 		os.Exit(1)
 	}
 	server.SetAuthService(application.NewAuthService(store))
-	server.SetMaintenanceService(application.NewMaintenanceService(store, settings.Storage.Database, sqlite.ValidateRestoreCandidate, sqlite.PendingRestorePaths, sqlite.WritePendingRestoreMarker))
+	server.SetMaintenanceService(application.NewMaintenanceService(store, settings.Storage.MasterKey, postgres.ValidateRestoreCandidate, postgres.PendingRestorePaths, postgres.WritePendingRestoreMarker))
 	server.SetSettingsService(settingsService)
 	auditService := application.NewAuditService(store)
 	server.SetAuditService(auditService)

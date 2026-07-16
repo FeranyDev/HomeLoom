@@ -2,14 +2,12 @@ package application_test
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	"github.com/feranydev/homeloom/backend/internal/mapping"
-	"github.com/feranydev/homeloom/backend/internal/persistence/sqlite"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 )
 
@@ -54,7 +52,7 @@ func (p *rawMappingProvider) WriteProperty(_ context.Context, request providersd
 
 func TestProviderRouteRelocatesRawPathAndResolvesReverseWrite(t *testing.T) {
 	ctx := context.Background()
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "mapping.db"))
+	store, err := openTestStore(t, ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +100,7 @@ func TestProviderRouteRelocatesRawPathAndResolvesReverseWrite(t *testing.T) {
 
 func TestRegisteredCustomPropertyEntersUnifiedProjection(t *testing.T) {
 	ctx := context.Background()
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "custom-projection.db"))
+	store, err := openTestStore(t, ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +140,7 @@ func TestRegisteredCustomPropertyEntersUnifiedProjection(t *testing.T) {
 
 func TestConsumerRouteProjectsAndReversesConversion(t *testing.T) {
 	ctx := context.Background()
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "consumer.db"))
+	store, err := openTestStore(t, ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +185,7 @@ func TestConsumerRouteProjectsAndReversesConversion(t *testing.T) {
 
 func TestConsumerRouteIsScopedToTargetVirtualDevice(t *testing.T) {
 	ctx := context.Background()
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "target-consumer.db"))
+	store, err := openTestStore(t, ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +229,7 @@ func TestConsumerRouteIsScopedToTargetVirtualDevice(t *testing.T) {
 
 func TestSinglePropertySensorConsumerRouteSelectsHomeKitSemantic(t *testing.T) {
 	ctx := context.Background()
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "single-sensor-consumer.db"))
+	store, err := openTestStore(t, ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +266,7 @@ func TestSinglePropertySensorConsumerRouteSelectsHomeKitSemantic(t *testing.T) {
 
 func TestCustomUnifiedPropertyPersistsInModelCatalog(t *testing.T) {
 	ctx := context.Background()
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "custom-model.db"))
+	store, err := openTestStore(t, ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

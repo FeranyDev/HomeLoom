@@ -39,7 +39,7 @@ export function ProviderWorkspace({ providers, devices, onEdit, onManageDevices,
 		</div>
 		{discoveryError && <p className="inline-error" role="alert">{discoveryError}</p>}
 		{gateways.length > 0 && <div className="xiaomi-gateways"><div className="command-heading"><h3>局域网小米中枢</h3><span>{gateways.length} 个候选</span></div>{gateways.map((gateway) => <article key={`${gateway.instance}-${gateway.hostName}`}><span className={`status-dot ${gateway.mqttEnabled ? 'is-online' : ''}`} /><div><strong>{gateway.instance}</strong><small>{gateway.addresses[0] ?? gateway.hostName}:{gateway.port}</small></div><div><b>{gateway.role === 1 ? '主中枢' : `角色 ${gateway.role ?? '未知'}`}</b><small>{gateway.mqttEnabled ? '本地 MQTT 可用' : '未声明 MQTT'}</small></div><code>{gateway.did ?? 'DID 未广播'}</code></article>)}</div>}
-		<div className="config-note"><span>配置来源</span><strong>SQLite · providers</strong><p>每个实例独立连接、发现、重试和发布；更新配置后立即替换对应运行实例。</p></div>
+		<div className="config-note"><span>配置来源</span><strong>PostgreSQL · providers</strong><p>每个实例独立连接、发现、重试和发布；更新配置后立即替换对应运行实例。</p></div>
 		{providers.length === 0 ? <CollectionEmpty title="还没有 Provider" description="新建 Virtual、MQTT、小米中枢或第三方兼容 MIoT 云 Provider 后，实例会立即初始化并进入统一运行流程。" /> : <div className="provider-list">{providers.map((provider) => <ProviderCard key={provider.id} provider={provider} devices={devices.filter((item) => item.providerId === provider.id && !item.removed)} onEdit={onEdit} onManageDevices={onManageDevices} onDelete={onDelete} onRestart={onRestart} onTest={onTest} onSimulate={onSimulate} />)}</div>}
 	</section>
 }

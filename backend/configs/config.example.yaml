@@ -2,4 +2,5 @@ server:
   address: "127.0.0.1:8090"
 
 storage:
-  database: "./data/homeloom.db"
+  database_url: "postgres://homeloom:homeloom-dev@127.0.0.1:54329/homeloom?sslmode=disable"
+  master_key: "./data/homeloom.key"

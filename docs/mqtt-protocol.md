@@ -1,6 +1,6 @@
 # HomeLoom MQTT Provider 协议 v1
 
-MQTT Provider 把 Broker 上的设备转换成 HomeLoom Device Model。配置保存在 SQLite；实时设备状态、远端 sequence 和连接状态只保存在内存，服务重启后由 retained discovery、availability 和新状态重新建立。
+MQTT Provider 把 Broker 上的设备转换成 HomeLoom Device Model。配置保存在 PostgreSQL；实时设备状态、远端 sequence 和连接状态只保存在内存，服务重启后由 retained discovery、availability 和新状态重新建立。
 
 ## Provider 配置
 
@@ -26,7 +26,7 @@ MQTT Provider 把 Broker 上的设备转换成 HomeLoom Device Model。配置保
 }
 ```
 
-支持 `mqtt`、`tls`/`mqtts`、`ws` 和 `wss`。Broker URL 中禁止嵌入凭据。密码、token、secret 和 private key 类配置在 SQLite 中由数据库主密钥加密，列表和诊断接口只返回 `********`。
+支持 `mqtt`、`tls`/`mqtts`、`ws` 和 `wss`。Broker URL 中禁止嵌入凭据。密码、token、secret 和 private key 类配置在 PostgreSQL 中由数据库主密钥加密，列表和诊断接口只返回 `********`。
 
 ## Topic
 

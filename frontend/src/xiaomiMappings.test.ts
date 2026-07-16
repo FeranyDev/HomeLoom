@@ -42,10 +42,8 @@ describe('Xiaomi temperature/humidity mapping', () => {
 	it('creates the complete required air-conditioner mapping baseline', () => {
 		expect(requiredXiaomiProperties('air-conditioner')).toEqual([
 			expect.objectContaining({ capabilityId: 'air-conditioner', propertyId: 'active', writable: true }),
-			expect.objectContaining({ capabilityId: 'air-conditioner', propertyId: 'current-state', writable: false }),
-			expect.objectContaining({ capabilityId: 'air-conditioner', propertyId: 'target-mode', writable: true }),
-			expect.objectContaining({ capabilityId: 'temperature', propertyId: 'current-temperature', writable: false }),
-			expect.objectContaining({ capabilityId: 'temperature', propertyId: 'target-temperature', writable: true }),
+			expect.objectContaining({ capabilityId: 'air-conditioner', propertyId: 'target-mode', piid: 2, writable: true }),
+			expect.objectContaining({ capabilityId: 'temperature', propertyId: 'target-temperature', piid: 3, writable: true, min: 16, max: 32 }),
 		])
 	})
 })

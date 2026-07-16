@@ -12,7 +12,7 @@ HomeLoom 将三种小米接入方式视为不同 Provider 类型，不共享名�
 
 ## Xiaomi Central Hub Provider
 
-HomeLoom 的 Xiaomi Provider 通过小米中枢网关的局域网 MQTT 5/MIPS 接口接入米家设备。实现依据根目录 `xiaomi-central-hub-client-oauth-tls-fix-source/` 的 MIT 许可参考代码，并适配到 HomeLoom 的 Provider SDK、内存状态系统和 SQLite 配置体系。
+HomeLoom 的 Xiaomi Provider 通过小米中枢网关的局域网 MQTT 5/MIPS 接口接入米家设备。实现依据根目录 `xiaomi-central-hub-client-oauth-tls-fix-source/` 的 MIT 许可参考代码，并适配到 HomeLoom 的 Provider SDK、内存状态系统和 PostgreSQL 配置体系。
 
 ## 能力范围
 
@@ -47,15 +47,15 @@ HomeLoom 的 Xiaomi Provider 通过小米中枢网关的局域网 MQTT 5/MIPS �
 9. 从设备目录中选择要接入的设备和统一模型，再生成设备映射；
 10. 在高级 JSON 中按设备 MIoT Spec 核对 `siid/piid/aiid`，保存后实时应用。
 
-新建 Xiaomi Provider 时 `devices` 默认为空数组，不再生成 DID 为空的示例设备。Provider 配置页不展示、读取或修改子设备映射，防止在 OAuth、证书或 MQTT 尚未就绪时越级发现设备。网关目录提供设备身份、名称、房间、型号和可用的 `specType`；设备加入 HomeLoom 后，Provider 根据 `specType` 或 `model` 从 MIoT Spec V2 实例目录加载完整的 Property、Action 和 Event 定义并缓存到 SQLite。自动生成的旧式映射仍只覆盖统一模型必需参数，但设备中心的来源目录不再受这些已配置属性限制。
+新建 Xiaomi Provider 时 `devices` 默认为空数组，不再生成 DID 为空的示例设备。Provider 配置页不展示、读取或修改子设备映射，防止在 OAuth、证书或 MQTT 尚未就绪时越级发现设备。网关目录提供设备身份、名称、房间、型号和可用的 `specType`；设备加入 HomeLoom 后，Provider 根据 `specType` 或 `model` 从 MIoT Spec V2 实例目录加载完整的 Property、Action 和 Event 定义并缓存到 PostgreSQL。自动生成的旧式映射仍只覆盖统一模型必需参数，但设备中心的来源目录不再受这些已配置属性限制。
 
-Provider 配置只写入 SQLite，不生成 `auth.json`、`config.json` 或 `certs/` 目录。`accessToken`、`refreshToken` 和 `privateKey` 由数据库旁主密钥使用 AES-256-GCM 加密；管理 API 和诊断导出只返回 `********`。
+Provider 配置只写入 PostgreSQL，不生成 `auth.json`、`config.json` 或 `certs/` 目录。`accessToken`、`refreshToken` 和 `privateKey` 由 `storage.master_key` 指定的主密钥使用 AES-256-GCM 加密；管理 API 和诊断导出只返回 `********`。
 
 ### Token 与证书自动续期
 
 - OAuth Token 在 `expires_in` 的 70% 时间点进入刷新窗口，最迟会在到期前 5 分钟刷新；服务启动、Provider 配置变化和到达刷新时间都会唤醒检查；
 - 中枢客户端证书在有效期剩余 20% 时续签，提前量最多 7 天；证书无法解析时会立即尝试修复；
-- 续签复用原账号 UID、`virtualDid` 和 Ed25519 私钥，申请结果必须校验公钥、证书主题和有效期后才可写入 SQLite；
+- 续签复用原账号 UID、`virtualDid` 和 Ed25519 私钥，申请结果必须校验公钥、证书主题和有效期后才可写入 PostgreSQL；
 - 新 Token 与证书通过 Provider 热配置更新到“下一次 TLS 握手”材料，当前健康 MQTT 连接不会被主动中断，也不会创建第二条连接；
 - 云端失败按 1、2、4、8、16、30 分钟指数退避。每个 Provider 独立重试，失败不会阻塞其他 Provider；
 - 数据库写入成功但运行时应用暂时失败时，只重试应用已保存的新凭据，不会重复刷新 Token 或重复申请证书；
@@ -73,7 +73,11 @@ Provider 配置只写入 SQLite，不生成 `auth.json`、`config.json` 或 `cer
     "name": "客厅开关",
     "type": "switch",
     "model": "vendor.model.v1",
+	"homeId": "10001",
+	"home": "我的家",
+    "roomId": "20001",
     "room": "客厅",
+	"connectionMode": "auto",
     "properties": [
       {
         "endpointId": "main",
@@ -127,8 +131,8 @@ miot-{SIID} / service-{SIID} / property-{PIID}
 
 ## 运行语义
 
-- SQLite 保存期望配置、OAuth 身份、Token、证书和 MIoT 映射；
-- Token 与证书由后台调度器提前续期并原子写回 SQLite；
+- PostgreSQL 保存期望配置、OAuth 身份、Token、证书和 MIoT 映射；
+- Token 与证书由后台调度器提前续期并原子写回 PostgreSQL；
 - 当前属性值、在线状态和 sequence 只保存在内存；
 - 启动时连接中枢、获取设备列表、加载/缓存 MIoT Spec，并有界并发读取完整可读属性；
 - 仅修改子设备映射时复用当前 MQTT 会话原地更新设备模型，新增属性在后台有界并发读取，不创建相同 Client ID 的第二条连接；
@@ -152,14 +156,21 @@ MIoT Spec 只用于构造 Provider 原始目录，不会自动改变统一模型
 
 运行流程：
 
-1. 使用小米账号、密码和地区建立 `xiaomiio` 会话，或导入完整的 `userId`、`ssecurity`、`serviceToken` 三元组；
-2. 通过 `home/device_list` 读取账号设备目录；
+1. 使用小米账号、密码和地区建立 `xiaomiio` 会话，或导入完整的 `userId`、`ssecurity`、`serviceToken` 三元组；若账号触发风控，则保留本次登录 Cookie 并进入短信/邮箱验证步骤；
+2. 通过 `home/device_list` 读取账号设备基础目录，再调用 `v2/homeroom/gethome_merged` 读取本人及共享家庭的家庭、房间层级，并按 DID 合并 `homeId/homeName/roomId/roomName`；
 3. 用户在独立“管理设备”页面选择设备与统一模型，默认 ID 使用 `xiaomi-miot-` 前缀；
 4. 根据型号解析并缓存 MIoT Spec，形成完整来源 Property、Action 和 Event 目录；
-5. 可读 Property 以最多 10 项一批调用 `miotspec/prop/get`，默认每 30 秒轮询；
-6. 写入和命令分别调用 `miotspec/prop/set` 与 `miotspec/action`；
-7. 云会话出现认证过期时，如果保存了账号密码则在当前 Provider 内重新登录并重试一次，不创建第二个 Provider 实例。
+5. 每台设备可选择 `auto`、`local` 或 `cloud`：`auto` 使用云目录返回的私网 `localip` 与 Token 优先通过 UDP/54321 执行 LAN MIoT，失败时仅为本轮操作回退云端；
+6. 可读 Property 以最多 10 项一批同步，默认每 30 秒执行；LAN 使用 `get_properties`，云端使用 `miotspec/prop/get`；
+7. 写入和命令同样遵循设备连接策略，本地使用 `set_properties`/`action`，云端使用 `miotspec/prop/set`/`miotspec/action`；
+8. 云会话出现认证过期时，如果保存了账号密码则在当前 Provider 内重新登录并重试一次，不创建第二个 Provider 实例。
 
-账号密码、`ssecurity` 与 `serviceToken` 都属于敏感 Provider 配置：写入 SQLite 时使用项目主密钥加密，管理 API 返回 `********`。如果账号要求验证码或身份验证，初始化会返回小米验证地址；当前版本不会绕过验证，需先完成账号验证后重试或导入合法会话。
+云端设备加入时的基础模板只用于在 MIoT Spec 尚未加载前表达所选统一模型。Spec 可用后，Provider 会识别未被用户修改的自动模板，并按真实 property URN、SIID/PIID、数值范围和枚举重新生成运行时映射；显式手工映射不会被覆盖。空调伴侣等不提供当前室温/当前运行状态的设备使用 `air-conditioner` v2，其必须参数为启用、运行模式和目标温度。
+
+设备管理页以“家庭 / 房间”展示云端位置，加入映射时同时保存家庭与房间的 ID 和名称。未分配到房间的设备仍保留家庭信息；若位置目录接口暂时不可用，基础设备目录仍可使用，不会因此清空已发现设备。
+
+`connectionMode` 是逐设备配置：`auto` 为默认值；`local` 在缺少私网 IP、16 字节 Token 或局域网不可达时直接报告不可用；`cloud` 完全跳过局域网尝试。管理 API 只返回 `localIp` 和 `localAvailable`，云目录中的设备 Token 只保存在 Provider 运行时内存，既不写入设备映射也不返回前端。局域网目标只允许私网或链路本地 IP，避免把云端目录数据用于访问公网地址。
+
+账号密码、`ssecurity` 与 `serviceToken` 都属于敏感 Provider 配置：写入 PostgreSQL 时使用项目主密钥加密，管理 API 返回 `********`。页面会先调用登录入口；如果小米要求身份验证，HomeLoom 创建一个仅保存在内存、10 分钟过期且最多尝试 5 次的登录挑战。用户在小米验证页发送短信或邮件验证码但不在该页提交，再回到 HomeLoom 回填验证码。后端在原 Cookie 会话中完成验证，成功取得完整三元组后才允许保存并初始化 Provider。一次性验证码和账号密码不会写入挑战数据库，登录响应统一使用 `Cache-Control: no-store`。
 
 该接口依赖未公开的兼容 API，可能随小米服务变化。它采用轮询，适合空调、净化器、灯、插座等持续状态 Wi‑Fi 设备；不适合无线开关、人体/门窗传感器等需要瞬时事件的设备。事件型设备继续优先使用中枢 MQTT。

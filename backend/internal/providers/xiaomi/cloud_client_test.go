@@ -99,6 +99,64 @@ func TestHTTPMiotCloudClientEncryptsPropertyRequests(t *testing.T) {
 	}
 }
 
+func TestHTTPMiotCloudClientMergesHomeAndRoomDirectoryIntoDevices(t *testing.T) {
+	security := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef"))
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/app/home/device_list":
+			_, _ = response.Write([]byte(`{"code":0,"result":{"list":[{"did":"device-room","name":"客厅空调","model":"xiaomi.aircondition.v1","localip":"192.168.1.20","token":"30313233343536373839616263646566"},{"did":"device-shared","name":"共享灯","model":"vendor.light.v1"},{"did":"device-unassigned","name":"门锁","model":"vendor.lock.v1","home_id":"home-main"}]}}`))
+		case "/app/v2/homeroom/gethome_merged":
+			_, _ = response.Write([]byte(`{"code":0,"result":{"homelist":[{"id":"home-main","name":"我的家","dids":["device-unassigned"],"roomlist":[{"id":"room-living","name":"客厅","dids":["device-room"]}]}],"share_home_list":[{"id":"home-shared","name":"父母家","roomlist":[{"id":"room-shared","name":"卧室","dids":["device-shared"]}]}]}}`))
+		default:
+			response.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	client := newHTTPMiotCloudClient(CloudConfig{Region: "cn", UserID: "123", Ssecurity: security, ServiceToken: "token", RequestTimeoutSec: 5})
+	client.apiBase, client.http = server.URL+"/app", server.Client()
+
+	devices, err := client.DeviceList(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	byDID := make(map[string]HubDevice, len(devices))
+	for _, item := range devices {
+		byDID[item.DID] = item
+	}
+	if item := byDID["device-room"]; item.HomeID != "home-main" || item.HomeName != "我的家" || item.RoomID != "room-living" || item.RoomName != "客厅" {
+		t.Fatalf("room device location = %#v", item)
+	}
+	if item := byDID["device-room"]; item.LocalIP != "192.168.1.20" || !item.Local || item.Token == "" {
+		t.Fatalf("room device local access = %#v", item)
+	}
+	if item := byDID["device-shared"]; item.HomeID != "home-shared" || item.HomeName != "父母家" || item.RoomName != "卧室" {
+		t.Fatalf("shared device location = %#v", item)
+	}
+	if item := byDID["device-unassigned"]; item.HomeName != "我的家" || item.RoomID != "" || item.RoomName != "" {
+		t.Fatalf("unassigned device location = %#v", item)
+	}
+}
+
+func TestHTTPMiotCloudClientKeepsDeviceListWhenHomeDirectoryFails(t *testing.T) {
+	security := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef"))
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/app/home/device_list" {
+			_, _ = response.Write([]byte(`{"code":0,"result":{"list":[{"did":"device-1","name":"空调","home_id":"home-1","home_name":"我的家","room_id":"room-1","room_name":"卧室"}]}}`))
+			return
+		}
+		response.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	client := newHTTPMiotCloudClient(CloudConfig{Region: "cn", UserID: "123", Ssecurity: security, ServiceToken: "token", RequestTimeoutSec: 5})
+	client.apiBase, client.http = server.URL+"/app", server.Client()
+
+	devices, err := client.DeviceList(context.Background())
+	if err != nil || len(devices) != 1 || devices[0].HomeName != "我的家" || devices[0].RoomName != "卧室" {
+		t.Fatalf("devices = %#v, error = %v", devices, err)
+	}
+}
+
 func TestHTTPMiotCloudLoginFindsAppPathCookiesSetDuringRedirect(t *testing.T) {
 	security := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef"))
 	var server *httptest.Server
@@ -142,14 +200,74 @@ func TestHTTPMiotCloudLoginFindsAppPathCookiesSetDuringRedirect(t *testing.T) {
 	}
 }
 
+func TestHTTPMiotCloudLoginDoesNotTreatStepOneLocationAsAuthenticated(t *testing.T) {
+	security := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef"))
+	auth2Calls := 0
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/pass/serviceLogin":
+			_, _ = response.Write([]byte(`&&&START&&&{"location":"` + server.URL + `/intermediate","_sign":"sign","qs":"qs","callback":"callback"}`))
+		case "/pass/serviceLoginAuth2":
+			auth2Calls++
+			_, _ = response.Write([]byte(`&&&START&&&{"location":"` + server.URL + `/sts","userId":"42","ssecurity":"` + security + `"}`))
+		case "/sts":
+			http.SetCookie(response, &http.Cookie{Name: "serviceToken", Value: "complete-token", Path: "/"})
+			_, _ = response.Write([]byte("ok"))
+		case "/intermediate":
+			t.Error("step-one location was followed before password authentication")
+			_, _ = response.Write([]byte("not authenticated"))
+		default:
+			response.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	client := newHTTPMiotCloudClient(CloudConfig{Region: "cn", Username: "owner@example.com", Password: "password", RequestTimeoutSec: 5})
+	client.accountBase, client.apiBase, client.http = server.URL, server.URL+"/app", server.Client()
+	if err := client.Login(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if auth2Calls != 1 || client.userID != "42" || client.ssecurity != security || client.serviceToken != "complete-token" {
+		t.Fatalf("auth2=%d session user=%q security=%t token=%q", auth2Calls, client.userID, client.ssecurity != "", client.serviceToken)
+	}
+}
+
+func TestHTTPMiotCloudLoginClearsStepOneLocationWhenVerificationIsRequired(t *testing.T) {
+	intermediateCalls := 0
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/pass/serviceLogin":
+			_, _ = response.Write([]byte(`&&&START&&&{"location":"` + server.URL + `/intermediate","_sign":"sign","qs":"qs","callback":"callback"}`))
+		case "/pass/serviceLoginAuth2":
+			_, _ = response.Write([]byte(`&&&START&&&{"code":81003,"notificationUrl":"/identity/verify"}`))
+		case "/intermediate":
+			intermediateCalls++
+			_, _ = response.Write([]byte("not authenticated"))
+		default:
+			response.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	client := newHTTPMiotCloudClient(CloudConfig{Region: "cn", Username: "owner@example.com", Password: "password", RequestTimeoutSec: 5})
+	client.accountBase, client.apiBase, client.http = server.URL, server.URL+"/app", server.Client()
+	err := client.Login(context.Background())
+	if err == nil || !strings.Contains(err.Error(), server.URL+"/identity/verify") || intermediateCalls != 0 {
+		t.Fatalf("error=%v intermediate calls=%d", err, intermediateCalls)
+	}
+}
+
 func TestHTTPMiotCloudLoginReportsOnlyMissingSessionFieldNames(t *testing.T) {
 	client := newHTTPMiotCloudClient(CloudConfig{Username: "owner", Password: "password", RequestTimeoutSec: 5})
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/pass/serviceLogin" {
+		switch request.URL.Path {
+		case "/pass/serviceLogin":
+			_, _ = response.Write([]byte(`&&&START&&&{"_sign":"sign","qs":"qs","callback":"callback"}`))
+		case "/pass/serviceLoginAuth2":
 			_, _ = response.Write([]byte(`&&&START&&&{"location":"` + "http://" + request.Host + `/done","userId":"1"}`))
-			return
+		default:
+			_, _ = response.Write([]byte("ok"))
 		}
-		_, _ = response.Write([]byte("ok"))
 	}))
 	defer server.Close()
 	client.accountBase, client.apiBase, client.http = server.URL, server.URL+"/app", server.Client()

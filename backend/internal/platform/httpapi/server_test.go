@@ -10,14 +10,13 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
-	"github.com/feranydev/homeloom/backend/internal/persistence/sqlite"
+	"github.com/feranydev/homeloom/backend/internal/persistence/postgres"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
 	"github.com/feranydev/homeloom/backend/internal/runtime/providermanager"
@@ -67,7 +66,7 @@ func newTestServer() *Server {
 
 func TestManagementAuthenticationLifecycleAndCSRF(t *testing.T) {
 	ctx := context.Background()
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "auth-api.db"))
+	store, err := openTestStore(t, ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,15 +154,14 @@ func TestManagementAuthenticationLifecycleAndCSRF(t *testing.T) {
 
 func TestDatabaseBackupAndRestoreStagingAPI(t *testing.T) {
 	ctx := context.Background()
-	directory := t.TempDir()
-	databasePath := filepath.Join(directory, "maintenance-api.db")
-	store, err := sqlite.Open(ctx, databasePath)
+	databaseURL, keyPath := testStoreCredentials(t)
+	store, err := postgres.Open(ctx, databaseURL, keyPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 	server := newTestServer()
-	server.SetMaintenanceService(application.NewMaintenanceService(store, databasePath, sqlite.ValidateRestoreCandidate, sqlite.PendingRestorePaths, sqlite.WritePendingRestoreMarker))
+	server.SetMaintenanceService(application.NewMaintenanceService(store, keyPath, postgres.ValidateRestoreCandidate, postgres.PendingRestorePaths, postgres.WritePendingRestoreMarker))
 
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/system/backup", bytes.NewBufferString(`{"confirmation":"BACKUP"}`))
 	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
@@ -299,7 +297,7 @@ func TestListTargetsAndPairingQR(t *testing.T) {
 
 func TestTargetCRUDAPIPersistsConfiguration(t *testing.T) {
 	ctx := context.Background()
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "target-api.db"))
+	store, err := openTestStore(t, ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,7 +355,7 @@ func TestTargetCRUDAPIPersistsConfiguration(t *testing.T) {
 
 func TestDeviceEnabledAPIIsPersisted(t *testing.T) {
 	ctx := context.Background()
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "homeloom.db"))
+	store, err := openTestStore(t, ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +388,7 @@ func TestDeviceEnabledAPIIsPersisted(t *testing.T) {
 
 func TestMutationAuditAndCommandCorrelationID(t *testing.T) {
 	ctx := context.Background()
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "audit-api.db"))
+	store, err := openTestStore(t, ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -665,6 +663,25 @@ func TestXiaomiMIoTCloudDirectoryIsNotAliasedToCentralHub(t *testing.T) {
 	}
 }
 
+func TestXiaomiMIoTCloudLoginAPIValidatesTwoStepRequests(t *testing.T) {
+	server := newTestServer()
+	start := httptest.NewRequest(http.MethodPost, "/api/v1/xiaomi-miot-cloud/login/start", bytes.NewBufferString(`{"region":"cn"}`))
+	start.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	startResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(startResponse, start)
+	if startResponse.Code != http.StatusBadRequest || !strings.Contains(startResponse.Body.String(), "Xiaomi account is required") {
+		t.Fatalf("start response = %d %s", startResponse.Code, startResponse.Body.String())
+	}
+
+	verify := httptest.NewRequest(http.MethodPost, "/api/v1/xiaomi-miot-cloud/login/verify", bytes.NewBufferString(`{"challengeId":"","code":""}`))
+	verify.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	verifyResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(verifyResponse, verify)
+	if verifyResponse.Code != http.StatusBadRequest || !strings.Contains(verifyResponse.Body.String(), "challengeId and verification code are required") {
+		t.Fatalf("verify response = %d %s", verifyResponse.Code, verifyResponse.Body.String())
+	}
+}
+
 func TestListDevices(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/devices", nil)
 	response := httptest.NewRecorder()
@@ -916,7 +933,7 @@ func TestMappingPreviewAPIExplainsForwardAndReverseTransforms(t *testing.T) {
 
 func TestMappingProfileCRUDHotReloadAndExport(t *testing.T) {
 	ctx := context.Background()
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "profiles-api.db"))
+	store, err := openTestStore(t, ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1021,7 +1038,7 @@ func TestMappingProfileCRUDHotReloadAndExport(t *testing.T) {
 
 func TestMappingCatalogCustomPropertyAndConsumerRouteAPI(t *testing.T) {
 	ctx := context.Background()
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "mapping-graph-api.db"))
+	store, err := openTestStore(t, ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1063,7 +1080,7 @@ func TestMappingCatalogCustomPropertyAndConsumerRouteAPI(t *testing.T) {
 
 func TestCustomUnifiedModelAPI(t *testing.T) {
 	ctx := context.Background()
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "custom-model-api.db"))
+	store, err := openTestStore(t, ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1364,7 +1381,7 @@ func TestCommandEventStreamPublishesLifecycle(t *testing.T) {
 
 func TestAuditEventStreamPublishesPersistedMutation(t *testing.T) {
 	ctx := context.Background()
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "audit-stream.db"))
+	store, err := openTestStore(t, ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

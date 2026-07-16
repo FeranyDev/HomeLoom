@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { Provider, ProviderInput } from '../types/provider'
 import { ApiError } from '../api/client'
-import { completeXiaomiOAuth, discoverXiaomiGateways, startXiaomiOAuth, type XiaomiGateway } from '../api/xiaomi'
+import { completeXiaomiOAuth, discoverXiaomiGateways, startXiaomiCloudLogin, startXiaomiOAuth, verifyXiaomiCloudLogin, type XiaomiCloudLoginResult, type XiaomiGateway } from '../api/xiaomi'
 
 const xiaomiOAuthRedirectURL = 'http://homeassistant.local:8123'
 const expandedVirtualExamples = [
@@ -42,6 +42,9 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 	const [oauthCallbackURL, setOAuthCallbackURL] = useState('')
 	const [gateways, setGateways] = useState<XiaomiGateway[]>([])
 	const [discoveringGateways, setDiscoveringGateways] = useState(false)
+	const [cloudChallenge, setCloudChallenge] = useState<XiaomiCloudLoginResult | null>(null)
+	const [cloudVerificationCode, setCloudVerificationCode] = useState('')
+	const [cloudAuthenticating, setCloudAuthenticating] = useState(false)
 	const hasRedactedSecrets = Boolean(provider && JSON.stringify(provider.config).includes('********'))
   const example = { latencyMs: 0, rejectWrites: false, devices: [{ id: 'demo-switch', name: '客厅开关', type: 'switch', online: true, power: false }, { id: 'demo-light', name: '客厅灯', type: 'lightbulb', online: true, power: true, brightness: 80, colorTemperature: 250, hue: 35, saturation: 45 }, { id: 'demo-outlet', name: '书房插座', type: 'outlet', online: true, power: false, inUse: false, currentPower: 0, energy: 1.25 }, { id: 'demo-sensor', name: '客厅温度', type: 'single-property-sensor', online: true, value: 23.6, unit: 'celsius', batteryLevel: 91, lowBattery: false }, { id: 'demo-climate', name: '客厅温湿度', type: 'temperature-humidity-sensor', online: true, temperature: 23.6, humidity: 56.2, batteryLevel: 87, lowBattery: false }, { id: 'demo-contact', name: '入户门', type: 'contact-sensor', online: true, contact: false, batteryLevel: 88, lowBattery: false, tampered: false }, { id: 'demo-motion', name: '走廊活动', type: 'motion-sensor', online: true, motion: false, batteryLevel: 84, lowBattery: false, tampered: false }, { id: 'demo-fan', name: '卧室风扇', type: 'fan', online: true, active: false, speed: 35, mode: 'manual', swingMode: true, direction: 'clockwise', controlLock: false }, { id: 'demo-air', name: '客厅净化器', type: 'air-purifier', online: true, active: true, speed: 60, mode: 'auto', swingMode: false, controlLock: false, airQuality: 'good', pm25: 12, voc: 80, filterLife: 82, filterChange: false }, { id: 'demo-shade', name: '南窗帘', type: 'window-covering', online: true, position: 50, obstruction: false }, ...expandedVirtualExamples] }
 	const mqttExample = { brokerUrl: 'mqtt://127.0.0.1:1883', username: '', password: '', clientId: '', topicPrefix: 'homeloom', qos: 1, keepAliveSeconds: 30, connectTimeoutSeconds: 10, sessionExpirySeconds: 86400, retainedStateMaxAgeSeconds: 300, tls: {} }
@@ -55,6 +58,35 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 	const updateTLS = (key: string, value: unknown) => setConfig(JSON.stringify({ ...configObject, tls: { ...tlsConfig, [key]: value } }, null, 2))
 	const updateXiaomi = (key: string, value: unknown) => setConfig(JSON.stringify({ ...configObject, [key]: value }, null, 2))
 	const updateXiaomiOAuth = (key: string, value: unknown) => setConfig(JSON.stringify({ ...configObject, oauth: { ...xiaomiOAuth, [key]: value } }, null, 2))
+	const updateXiaomiCloudIdentity = (key: string, value: unknown) => { updateXiaomi(key, value); setCloudChallenge(null); setCloudVerificationCode('') }
+	const cloudSessionReady = ['userId', 'ssecurity', 'serviceToken'].every((key) => typeof configObject[key] === 'string' && String(configObject[key]).length > 0)
+	function applyCloudSession(result: XiaomiCloudLoginResult) {
+		if (result.status !== 'verified' || !result.userId || !result.ssecurity || !result.serviceToken) throw new Error('小米云登录未返回完整会话，请重新登录')
+		setConfig(JSON.stringify({ ...configObject, userId: result.userId, ssecurity: result.ssecurity, serviceToken: result.serviceToken }, null, 2))
+		setCloudChallenge(null); setCloudVerificationCode('')
+		setTestResult('小米云账号验证成功，会话凭据已就绪；现在可以保存并启用 Provider。')
+	}
+	async function beginCloudLogin() {
+		const username = String(configObject.username ?? '').trim()
+		const password = String(configObject.password ?? '')
+		if (!username || !password || password === '********') { setError('请输入当前的小米账号和真实密码后再登录'); return }
+		setCloudAuthenticating(true); setError(null); setTestResult(null); setCloudChallenge(null); setCloudVerificationCode('')
+		try {
+			const result = await startXiaomiCloudLogin({ region: String(configObject.region ?? 'cn'), username, password, requestTimeoutSeconds: Number(configObject.requestTimeoutSeconds ?? 15) })
+			if (result.status === 'verification_required') {
+				if (!result.challengeId || !result.verificationUrl) throw new Error('小米要求身份验证，但没有返回验证入口')
+				setCloudChallenge(result)
+				setTestResult('小米要求身份验证。请打开验证页面发送短信或邮件验证码，然后回到这里填写。')
+			} else applyCloudSession(result)
+		} catch (cause) { setError(cause instanceof Error ? cause.message : '小米云登录失败') } finally { setCloudAuthenticating(false) }
+	}
+	async function completeCloudVerification() {
+		if (!cloudChallenge?.challengeId || !cloudVerificationCode.trim()) return
+		setCloudAuthenticating(true); setError(null)
+		try { applyCloudSession(await verifyXiaomiCloudLogin({ challengeId: cloudChallenge.challengeId, code: cloudVerificationCode.trim() })) }
+		catch (cause) { setError(cause instanceof Error ? cause.message : '小米验证码校验失败') }
+		finally { setCloudAuthenticating(false) }
+	}
 	async function authorizeXiaomi() {
 		setAuthorizing(true); setError(null); setTestResult(null)
 		const popup = window.open('', 'homeloom-xiaomi-oauth', 'popup,width=720,height=760')
@@ -93,6 +125,7 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 	    event.preventDefault(); let parsed: Record<string, unknown>
 		try { parsed = JSON.parse(config) as Record<string, unknown>; if (!parsed || Array.isArray(parsed)) throw new Error() } catch { setError('扩展配置必须是 JSON 对象'); setFieldErrors({ config: '必须是 JSON 对象' }); return }
 		if ((type === 'xiaomi' || type === 'xiaomi-miot-cloud') && !Array.isArray(parsed.devices)) parsed.devices = []
+		if (type === 'xiaomi-miot-cloud' && !['userId', 'ssecurity', 'serviceToken'].every((key) => typeof parsed[key] === 'string' && String(parsed[key]).length > 0)) { setError('请先完成“小米云账号登录”；如触发短信或邮件验证，请回填验证码后再保存'); return }
 		setSaving(true); setError(null); setFieldErrors({}); try { await onSave({ id, name, type, enabled, config: parsed }, Boolean(provider)) } catch (cause) { setError(cause instanceof Error ? cause.message : '保存失败'); if (cause instanceof ApiError) setFieldErrors(cause.fields) } finally { setSaving(false) }
   }
 	async function testConnection() {
@@ -117,7 +150,7 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 		<label>Session 保留（秒）<input aria-label="MQTT Session 保留" type="number" min="1" value={Number(configObject.sessionExpirySeconds ?? 86400)} onChange={(event) => updateMQTT('sessionExpirySeconds', Number(event.target.value))} /></label>
 		<label>Retained State 最大年龄（秒）<input aria-label="MQTT Retained State 最大年龄" type="number" min="1" max="86400" value={Number(configObject.retainedStateMaxAgeSeconds ?? 300)} onChange={(event) => updateMQTT('retainedStateMaxAgeSeconds', Number(event.target.value))} /></label>
 		<details className="wide"><summary>TLS / mTLS 高级设置</summary><div className="mqtt-tls-grid"><label>CA 文件<input aria-label="MQTT CA 文件" value={String(tlsConfig.caFile ?? '')} onChange={(event) => updateTLS('caFile', event.target.value)} /></label><label>Server Name<input aria-label="MQTT TLS Server Name" value={String(tlsConfig.serverName ?? '')} onChange={(event) => updateTLS('serverName', event.target.value)} /></label><label>客户端证书<input aria-label="MQTT 客户端证书" value={String(tlsConfig.certFile ?? '')} onChange={(event) => updateTLS('certFile', event.target.value)} /></label><label>客户端私钥<input aria-label="MQTT 客户端私钥" value={String(tlsConfig.keyFile ?? '')} onChange={(event) => updateTLS('keyFile', event.target.value)} /></label><label className="enable-row"><input type="checkbox" checked={Boolean(tlsConfig.insecureSkipVerify)} onChange={(event) => updateTLS('insecureSkipVerify', event.target.checked)} />跳过证书校验（仅调试）</label></div></details>
-		{fieldErrors.config && <small className="field-error wide">{fieldErrors.config}</small>}<small className="wide">订阅 discovery、state 和 availability；控制命令发布到 command Topic。配置保存到 SQLite，密码由主密钥加密且由 API 脱敏返回。</small>
+		{fieldErrors.config && <small className="field-error wide">{fieldErrors.config}</small>}<small className="wide">订阅 discovery、state 和 availability；控制命令发布到 command Topic。配置保存到 PostgreSQL，密码由主密钥加密且由 API 脱敏返回。</small>
 		{onTest && <button type="button" className="example-button" disabled={testing || saving} onClick={() => void testConnection()}>{testing ? '连接中…' : '测试连接'}</button>}{testResult && <small className="wide test-success">{testResult}</small>}
 		</div> : type === 'xiaomi' ? <div className="wide xiaomi-connection-flow">
 			<section className="xiaomi-connection-step"><div className="xiaomi-connection-step__heading"><span>01</span><div><strong>OAuth 授权与证书</strong><small>先完成账号授权，由 HomeLoom 获取中枢 MQTT 客户端证书。</small></div></div><div className="mqtt-config-grid">
@@ -140,16 +173,19 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 			{hasRedactedSecrets && <small>Token 和私钥已由 API 脱敏；保持 ******** 即可沿用数据库中的加密值。</small>}{fieldErrors.config && <small className="field-error">{fieldErrors.config}</small>}{testResult && <small className="test-success">{testResult}</small>}
 			</div> : type === 'xiaomi-miot-cloud' ? <div className="wide xiaomi-connection-flow">
 				<section className="xiaomi-connection-step"><div className="xiaomi-connection-step__heading"><span>01</span><div><strong>第三方兼容 MIoT 云账号</strong><small>此接口参考 hass-xiaomi-miot，并非预留的官方 Xiaomi Home Cloud Provider。</small></div></div><div className="mqtt-config-grid">
-					<label>小米账号<input aria-label="小米 MIoT 云账号" required={!configObject.serviceToken} value={String(configObject.username ?? '')} onChange={(event) => updateXiaomi('username', event.target.value)} autoComplete="username" placeholder="邮箱、手机号或小米账号" /></label>
-					<label>账号密码<input aria-label="小米 MIoT 云密码" type="password" required={!configObject.serviceToken} value={String(configObject.password ?? '')} onChange={(event) => updateXiaomi('password', event.target.value)} autoComplete="new-password" />{hasRedactedSecrets && <small>保持 ******** 可沿用数据库中的加密密码。</small>}</label>
-					<label>账号地区<select aria-label="小米 MIoT 云地区" value={String(configObject.region ?? 'cn')} onChange={(event) => updateXiaomi('region', event.target.value)}><option value="cn">中国大陆（cn）</option><option value="de">欧洲（de）</option><option value="us">美国（us）</option><option value="ru">俄罗斯（ru）</option><option value="tw">台湾（tw）</option><option value="sg">新加坡（sg）</option><option value="in">印度（in）</option><option value="i2">印度二区（i2）</option></select></label>
-					<label>状态轮询（秒）<input aria-label="小米 MIoT 云轮询间隔" type="number" min="15" max="3600" value={Number(configObject.pollIntervalSeconds ?? 30)} onChange={(event) => updateXiaomi('pollIntervalSeconds', Number(event.target.value))} /></label>
+					<label>小米账号<input aria-label="小米 MIoT 云账号" required={!configObject.serviceToken} value={String(configObject.username ?? '')} onChange={(event) => updateXiaomiCloudIdentity('username', event.target.value)} autoComplete="username" placeholder="邮箱、手机号或小米账号" /></label>
+					<label>账号密码<input aria-label="小米 MIoT 云密码" type="password" required={!configObject.serviceToken} value={String(configObject.password ?? '')} onChange={(event) => updateXiaomiCloudIdentity('password', event.target.value)} autoComplete="new-password" />{hasRedactedSecrets && <small>保持 ******** 可沿用数据库中的加密密码。</small>}</label>
+					<label>账号地区<select aria-label="小米 MIoT 云地区" value={String(configObject.region ?? 'cn')} onChange={(event) => updateXiaomiCloudIdentity('region', event.target.value)}><option value="cn">中国大陆（cn）</option><option value="de">欧洲（de）</option><option value="us">美国（us）</option><option value="ru">俄罗斯（ru）</option><option value="tw">台湾（tw）</option><option value="sg">新加坡（sg）</option><option value="in">印度（in）</option><option value="i2">印度二区（i2）</option></select></label>
+					<label>状态同步间隔（秒）<input aria-label="小米 MIoT 云轮询间隔" type="number" min="15" max="3600" value={Number(configObject.pollIntervalSeconds ?? 30)} onChange={(event) => updateXiaomi('pollIntervalSeconds', Number(event.target.value))} /><small>auto 设备优先通过局域网读取；失败时本轮回退云端。</small></label>
 					<label>请求超时（秒）<input aria-label="小米 MIoT 云请求超时" type="number" min="1" max="120" value={Number(configObject.requestTimeoutSeconds ?? 15)} onChange={(event) => updateXiaomi('requestTimeoutSeconds', Number(event.target.value))} /></label>
-					{onTest && <button type="button" className="example-button" disabled={testing || saving} onClick={() => void testConnection()}>{testing ? '正在登录并读取…' : '测试 MIoT 云连接'}</button>}
+					<button type="button" className="example-button" disabled={cloudAuthenticating || saving} onClick={() => void beginCloudLogin()}>{cloudAuthenticating ? '正在登录…' : cloudSessionReady ? '重新登录小米云账号' : '登录小米云账号'}</button>
+					{cloudSessionReady && <small className="test-success">云会话已就绪。保存后 Provider 将直接复用此会话，不会重复登录。</small>}
+					{cloudChallenge?.verificationUrl && <div className="wide xiaomi-oauth-callback"><strong>需要短信或邮件验证</strong><ol><li><a href={cloudChallenge.verificationUrl} target="_blank" rel="noreferrer">打开小米身份验证页面</a>。</li><li>在小米页面选择手机号或邮箱并发送验证码；收到后不要在小米页面提交。</li><li>回到 HomeLoom，在下方填写验证码并继续登录。</li></ol><label>短信 / 邮件验证码<input aria-label="小米 MIoT 云验证码" inputMode="numeric" autoComplete="one-time-code" value={cloudVerificationCode} onChange={(event) => setCloudVerificationCode(event.target.value)} /></label><button type="button" disabled={cloudAuthenticating || !cloudVerificationCode.trim()} onClick={() => void completeCloudVerification()}>{cloudAuthenticating ? '正在验证…' : '提交验证码并继续登录'}</button>{cloudChallenge.expiresAt && <small>此登录会话将在 {new Date(cloudChallenge.expiresAt).toLocaleTimeString()} 过期；过期后请重新登录。</small>}</div>}
+					{onTest && cloudSessionReady && <button type="button" className="example-button" disabled={testing || saving || cloudAuthenticating} onClick={() => void testConnection()}>{testing ? '正在读取…' : '测试 MIoT 云连接'}</button>}
 				</div></section>
-				<div className="xiaomi-next-step"><strong>02 · 选择云端设备</strong><p>保存并启用 Provider 后，从 Provider 卡片进入“管理设备”；系统复用当前云会话读取账号设备目录，不会重复登录。</p></div>
+				<div className="xiaomi-next-step"><strong>02 · 保存并选择云端设备</strong><p>登录完成后保存并启用 Provider，再从 Provider 卡片进入“管理设备”；系统复用当前云会话读取账号设备目录，不会重复登录。</p></div>
 				<details><summary>已有会话凭据（高级替代方案）</summary><div className="mqtt-tls-grid"><label>User ID（userId）<input aria-label="小米 MIoT 云 User ID" value={String(configObject.userId ?? '')} onChange={(event) => updateXiaomi('userId', event.target.value)} /></label><label>ssecurity<input aria-label="小米 MIoT 云 ssecurity" type="password" value={String(configObject.ssecurity ?? '')} onChange={(event) => updateXiaomi('ssecurity', event.target.value)} /></label><label>Service Token（serviceToken）<input aria-label="小米 MIoT 云 Service Token" type="password" value={String(configObject.serviceToken ?? '')} onChange={(event) => updateXiaomi('serviceToken', event.target.value)} /></label><small>三项必须同时填写，可替代账号密码；会话过期后若未保存账号密码，需要手动更新。</small></div></details>
-				<small>密码与会话 Token 保存到 SQLite 的 Provider 配置中，由项目主密钥加密，API 返回时统一脱敏。该轮询接口不适合无线开关、人体传感器等瞬时事件设备。</small>
+				<small>密码与云会话 Token 保存到 PostgreSQL 并加密。设备局域网 Token 仅在后端云目录运行时使用，不通过管理 API 返回；没有本地能力的设备继续使用云轮询。该接口不适合无线开关、人体传感器等瞬时事件设备。</small>
 				{fieldErrors.config && <small className="field-error">{fieldErrors.config}</small>}{testResult && <small className="test-success">{testResult}</small>}
 			</div> : <label className="wide config-editor"><span>扩展配置（JSON）</span><textarea aria-invalid={Boolean(fieldErrors.config)} rows={11} value={config} onChange={(event) => setConfig(event.target.value)} spellCheck={false} />{fieldErrors.config && <small className="field-error">{fieldErrors.config}</small>}{hasRedactedSecrets && <small>敏感字段已显示为 ********；保持占位符即可沿用数据库中的原值，输入新值可进行替换。</small>}<small>支持 27 种内置统一模型及必须/可选参数；未进入标准契约的属性会标记为自定义参数。</small><button type="button" className="example-button" onClick={() => setConfig(JSON.stringify(example, null, 2))}>载入完整模型示例</button></label>}</div>
     <label className="enable-row"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />立即启用（无需重启服务）</label>

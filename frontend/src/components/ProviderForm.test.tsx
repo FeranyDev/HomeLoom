@@ -8,6 +8,8 @@ const xiaomiAPI = vi.hoisted(() => ({
 	startXiaomiOAuth: vi.fn(),
 	completeXiaomiOAuth: vi.fn(),
 	discoverXiaomiGateways: vi.fn(),
+	startXiaomiCloudLogin: vi.fn(),
+	verifyXiaomiCloudLogin: vi.fn(),
 }))
 
 vi.mock('../api/xiaomi', () => xiaomiAPI)
@@ -18,6 +20,8 @@ describe('ProviderForm', () => {
 		xiaomiAPI.startXiaomiOAuth.mockResolvedValue({ authorizationUrl: 'https://account.xiaomi.com/oauth2/authorize', state: 'expected-state', oauthUuid: '0123456789abcdef0123456789abcdef', virtualDid: '987654321' })
 		xiaomiAPI.completeXiaomiOAuth.mockResolvedValue({ oauth: { clientId: '1234567890', region: 'cn', redirectUrl: 'http://homeassistant.local:8123', oauthUuid: '0123456789abcdef0123456789abcdef', virtualDid: '987654321' }, clientId: '987654321', caCertificate: 'ca', clientCertificate: 'certificate', privateKey: 'private-key' })
 		xiaomiAPI.discoverXiaomiGateways.mockResolvedValue([])
+		xiaomiAPI.startXiaomiCloudLogin.mockResolvedValue({ status: 'verified', userId: '42', ssecurity: 'security', serviceToken: 'service-token' })
+		xiaomiAPI.verifyXiaomiCloudLogin.mockResolvedValue({ status: 'verified', userId: '42', ssecurity: 'security', serviceToken: 'service-token' })
 	})
 
 	afterEach(() => vi.restoreAllMocks())
@@ -87,8 +91,37 @@ describe('ProviderForm', () => {
 		await userEvent.type(screen.getByLabelText('小米 MIoT 云账号'), 'owner@example.com')
 		await userEvent.type(screen.getByLabelText('小米 MIoT 云密码'), 'account-password')
 		expect(screen.getByText(/并非预留的官方 Xiaomi Home Cloud Provider/)).toBeInTheDocument()
+		await userEvent.click(screen.getByRole('button', { name: '登录小米云账号' }))
+		await waitFor(() => expect(xiaomiAPI.startXiaomiCloudLogin).toHaveBeenCalledWith({ region: 'cn', username: 'owner@example.com', password: 'account-password', requestTimeoutSeconds: 15 }))
 		await userEvent.click(screen.getByRole('button', { name: '保存并应用' }))
-		expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ type: 'xiaomi-miot-cloud', config: expect.objectContaining({ region: 'cn', username: 'owner@example.com', password: 'account-password', pollIntervalSeconds: 30, devices: [] }) }), false)
+		expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ type: 'xiaomi-miot-cloud', config: expect.objectContaining({ region: 'cn', username: 'owner@example.com', password: 'account-password', userId: '42', ssecurity: 'security', serviceToken: 'service-token', pollIntervalSeconds: 30, devices: [] }) }), false)
+	})
+
+	it('guides Xiaomi cloud SMS verification and resumes the pending login', async () => {
+		xiaomiAPI.startXiaomiCloudLogin.mockResolvedValue({ status: 'verification_required', challengeId: 'challenge-1', verificationUrl: 'https://account.xiaomi.com/fe/service/identity/authStart', expiresAt: '2030-01-01T00:00:00Z' })
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		render(<ProviderForm provider={null} initialType="xiaomi-miot-cloud" onCancel={() => {}} onSave={onSave} />)
+		await userEvent.type(screen.getByLabelText('小米 MIoT 云账号'), 'owner@example.com')
+		await userEvent.type(screen.getByLabelText('小米 MIoT 云密码'), 'account-password')
+		await userEvent.click(screen.getByRole('button', { name: '登录小米云账号' }))
+		expect(await screen.findByRole('link', { name: '打开小米身份验证页面' })).toHaveAttribute('href', 'https://account.xiaomi.com/fe/service/identity/authStart')
+		expect(screen.getByText(/收到后不要在小米页面提交/)).toBeInTheDocument()
+		await userEvent.type(screen.getByLabelText('小米 MIoT 云验证码'), '123456')
+		await userEvent.click(screen.getByRole('button', { name: '提交验证码并继续登录' }))
+		await waitFor(() => expect(xiaomiAPI.verifyXiaomiCloudLogin).toHaveBeenCalledWith({ challengeId: 'challenge-1', code: '123456' }))
+		expect(screen.getByText(/云会话已就绪/)).toBeInTheDocument()
+		await userEvent.click(screen.getByRole('button', { name: '保存并应用' }))
+		expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ userId: '42', serviceToken: 'service-token' }) }), false)
+	})
+
+	it('does not save a Xiaomi cloud provider before account login is complete', async () => {
+		const onSave = vi.fn()
+		render(<ProviderForm provider={null} initialType="xiaomi-miot-cloud" onCancel={() => {}} onSave={onSave} />)
+		await userEvent.type(screen.getByLabelText('小米 MIoT 云账号'), 'owner@example.com')
+		await userEvent.type(screen.getByLabelText('小米 MIoT 云密码'), 'account-password')
+		await userEvent.click(screen.getByRole('button', { name: '保存并应用' }))
+		expect(screen.getByText(/请先完成“小米云账号登录”/)).toBeInTheDocument()
+		expect(onSave).not.toHaveBeenCalled()
 	})
 
 	it('completes Xiaomi OAuth from a pasted callback URL', async () => {

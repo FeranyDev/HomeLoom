@@ -3,19 +3,18 @@ package application_test
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	"github.com/feranydev/homeloom/backend/internal/mapping"
-	"github.com/feranydev/homeloom/backend/internal/persistence/sqlite"
+	"github.com/feranydev/homeloom/backend/internal/persistence/postgres"
 )
 
 func TestCustomUnifiedModelPersistsAndOwnsThreeLevelProperties(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "custom-model.db")
-	store, err := sqlite.Open(ctx, path)
+	databaseURL, keyPath := testStoreCredentials(t)
+	store, err := postgres.Open(ctx, databaseURL, keyPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +52,7 @@ func TestCustomUnifiedModelPersistsAndOwnsThreeLevelProperties(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store, err = sqlite.Open(ctx, path)
+	store, err = postgres.Open(ctx, databaseURL, keyPath)
 	if err != nil {
 		t.Fatal(err)
 	}

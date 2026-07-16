@@ -1,6 +1,6 @@
 # HomeLoom Device Model v1
 
-HomeLoom 的设备快照使用统一的 Endpoint / Capability / Property 模型。实时状态由 Provider 在启动和重连后重新上报，SQLite 不保存设备实时值。
+HomeLoom 的设备快照使用统一的 Endpoint / Capability / Property 模型。实时状态由 Provider 在启动和重连后重新上报，PostgreSQL 不保存设备实时值。
 
 标准属性按 `required`、`optional` 和 `custom` 分级，并分别约束 Provider 发布和 Consumer 映射。完整规则与 27 种内置模型目录见 [统一模型参数分级与角色映射](unified-model-parameters.md)。
 
@@ -80,7 +80,7 @@ deviceId / endpointId / capabilityId / propertyId
 - 定义类型和值类型必须一致；
 - `step` 必须大于零，`min` 不得大于 `max`。
 
-设备可用性由 `availability` 表示：`online` 代表 Provider 明确确认设备可通信，`offline` 代表 Provider 暂时确认不可通信，`unknown` 代表尚未获得或暂时无法判断。`disabled=true` 是用户持久化到 SQLite 的管理意图，Provider 后续事件不能重新将其置为在线；`removed=true` 是 Provider 配置删除设备后保留的 tombstone，用于保留内部及 HomeKit 稳定身份。恢复同一 ID 的 Provider 设备会清除 tombstone。schema v1 暂时保留 `online` 布尔字段作为兼容投影，只有 `availability=online` 且设备未禁用、未删除时才为 `true`。
+设备可用性由 `availability` 表示：`online` 代表 Provider 明确确认设备可通信，`offline` 代表 Provider 暂时确认不可通信，`unknown` 代表尚未获得或暂时无法判断。`disabled=true` 是用户持久化到 PostgreSQL 的管理意图，Provider 后续事件不能重新将其置为在线；`removed=true` 是 Provider 配置删除设备后保留的 tombstone，用于保留内部及 HomeKit 稳定身份。恢复同一 ID 的 Provider 设备会清除 tombstone。schema v1 暂时保留 `online` 布尔字段作为兼容投影，只有 `availability=online` 且设备未禁用、未删除时才为 `true`。
 
 State API 使用三个正交字段表达值语义：
 

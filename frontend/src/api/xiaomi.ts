@@ -38,10 +38,24 @@ export interface XiaomiHubDevice {
 	did: string
 	name: string
 	model?: string
+	homeId?: string
+	homeName?: string
 	roomId?: string
 	roomName?: string
+	localIp?: string
+	localAvailable?: boolean
 	specType?: string
 	online?: boolean
+}
+
+export interface XiaomiCloudLoginResult {
+	status: 'verified' | 'verification_required'
+	challengeId?: string
+	verificationUrl?: string
+	expiresAt?: string
+	userId?: string
+	ssecurity?: string
+	serviceToken?: string
 }
 
 export async function startXiaomiOAuth(input: XiaomiOAuthStartInput): Promise<XiaomiOAuthStartResult> {
@@ -50,6 +64,14 @@ export async function startXiaomiOAuth(input: XiaomiOAuthStartInput): Promise<Xi
 
 export async function completeXiaomiOAuth(input: XiaomiOAuthStartInput & { code: string; state: string }): Promise<XiaomiOAuthProvisionResult> {
 	return requestData<XiaomiOAuthProvisionResult>('/api/v1/xiaomi/oauth/complete', { method: 'POST', body: JSON.stringify(input) })
+}
+
+export async function startXiaomiCloudLogin(input: { region: string; username: string; password: string; requestTimeoutSeconds?: number }): Promise<XiaomiCloudLoginResult> {
+	return requestData<XiaomiCloudLoginResult>('/api/v1/xiaomi-miot-cloud/login/start', { method: 'POST', body: JSON.stringify(input) })
+}
+
+export async function verifyXiaomiCloudLogin(input: { challengeId: string; code: string }): Promise<XiaomiCloudLoginResult> {
+	return requestData<XiaomiCloudLoginResult>('/api/v1/xiaomi-miot-cloud/login/verify', { method: 'POST', body: JSON.stringify(input) })
 }
 
 export async function discoverXiaomiGateways(): Promise<XiaomiGateway[]> {

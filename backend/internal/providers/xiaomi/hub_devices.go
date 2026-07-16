@@ -11,14 +11,19 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 )
 
-// HubDevice is the identity metadata returned by the central gateway before a
-// device is mapped into HomeLoom's unified model.
+// HubDevice is the identity and location metadata returned by a Xiaomi source
+// before a device is mapped into HomeLoom's unified model.
 type HubDevice struct {
 	DID      string `json:"did"`
 	Name     string `json:"name"`
 	Model    string `json:"model,omitempty"`
+	HomeID   string `json:"homeId,omitempty"`
+	HomeName string `json:"homeName,omitempty"`
 	RoomID   string `json:"roomId,omitempty"`
 	RoomName string `json:"roomName,omitempty"`
+	LocalIP  string `json:"localIp,omitempty"`
+	Local    bool   `json:"localAvailable"`
+	Token    string `json:"-"`
 	SpecType string `json:"specType,omitempty"`
 	Online   *bool  `json:"online,omitempty"`
 }
@@ -83,6 +88,9 @@ func parseHubDeviceList(raw json.RawMessage) ([]HubDevice, error) {
 		result = append(result, item)
 	}
 	sort.Slice(result, func(i, j int) bool {
+		if result[i].HomeName != result[j].HomeName {
+			return result[i].HomeName < result[j].HomeName
+		}
 		if result[i].RoomName != result[j].RoomName {
 			return result[i].RoomName < result[j].RoomName
 		}
@@ -122,7 +130,8 @@ func collectHubDevices(value any, output map[string]HubDevice, deviceList bool) 
 			if name == "" {
 				name = did
 			}
-			item := HubDevice{DID: did, Name: name, Model: model, RoomID: firstString(current, "roomId", "room_id", "roomDid", "room_did"), RoomName: firstString(current, "roomName", "room_name", "room", "room_name_i18n"), SpecType: firstString(current, "specType", "spec_type", "urn", "type")}
+			item := HubDevice{DID: did, Name: name, Model: model, HomeID: firstString(current, "homeId", "home_id", "homeDid", "home_did"), HomeName: firstString(current, "homeName", "home_name", "home", "home_name_i18n"), RoomID: firstString(current, "roomId", "room_id", "roomDid", "room_did"), RoomName: firstString(current, "roomName", "room_name", "room", "room_name_i18n"), LocalIP: firstString(current, "localIp", "localip", "local_ip", "lanIp", "lan_ip"), Token: firstString(current, "token"), SpecType: firstString(current, "specType", "spec_type", "urn", "type")}
+			item.Local = validLocalAccess(item.LocalIP, item.Token)
 			if online, ok := boolValue(firstValue(current, "online", "isOnline", "is_online")); ok {
 				item.Online = &online
 			}

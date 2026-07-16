@@ -3,20 +3,18 @@ package application_test
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	"github.com/feranydev/homeloom/backend/internal/mapping"
-	"github.com/feranydev/homeloom/backend/internal/persistence/sqlite"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
 )
 
 func TestPropertyBindingHotReloadsAndMapsBothDirections(t *testing.T) {
 	ctx := context.Background()
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "bindings.db"))
+	store, err := openTestStore(t, ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +85,7 @@ func TestPropertyBindingHotReloadsAndMapsBothDirections(t *testing.T) {
 
 func TestProfileInUseCannotBeDeletedOrMadeNonReversible(t *testing.T) {
 	ctx := context.Background()
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "bindings.db"))
+	store, err := openTestStore(t, ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +112,7 @@ func TestProfileInUseCannotBeDeletedOrMadeNonReversible(t *testing.T) {
 
 func TestPropertyBindingTransformsNumericDefinition(t *testing.T) {
 	ctx := context.Background()
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "definitions.db"))
+	store, err := openTestStore(t, ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +138,7 @@ func TestPropertyBindingTransformsNumericDefinition(t *testing.T) {
 
 func TestPropertyBindingTransformsNumericDefinitionToEnumBands(t *testing.T) {
 	ctx := context.Background()
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "range-enum.db"))
+	store, err := openTestStore(t, ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

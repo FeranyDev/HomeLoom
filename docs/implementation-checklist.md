@@ -1,6 +1,6 @@
 # HomeLoom 详细实施清单
 
-更新时间：2026-07-14
+更新时间：2026-07-16
 
 状态说明：
 
@@ -82,7 +82,7 @@
 
 ### 1.3 风险整改
 
-- [x] PIN 使用数据库旁主密钥进行 AES-256-GCM 加密存储；
+- [x] PIN 使用 `storage.master_key` 指定的主密钥进行 AES-256-GCM 加密存储；
 - [x] 管理 API 使用数据库 Session 认证，健康检查和版本发现保持公开；
 - [x] 配对资料和二维码查看受管理员 Session 权限保护；
 - [x] 重新生成 PIN/Setup ID 使用 `REGENERATE {id}` 二次确认；
@@ -108,9 +108,9 @@ M0 退出条件：Apple Home 实机配对、双向控制、多桥运行和三次
 - [x] 定义模型 schema version；
 - [x] 定义所有稳定 ID 的格式和字符限制；
 - [x] 定义设备可用性：online、offline、unknown；
-- [x] 区分 Provider 暂时离线、SQLite 持久禁用和 Provider 删除 tombstone；
+- [x] 区分 Provider 暂时离线、PostgreSQL 持久禁用和 Provider 删除 tombstone；
 - [x] 内置统一模型扩充到 27 种，覆盖环境、安防、恒温器、独立空调、冷暖设备、门锁、阀门、媒体和清洁家电；
-- [x] 自定义统一模型支持新增、删除、SQLite 持久化和占用保护；
+- [x] 自定义统一模型支持新增、删除、PostgreSQL 持久化和占用保护；
 
 ### 2.2 类型系统
 
@@ -127,10 +127,10 @@ M0 退出条件：Apple Home 实机配对、双向控制、多桥运行和三次
 - [x] JSON 序列化契约；
 - [x] 模型表驱动测试。
 
-### 2.3 兼容迁移
+### 2.3 当前模型契约
 
-- [x] 将虚拟开关迁移为 `switch/power` Capability；
-- [x] 将旧温度/湿度模型合并为 `single-property-sensor` 的 `sensor/value`；
+- [x] 虚拟开关统一使用 `switch/power` Capability；
+- [x] 温度/湿度统一使用 `single-property-sensor` 的 `sensor/value`；
 - [x] 一次性升级设备 API 和前端到 schema v1；
 - [x] HomeKit Target 改为读取 Capability；
 - [x] 删除 Target 中对简化 State 字段的直接依赖；
@@ -159,7 +159,7 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 
 ### 3.2 Provider Manager
 
-- [x] 从 SQLite 加载 Provider 配置；
+- [x] 从 PostgreSQL 加载 Provider 配置；
 - [x] 动态创建 Provider；
 - [x] 动态启用和停用；
 - [x] 单 Provider 热重载；
@@ -175,11 +175,11 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 ### 3.3 Virtual Provider 重构
 
 - [x] 使用正式 Provider SDK；
-- [x] 程序初始化时可选为每种受支持模型各生成一个虚拟设备，配置持久化到 SQLite 且幂等；
+- [x] 程序初始化时可选为每种受支持模型各生成一个虚拟设备，配置持久化到 PostgreSQL 且幂等；
 - [x] Virtual Provider 根据模型契约自动物化扩充模型的全部必需和可选属性；
 - [x] 统一模型参数按必须、可选、自定义分级，并实现 Provider 发布校验与 Consumer 显式映射；
 - [x] 统一模型固定使用 Endpoint / Capability / Property 三级属性地址；
-- [x] 自定义统一属性 CRUD、SQLite 持久化和模型目录合并；
+- [x] 自定义统一属性 CRUD、PostgreSQL 持久化和模型目录合并；
 - [x] 自定义属性完整配置类型、单位、范围、枚举及 R/W/N 权限；
 - [x] 支持配置虚拟设备；
 - [x] 支持动态新增和删除虚拟设备；
@@ -243,7 +243,7 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 - [x] 状态质量比较；
 - [x] 接收时间比较；
 - [x] 状态诊断 API；
-- [x] 实时状态不写 SQLite；
+- [x] 实时状态不写 PostgreSQL；
 - [x] 重启后由 Provider 重建状态。
 
 ### 5.2 待完善
@@ -312,11 +312,12 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 
 ### 7.1 已实现
 
-- [x] SQLite；
-- [x] migration runner；
-- [x] WAL；
+- [x] PostgreSQL；
+- [x] GORM 持久层、`gorm.io/driver/postgres` 与 pgx 驱动；
+- [x] GORM `AutoMigrate` 当前模型同步；
+- [x] 移除编号 SQL migration 和旧 schema 自动升级兼容；
 - [x] foreign keys；
-- [x] busy timeout；
+- [x] PostgreSQL 连接池上限、空闲回收和连接生命周期；
 - [x] Target 表；
 - [x] Target Device Binding 表；
 - [x] 唯一端口约束；
@@ -349,8 +350,8 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 - [x] 配置导出脱敏；
 - [x] 诊断包脱敏；
 - [ ] 密钥轮换设计；
-- [x] 数据库备份使用 SQLite `VACUUM INTO` 一致性 API；
-- [x] 打开/恢复前拒绝高于程序支持版本的数据库。
+- [x] 数据库备份使用 PostgreSQL `REPEATABLE READ` 逻辑快照；
+- [x] 打开/恢复前验证当前 GORM 模型表完整性。
 
 ## 8. M2：HomeKit 基础设备
 
@@ -526,7 +527,7 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [x] Capability 树；
 - [x] 状态来源和质量展示；
 - [x] 命令历史页面；
-- [~] 实时日志（审计事件已支持 SQLite 历史和 SSE，进程运行日志流待实现）；
+- [~] 实时日志（审计事件已支持 PostgreSQL 历史和 SSE，进程运行日志流待实现）；
 - [x] Mapping 预览；
 - [x] Profile 管理；
 - [x] 完整备份下载、恢复包校验暂存和下次启动前原子应用；
@@ -543,7 +544,7 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 
 - [x] 首次启动管理员初始化；
 - [x] 登录；
-- [x] SQLite Session（24 小时，数据库仅存令牌哈希）；
+- [x] PostgreSQL Session（24 小时，数据库仅存令牌哈希）；
 - [x] CSRF 防护；
 - [x] 登录限速；
 - [x] 备份、整库恢复、配对参数再生成和配对身份清理使用精确短语二次确认；
@@ -579,7 +580,7 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [x] 命令延迟；
 - [x] 命令超时数；
 - [x] HomeKit 推送数；
-- [x] SQLite 操作数、平均和最大延迟；
+- [x] PostgreSQL 操作数、平均和最大延迟；
 - [x] goroutine 数；
 - [~] 内存指标（CPU 指标待长期采样）；
 - [x] Request ID；
@@ -597,7 +598,7 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [x] Event Queue 边界测试；
 - [x] State Merge 测试；
 - [x] Command State Machine 测试；
-- [x] SQLite migration 和 CRUD 测试；
+- [x] GORM AutoMigrate、约束、事务和 CRUD 测试；
 - [x] HTTP API 测试；
 - [x] Target 配置逻辑测试；
 - [x] 前端二维码交互测试；
@@ -642,7 +643,7 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [x] 进程级优雅停止烟雾验证；
 - [x] 容器健康检查；
 - [x] 数据库备份脚本；
-- [x] 版本升级、回滚和 migration 文档。
+- [x] 当前 GORM schema、备份和离线回滚文档。
 
 ## 15. 后续版本
 
@@ -655,10 +656,11 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [x] OAuth/证书、中枢 MQTT 连接与子设备管理分阶段；仅在 Provider 运行后复用现有 MQTT 连接拉取设备目录，并在独立页面生成统一模型映射；
 - [x] 子设备映射原地热应用并保留 MQTT 会话，避免相同虚拟 DID 并行登录被中枢拒绝；
 - [~] Token 获取、加密持久化、70% 有效期自动刷新和指数退避已实现；主动吊销仍待完成；
-- [x] 中枢客户端证书按有效期提前续签，复用 UID、Virtual DID 与 Ed25519 私钥，校验新证书后写回 SQLite 并无断连热应用；
-- [~] 已通过家庭接口获取 UID，房间元数据当前由设备映射配置维护；
+- [x] 中枢客户端证书按有效期提前续签，复用 UID、Virtual DID 与 Ed25519 私钥，校验新证书后写回 PostgreSQL 并无断连热应用；
+- [x] 中枢 OAuth 已获取家庭 UID；MIoT 云通过合并家庭目录按 DID 获取本人/共享家庭名称与房间名称，并作为设备级映射元数据保存；
+- [x] MIoT 云设备支持逐设备 `auto/local/cloud`；`auto` 使用云目录私网 IP/Token 优先执行 LAN MIoT，失败自动回退云端，Token 不经管理 API 暴露；
 - [~] mDNS 中枢发现、设备列表握手和配置设备发现已实现，未映射设备的自动导入仍待完成；
-- [x] MIoT Spec V2 实例获取、型号索引解析、SQLite 缓存和完整性错误状态；
+- [x] MIoT Spec V2 实例获取、型号索引解析、PostgreSQL 缓存和完整性错误状态；
 - [x] 有界并发属性读取；
 - [x] 属性写入；
 - [x] Action；
@@ -671,7 +673,7 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [x] MIoT 云端 `prop/get` 分批轮询、`prop/set`、`action`、认证过期单次重登和独立运行指标；
 - [x] 中枢与第三方云使用不同 Provider 类型、设备默认 ID 前缀和设备管理接口，不按 DID 自动合并；
 - [x] 前端明确标注“第三方兼容”，并为未来官方 `xiaomi-home-cloud` 保留独立命名；
-- [~] 第三方云账号密码/导入会话与身份验证错误引导已实现；验证码和二次验证的页面内完成流程待补；
+- [x] 第三方云账号密码/导入会话已实现；短信/邮箱二次验证使用 10 分钟内存挑战复用原登录 Cookie，页面引导用户在小米端发送验证码并回填完成登录；
 - [ ] 实机测试记录。
 
 ### v0.4：Logical Device 和多 Provider 路由

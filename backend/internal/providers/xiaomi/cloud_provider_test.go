@@ -2,6 +2,7 @@ package xiaomi
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 
@@ -16,6 +17,7 @@ type fakeMIoTCloud struct {
 	values    map[string]any
 	writes    []cloudProperty
 	actions   []cloudAction
+	reads     int
 }
 
 func (f *fakeMIoTCloud) Login(context.Context) error {
@@ -30,12 +32,56 @@ func (f *fakeMIoTCloud) DeviceList(context.Context) ([]HubDevice, error) {
 func (f *fakeMIoTCloud) GetProperties(_ context.Context, input []cloudProperty) ([]cloudProperty, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.reads++
 	result := make([]cloudProperty, len(input))
 	for index, item := range input {
 		item.Value = f.values[miotKey(item.SIID, item.PIID)]
 		result[index] = item
 	}
 	return result, nil
+}
+
+type fakeMIoTLocal struct {
+	mu        sync.Mutex
+	values    map[string]any
+	readErr   error
+	writeErr  error
+	actionErr error
+	reads     int
+	writes    int
+	actions   int
+}
+
+func (f *fakeMIoTLocal) GetProperties(_ context.Context, _ miotLocalAccess, input []cloudProperty) ([]cloudProperty, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reads++
+	if f.readErr != nil {
+		return nil, f.readErr
+	}
+	result := make([]cloudProperty, len(input))
+	for index, item := range input {
+		item.Value = f.values[miotKey(item.SIID, item.PIID)]
+		result[index] = item
+	}
+	return result, nil
+}
+
+func (f *fakeMIoTLocal) SetProperties(_ context.Context, _ miotLocalAccess, input []cloudProperty) ([]cloudProperty, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.writes++
+	if f.writeErr != nil {
+		return nil, f.writeErr
+	}
+	return append([]cloudProperty(nil), input...), nil
+}
+
+func (f *fakeMIoTLocal) Action(context.Context, miotLocalAccess, cloudAction) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.actions++
+	return f.actionErr
 }
 func (f *fakeMIoTCloud) SetProperties(_ context.Context, input []cloudProperty) ([]cloudProperty, error) {
 	f.mu.Lock()
@@ -116,6 +162,100 @@ func TestCloudProviderInitializeIsIdempotent(t *testing.T) {
 	defer fake.mu.Unlock()
 	if fake.login != 1 {
 		t.Fatalf("login count = %d", fake.login)
+	}
+}
+
+func TestCloudProviderAutoPrefersLocalForReadWriteAndAction(t *testing.T) {
+	token := "30313233343536373839616263646566"
+	fakeCloud := &fakeMIoTCloud{directory: []HubDevice{{DID: "123", Name: "LAN switch", LocalIP: "192.168.1.20", Token: token, Local: true}}, values: map[string]any{"2.1": false}}
+	fakeLocal := &fakeMIoTLocal{values: map[string]any{"2.1": false}}
+	provider, err := newCloudProvider("xiaomi-miot-cloud-main", "Cloud", cloudTestConfig(), func() miotCloudClient { return fakeCloud }, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.local = fakeLocal
+	ctx := context.Background()
+	if err := provider.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close(ctx)
+	if _, err := provider.ReadProperty(ctx, providersdk.PropertyReadRequest{DeviceID: "xiaomi-switch", EndpointID: "main", CapabilityID: "switch", PropertyID: "power"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.WriteProperty(ctx, providersdk.PropertyWriteRequest{DeviceID: "xiaomi-switch", EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Value: device.BoolValue(true)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.ExecuteCommand(ctx, providersdk.CommandRequest{DeviceID: "xiaomi-switch", EndpointID: "main", CapabilityID: "switch", CommandID: "toggle"}); err != nil {
+		t.Fatal(err)
+	}
+	fakeLocal.mu.Lock()
+	localReads, localWrites, localActions := fakeLocal.reads, fakeLocal.writes, fakeLocal.actions
+	fakeLocal.mu.Unlock()
+	fakeCloud.mu.Lock()
+	cloudReads, cloudWrites, cloudActions := fakeCloud.reads, len(fakeCloud.writes), len(fakeCloud.actions)
+	fakeCloud.mu.Unlock()
+	if localReads < 2 || localWrites != 1 || localActions != 1 || cloudReads != 0 || cloudWrites != 0 || cloudActions != 0 {
+		t.Fatalf("local=%d/%d/%d cloud=%d/%d/%d", localReads, localWrites, localActions, cloudReads, cloudWrites, cloudActions)
+	}
+}
+
+func TestCloudProviderAutoFallsBackToCloudAfterLocalFailure(t *testing.T) {
+	token := "30313233343536373839616263646566"
+	fakeCloud := &fakeMIoTCloud{directory: []HubDevice{{DID: "123", Name: "LAN switch", LocalIP: "192.168.1.20", Token: token, Local: true}}, values: map[string]any{"2.1": false}}
+	fakeLocal := &fakeMIoTLocal{readErr: errors.New("device timed out"), writeErr: errors.New("device timed out"), actionErr: errors.New("device timed out")}
+	provider, err := newCloudProvider("xiaomi-miot-cloud-main", "Cloud", cloudTestConfig(), func() miotCloudClient { return fakeCloud }, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.local = fakeLocal
+	ctx := context.Background()
+	if err := provider.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close(ctx)
+	property, err := provider.ReadProperty(ctx, providersdk.PropertyReadRequest{DeviceID: "xiaomi-switch", EndpointID: "main", CapabilityID: "switch", PropertyID: "power"})
+	if err != nil || property.Value.Bool == nil || *property.Value.Bool {
+		t.Fatalf("property=%#v error=%v", property, err)
+	}
+	if _, err := provider.WriteProperty(ctx, providersdk.PropertyWriteRequest{DeviceID: "xiaomi-switch", EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Value: device.BoolValue(true)}); err != nil {
+		t.Fatalf("fallback write: %v", err)
+	}
+	if _, err := provider.ExecuteCommand(ctx, providersdk.CommandRequest{DeviceID: "xiaomi-switch", EndpointID: "main", CapabilityID: "switch", CommandID: "toggle"}); err != nil {
+		t.Fatalf("fallback action: %v", err)
+	}
+	metrics := provider.ProviderMetrics()
+	if metrics["localFailures"] < 4 || metrics["cloudFallbacks"] < 4 {
+		t.Fatalf("metrics = %#v", metrics)
+	}
+	fakeCloud.mu.Lock()
+	defer fakeCloud.mu.Unlock()
+	if len(fakeCloud.writes) != 1 || len(fakeCloud.actions) != 1 {
+		t.Fatalf("cloud writes/actions = %d/%d", len(fakeCloud.writes), len(fakeCloud.actions))
+	}
+}
+
+func TestCloudProviderCloudModeSkipsAvailableLocalTransport(t *testing.T) {
+	config := cloudTestConfig()
+	config.Devices[0].ConnectionMode = cloudConnectionCloud
+	fakeCloud := &fakeMIoTCloud{directory: []HubDevice{{DID: "123", Name: "LAN switch", LocalIP: "192.168.1.20", Token: "30313233343536373839616263646566", Local: true}}, values: map[string]any{"2.1": false}}
+	fakeLocal := &fakeMIoTLocal{values: map[string]any{"2.1": true}}
+	provider, err := newCloudProvider("xiaomi-miot-cloud-main", "Cloud", config, func() miotCloudClient { return fakeCloud }, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.local = fakeLocal
+	ctx := context.Background()
+	if err := provider.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close(ctx)
+	if _, err := provider.ReadProperty(ctx, providersdk.PropertyReadRequest{DeviceID: "xiaomi-switch", EndpointID: "main", CapabilityID: "switch", PropertyID: "power"}); err != nil {
+		t.Fatal(err)
+	}
+	fakeLocal.mu.Lock()
+	defer fakeLocal.mu.Unlock()
+	if fakeLocal.reads != 0 {
+		t.Fatalf("local reads = %d", fakeLocal.reads)
 	}
 }
 

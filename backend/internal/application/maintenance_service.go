@@ -41,16 +41,16 @@ type PendingRestore struct {
 }
 
 type MaintenanceService struct {
-	store        MaintenanceStore
-	databasePath string
-	validate     func(context.Context, string) error
-	pendingPaths func(string) (string, string, string)
-	writeMarker  func(string, time.Time) error
-	now          func() time.Time
+	store         MaintenanceStore
+	masterKeyPath string
+	validate      func(context.Context, string) error
+	pendingPaths  func(string) (string, string, string)
+	writeMarker   func(string, time.Time) error
+	now           func() time.Time
 }
 
-func NewMaintenanceService(store MaintenanceStore, databasePath string, validate func(context.Context, string) error, pendingPaths func(string) (string, string, string), writeMarker func(string, time.Time) error) *MaintenanceService {
-	return &MaintenanceService{store: store, databasePath: databasePath, validate: validate, pendingPaths: pendingPaths, writeMarker: writeMarker, now: time.Now}
+func NewMaintenanceService(store MaintenanceStore, masterKeyPath string, validate func(context.Context, string) error, pendingPaths func(string) (string, string, string), writeMarker func(string, time.Time) error) *MaintenanceService {
+	return &MaintenanceService{store: store, masterKeyPath: masterKeyPath, validate: validate, pendingPaths: pendingPaths, writeMarker: writeMarker, now: time.Now}
 }
 
 func (s *MaintenanceService) Backup(ctx context.Context, confirmation string) (MaintenanceArtifact, error) {
@@ -62,13 +62,13 @@ func (s *MaintenanceService) Backup(ctx context.Context, confirmation string) (M
 		return MaintenanceArtifact{}, fmt.Errorf("create backup workspace: %w", err)
 	}
 	cleanup := func() { _ = os.RemoveAll(directory) }
-	database := filepath.Join(directory, "homeloom.db")
-	if err := s.store.Backup(ctx, database); err != nil {
+	snapshot := filepath.Join(directory, "homeloom-postgres.json")
+	if err := s.store.Backup(ctx, snapshot); err != nil {
 		cleanup()
 		return MaintenanceArtifact{}, err
 	}
 	archivePath := filepath.Join(directory, "homeloom-backup.zip")
-	if err := createBackupArchive(archivePath, database); err != nil {
+	if err := createBackupArchive(archivePath, snapshot); err != nil {
 		cleanup()
 		return MaintenanceArtifact{}, err
 	}
@@ -83,15 +83,15 @@ func (s *MaintenanceService) StageRestore(ctx context.Context, archive io.Reader
 	if archive == nil {
 		return PendingRestore{}, NewValidationError("restore archive is required", map[string]string{"file": "required"})
 	}
-	stagedDatabase, stagedKey, markerPath := s.pendingPaths(s.databasePath)
-	for _, path := range []string{stagedDatabase, stagedKey, markerPath} {
+	stagedSnapshot, stagedKey, markerPath := s.pendingPaths(s.masterKeyPath)
+	for _, path := range []string{stagedSnapshot, stagedKey, markerPath} {
 		if _, err := os.Lstat(path); err == nil {
 			return PendingRestore{}, fmt.Errorf("a database restore is already pending")
 		} else if !os.IsNotExist(err) {
 			return PendingRestore{}, fmt.Errorf("inspect restore staging: %w", err)
 		}
 	}
-	directory, err := os.MkdirTemp(filepath.Dir(s.databasePath), ".homeloom-restore-upload-")
+	directory, err := os.MkdirTemp(filepath.Dir(s.masterKeyPath), ".homeloom-restore-upload-")
 	if err != nil {
 		return PendingRestore{}, fmt.Errorf("create restore upload workspace: %w", err)
 	}
@@ -100,7 +100,7 @@ func (s *MaintenanceService) StageRestore(ctx context.Context, archive io.Reader
 	if err := copyLimitedFile(archivePath, archive, maxRestoreArchive); err != nil {
 		return PendingRestore{}, err
 	}
-	candidate := filepath.Join(directory, "homeloom.db")
+	candidate := filepath.Join(directory, "homeloom-postgres.json")
 	if err := extractBackupArchive(archivePath, candidate); err != nil {
 		return PendingRestore{}, err
 	}
@@ -111,29 +111,29 @@ func (s *MaintenanceService) StageRestore(ctx context.Context, archive io.Reader
 	if err != nil {
 		return PendingRestore{}, err
 	}
-	if err := movePrivateFile(candidate, stagedDatabase); err != nil {
+	if err := movePrivateFile(candidate, stagedSnapshot); err != nil {
 		return PendingRestore{}, err
 	}
 	if err := movePrivateFile(candidate+".key", stagedKey); err != nil {
-		_ = os.Remove(stagedDatabase)
+		_ = os.Remove(stagedSnapshot)
 		return PendingRestore{}, err
 	}
 	createdAt := s.now().UTC()
-	if err := s.writeMarker(s.databasePath, createdAt); err != nil {
-		_ = os.Remove(stagedDatabase)
+	if err := s.writeMarker(s.masterKeyPath, createdAt); err != nil {
+		_ = os.Remove(stagedSnapshot)
 		_ = os.Remove(stagedKey)
 		return PendingRestore{}, err
 	}
 	return PendingRestore{Staged: true, RequiresRestart: true, CreatedAt: createdAt, SchemaVersion: version}, nil
 }
 
-func createBackupArchive(archivePath, databasePath string) error {
+func createBackupArchive(archivePath, snapshotPath string) error {
 	file, err := os.OpenFile(archivePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("create backup archive: %w", err)
 	}
 	archive := zip.NewWriter(file)
-	for _, item := range []struct{ source, name string }{{databasePath, "homeloom.db"}, {databasePath + ".key", "homeloom.db.key"}} {
+	for _, item := range []struct{ source, name string }{{snapshotPath, "homeloom-postgres.json"}, {snapshotPath + ".key", "homeloom-master.key"}} {
 		if err := addArchiveFile(archive, item.source, item.name); err != nil {
 			archive.Close()
 			file.Close()
@@ -193,7 +193,7 @@ func extractBackupArchive(archivePath, candidate string) error {
 		return fmt.Errorf("open restore archive: %w", err)
 	}
 	defer archive.Close()
-	entries := map[string]string{"homeloom.db": candidate, "homeloom.db.key": candidate + ".key"}
+	entries := map[string]string{"homeloom-postgres.json": candidate, "homeloom-master.key": candidate + ".key"}
 	seen := make(map[string]bool)
 	var totalSize uint64
 	for _, entry := range archive.File {

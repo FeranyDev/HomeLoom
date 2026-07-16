@@ -8,7 +8,7 @@
 - Provider 状态订阅；
 - HomeKit Bridge、Switch 和 Temperature Sensor；
 - HAP UUID、密钥及 pairing 文件持久化；
-- SQLite migration 和 WAL；实时设备状态仅保存在内存；
+- PostgreSQL 17、GORM AutoMigrate 和 pgx 连接池；实时设备状态仅保存在内存；
 - 可同时运行多个 Apple HAP Bridge；
 - Target 类型、设备分配、独立端口和独立身份配置；
 - 标准 HomeKit Setup URI 与 PNG 配对二维码；
@@ -26,7 +26,7 @@
 - Provider SDK 与多 Provider 聚合管理、设备归属路由；
 - Device Model v1、稳定 ID 校验和统一 Capability/Property 契约；
 - 通用 PropertyReader、PropertyWriter 和带幂等 key 的 Action/Command；
-- SQLite Provider 配置、默认种子和类型 Factory；
+- PostgreSQL Provider 配置、默认种子和类型 Factory；
 - 统一 API 错误包装、Request ID、OpenAPI 与 runtime 指标；
 - 前后端独立容器、Linux host-network Compose 和数据卷；
 - 项目级 Go/npm 缓存；
@@ -62,6 +62,6 @@
 
 - 完成 Apple Home 实机配对、双向控制和三次重启验收；
 - 为重新生成配对资料、清除身份等高风险操作加入独立二次确认；
-- 将已完成的 SQLite 一致性备份/离线安全恢复接入管理员认证后的 Web 运维入口；
+- 将已完成的 PostgreSQL 一致性备份/离线安全恢复接入管理员认证后的 Web 运维入口；
 - 使用真实 Mosquitto 验收 Broker 重启和网络中断恢复；
 - 完成 MQTT → Apple Home 与 Apple Home → MQTT 实机双向验收；

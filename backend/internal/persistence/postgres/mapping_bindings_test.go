@@ -1,0 +1,97 @@
+package postgres
+
+import (
+	"context"
+	"testing"
+
+	"github.com/feranydev/homeloom/backend/internal/mapping"
+)
+
+func TestMappingBindingsPersistAndEnforceUniquePropertyPath(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	item := mapping.Binding{ID: "binding-one", ProfileID: "builtin-active-low", ProviderID: "virtual-main", DeviceID: "virtual-switch-1", EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Enabled: true}
+	if err := store.SaveMappingBinding(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+	duplicate := item
+	duplicate.ID = "binding-two"
+	if err := store.SaveMappingBinding(ctx, duplicate); err == nil {
+		t.Fatal("duplicate property binding was accepted")
+	}
+	items, err := store.ListMappingBindings(ctx)
+	if err != nil || len(items) != 1 || items[0].ID != item.ID || items[0].EffectiveStage() != mapping.StageProvider || items[0].ModelPath() != item.SourcePath() || items[0].ProfileID != item.ProfileID || !items[0].Enabled {
+		t.Fatalf("bindings = %#v, error = %v", items, err)
+	}
+	item.Enabled = false
+	if err := store.SaveMappingBinding(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+	items, _ = store.ListMappingBindings(ctx)
+	if items[0].Enabled {
+		t.Fatal("binding update was not persisted")
+	}
+	if err := store.DeleteMappingBinding(ctx, item.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConsumerMappingUniquenessIsScopedPerDevice(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	first := mapping.Binding{ID: "consumer-one", Stage: mapping.StageConsumer, ProviderID: "virtual-main", DeviceID: "switch-one", DeviceType: "switch", ModelEndpointID: "main", ModelCapabilityID: "switch", ModelPropertyID: "power", ConsumerID: "homekit", ConsumerProperty: "Switch.On", Enabled: true}
+	if err := store.SaveMappingBinding(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	second := first
+	second.ID, second.DeviceID = "consumer-two", "switch-two"
+	if err := store.SaveMappingBinding(ctx, second); err != nil {
+		t.Fatalf("same Consumer property on another device was rejected: %v", err)
+	}
+	duplicate := first
+	duplicate.ID = "consumer-duplicate"
+	if err := store.SaveMappingBinding(ctx, duplicate); err == nil {
+		t.Fatal("duplicate Consumer property on the same device was accepted")
+	}
+}
+
+func TestConsumerMappingUniquenessIsScopedPerTargetVirtualDevice(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	first := mapping.Binding{
+		ID: "target-consumer-one", Stage: mapping.StageConsumer,
+		ProviderID: "virtual-main", DeviceID: "switch-one", DeviceType: "switch",
+		ModelEndpointID: "main", ModelCapabilityID: "switch", ModelPropertyID: "power",
+		TargetID: "apple-main", ConsumerDeviceID: "living-room-switch",
+		ConsumerID: "homekit", ConsumerProperty: "Switch.On", Enabled: true,
+	}
+	if err := store.SaveMappingBinding(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	second := first
+	second.ID, second.TargetID, second.ConsumerDeviceID = "target-consumer-two", "apple-guest", "guest-switch"
+	if err := store.SaveMappingBinding(ctx, second); err != nil {
+		t.Fatalf("same source and characteristic on another virtual device was rejected: %v", err)
+	}
+	items, err := store.ListMappingBindings(ctx)
+	if err != nil || len(items) != 2 || items[0].TargetID == "" || items[1].ConsumerDeviceID == "" {
+		t.Fatalf("scoped bindings = %#v, error = %v", items, err)
+	}
+	duplicate := first
+	duplicate.ID = "target-consumer-duplicate"
+	if err := store.SaveMappingBinding(ctx, duplicate); err == nil {
+		t.Fatal("duplicate Consumer property on the same target virtual device was accepted")
+	}
+}

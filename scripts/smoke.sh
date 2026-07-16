@@ -5,6 +5,7 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 BINARY=${HOMELOOM_BINARY:-$ROOT/backend/bin/homeloom}
 ADDRESS=${HOMELOOM_SMOKE_ADDRESS:-127.0.0.1:18090}
+DATABASE_URL=${HOMELOOM_SMOKE_DATABASE_URL:-}
 BASE_URL="http://$ADDRESS"
 TEMP=$(mktemp -d "${TMPDIR:-/tmp}/homeloom-smoke.XXXXXX")
 COOKIE_JAR="$TEMP/cookies.txt"
@@ -25,7 +26,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 start_server() {
-  HOMELOOM_HTTP_ADDRESS="$ADDRESS" HOMELOOM_DATABASE="$TEMP/homeloom.db" "$BINARY" >"$TEMP/server.log" 2>&1 &
+  HOMELOOM_HTTP_ADDRESS="$ADDRESS" HOMELOOM_DATABASE_URL="$DATABASE_URL" HOMELOOM_MASTER_KEY="$TEMP/homeloom.key" "$BINARY" >"$TEMP/server.log" 2>&1 &
   PID=$!
   ready=false
   for _ in $(seq 1 40); do
@@ -45,6 +46,10 @@ stop_server() {
 if [ ! -x "$BINARY" ]; then
   echo "missing executable: $BINARY (run ./scripts/build.sh first)" >&2
   exit 1
+fi
+if [ -z "$DATABASE_URL" ]; then
+  echo "HOMELOOM_SMOKE_DATABASE_URL must point to an empty, disposable PostgreSQL database or schema" >&2
+  exit 2
 fi
 
 cd "$TEMP"
@@ -103,8 +108,7 @@ for attempt in 1 2 3; do
   fi
   stop_server
 done
-HOMELOOM_DATABASE="$TEMP/homeloom.db" "$BINARY" -backup "$TEMP/backup.db" >/dev/null
-if [ ! -s "$TEMP/backup.db" ] || [ ! -s "$TEMP/backup.db.key" ]; then echo "backup smoke test produced incomplete database/key pair" >&2; exit 1; fi
-HOMELOOM_DATABASE="$TEMP/restored.db" "$BINARY" -restore "$TEMP/backup.db" >/dev/null
-if [ ! -s "$TEMP/restored.db" ] || [ ! -s "$TEMP/restored.db.key" ]; then echo "restore smoke test produced incomplete database/key pair" >&2; exit 1; fi
+HOMELOOM_DATABASE_URL="$DATABASE_URL" HOMELOOM_MASTER_KEY="$TEMP/homeloom.key" "$BINARY" -backup "$TEMP/backup.json" >/dev/null
+if [ ! -s "$TEMP/backup.json" ] || [ ! -s "$TEMP/backup.json.key" ]; then echo "backup smoke test produced incomplete snapshot/key pair" >&2; exit 1; fi
+HOMELOOM_DATABASE_URL="$DATABASE_URL" HOMELOOM_MASTER_KEY="$TEMP/homeloom.key" "$BINARY" -restore "$TEMP/backup.json" -restore-replace >/dev/null
 printf 'smoke test passed (%s)\n' "$ADDRESS"

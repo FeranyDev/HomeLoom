@@ -14,11 +14,14 @@ import (
 const (
 	defaultCloudPollInterval = 30
 	defaultCloudTimeout      = 15
+	cloudConnectionAuto      = "auto"
+	cloudConnectionLocal     = "local"
+	cloudConnectionCloud     = "cloud"
 )
 
 // CloudConfig is the durable configuration for the Xiaomi cloud MIoT
 // provider. Password and session fields are encrypted by the provider config
-// secret codec before the JSON document is stored in SQLite.
+// secret codec before the JSON document is stored in PostgreSQL.
 type CloudConfig struct {
 	Region            string         `json:"region"`
 	Username          string         `json:"username,omitempty"`
@@ -63,6 +66,10 @@ func (c *CloudConfig) applyDefaults() {
 	for index := range c.Devices {
 		item := &c.Devices[index]
 		item.DID, item.ID = strings.TrimSpace(item.DID), strings.TrimSpace(item.ID)
+		item.ConnectionMode = strings.ToLower(strings.TrimSpace(item.ConnectionMode))
+		if item.ConnectionMode == "" {
+			item.ConnectionMode = cloudConnectionAuto
+		}
 		if item.ID == "" {
 			item.ID = "xiaomi-miot-" + stableID(item.DID)
 		}
@@ -116,6 +123,9 @@ func (c CloudConfig) validate() error {
 			return fmt.Errorf("duplicate Xiaomi cloud device id %q", item.ID)
 		}
 		seenDevices[item.ID] = true
+		if item.ConnectionMode != cloudConnectionAuto && item.ConnectionMode != cloudConnectionLocal && item.ConnectionMode != cloudConnectionCloud {
+			return fmt.Errorf("device %q connectionMode must be auto, local or cloud", item.ID)
+		}
 		seenProperties := make(map[string]bool)
 		for _, mapping := range item.Properties {
 			key := mapping.EndpointID + "/" + mapping.CapabilityID + "/" + mapping.PropertyID

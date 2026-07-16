@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: HomeLoom API
   version: 0.1.0
-  description: HomeLoom management API. Runtime device values are ephemeral; configuration is stored in SQLite.
+  description: HomeLoom management API. Runtime device values are ephemeral; configuration is stored in PostgreSQL.
 servers:
   - url: http://127.0.0.1:8090
 security:
@@ -150,10 +150,10 @@ paths:
   /api/v1/system/backup:
     post:
       operationId: downloadDatabaseBackup
-      description: Creates a consistent SQLite backup plus its master key as a sensitive ZIP archive. Requires X-CSRF-Token and the exact BACKUP confirmation phrase.
+      description: Creates a consistent PostgreSQL logical snapshot plus its master key as a sensitive ZIP archive. Requires X-CSRF-Token and the exact BACKUP confirmation phrase.
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ConfirmationRequest" } } } }
       responses:
-        "200": { description: No-store ZIP attachment containing homeloom.db and homeloom.db.key, content: { application/zip: { schema: { type: string, format: binary } } } }
+        "200": { description: No-store ZIP attachment containing homeloom-postgres.json and homeloom-master.key, content: { application/zip: { schema: { type: string, format: binary } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
   /api/v1/system/restore:
     post:
@@ -265,7 +265,7 @@ paths:
       responses: { "200": { description: Updated profile, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/MappingProfileInfo" } } } } } }, "400": { $ref: "#/components/responses/BadRequest" }, "404": { $ref: "#/components/responses/NotFound" }, "409": { description: Built-in profile is read-only } }
     delete:
       operationId: deleteMappingProfile
-      responses: { "204": { description: User profile deleted from SQLite and the live snapshot }, "404": { $ref: "#/components/responses/NotFound" }, "409": { description: Built-in profile is read-only } }
+      responses: { "204": { description: User profile deleted from PostgreSQL and the live snapshot }, "404": { $ref: "#/components/responses/NotFound" }, "409": { description: Built-in profile is read-only } }
   /api/v1/audit-events:
     get:
       operationId: listAuditEvents
@@ -413,6 +413,22 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { allOf: [{ $ref: "#/components/schemas/XiaomiOAuthStart" }, { type: object, required: [code, state], properties: { code: { type: string }, state: { type: string } } }] } } } }
       responses:
         "200": { description: OAuth token metadata and in-memory PEM material to include in the encrypted Provider configuration, content: { application/json: { schema: { $ref: "#/components/schemas/ObjectResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/v1/xiaomi-miot-cloud/login/start:
+    post:
+      operationId: startXiaomiMIoTCloudLogin
+      description: Starts third-party-compatible Xiaomi account login. Returns a complete session or a short-lived in-memory challenge that preserves the original Xiaomi cookie jar for SMS/email verification. The response is marked no-store.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/XiaomiCloudLoginStart" } } } }
+      responses:
+        "200": { description: Complete cloud session or identity-verification challenge, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/XiaomiCloudLoginResult" } } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/v1/xiaomi-miot-cloud/login/verify:
+    post:
+      operationId: verifyXiaomiMIoTCloudLogin
+      description: Submits the SMS/email code into the retained Xiaomi login session. The challenge is single-use after success, expires after ten minutes and allows at most five attempts. The response is marked no-store.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [challengeId, code], properties: { challengeId: { type: string }, code: { type: string } } } } } }
+      responses:
+        "200": { description: Complete Xiaomi cloud session, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/XiaomiCloudLoginResult" } } } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
   /api/v1/xiaomi/gateways:
     get:
@@ -961,6 +977,25 @@ components:
         redirectUrl: { type: string, format: uri, const: "http://homeassistant.local:8123", default: "http://homeassistant.local:8123", description: Fixed Xiaomi OAuth redirect URI; any supplied value is normalized to this URI. }
         oauthUuid: { type: string, pattern: "^[0-9a-f]{32}$" }
         virtualDid: { type: string, pattern: "^[0-9]+$" }
+    XiaomiCloudLoginStart:
+      type: object
+      required: [region, username, password]
+      properties:
+        region: { type: string, enum: [cn, de, i2, ru, sg, tw, us, in] }
+        username: { type: string }
+        password: { type: string, format: password, description: Retained only in process while the live challenge is pending and encrypted only when included in a saved Provider configuration; never written to a challenge database. }
+        requestTimeoutSeconds: { type: integer, minimum: 1, maximum: 120, default: 15 }
+    XiaomiCloudLoginResult:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [verified, verification_required] }
+        challengeId: { type: string }
+        verificationUrl: { type: string, format: uri }
+        expiresAt: { type: string, format: date-time }
+        userId: { type: string }
+        ssecurity: { type: string }
+        serviceToken: { type: string }
     XiaomiHubDevice:
       type: object
       required: [did, name]
@@ -968,8 +1003,12 @@ components:
         did: { type: string }
         name: { type: string }
         model: { type: string }
+        homeId: { type: string }
+        homeName: { type: string }
         roomId: { type: string }
         roomName: { type: string }
+        localIp: { type: string, description: Private LAN address reported by Xiaomi Cloud. }
+        localAvailable: { type: boolean, description: Whether both a safe private address and valid local token are available; the token itself is never serialized. }
         specType: { type: string }
         online: { type: boolean }
     TargetVirtualDevice:

@@ -14,7 +14,7 @@ const provider: Provider = {
 }
 
 describe('XiaomiDeviceManager', () => {
-	beforeEach(() => { vi.clearAllMocks(); api.discoverXiaomiDevices.mockResolvedValue([{ did: '123.456', name: '客厅灯', model: 'vendor.light.v1', roomName: '客厅', specType: 'urn:miot-spec-v2:device:light:0000A001' }]) })
+	beforeEach(() => { vi.clearAllMocks(); api.discoverXiaomiDevices.mockResolvedValue([{ did: '123.456', name: '客厅灯', model: 'vendor.light.v1', homeId: 'home-main', homeName: '我的家', roomId: 'room-living', roomName: '客厅', localIp: '192.168.1.20', localAvailable: true, specType: 'urn:miot-spec-v2:device:light:0000A001' }]) })
 
 	it('discovers subdevices through the running provider and saves mappings', async () => {
 		const onSave = vi.fn().mockResolvedValue(undefined)
@@ -22,11 +22,12 @@ describe('XiaomiDeviceManager', () => {
 		await userEvent.click(screen.getByRole('button', { name: '从中枢读取子设备' }))
 		await waitFor(() => expect(api.discoverXiaomiDevices).toHaveBeenCalledWith('xiaomi-main', 'xiaomi'))
 		expect(await screen.findByText('客厅灯')).toBeInTheDocument()
+		expect(screen.getByText(/我的家 \/ 客厅/)).toBeInTheDocument()
 		expect(screen.getByLabelText('客厅灯 统一模型')).toHaveValue('lightbulb')
 		await userEvent.click(screen.getByRole('button', { name: '加入映射' }))
 		expect(screen.getByText('已映射 1 台设备')).toBeInTheDocument()
 		await userEvent.click(screen.getByRole('button', { name: '保存子设备映射' }))
-		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ id: 'xiaomi-main', config: expect.objectContaining({ devices: [expect.objectContaining({ did: '123.456', type: 'lightbulb' })] }) }), true))
+		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ id: 'xiaomi-main', config: expect.objectContaining({ devices: [expect.objectContaining({ did: '123.456', type: 'lightbulb', homeId: 'home-main', home: '我的家', roomId: 'room-living', room: '客厅' })] }) }), true))
 	})
 
 	it('requires an established MQTT connection', () => {
@@ -42,8 +43,10 @@ describe('XiaomiDeviceManager', () => {
 		render(<XiaomiDeviceManager provider={cloud} onClose={() => {}} onSave={onSave} />)
 		await userEvent.click(screen.getByRole('button', { name: '从 MIoT 云读取设备' }))
 		await waitFor(() => expect(api.discoverXiaomiDevices).toHaveBeenCalledWith('xiaomi-miot-cloud-main', 'xiaomi-miot-cloud'))
+		expect(screen.getByText(/局域网 MIoT 可用/)).toBeInTheDocument()
+		expect(screen.getByLabelText('客厅灯 连接策略')).toHaveValue('auto')
 		await userEvent.click(await screen.findByRole('button', { name: '加入映射' }))
 		await userEvent.click(screen.getByRole('button', { name: '保存子设备映射' }))
-		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ type: 'xiaomi-miot-cloud', config: expect.objectContaining({ devices: [expect.objectContaining({ id: 'xiaomi-miot-123.456' })] }) }), true))
+		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ type: 'xiaomi-miot-cloud', config: expect.objectContaining({ devices: [expect.objectContaining({ id: 'xiaomi-miot-123.456', connectionMode: 'auto' })] }) }), true))
 	})
 })

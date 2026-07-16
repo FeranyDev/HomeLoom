@@ -37,7 +37,7 @@ Virtual / MQTT / Xiaomi / 其他平台
 - Virtual Provider；
 - MQTT Provider；
 - Apple HAP Target；
-- SQLite 持久化；
+- PostgreSQL 持久化；
 - YAML 配置；
 - Switch、Light、Temperature Sensor、Humidity Sensor；
 - 健康检查、结构化日志和基础指标；
@@ -108,8 +108,8 @@ Apple Home 写入后可以短暂显示乐观值，但必须等待 Provider 上�
 |---|---|
 | 主语言 | Go |
 | HTTP | `echo` |
-| 配置 | SQLite；YAML 仅用于进程启动参数 |
-| 数据库 | SQLite + migrations + WAL |
+| 配置 | PostgreSQL；YAML 仅用于进程启动参数 |
+| 数据库 | PostgreSQL 17 + GORM AutoMigrate + pgx |
 | MQTT | Eclipse Paho `autopaho` |
 | 日志 | `log/slog` |
 | 指标 | Prometheus Client |
@@ -145,7 +145,6 @@ HomeLoom/
 ├── targets/
 │   └── homekit/
 ├── profiles/
-├── migrations/
 ├── configs/
 ├── testdata/
 ├── Dockerfile
@@ -278,32 +277,34 @@ queued → sent → accepted → confirmed
 首版至少包含：
 
 ```text
-schema_migrations
 providers
-devices
-device_endpoints
-device_capabilities
-property_states
-pending_commands
 mapping_profiles
 mapping_bindings
-hap_bridges
-hap_accessories
-hap_instances
-hap_pairings
+targets
+target_virtual_devices
+homekit_accessory_ids
+homekit_iids
 system_settings
+device_preferences
+audit_events
+admin_users
+admin_sessions
+miot_spec_cache
+custom_unified_models
+custom_model_properties
 ```
 
 要求：
 
-- 所有 schema 通过 migration 管理；
+- 当前 schema 由 GORM 模型和 `AutoMigrate` 管理，不维护旧版数据库的编号兼容迁移；
+- 业务 CRUD、关联查询、约束和显式事务统一通过 GORM；连接池健康查询及逻辑快照序列校准使用 PostgreSQL 原生命令；
 - 写操作使用明确事务边界；
-- 启用 WAL 并设置 busy timeout；
+- 配置连接池上限、空闲回收和连接生命周期；
 - JSON 字段带 schema version；
 - 时间统一使用 UTC 和明确精度；
 - 外键和唯一约束必须开启；
 - pairing、Token 和私钥加密存储；
-- 备份使用 SQLite 一致性备份机制，不直接复制活动数据库文件。
+- 备份在 `REPEATABLE READ` 只读事务中生成版本化逻辑快照，不复制 PostgreSQL 数据目录。
 
 ## 10. 配置与安全
 
@@ -314,10 +315,11 @@ server:
   address: 127.0.0.1:8090
 
 storage:
-  database: /data/homeloom.db
+  database_url: postgres://homeloom:secret@127.0.0.1:5432/homeloom?sslmode=disable
+  master_key: /data/homeloom.key
 ```
 
-Provider、Target、设备绑定、映射和运行时开关统一存入 SQLite，由管理 API 修改。YAML 不得覆盖这些数据库配置。
+Provider、Target、设备绑定、映射和运行时开关统一存入 PostgreSQL，由管理 API 修改。YAML 不得覆盖这些数据库配置。
 
 Web 只提供一个管理员身份，不建设普通用户或角色系统。日常家庭设备控制、成员共享和使用权限由 Apple Home 承担；HomeLoom Web 聚焦接入、桥接、映射、诊断与运维。
 
@@ -367,7 +369,7 @@ Web 只提供一个管理员身份，不建设普通用户或角色系统。日�
 - 有界事件总线和按设备分片 Dispatcher；
 - State Store 和状态归并函数；
 - 基础 Command Router；
-- SQLite migrations；
+- GORM 模型同步与约束；
 - YAML 配置校验；
 - 优雅关闭。
 
@@ -518,7 +520,7 @@ Web 只提供一个管理员身份，不建设普通用户或角色系统。日�
 ```text
 Virtual Provider → Core → HomeKit Target
 MQTT Provider → Core → HomeKit Target
-SQLite restart/recovery
+PostgreSQL restart/recovery
 ```
 
 ### 故障测试
@@ -560,7 +562,7 @@ GET /metrics  Prometheus 指标
 - 事件吞吐、队列长度和丢弃量；
 - 命令成功率、延迟、超时和 unknown outcome；
 - HomeKit 推送和失败次数；
-- SQLite 延迟和错误数；
+- PostgreSQL 延迟和错误数；
 - goroutine、内存和 CPU。
 
 ## 14. 版本路线
@@ -573,7 +575,7 @@ GET /metrics  Prometheus 指标
 | v0.3.0 | M6：管理 API 和 Web UI |
 | v0.4.0 | M7：Logical Device 和多 Provider 路由 |
 | v0.5.0 | 第二 Provider、进程隔离、稳定性增强 |
-| v1.0.0 | 核心接口、数据迁移、部署与文档稳定 |
+| v1.0.0 | 核心接口、数据模型、部署与文档稳定 |
 
 ## 15. 近期执行清单
 
@@ -584,7 +586,7 @@ GET /metrics  Prometheus 指标
 3. 选择并锁定 HAP 库版本；
 4. 发布虚拟开关；
 5. 完成 Apple Home 配对；
-6. 将 pairing 和附件身份写入 SQLite；
+6. 将 pairing 和附件身份写入 PostgreSQL；
 7. 验证三次重启和设备改名；
 8. 验证 Docker 与 ARM64；
 9. 记录 PoC 结论和未解决风险；

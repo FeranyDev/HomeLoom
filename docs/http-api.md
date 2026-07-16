@@ -16,7 +16,7 @@ Web 管理面只有这一个管理员身份，不实现普通用户、角色或�
 
 `/health`、`/ready`、`/api/versions`、`/api/v1/system/version` 和认证初始化入口保持公开。其余 v1 管理接口、`/metrics` 和 HomeKit 配对二维码均要求登录。所有 `POST`、`PUT`、`PATCH`、`DELETE` 请求还必须把 `homeloom_csrf` Cookie 的值放入 `X-CSRF-Token` 请求头；前端 API Client 会自动完成此操作。
 
-同一客户端在五分钟窗口内连续登录失败 5 次后会锁定 5 分钟。默认只使用 TCP 直连地址；仅当直连来源位于 `server.trusted_proxies` / `HOMELOOM_TRUSTED_PROXIES` 明确列出的 IP/CIDR 时，才从右向左解析 `X-Forwarded-For` 并信任 `X-Forwarded-Proto`。认证响应禁止缓存，退出会立即从 SQLite 删除 Session。
+同一客户端在五分钟窗口内连续登录失败 5 次后会锁定 5 分钟。默认只使用 TCP 直连地址；仅当直连来源位于 `server.trusted_proxies` / `HOMELOOM_TRUSTED_PROXIES` 明确列出的 IP/CIDR 时，才从右向左解析 `X-Forwarded-For` 并信任 `X-Forwarded-Proto`。认证响应禁止缓存，退出会立即从 PostgreSQL 删除 Session。
 
 ## 错误响应
 
@@ -65,12 +65,12 @@ Web 管理面只有这一个管理员身份，不实现普通用户、角色或�
 ## 诊断入口
 
 - `GET /health`：进程存活；
-- `GET /ready`：检查必要运行依赖；SQLite 可访问时返回 200，否则返回 503 和分项原因；
+- `GET /ready`：检查必要运行依赖；PostgreSQL 可访问时返回 200，否则返回 503 和分项原因；
 - `GET /api/v1/system/version`：版本、commit、构建时间和 Go 版本；
-- `GET/PUT /api/v1/system/settings`：读取或实时更新 SQLite 中的运行时设置；
+- `GET/PUT /api/v1/system/settings`：读取或实时更新 PostgreSQL 中的运行时设置；
 - `GET /api/v1/system/config-export`：下载脱敏后的数据库配置快照；
 - `GET /api/v1/system/diagnostic-bundle`：下载版本、指标、脱敏配置和最近审计事件组成的诊断包；
-- `POST /api/v1/system/backup`：输入精确确认短语 `BACKUP` 后下载 SQLite 与数据库主密钥组成的 ZIP 完整备份；
+- `POST /api/v1/system/backup`：输入精确确认短语 `BACKUP` 后下载 PostgreSQL 与数据库主密钥组成的 ZIP 完整备份；
 - `POST /api/v1/system/restore`：上传完整备份并输入 `RESTORE`，完成完整性、Schema 和密钥校验后暂存；下次进程启动前原子替换、保留恢复前快照，并清空备份中的旧浏览器 Session；
 - `GET /api/v1/diagnostics`：设备、事件、命令、订阅及 Go runtime 快照；
 - `GET /metrics`：Prometheus 文本指标；
@@ -80,9 +80,9 @@ Web 管理面只有这一个管理员身份，不实现普通用户、角色或�
 - `GET /api/v1/audit-events?limit=200`：按时间倒序读取持久化审计事件，`limit` 范围为 1–500；
 - `GET /api/v1/events/audit`：通过 SSE 实时接收 `audit` 事件。
 
-所有 `/api/v1` 下的 POST、PUT、PATCH 和 DELETE 都记录审计事件，包括失败的操作。审计表只保存 actor、方法、模板化路由、资源 ID、状态码、结果和 correlation ID，不保存请求体或配置值，避免 Provider 凭据和 HomeKit PIN 进入日志。记录保存在 SQLite 的 `audit_events` 表中，当前自动保留最近 5000 条；写请求会在返回前同步尝试持久化，审计失败会写入结构化错误日志，但不会把已经完成的业务操作伪装成失败。SSE 订阅使用有界缓冲，慢客户端只会漏掉实时通知，不影响已经落库的历史。
+所有 `/api/v1` 下的 POST、PUT、PATCH 和 DELETE 都记录审计事件，包括失败的操作。审计表只保存 actor、方法、模板化路由、资源 ID、状态码、结果和 correlation ID，不保存请求体或配置值，避免 Provider 凭据和 HomeKit PIN 进入日志。记录保存在 PostgreSQL 的 `audit_events` 表中，当前自动保留最近 5000 条；写请求会在返回前同步尝试持久化，审计失败会写入结构化错误日志，但不会把已经完成的业务操作伪装成失败。SSE 订阅使用有界缓冲，慢客户端只会漏掉实时通知，不影响已经落库的历史。
 
-`/metrics` 中的 runtime 指标包括 `homeloom_go_goroutines`、`homeloom_go_heap_alloc_bytes` 和 `homeloom_go_heap_objects`。事件指标包含入队到处理完成的平均/最大延迟及超过 100ms 的慢 Handler 计数；SQLite 指标包含配置、身份、schema、健康检查和备份操作数以及平均/最大延迟；`homeloom_homekit_pushes_total` 统计运行期间应用到 HomeKit Characteristic 的状态更新次数。命令协调指标 `homeloom_command_queue_pending` 和 `homeloom_command_queue_max_pending` 分别表示当前等待 Provider 执行槽的命令数及进程生命周期内的最大等待数。
+`/metrics` 中的 runtime 指标包括 `homeloom_go_goroutines`、`homeloom_go_heap_alloc_bytes` 和 `homeloom_go_heap_objects`。事件指标包含入队到处理完成的平均/最大延迟及超过 100ms 的慢 Handler 计数；PostgreSQL 指标包含配置、身份、schema、健康检查和备份操作数以及平均/最大延迟；`homeloom_homekit_pushes_total` 统计运行期间应用到 HomeKit Characteristic 的状态更新次数。命令协调指标 `homeloom_command_queue_pending` 和 `homeloom_command_queue_max_pending` 分别表示当前等待 Provider 执行槽的命令数及进程生命周期内的最大等待数。
 
 属性写入和 Action 按 Device ID 串行进入 Provider，不同设备仍可并行执行。等待执行槽时会响应 HTTP 请求取消或 deadline，取消的排队请求不会创建命令记录，也不会到达 Provider。
 
@@ -139,21 +139,23 @@ Core 会根据 Capability 中的 `CommandDefinition` 校验必填参数、未声
 
 响应包含最终 typed value 和每一步的输入、输出及 transform 索引。错误 Profile 使用统一字段错误结构返回，字段路径例如 `profile.transforms.0.factor`，便于前端准确定位。反向预览逆序运行 transform，用于提前验证 Target 控制写回 Provider 的可逆性。
 
-Profile 管理入口为 `GET/POST /api/v1/mapping/profiles` 和 `GET/PUT/DELETE /api/v1/mapping/profiles/{id}`。用户 Profile 保存到 SQLite `mapping_profiles`，应用层在数据库成功提交后原子替换内存快照；后续预览只需提交 `profileId`，无需重启即可解析最新版本。更新必须把 `version` 增加到当前版本之上，避免旧页面覆盖新配置。
+Profile 管理入口为 `GET/POST /api/v1/mapping/profiles` 和 `GET/PUT/DELETE /api/v1/mapping/profiles/{id}`。用户 Profile 保存到 PostgreSQL `mapping_profiles`，应用层在数据库成功提交后原子替换内存快照；后续预览只需提交 `profileId`，无需重启即可解析最新版本。更新必须把 `version` 增加到当前版本之上，避免旧页面覆盖新配置。
 
-HomeLoom 随程序提供 provider、capability 和 target 三类内置示例 Profile。内置 ID 只读且不能被用户配置覆盖。`POST /api/v1/mapping/profiles/import` 会先验证完整批次，再使用单个 SQLite 事务写入，任何一项错误都不会产生部分导入。`GET /api/v1/mapping/profiles/export` 只导出用户 Profile，生成的文件可以直接重新导入；全局脱敏配置导出和诊断包则包含内置与用户 Profile，便于还原排障上下文。
+HomeLoom 随程序提供 provider、capability 和 target 三类内置示例 Profile。内置 ID 只读且不能被用户配置覆盖。`POST /api/v1/mapping/profiles/import` 会先验证完整批次，再使用单个 PostgreSQL 事务写入，任何一项错误都不会产生部分导入。`GET /api/v1/mapping/profiles/export` 只导出用户 Profile，生成的文件可以直接重新导入；全局脱敏配置导出和诊断包则包含内置与用户 Profile，便于还原排障上下文。
 
-运行时属性绑定入口为 `GET/POST /api/v1/mapping/bindings` 和 `GET/PUT/DELETE /api/v1/mapping/bindings/{id}`。绑定存储于 SQLite `mapping_bindings`，精确指定 Provider、设备、Endpoint、Capability 和 Property 路径；ID 可以省略并由后端生成。启用后，Provider 快照和读取结果执行 `forward` 转换，属性控制执行 `reverse` 转换。保存、启停或删除会同步重新发现并处理当前 Provider 快照，不重启 Provider 或 Target。运行时绑定允许输入和输出类型不同，但每一步必须能够生成合法的反向写入值；因此仅正向的 `clamp` 不能绑定到真实读写链路。分段枚举和阈值转换通过显式 `reverse`/`trueNumber`/`falseNumber` 保存反向代表值。正在被绑定引用的用户 Profile 不能删除，也不能更新为不兼容流水线。
+运行时属性绑定入口为 `GET/POST /api/v1/mapping/bindings` 和 `GET/PUT/DELETE /api/v1/mapping/bindings/{id}`。绑定存储于 PostgreSQL `mapping_bindings`，精确指定 Provider、设备、Endpoint、Capability 和 Property 路径；ID 可以省略并由后端生成。启用后，Provider 快照和读取结果执行 `forward` 转换，属性控制执行 `reverse` 转换。保存、启停或删除会同步重新发现并处理当前 Provider 快照，不重启 Provider 或 Target。运行时绑定允许输入和输出类型不同，但每一步必须能够生成合法的反向写入值；因此仅正向的 `clamp` 不能绑定到真实读写链路。分段枚举和阈值转换通过显式 `reverse`/`trueNumber`/`falseNumber` 保存反向代表值。正在被绑定引用的用户 Profile 不能删除，也不能更新为不兼容流水线。
 
-诊断响应的 `mappingApplied` 和 `mappingErrors` 分别统计运行时转换命中与失败。转换失败的 Provider 事件不会覆盖内存中的上一份有效设备状态；错误配置仍保存在数据库中，便于管理员修正而不会触发服务重启循环。全局脱敏配置导出和 SQLite 备份均包含属性绑定。
+诊断响应的 `mappingApplied` 和 `mappingErrors` 分别统计运行时转换命中与失败。转换失败的 Provider 事件不会覆盖内存中的上一份有效设备状态；错误配置仍保存在数据库中，便于管理员修正而不会触发服务重启循环。全局脱敏配置导出和 PostgreSQL 备份均包含属性绑定。
 
 ## 小米设备目录
 
 `GET /api/v1/xiaomi/providers/{id}/devices` 只接受正在运行的 `xiaomi` 中枢 Provider，并复用其现有 MQTT 连接读取子设备。`GET /api/v1/xiaomi-miot-cloud/providers/{id}/devices` 只接受正在运行的 `xiaomi-miot-cloud` 第三方兼容 Provider，并复用其现有账号会话读取云端设备。两个接口不互相回退，也不会按 DID 合并目录；未来官方 `xiaomi-home-cloud` 使用独立类型和接口。
 
+第三方 MIoT 云登录使用 `POST /api/v1/xiaomi-miot-cloud/login/start` 与 `POST /api/v1/xiaomi-miot-cloud/login/verify`。前者可能直接返回完整会话，也可能返回 `verification_required`、短时 `challengeId` 和小米验证 URL；用户在小米页面触发短信/邮件后，将验证码提交给后者。挑战仅在进程内保存 10 分钟并复用首次登录的 Cookie，成功后单次失效；两个响应均禁止缓存。
+
 ## Provider 敏感配置
 
-Provider 配置仍以完整值保存在 SQLite 中，但管理 API 会递归识别 password、secret、token、API key、private key、credential 和 Xiaomi `ssecurity` 字段，并以 `********` 返回。编辑时保留该占位符会沿用数据库中的原值；输入新值会替换原值。新建 Provider 时不能把占位符当作真实密钥提交。数组对象优先按稳定 `id` 恢复密钥，避免配置重排后发生错配。
+Provider 配置仍以完整值保存在 PostgreSQL 中，但管理 API 会递归识别 password、secret、token、API key、private key、credential 和 Xiaomi `ssecurity` 字段，并以 `********` 返回。编辑时保留该占位符会沿用数据库中的原值；输入新值会替换原值。新建 Provider 时不能把占位符当作真实密钥提交。数组对象优先按稳定 `id` 恢复密钥，避免配置重排后发生错配。
 
 支持自动续期的 Provider 会额外返回 `credentials` 状态，只包含 `managed`、`refreshAt`、`tokenExpiresAt` 和 `certificateExpiresAt`。续期失败通过 `credentialError` 与 `credentialRetryAt` 展示；这些字段不包含 Access Token、Refresh Token、证书或私钥。Xiaomi Token 在有效期 70% 处刷新，客户端证书在剩余有效期 20%（最多提前 7 天）时续签并热应用。
 
@@ -161,6 +163,6 @@ Provider 配置仍以完整值保存在 SQLite 中，但管理 API 会递归识�
 
 进程结构化日志统一经过敏感属性过滤器。敏感键直接替换为 `********`，错误文本或 URL 中常见的 `token=...`、`api_key=...`、`password=...` 等赋值也会在输出前清理。调用方仍不应把完整请求体作为无语义字符串写入日志。
 
-HomeKit PIN 在 SQLite 中使用 AES-256-GCM 加密，主密钥自动保存为数据库旁的 `<database>.key` 文件并强制使用 `0600` 权限。已有明文 PIN 会在升级后的首次启动自动加密；数据库包含密文但密钥缺失时服务会拒绝启动，避免静默生成错误密钥。Web 完整备份把数据库和配套密钥封装为一个 ZIP；该文件可解密 Provider 凭据与桥 PIN，必须按敏感文件保管。HAP 控制器配对目录不在 SQLite 备份中。
+HomeKit PIN 在 PostgreSQL 中使用 AES-256-GCM 加密，主密钥保存到 `storage.master_key` / `HOMELOOM_MASTER_KEY` 指定的文件并强制使用 `0600` 权限。已有明文 PIN 会在首次启动时自动加密；数据库包含密文但密钥缺失时服务会拒绝启动。Web 完整备份把 PostgreSQL 逻辑快照和配套密钥封装为一个 ZIP；该文件可解密 Provider 凭据与桥 PIN，必须按敏感文件保管。HAP 控制器配对目录不在数据库备份中。
 
-SQLite 主数据库文件在打开后强制设置为 `0600`。HomeKit 身份目录由 HomeLoom 自己实现的安全 Store 管理：目录为 `0700`、身份与配对文件为 `0600`，启动时会修复已有权限并拒绝身份目录中的符号链接。
+HomeLoom 不直接管理 PostgreSQL 数据目录权限；生产环境应由 PostgreSQL 服务和卷策略负责访问控制。HomeLoom 主密钥为 `0600`。HomeKit 身份目录由安全 Store 管理：目录为 `0700`、身份与配对文件为 `0600`，启动时会修复已有权限并拒绝身份目录中的符号链接。

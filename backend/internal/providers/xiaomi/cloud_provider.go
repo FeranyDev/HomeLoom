@@ -3,6 +3,7 @@ package xiaomi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -34,6 +35,7 @@ type CloudProvider struct {
 	name     string
 	config   CloudConfig
 	factory  cloudClientFactory
+	local    miotLocalClient
 	resolver *SpecResolver
 
 	mu            sync.RWMutex
@@ -50,9 +52,12 @@ type CloudProvider struct {
 	cancel        context.CancelFunc
 	done          chan struct{}
 
-	requests atomic.Uint64
-	events   atomic.Uint64
-	errors   atomic.Uint64
+	requests       atomic.Uint64
+	events         atomic.Uint64
+	errors         atomic.Uint64
+	localRequests  atomic.Uint64
+	localFailures  atomic.Uint64
+	cloudFallbacks atomic.Uint64
 }
 
 var (
@@ -82,6 +87,7 @@ func NewCloudProviderFromConfigWithSpecResolver(item providerconfig.Config, reso
 func newCloudProvider(id, name string, config CloudConfig, factory cloudClientFactory, resolver *SpecResolver) (*CloudProvider, error) {
 	provider := &CloudProvider{
 		id: id, name: name, config: config, factory: factory, resolver: resolver,
+		local:   newUDPMIoTLocalClient(localMIoTTimeout(config.requestTimeout())),
 		devices: make(map[string]device.Device), rawProperties: make(map[string]PropertyMapping), rawActions: make(map[string]ActionMapping),
 		catalog: make(map[string]providersdk.SourceCatalogMetadata), valueStatus: make(map[string]providersdk.SourceValueStatus), listeners: make(map[uint64]func(device.Device)),
 	}
@@ -313,8 +319,14 @@ func (p *CloudProvider) loadCloudSpecs(ctx context.Context, directory []HubDevic
 	nextProperties := make(map[string]PropertyMapping)
 	nextActions := make(map[string]ActionMapping)
 	nextCatalog := make(map[string]providersdk.SourceCatalogMetadata, len(configuredDevices))
+	nextConfigured := make([]DeviceConfig, 0, len(configuredDevices))
 	for _, loadedItem := range loaded {
 		configured, hub := loadedItem.configured, loadedItem.hub
+		automapped := false
+		if loadedItem.err == nil {
+			configured, automapped = autoMapCloudDevice(configured, loadedItem.document)
+		}
+		nextConfigured = append(nextConfigured, configured)
 		model := hub.Model
 		if model == "" {
 			model = configured.Model
@@ -341,13 +353,13 @@ func (p *CloudProvider) loadCloudSpecs(ctx context.Context, directory []HubDevic
 		p.mu.RLock()
 		previous, exists := p.devices[item.ID]
 		p.mu.RUnlock()
-		if exists {
+		if exists && !automapped {
 			item = preserveDeviceState(item, previous)
 		}
 		nextDevices[item.ID], nextCatalog[item.ID] = item, metadata
 	}
 	p.mu.Lock()
-	p.devices, p.rawProperties, p.rawActions, p.catalog = nextDevices, nextProperties, nextActions, nextCatalog
+	p.config.Devices, p.devices, p.rawProperties, p.rawActions, p.catalog = nextConfigured, nextDevices, nextProperties, nextActions, nextCatalog
 	p.mu.Unlock()
 }
 
@@ -356,12 +368,8 @@ func (p *CloudProvider) ReadProperty(ctx context.Context, request providersdk.Pr
 	if err != nil {
 		return device.Property{}, err
 	}
-	client, err := p.currentCloudClient()
-	if err != nil {
-		return device.Property{}, err
-	}
-	p.requests.Add(1)
-	result, err := client.GetProperties(ctx, []cloudProperty{{DID: configured.DID, SIID: mapping.SIID, PIID: mapping.PIID}})
+	input := []cloudProperty{{DID: configured.DID, SIID: mapping.SIID, PIID: mapping.PIID}}
+	result, err := p.getProperties(ctx, configured, input)
 	if err != nil || len(result) != 1 || result[0].Code != 0 {
 		p.errors.Add(1)
 		return device.Property{}, providersdk.ErrProviderUnavailable
@@ -402,12 +410,8 @@ func (p *CloudProvider) WriteProperty(ctx context.Context, request providersdk.P
 	if err != nil {
 		return device.Device{}, providersdk.ErrPropertyInvalid
 	}
-	client, err := p.currentCloudClient()
-	if err != nil {
-		return device.Device{}, err
-	}
-	p.requests.Add(1)
-	result, err := client.SetProperties(ctx, []cloudProperty{{DID: configured.DID, SIID: mapping.SIID, PIID: mapping.PIID, Value: raw}})
+	input := []cloudProperty{{DID: configured.DID, SIID: mapping.SIID, PIID: mapping.PIID, Value: raw}}
+	result, err := p.setProperties(ctx, configured, input)
 	if err != nil || len(result) != 1 || result[0].Code != 0 {
 		p.errors.Add(1)
 		return device.Device{}, providersdk.ErrWriteRejected
@@ -430,17 +434,134 @@ func (p *CloudProvider) ExecuteCommand(ctx context.Context, request providersdk.
 		}
 		input = append(input, plainPropertyValue(value))
 	}
-	client, err := p.currentCloudClient()
-	if err != nil {
-		return device.Device{}, err
-	}
-	p.requests.Add(1)
-	if err := client.Action(ctx, cloudAction{DID: configured.DID, SIID: action.SIID, AIID: action.AIID, Input: input}); err != nil {
+	if err := p.doAction(ctx, configured, cloudAction{DID: configured.DID, SIID: action.SIID, AIID: action.AIID, Input: input}); err != nil {
 		p.errors.Add(1)
 		return device.Device{}, providersdk.ErrWriteRejected
 	}
 	item, _ := p.snapshotCloud(configured.ID)
 	return item, nil
+}
+
+func (p *CloudProvider) getProperties(ctx context.Context, configured DeviceConfig, input []cloudProperty) ([]cloudProperty, error) {
+	access, mode, local := p.localAccess(configured)
+	if local {
+		p.requests.Add(1)
+		p.localRequests.Add(1)
+		result, err := p.local.GetProperties(ctx, access, input)
+		if err == nil && propertyResultsSuccessful(result, len(input)) {
+			return result, nil
+		}
+		p.localFailures.Add(1)
+		if mode == cloudConnectionLocal {
+			if err != nil {
+				return nil, err
+			}
+			return result, errors.New("local MIoT property response was incomplete")
+		}
+	} else if mode == cloudConnectionLocal {
+		return nil, errors.New("local MIoT address or token is unavailable")
+	}
+	if mode == cloudConnectionAuto {
+		p.cloudFallbacks.Add(1)
+	}
+	client, err := p.currentCloudClient()
+	if err != nil {
+		return nil, err
+	}
+	p.requests.Add(1)
+	return client.GetProperties(ctx, input)
+}
+
+func (p *CloudProvider) setProperties(ctx context.Context, configured DeviceConfig, input []cloudProperty) ([]cloudProperty, error) {
+	access, mode, local := p.localAccess(configured)
+	if local {
+		p.requests.Add(1)
+		p.localRequests.Add(1)
+		result, err := p.local.SetProperties(ctx, access, input)
+		if err == nil && propertyResultsSuccessful(result, len(input)) {
+			return result, nil
+		}
+		p.localFailures.Add(1)
+		if mode == cloudConnectionLocal {
+			if err != nil {
+				return nil, err
+			}
+			return result, errors.New("local MIoT write response was incomplete")
+		}
+	} else if mode == cloudConnectionLocal {
+		return nil, errors.New("local MIoT address or token is unavailable")
+	}
+	if mode == cloudConnectionAuto {
+		p.cloudFallbacks.Add(1)
+	}
+	client, err := p.currentCloudClient()
+	if err != nil {
+		return nil, err
+	}
+	p.requests.Add(1)
+	return client.SetProperties(ctx, input)
+}
+
+func (p *CloudProvider) doAction(ctx context.Context, configured DeviceConfig, input cloudAction) error {
+	access, mode, local := p.localAccess(configured)
+	if local {
+		p.requests.Add(1)
+		p.localRequests.Add(1)
+		if err := p.local.Action(ctx, access, input); err == nil {
+			return nil
+		} else {
+			p.localFailures.Add(1)
+			if mode == cloudConnectionLocal {
+				return err
+			}
+		}
+	} else if mode == cloudConnectionLocal {
+		return errors.New("local MIoT address or token is unavailable")
+	}
+	if mode == cloudConnectionAuto {
+		p.cloudFallbacks.Add(1)
+	}
+	client, err := p.currentCloudClient()
+	if err != nil {
+		return err
+	}
+	p.requests.Add(1)
+	return client.Action(ctx, input)
+}
+
+func (p *CloudProvider) localAccess(configured DeviceConfig) (miotLocalAccess, string, bool) {
+	mode := configured.ConnectionMode
+	if mode == "" {
+		mode = cloudConnectionAuto
+	}
+	if mode == cloudConnectionCloud {
+		return miotLocalAccess{}, mode, false
+	}
+	p.mu.RLock()
+	directory := append([]HubDevice(nil), p.directory...)
+	local := p.local
+	p.mu.RUnlock()
+	if local == nil {
+		return miotLocalAccess{}, mode, false
+	}
+	for _, item := range directory {
+		if item.DID == configured.DID && validLocalAccess(item.LocalIP, item.Token) {
+			return miotLocalAccess{Host: item.LocalIP, Token: item.Token}, mode, true
+		}
+	}
+	return miotLocalAccess{}, mode, false
+}
+
+func propertyResultsSuccessful(result []cloudProperty, expected int) bool {
+	if len(result) != expected {
+		return false
+	}
+	for _, item := range result {
+		if item.Code != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (p *CloudProvider) Subscribe(handler func(device.Device)) func() {
@@ -457,7 +578,7 @@ func (p *CloudProvider) Subscribe(handler func(device.Device)) func() {
 }
 
 func (p *CloudProvider) ProviderMetrics() map[string]uint64 {
-	return map[string]uint64{"requests": p.requests.Load(), "events": p.events.Load(), "errors": p.errors.Load()}
+	return map[string]uint64{"requests": p.requests.Load(), "events": p.events.Load(), "errors": p.errors.Load(), "localRequests": p.localRequests.Load(), "localFailures": p.localFailures.Load(), "cloudFallbacks": p.cloudFallbacks.Load()}
 }
 
 func (p *CloudProvider) cloudPollLoop(ctx context.Context, done chan struct{}) {
@@ -483,10 +604,6 @@ func (p *CloudProvider) cloudPollLoop(ctx context.Context, done chan struct{}) {
 }
 
 func (p *CloudProvider) refreshAllCloud(ctx context.Context) {
-	client, err := p.currentCloudClient()
-	if err != nil {
-		return
-	}
 	type mappingRequest struct {
 		configured DeviceConfig
 		mapping    PropertyMapping
@@ -498,62 +615,94 @@ func (p *CloudProvider) refreshAllCloud(ctx context.Context) {
 		raw[key] = value
 	}
 	p.mu.RUnlock()
-	requests := make([]mappingRequest, 0)
+	requests := make(map[string][]mappingRequest, len(configured))
 	for _, item := range configured {
 		for _, mapping := range item.Properties {
 			if mapping.Readable == nil || *mapping.Readable {
-				requests = append(requests, mappingRequest{item, mapping})
+				requests[item.ID] = append(requests[item.ID], mappingRequest{item, mapping})
 			}
 		}
 		for key, mapping := range raw {
 			if strings.HasPrefix(key, item.ID+"\x00") && (mapping.Readable == nil || *mapping.Readable) {
-				requests = append(requests, mappingRequest{item, mapping})
+				requests[item.ID] = append(requests[item.ID], mappingRequest{item, mapping})
 			}
 		}
 	}
+	deviceIDs := make([]string, 0, len(requests))
+	for id := range requests {
+		deviceIDs = append(deviceIDs, id)
+	}
+	sort.Strings(deviceIDs)
 	const chunkSize = 10
-	for start := 0; start < len(requests); start += chunkSize {
-		end := start + chunkSize
-		if end > len(requests) {
-			end = len(requests)
-		}
-		input := make([]cloudProperty, 0, end-start)
-		for _, request := range requests[start:end] {
-			input = append(input, cloudProperty{DID: request.configured.DID, SIID: request.mapping.SIID, PIID: request.mapping.PIID})
-		}
-		p.requests.Add(1)
-		result, requestErr := client.GetProperties(ctx, input)
-		if requestErr != nil {
-			p.errors.Add(1)
-			continue
-		}
-		requestByKey := make(map[string]mappingRequest, end-start)
-		for _, request := range requests[start:end] {
-			requestByKey[cloudResultKey(request.configured.DID, request.mapping.SIID, request.mapping.PIID)] = request
-		}
-		for index, response := range result {
-			if response.Code != 0 {
-				continue
+	processDevice := func(deviceRequests []mappingRequest) {
+		for start := 0; start < len(deviceRequests); start += chunkSize {
+			end := start + chunkSize
+			if end > len(deviceRequests) {
+				end = len(deviceRequests)
 			}
-			request, found := requestByKey[cloudResultKey(response.DID, response.SIID, response.PIID)]
-			if !found && index < end-start {
-				// Some compatible endpoints omit DID/SIID/PIID in successful
-				// responses but retain request order.
-				request = requests[start+index]
-				found = true
+			chunk := deviceRequests[start:end]
+			input := make([]cloudProperty, 0, len(chunk))
+			for _, request := range chunk {
+				input = append(input, cloudProperty{DID: request.configured.DID, SIID: request.mapping.SIID, PIID: request.mapping.PIID})
 			}
-			if !found {
-				continue
-			}
-			value, decodeErr := decodePropertyValue(request.mapping, response.Value)
-			if decodeErr != nil {
+			result, requestErr := p.getProperties(ctx, chunk[0].configured, input)
+			if requestErr != nil {
 				p.errors.Add(1)
 				continue
 			}
-			p.events.Add(1)
-			p.broadcastCloud(p.updateCloudProperty(request.configured.ID, request.mapping, value))
+			requestByKey := make(map[string]mappingRequest, len(chunk))
+			for _, request := range chunk {
+				requestByKey[cloudResultKey(request.configured.DID, request.mapping.SIID, request.mapping.PIID)] = request
+			}
+			for index, response := range result {
+				if response.Code != 0 {
+					continue
+				}
+				request, found := requestByKey[cloudResultKey(response.DID, response.SIID, response.PIID)]
+				if !found && index < len(chunk) {
+					// Local and compatible cloud endpoints may omit identifiers but
+					// retain request order.
+					request = chunk[index]
+					found = true
+				}
+				if !found {
+					continue
+				}
+				value, decodeErr := decodePropertyValue(request.mapping, response.Value)
+				if decodeErr != nil {
+					p.errors.Add(1)
+					continue
+				}
+				p.events.Add(1)
+				p.broadcastCloud(p.updateCloudProperty(request.configured.ID, request.mapping, value))
+			}
 		}
 	}
+	workerCount := 4
+	if len(deviceIDs) < workerCount {
+		workerCount = len(deviceIDs)
+	}
+	jobs := make(chan []mappingRequest)
+	var workers sync.WaitGroup
+	for index := 0; index < workerCount; index++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for deviceRequests := range jobs {
+				processDevice(deviceRequests)
+			}
+		}()
+	}
+sendDevices:
+	for _, deviceID := range deviceIDs {
+		select {
+		case jobs <- requests[deviceID]:
+		case <-ctx.Done():
+			break sendDevices
+		}
+	}
+	close(jobs)
+	workers.Wait()
 }
 
 func (p *CloudProvider) currentCloudClient() (miotCloudClient, error) {

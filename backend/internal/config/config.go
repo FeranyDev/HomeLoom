@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"strings"
 
@@ -21,13 +22,17 @@ type ServerConfig struct {
 }
 
 type StorageConfig struct {
-	Database string `yaml:"database"`
+	DatabaseURL string `yaml:"database_url"`
+	MasterKey   string `yaml:"master_key"`
 }
 
 func Default() Config {
 	return Config{
-		Server:  ServerConfig{Address: "127.0.0.1:8090"},
-		Storage: StorageConfig{Database: "./data/homeloom.db"},
+		Server: ServerConfig{Address: "127.0.0.1:8090"},
+		Storage: StorageConfig{
+			DatabaseURL: "postgres://homeloom:homeloom-dev@127.0.0.1:54329/homeloom?sslmode=disable",
+			MasterKey:   "./data/homeloom.key",
+		},
 	}
 }
 
@@ -58,8 +63,15 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Server.Address) == "" {
 		return errors.New("server.address is required")
 	}
-	if strings.TrimSpace(c.Storage.Database) == "" {
-		return errors.New("storage.database is required")
+	if strings.TrimSpace(c.Storage.DatabaseURL) == "" {
+		return errors.New("storage.database_url is required")
+	}
+	databaseURL, err := url.Parse(c.Storage.DatabaseURL)
+	if err != nil || (databaseURL.Scheme != "postgres" && databaseURL.Scheme != "postgresql") || databaseURL.Host == "" || strings.Trim(databaseURL.Path, "/") == "" {
+		return errors.New("storage.database_url must be a PostgreSQL URL with host and database name")
+	}
+	if strings.TrimSpace(c.Storage.MasterKey) == "" {
+		return errors.New("storage.master_key is required")
 	}
 	for _, value := range c.Server.TrustedProxies {
 		value = strings.TrimSpace(value)
@@ -79,8 +91,11 @@ func applyEnvironment(config *Config) error {
 	if value := os.Getenv("HOMELOOM_HTTP_ADDRESS"); value != "" {
 		config.Server.Address = value
 	}
-	if value := os.Getenv("HOMELOOM_DATABASE"); value != "" {
-		config.Storage.Database = value
+	if value := os.Getenv("HOMELOOM_DATABASE_URL"); value != "" {
+		config.Storage.DatabaseURL = value
+	}
+	if value := os.Getenv("HOMELOOM_MASTER_KEY"); value != "" {
+		config.Storage.MasterKey = value
 	}
 	if value, present := os.LookupEnv("HOMELOOM_TRUSTED_PROXIES"); present {
 		config.Server.TrustedProxies = nil

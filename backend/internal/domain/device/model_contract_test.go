@@ -175,6 +175,9 @@ func TestExpandedModelContractsExposeCompleteMetadata(t *testing.T) {
 	if !ok {
 		t.Fatal("air conditioner contract is missing")
 	}
+	if airConditioner.Version != 2 {
+		t.Fatalf("air conditioner version = %d", airConditioner.Version)
+	}
 	airConditionerPaths := make(map[string]ModelParameter, len(airConditioner.Parameters))
 	for _, parameter := range airConditioner.Parameters {
 		airConditionerPaths[parameter.Path.String()] = parameter
@@ -184,6 +187,11 @@ func TestExpandedModelContractsExposeCompleteMetadata(t *testing.T) {
 	}
 	if mode := airConditionerPaths["main/air-conditioner/target-mode"]; mode.Type != ValueTypeEnum || !mode.Writable || len(mode.Enum) != 6 {
 		t.Errorf("air conditioner target mode = %#v", mode)
+	}
+	for _, path := range []string{"main/air-conditioner/current-state", "main/temperature/current-temperature"} {
+		if parameter := airConditionerPaths[path]; parameter.Level != ParameterOptional {
+			t.Errorf("air conditioner source-dependent parameter %s = %#v", path, parameter)
+		}
 	}
 	for _, path := range []string{"main/air-conditioner/fan-speed", "main/air-conditioner/vertical-swing", "main/air-conditioner/horizontal-swing", "main/air-conditioner/auxiliary-heat", "main/air-conditioner/sleep-mode", "main/filter/life-level"} {
 		if _, found := airConditionerPaths[path]; !found {

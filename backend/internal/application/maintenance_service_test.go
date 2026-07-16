@@ -4,27 +4,25 @@ import (
 	"archive/zip"
 	"context"
 	"os"
-	"path/filepath"
 	"sort"
 	"testing"
 
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
-	"github.com/feranydev/homeloom/backend/internal/persistence/sqlite"
+	"github.com/feranydev/homeloom/backend/internal/persistence/postgres"
 )
 
 func TestMaintenanceServiceBacksUpStagesAndAppliesRestore(t *testing.T) {
 	ctx := context.Background()
-	directory := t.TempDir()
-	databasePath := filepath.Join(directory, "homeloom.db")
-	store, err := sqlite.Open(ctx, databasePath)
+	databaseURL, keyPath := testStoreCredentials(t)
+	store, err := postgres.Open(ctx, databaseURL, keyPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := store.SaveProvider(ctx, providerconfig.Config{ID: "preserved", Type: "virtual", Name: "Preserved", Config: []byte(`{}`)}); err != nil {
 		t.Fatal(err)
 	}
-	service := application.NewMaintenanceService(store, databasePath, sqlite.ValidateRestoreCandidate, sqlite.PendingRestorePaths, sqlite.WritePendingRestoreMarker)
+	service := application.NewMaintenanceService(store, keyPath, postgres.ValidateRestoreCandidate, postgres.PendingRestorePaths, postgres.WritePendingRestoreMarker)
 	if _, err := service.Backup(ctx, "wrong"); err == nil {
 		t.Fatal("backup accepted missing confirmation")
 	}
@@ -43,7 +41,7 @@ func TestMaintenanceServiceBacksUpStagesAndAppliesRestore(t *testing.T) {
 	}
 	archive.Close()
 	sort.Strings(names)
-	if len(names) != 2 || names[0] != "homeloom.db" || names[1] != "homeloom.db.key" {
+	if len(names) != 2 || names[0] != "homeloom-master.key" || names[1] != "homeloom-postgres.json" {
 		t.Fatalf("archive entries = %#v", names)
 	}
 
@@ -62,11 +60,11 @@ func TestMaintenanceServiceBacksUpStagesAndAppliesRestore(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	recovery, applied, err := sqlite.ApplyPendingRestore(ctx, databasePath)
+	recovery, applied, err := postgres.ApplyPendingRestore(ctx, databaseURL, keyPath)
 	if err != nil || !applied || recovery == "" {
 		t.Fatalf("apply pending restore = %q, %v, %v", recovery, applied, err)
 	}
-	restored, err := sqlite.Open(ctx, databasePath)
+	restored, err := postgres.Open(ctx, databaseURL, keyPath)
 	if err != nil {
 		t.Fatal(err)
 	}

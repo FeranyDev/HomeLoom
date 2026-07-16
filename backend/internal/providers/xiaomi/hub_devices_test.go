@@ -6,12 +6,15 @@ import (
 )
 
 func TestParseHubDeviceList(t *testing.T) {
-	devices, err := parseHubDeviceList(json.RawMessage(`{"code":0,"result":{"list":[{"did":"2","name":"卧室灯","model":"vendor.light.v1","roomName":"卧室","spec_type":"urn:miot-spec-v2:device:light:0000A001"},{"did":1,"deviceName":"客厅开关","model":"vendor.switch.v1","room_id":"living"}]}}`))
+	devices, err := parseHubDeviceList(json.RawMessage(`{"code":0,"result":{"list":[{"did":"2","name":"卧室灯","model":"vendor.light.v1","homeId":"main","homeName":"我的家","roomName":"卧室","spec_type":"urn:miot-spec-v2:device:light:0000A001"},{"did":1,"deviceName":"客厅开关","model":"vendor.switch.v1","room_id":"living"}]}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(devices) != 2 || devices[0].DID != "1" || devices[0].Name != "客厅开关" || devices[1].RoomName != "卧室" || devices[1].SpecType == "" {
 		t.Fatalf("unexpected devices: %#v", devices)
+	}
+	if devices[1].HomeID != "main" || devices[1].HomeName != "我的家" {
+		t.Fatalf("unexpected device home: %#v", devices[1])
 	}
 }
 

@@ -3,18 +3,16 @@ package application_test
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	"github.com/feranydev/homeloom/backend/internal/mapping"
-	"github.com/feranydev/homeloom/backend/internal/persistence/sqlite"
 )
 
 func TestProfileServicePersistsVersionsAndProtectsBuiltIns(t *testing.T) {
 	ctx := context.Background()
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "profiles.db"))
+	store, err := openTestStore(t, ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +58,7 @@ func TestProfileServicePersistsVersionsAndProtectsBuiltIns(t *testing.T) {
 
 func TestProfileServiceImportIsValidatedBeforePersistence(t *testing.T) {
 	ctx := context.Background()
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "profiles.db"))
+	store, err := openTestStore(t, ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,6 +12,14 @@ docs/      项目计划与设计文档
 
 ## 本地运行
 
+先用 macOS 的 Apple container 启动开发 PostgreSQL：
+
+```bash
+./scripts/apple-postgres.sh
+```
+
+默认连接为 `127.0.0.1:54329`，数据保存在 Apple container 命名卷 `homeloom-postgres-data`。
+
 后端：
 
 ```bash
@@ -24,7 +32,7 @@ docs/      项目计划与设计文档
 ./scripts/dev-env.sh sh -c 'cd backend && go run ./cmd/homeloom -init-all-virtual-models'
 ```
 
-该选项会把 10 个设备的显式配置写入 SQLite 中的 `virtual-main` Provider，后续启动不再需要携带该参数。重复执行不会重复生成，也不会覆盖已有的自定义设备列表。
+该选项会把 10 个设备的显式配置写入 PostgreSQL 中的 `virtual-main` Provider，后续启动不再需要携带该参数。重复执行不会重复生成，也不会覆盖已有的自定义设备列表。
 
 前端：
 
@@ -39,7 +47,7 @@ Web 端只有这个管理员账户，用于接入、桥接、映射、诊断和�
 
 新数据库会创建一个默认 HomeKit Bridge，初始监听 `51826`，配对码为 `001-02-003`。这些参数之后可在前端动态修改，并以数据库中的桥配置为准。HAP 身份和配对信息保存在 `backend/data/hap/`，该目录不会提交到版本库。
 
-桥配置保存在 SQLite，可同时运行多个 Apple HAP Bridge，并为 Matter 等其他 Target 类型预留统一入口。每个启用的 HAP 桥必须具有唯一的：
+桥配置保存在 PostgreSQL，可同时运行多个 Apple HAP Bridge，并为 Matter 等其他 Target 类型预留统一入口。每个启用的 HAP 桥必须具有唯一的：
 
 - `id`
 - `address`
@@ -50,10 +58,11 @@ Web 端只有这个管理员账户，用于接入、桥接、映射、诊断和�
 
 前端“桥接中心”会显示所有 Target 的类型、状态、设备范围、配对码和二维码。二维码来自后端生成的标准 HomeKit Setup URI，并与桥的 Setup ID 保持一致。
 
-后端支持 `-config configs/config.example.yaml`。YAML 只包含进程启动所需的 HTTP 地址、可信代理范围和数据库路径，也可以使用以下环境变量覆盖：
+后端支持 `-config configs/config.example.yaml`。YAML 只包含进程启动所需的 HTTP 地址、可信代理范围、PostgreSQL URL 和主密钥路径，也可以使用以下环境变量覆盖：
 
 - `HOMELOOM_HTTP_ADDRESS`
-- `HOMELOOM_DATABASE`
+- `HOMELOOM_DATABASE_URL`
+- `HOMELOOM_MASTER_KEY`
 - `HOMELOOM_TRUSTED_PROXIES`（逗号分隔的代理 IP/CIDR；未配置时完全忽略转发来源头）
 
 `scripts/dev-env.sh` 会将 Go、Go module 和 npm 缓存统一放在根目录 `.cache/`，避免写入用户级缓存或触发不必要的权限请求。
@@ -82,28 +91,28 @@ backend/bin/homeloom -version
 对实际二进制执行启动、HTTP 和优雅停止烟雾测试：
 
 ```bash
-./scripts/smoke.sh
+HOMELOOM_SMOKE_DATABASE_URL='postgres://.../disposable_database?sslmode=disable' ./scripts/smoke.sh
 ```
 
-冒烟测试会使用临时数据库和动态 HAP 端口，验证双桥并行、Target API 增删改、三次连续重启、身份稳定以及备份恢复，不会占用或停止已经运行的 HomeLoom 实例。
+冒烟测试要求显式提供一个可丢弃的 PostgreSQL 数据库或独立 schema，并使用临时主密钥和动态 HAP 端口；它会验证双桥并行、Target API 增删改、三次连续重启、身份稳定以及备份恢复。
 
 容器部署、host network 与数据卷说明见 [`deploy/README.md`](deploy/README.md)。
 
-SQLite 在线一致性备份（不会在备份前迁移源库）：
+PostgreSQL 在线一致性备份（检查连接不会在源库运行 GORM `AutoMigrate`）：
 
 ```bash
 ./scripts/backup.sh
 ```
 
-该脚本会生成 SQLite 备份及配套的 `.db.key` 主密钥文件，两者必须一起保管和恢复。灾难恢复 HomeKit 配对关系时，还必须备份相应的 HAP 身份目录。
+该脚本会生成 PostgreSQL 逻辑快照 `.json` 及配套的 `.json.key` 主密钥文件，两者必须一起保管和恢复。灾难恢复 HomeKit 配对关系时，还必须备份相应的 HAP 身份目录。
 
-停止 HomeLoom 后可以恢复备份到 `HOMELOOM_DATABASE` 指定的位置：
+停止 HomeLoom 后可以恢复备份到 `HOMELOOM_DATABASE_URL` 指定的数据库：
 
 ```bash
-HOMELOOM_DATABASE=backend/data/restored.db ./scripts/restore.sh backups/homeloom-20260713T000000Z.db
+HOMELOOM_DATABASE_URL='postgres://homeloom:secret@127.0.0.1:54329/homeloom?sslmode=disable' ./scripts/restore.sh backups/homeloom-20260716T000000Z.json --replace
 ```
 
-目标数据库已经存在时必须额外传入 `--replace`。恢复流程会先在目标目录完成完整性、schema、migration 和主密钥解密验证；替换时会保留带 `.pre-restore-<时间>` 后缀的原数据库及配套密钥，便于人工回滚。运行中的数据库存在 WAL/SHM sidecar 时会拒绝恢复。
+恢复必须显式传入 `--replace`。流程先校验快照格式、当前 GORM schema 和主密钥解密能力，再用单个 PostgreSQL 事务替换业务表并失效已恢复的浏览器 Session；操作前会在快照目录生成一份当前数据的恢复点。
 
 ## 当前 Demo 链路
 
@@ -132,7 +141,7 @@ GET /api/v1/devices/:id/states
 HTTP 成功/错误包装、请求 ID 和诊断入口见 [HTTP API 约定](docs/http-api.md)。
 OpenAPI 3.1 契约位于 [`docs/openapi.yaml`](docs/openapi.yaml)。
 
-实时设备状态只保存在内存。服务重启后 State Store 为空，由各 Provider 重新发现、订阅并读取设备状态；SQLite 只保存桥配置、设备绑定和稳定身份。
+实时设备状态只保存在内存。服务重启后 State Store 为空，由各 Provider 重新发现、订阅并读取设备状态；PostgreSQL 只保存桥配置、设备绑定和稳定身份。
 
 命令诊断：
 
@@ -161,7 +170,7 @@ GET /api/v1/system/diagnostic-bundle
 
 两者都使用独立的脱敏模型并禁止浏览器缓存：Provider 凭据替换为占位符，桥 PIN、Setup URI 和本地身份存储路径不会进入文件。
 
-“模型工具”页可以管理 SQLite 中的用户 Profile，并直接预览内置或已保存版本。Profile CRUD、批量导入和删除在数据库提交后立即更新应用层快照，不需要重启：
+“模型工具”页可以管理 PostgreSQL 中的用户 Profile，并直接预览内置或已保存版本。Profile CRUD、批量导入和删除在数据库提交后立即更新应用层快照，不需要重启：
 
 ```text
 GET/POST /api/v1/mapping/profiles
@@ -175,14 +184,14 @@ PUT/DELETE /api/v1/device-models/custom-properties/{id}
 POST     /api/v1/mapping/preview
 ```
 
-属性路由保存在 SQLite `mapping_bindings`，明确分为 `Provider → 统一模型` 和 `统一模型 → Consumer` 两段。两段路由都绑定具体 `providerId + deviceId`，同型号设备互不继承配置。两侧都可选择可逆 Profile，事件走正向转换，控制走反向转换；数值类型可在 `int` 与 `number` 间转换。统一模型始终使用 Endpoint / Capability / Property 三级路径，并按 required、optional、custom 分级。自定义属性及其类型、单位、范围、枚举和 R/W/N 权限保存在 `custom_model_properties`。
+属性路由保存在 PostgreSQL `mapping_bindings`，明确分为 `Provider → 统一模型` 和 `统一模型 → Consumer` 两段。两段路由都绑定具体 `providerId + deviceId`，同型号设备互不继承配置。两侧都可选择可逆 Profile，事件走正向转换，控制走反向转换；数值类型可在 `int` 与 `number` 间转换。统一模型始终使用 Endpoint / Capability / Property 三级路径，并按 required、optional、custom 分级。自定义属性及其类型、单位、范围、枚举和 R/W/N 权限保存在 `custom_model_properties`。
 
 设备映射从设备中心的对应设备卡片进入。三栏关系图会锁定该设备，只展示它的 Provider 原始目录、统一模型参数、HomeKit Consumer 属性和已有路由，不允许在编辑器内切换或操作其他设备。原始目录明确展示完整性、数据来源、Spec URN，以及 Property/Action/Event 数量；米家设备通过缓存的 MIoT Spec 补齐未配置属性。顶层“模型工具”页只保留统一模型自定义属性、Profile 与转换预览。Provider 路由变化只刷新原始快照，不重启 Provider；Consumer 路由变化会保留桥的配对身份并重建附件图。完整设计见 [双段设备映射架构](docs/mapping-architecture.md)。
 
 Provider 由 Provider Manager 聚合管理。Core 只依赖标准 Provider SDK；Manager 负责初始化、发现、事件转发以及 `Device ID → Provider ID` 写入路由，为后续同时运行 MQTT、米家和其他 Provider 保留统一边界。
 
-Provider 配置保存在 SQLite `providers` 表，启动时由 Provider Factory 按 `type` 构造实例。Migration 会创建默认启用的 `virtual-main`；YAML 不包含 Provider 配置。
+Provider 配置保存在 PostgreSQL `providers` 表，启动时由 Provider Factory 按 `type` 构造实例。数据库层使用 GORM、`gorm.io/driver/postgres` 和 pgx，`AutoMigrate` 同步当前模型后由幂等初始化逻辑创建默认启用的 `virtual-main`；YAML 不包含 Provider 配置。项目不再携带编号 SQL migration，也不承诺自动升级旧版 schema。
 
 MQTT Provider 已支持数据库/前端结构化配置、TLS/mTLS、认证、QoS、retained 恢复、自动重连、状态去重和命令确认。密码及嵌套的 token/secret/private-key 类字段使用数据库主密钥加密，API 只返回脱敏占位符。Topic 与 payload 契约见 [MQTT Provider 协议](docs/mqtt-protocol.md)。本地可用 `docker compose up -d mosquitto` 启动开发 Broker。
 
-Xiaomi Central Hub Provider 已接入 OAuth 授权、证书申请、MQTT 5/MIPS、属性读写、Action、状态订阅、轮询校准和自动重连。OAuth 使用固定回调地址 `http://homeassistant.local:8123`，授权后按页面引导复制完整回调 URL 粘贴回 HomeLoom。另有独立的 `xiaomi-miot-cloud` 第三方兼容 Provider，参考 `hass-xiaomi-miot` 通过账号云端轮询补充中枢不易适配的 Wi‑Fi 设备；未来官方 Cloud 预留为不同的 `xiaomi-home-cloud` 类型。凭据及 MIoT 映射均保存在 SQLite Provider 配置中；使用方法和授权边界见 [Xiaomi Provider 文档](docs/xiaomi-provider.md)。
+Xiaomi Central Hub Provider 已接入 OAuth 授权、证书申请、MQTT 5/MIPS、属性读写、Action、状态订阅、轮询校准和自动重连。OAuth 使用固定回调地址 `http://homeassistant.local:8123`，授权后按页面引导复制完整回调 URL 粘贴回 HomeLoom。另有独立的 `xiaomi-miot-cloud` 第三方兼容 Provider，参考 `hass-xiaomi-miot` 通过账号云端轮询补充中枢不易适配的 Wi‑Fi 设备，并支持在同一短时登录会话中回填短信/邮箱验证码；未来官方 Cloud 预留为不同的 `xiaomi-home-cloud` 类型。凭据及 MIoT 映射均保存在 PostgreSQL Provider 配置中；使用方法和授权边界见 [Xiaomi Provider 文档](docs/xiaomi-provider.md)。

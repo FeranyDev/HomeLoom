@@ -39,6 +39,7 @@ type Server struct {
 	auth           *application.AuthService
 	maintenance    *application.MaintenanceService
 	logins         *loginLimiter
+	cloudLogins    *xiaomi.CloudLoginService
 	trustedProxies []*net.IPNet
 }
 
@@ -221,7 +222,7 @@ func (r targetRequest) domain(id string) domaintarget.Config {
 
 func NewServer(address string, devices *application.DeviceService, targets *application.TargetService, logger *slog.Logger, providerServices ...*application.ProviderService) *Server {
 	e := echo.New()
-	server := &Server{address: address, echo: e, logins: newLoginLimiter()}
+	server := &Server{address: address, echo: e, logins: newLoginLimiter(), cloudLogins: xiaomi.NewCloudLoginService()}
 	e.IPExtractor = server.clientIP
 	e.HideBanner = true
 	e.HidePort = true
@@ -1109,6 +1110,34 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		ctx, cancel := context.WithTimeout(c.Request().Context(), 90*time.Second)
 		defer cancel()
 		result, err := xiaomi.CompleteOAuth(ctx, request)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+		return c.JSON(http.StatusOK, map[string]any{"data": result})
+	})
+	e.POST("/api/v1/xiaomi-miot-cloud/login/start", func(c echo.Context) error {
+		var request xiaomi.CloudLoginStartRequest
+		if err := c.Bind(&request); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid Xiaomi MIoT cloud login request")
+		}
+		ctx, cancel := context.WithTimeout(c.Request().Context(), 90*time.Second)
+		defer cancel()
+		result, err := server.cloudLogins.Start(ctx, request)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+		return c.JSON(http.StatusOK, map[string]any{"data": result})
+	})
+	e.POST("/api/v1/xiaomi-miot-cloud/login/verify", func(c echo.Context) error {
+		var request xiaomi.CloudLoginVerifyRequest
+		if err := c.Bind(&request); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid Xiaomi MIoT cloud verification request")
+		}
+		ctx, cancel := context.WithTimeout(c.Request().Context(), 90*time.Second)
+		defer cancel()
+		result, err := server.cloudLogins.Verify(ctx, request)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
