@@ -31,8 +31,10 @@ type Provider struct {
 	tlsConfig        *tls.Config
 	transportFactory transportFactory
 
+	routeMu         sync.RWMutex
 	mu              sync.RWMutex
 	devices         map[string]device.Device
+	routes          map[string]DeviceConfig
 	remoteSequences map[string]uint64
 	nextSequence    uint64
 	listeners       map[uint64]func(device.Device)
@@ -70,7 +72,7 @@ var (
 )
 
 func NewProviderFromConfig(item providerconfig.Config) (*Provider, error) {
-	return newProviderFromConfig(item, newPahoTransport)
+	return newProviderFromConfig(item, newMQTTTransport)
 }
 
 func newProviderFromConfig(item providerconfig.Config, factory transportFactory) (*Provider, error) {
@@ -80,7 +82,7 @@ func newProviderFromConfig(item providerconfig.Config, factory transportFactory)
 	}
 	return &Provider{
 		id: item.ID, name: item.Name, config: config, brokerURL: brokerURL, tlsConfig: tlsConfig, transportFactory: factory,
-		devices: make(map[string]device.Device), remoteSequences: make(map[string]uint64), listeners: make(map[uint64]func(device.Device)), inbound: make(chan inboundMessage, inboundQueueCapacity),
+		devices: make(map[string]device.Device), routes: deviceRoutes(config.Devices), remoteSequences: make(map[string]uint64), listeners: make(map[uint64]func(device.Device)), inbound: make(chan inboundMessage, inboundQueueCapacity),
 	}, nil
 }
 
@@ -174,22 +176,60 @@ func (p *Provider) Close(ctx context.Context) error {
 	return closeErr
 }
 
-// Reconfigure keeps the established broker session when only presentation
-// metadata changed. MQTT child devices are learned through discovery messages
-// on that same session and never require Provider replacement.
-func (p *Provider) Reconfigure(_ context.Context, replacement providersdk.Provider) (bool, error) {
+// Reconfigure applies device routes by changing subscriptions on the existing
+// Broker connection. Transport settings still require a replacement instance.
+func (p *Provider) Reconfigure(ctx context.Context, replacement providersdk.Provider) (bool, error) {
 	next, ok := replacement.(*Provider)
 	if !ok || next.id != p.id {
 		return false, nil
 	}
-	p.mu.Lock()
-	if !reflect.DeepEqual(p.config, next.config) {
-		p.mu.Unlock()
+	p.mu.RLock()
+	currentConfig, transport, running := p.config, p.transport, p.running
+	p.mu.RUnlock()
+	if !sameConnectionConfig(currentConfig, next.config) {
 		return false, nil
 	}
+	p.routeMu.Lock()
+	defer p.routeMu.Unlock()
+	if running && transport != nil {
+		if err := transport.ReplaceSubscriptions(ctx, configuredSubscriptions(next.config.Devices)); err != nil {
+			return true, fmt.Errorf("update mqtt device subscriptions: %w", err)
+		}
+	}
+	nextRoutes := deviceRoutes(next.config.Devices)
+	removed := make([]device.Device, 0)
+	p.mu.Lock()
+	for id, item := range p.devices {
+		if _, exists := nextRoutes[id]; exists {
+			continue
+		}
+		delete(p.devices, id)
+		p.clearRemoteSequencesLocked(id)
+		p.nextSequence++
+		item.Sequence, item.Removed, item.LastUpdateAt = p.nextSequence, true, time.Now().UTC()
+		item.SetOnline(false)
+		removed = append(removed, item)
+	}
+	p.config, p.routes = next.config, nextRoutes
 	p.name = next.name
 	p.mu.Unlock()
+	for _, item := range removed {
+		p.broadcast(item)
+	}
 	return true, nil
+}
+
+func sameConnectionConfig(left, right Config) bool {
+	left.Devices, right.Devices = nil, nil
+	return reflect.DeepEqual(left, right)
+}
+
+func deviceRoutes(items []DeviceConfig) map[string]DeviceConfig {
+	result := make(map[string]DeviceConfig, len(items))
+	for _, item := range items {
+		result[item.ID] = item
+	}
+	return result
 }
 
 func (p *Provider) DiscoverDevices(context.Context) ([]device.Device, error) {
@@ -222,11 +262,14 @@ func (p *Provider) ReadProperty(_ context.Context, request providersdk.PropertyR
 }
 
 func (p *Provider) WriteProperty(ctx context.Context, request providersdk.PropertyWriteRequest) (device.Device, error) {
+	p.routeMu.RLock()
+	defer p.routeMu.RUnlock()
 	p.mu.RLock()
 	item, exists := p.devices[request.DeviceID]
+	route, routed := p.routes[request.DeviceID]
 	connected := p.connected
 	p.mu.RUnlock()
-	if !exists {
+	if !exists || !routed {
 		return device.Device{}, providersdk.ErrDeviceNotFound
 	}
 	if !connected || !item.IsOnline() {
@@ -241,7 +284,8 @@ func (p *Provider) WriteProperty(ctx context.Context, request providersdk.Proper
 		return device.Device{}, fmt.Errorf("%w: %v", providersdk.ErrPropertyInvalid, err)
 	}
 	message := commandMessage{SchemaVersion: protocolSchemaVersion, Kind: "property", CorrelationID: newCorrelationID(), Value: &request.Value, CreatedAt: time.Now().UTC()}
-	if err := p.publishCommand(ctx, commandTopic(p.config.TopicPrefix, request.DeviceID, request.EndpointID, request.CapabilityID, request.PropertyID), message); err != nil {
+	topic := renderTopicTemplate(route.Topics.Command, map[string]string{"endpointId": request.EndpointID, "capabilityId": request.CapabilityID, "operationId": request.PropertyID})
+	if err := p.publishCommand(ctx, topic, route.effectiveQoS(), message); err != nil {
 		return device.Device{}, err
 	}
 	candidate := item.Clone()
@@ -250,11 +294,14 @@ func (p *Provider) WriteProperty(ctx context.Context, request providersdk.Proper
 }
 
 func (p *Provider) ExecuteCommand(ctx context.Context, request providersdk.CommandRequest) (device.Device, error) {
+	p.routeMu.RLock()
+	defer p.routeMu.RUnlock()
 	p.mu.RLock()
 	item, exists := p.devices[request.DeviceID]
+	route, routed := p.routes[request.DeviceID]
 	connected := p.connected
 	p.mu.RUnlock()
-	if !exists {
+	if !exists || !routed {
 		return device.Device{}, providersdk.ErrDeviceNotFound
 	}
 	if !connected || !item.IsOnline() {
@@ -268,7 +315,8 @@ func (p *Provider) ExecuteCommand(ctx context.Context, request providersdk.Comma
 		return device.Device{}, fmt.Errorf("%w: %v", providersdk.ErrCommandInvalid, err)
 	}
 	message := commandMessage{SchemaVersion: protocolSchemaVersion, Kind: "action", CorrelationID: newCorrelationID(), IdempotencyKey: request.IdempotencyKey, Parameters: request.Parameters, CreatedAt: time.Now().UTC()}
-	if err := p.publishCommand(ctx, commandTopic(p.config.TopicPrefix, request.DeviceID, request.EndpointID, request.CapabilityID, request.CommandID), message); err != nil {
+	topic := renderTopicTemplate(route.Topics.Command, map[string]string{"endpointId": request.EndpointID, "capabilityId": request.CapabilityID, "operationId": request.CommandID})
+	if err := p.publishCommand(ctx, topic, route.effectiveQoS(), message); err != nil {
 		return device.Device{}, err
 	}
 	return item.Clone(), nil
@@ -323,20 +371,26 @@ func (p *Provider) enqueue(message inboundMessage) {
 }
 
 func (p *Provider) handleMessage(message inboundMessage) error {
-	parts, ok := topicParts(message.topic, p.config.TopicPrefix)
-	if !ok {
-		return fmt.Errorf("mqtt topic %q is outside configured prefix", message.topic)
+	p.routeMu.RLock()
+	defer p.routeMu.RUnlock()
+	p.mu.RLock()
+	routes := make([]DeviceConfig, 0, len(p.routes))
+	for _, route := range p.routes {
+		routes = append(routes, route)
 	}
-	switch {
-	case len(parts) == 2 && parts[0] == "discovery":
-		return p.handleDiscovery(parts[1], message)
-	case len(parts) == 5 && parts[0] == "state":
-		return p.handleState(parts[1], parts[2], parts[3], parts[4], message)
-	case len(parts) == 2 && parts[0] == "availability":
-		return p.handleAvailability(parts[1], message)
-	default:
-		return fmt.Errorf("mqtt topic %q does not match a HomeLoom subscription", message.topic)
+	p.mu.RUnlock()
+	for _, route := range routes {
+		switch message.topic {
+		case route.Topics.Discovery:
+			return p.handleDiscovery(route.ID, message)
+		case route.Topics.Availability:
+			return p.handleAvailability(route.ID, message)
+		}
+		if values, ok := matchTopicTemplate(route.Topics.State, message.topic, stateTopicTokens); ok {
+			return p.handleState(route.ID, values["endpointId"], values["capabilityId"], values["propertyId"], message)
+		}
 	}
+	return fmt.Errorf("mqtt topic %q is not assigned to a configured device", message.topic)
 }
 
 func (p *Provider) handleDiscovery(deviceID string, message inboundMessage) error {
@@ -402,7 +456,10 @@ func (p *Provider) handleState(deviceID, endpointID, capabilityID, propertyID st
 	if state.SchemaVersion != protocolSchemaVersion || state.Value == nil || state.Sequence == 0 || state.ObservedAt.IsZero() {
 		return fmt.Errorf("state requires schemaVersion 1, value, positive sequence, and observedAt")
 	}
-	if message.retained && time.Since(state.ObservedAt) > p.config.retainedStateMaxAge() {
+	p.mu.RLock()
+	retainedStateMaxAge := p.config.retainedStateMaxAge()
+	p.mu.RUnlock()
+	if message.retained && time.Since(state.ObservedAt) > retainedStateMaxAge {
 		return nil
 	}
 	sequenceKey := "state\x00" + deviceID + "\x00" + endpointID + "\x00" + capabilityID + "\x00" + propertyID
@@ -452,7 +509,10 @@ func (p *Provider) handleAvailability(deviceID string, message inboundMessage) e
 	if availability.Availability != device.AvailabilityOnline && availability.Availability != device.AvailabilityOffline && availability.Availability != device.AvailabilityUnknown {
 		return fmt.Errorf("invalid availability %q", availability.Availability)
 	}
-	if message.retained && time.Since(availability.ObservedAt) > p.config.retainedStateMaxAge() {
+	p.mu.RLock()
+	retainedStateMaxAge := p.config.retainedStateMaxAge()
+	p.mu.RUnlock()
+	if message.retained && time.Since(availability.ObservedAt) > retainedStateMaxAge {
 		return nil
 	}
 	sequenceKey := "availability\x00" + deviceID
@@ -499,7 +559,7 @@ func (p *Provider) markConnectionDown() {
 	}
 }
 
-func (p *Provider) publishCommand(ctx context.Context, topic string, message commandMessage) error {
+func (p *Provider) publishCommand(ctx context.Context, topic string, qos byte, message commandMessage) error {
 	payload, err := json.Marshal(message)
 	if err != nil {
 		return fmt.Errorf("encode mqtt command: %w", err)
@@ -510,7 +570,7 @@ func (p *Provider) publishCommand(ctx context.Context, topic string, message com
 	if transport == nil || !connected {
 		return providersdk.ErrProviderUnavailable
 	}
-	if err := transport.Publish(ctx, topic, p.config.QoS, false, payload); err != nil {
+	if err := transport.Publish(ctx, topic, qos, false, payload); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return err
 		}

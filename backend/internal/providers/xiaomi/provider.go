@@ -250,6 +250,7 @@ func equalConnectionConfig(left, right Config) bool {
 func preserveDeviceState(next, previous device.Device) device.Device {
 	next.Availability, next.Online = previous.Availability, previous.Online
 	next.Sequence, next.LastUpdateAt = previous.Sequence, previous.LastUpdateAt
+	next.RuntimeMode = previous.RuntimeMode
 	for _, endpoint := range next.Endpoints {
 		for _, capability := range endpoint.Capabilities {
 			for _, property := range capability.Properties {

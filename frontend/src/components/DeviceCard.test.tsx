@@ -10,6 +10,16 @@ const sensorDevice = (type: Device['type'], capabilityId: string, propertyId: st
 })
 
 describe('DeviceCard device types', () => {
+	it.each([
+		['local', '局域网'],
+		['cloud', '云端轮询'],
+		['pending', '等待判定'],
+	] as const)('renders Xiaomi cloud runtime mode %s', (runtimeMode, label) => {
+		const device = { ...sensorDevice('single-property-sensor', 'sensor', 'value', { type: 'number', number: 20 }), providerId: 'xiaomi-miot-cloud-main', runtimeMode }
+		render(<DeviceCard device={device} pending={false} onPowerChange={() => {}} onDetails={() => {}} />)
+		expect(screen.getByText(label)).toHaveClass('device-runtime-mode', `is-${runtimeMode}`)
+	})
+
 	it('opens mapping configuration from the corresponding device card', async () => {
 		const device = sensorDevice('single-property-sensor', 'sensor', 'value', { type: 'number', number: 20 }, 'celsius')
 		const onMapping = vi.fn()

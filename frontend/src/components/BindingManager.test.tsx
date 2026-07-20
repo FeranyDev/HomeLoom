@@ -18,6 +18,50 @@ describe('BindingManager', () => {
     consumers: [{ id: 'homekit', name: 'Apple Home / HomeKit', properties: [{ id: 'Switch.On', name: 'Switch.On', deviceType: 'switch' as const, defaultModelPath: { endpointId: 'main', capabilityId: 'switch', propertyId: 'power' }, level: 'required' as const, type: 'bool' as const, readable: true, writable: true, notifiable: true }] }],
   }))
 
+  it('shows an effective identity default and saves a device-specific override', async () => {
+    const create = vi.fn(async (input) => ({ ...input, id: 'default-override' }))
+    const api = {
+      listBindings: vi.fn(async () => []),
+      listProfiles: vi.fn(async () => [{ schemaVersion: 1 as const, id: 'builtin-active-low', version: 1, kind: 'provider' as const, inputType: 'bool' as const, outputType: 'bool' as const, transforms: [{ type: 'invert' as const }], builtIn: true }]),
+      create, update: vi.fn(), remove: vi.fn(), catalog,
+    }
+
+    render(<BindingManager device={device} api={api} providerOnly />)
+
+    expect(await screen.findByText('模型默认（DEFAULT）')).toBeInTheDocument()
+    expect(screen.getByText('1 / 1 生效')).toBeInTheDocument()
+    expect(screen.getByText(/路径与类型一致时自动生效/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '编辑默认映射 power' }))
+    expect(screen.getByText(/正在修改默认映射/)).toBeInTheDocument()
+    await userEvent.selectOptions(screen.getByLabelText('映射转换 Profile'), 'builtin-active-low')
+    await userEvent.click(screen.getByRole('button', { name: '保存默认映射覆盖' }))
+
+    await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'provider', providerId: 'virtual-main', deviceId: 'virtual-switch-1',
+      endpointId: 'main', capabilityId: 'switch', propertyId: 'power',
+      modelEndpointId: 'main', modelCapabilityId: 'switch', modelPropertyId: 'power',
+      profileId: 'builtin-active-low', enabled: true,
+    })))
+  })
+
+  it('loads an existing database override back into the visual editor', async () => {
+    const current: MappingBinding = { id: 'current-route', stage: 'provider', providerId: device.providerId, deviceId: device.id, deviceType: 'switch', endpointId: 'main', capabilityId: 'switch', propertyId: 'power', modelEndpointId: 'main', modelCapabilityId: 'switch', modelPropertyId: 'power', enabled: true }
+    const update = vi.fn(async (_id, input) => input)
+    const api = {
+      listBindings: vi.fn(async () => [current]),
+      listProfiles: vi.fn(async () => [{ schemaVersion: 1 as const, id: 'builtin-active-low', version: 1, kind: 'provider' as const, inputType: 'bool' as const, outputType: 'bool' as const, transforms: [{ type: 'invert' as const }], builtIn: true }]),
+      create: vi.fn(), update, remove: vi.fn(), catalog,
+    }
+
+    render(<BindingManager device={device} api={api} providerOnly />)
+
+    await userEvent.click(await screen.findByRole('button', { name: '编辑映射路由 current-route' }))
+    expect(screen.getByText(/正在编辑数据库路由 current-route/)).toBeInTheDocument()
+    await userEvent.selectOptions(screen.getByLabelText('映射转换 Profile'), 'builtin-active-low')
+    await userEvent.click(screen.getByRole('button', { name: '保存路由修改' }))
+    await waitFor(() => expect(update).toHaveBeenCalledWith('current-route', expect.objectContaining({ id: 'current-route', profileId: 'builtin-active-low' })))
+  })
+
   it('creates a visual Provider to unified-model route', async () => {
     const create = vi.fn(async (input) => ({ ...input, id: 'binding-one' }))
     const api = {

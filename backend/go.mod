@@ -9,6 +9,7 @@ require (
 	github.com/jackc/pgx/v5 v5.6.0
 	github.com/kradalby/homekit-qr v0.0.0-20251117145710-0ea350a04eaa
 	github.com/labstack/echo/v4 v4.13.4
+	github.com/mochi-mqtt/server/v2 v2.7.9
 	golang.org/x/crypto v0.51.0
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/driver/postgres v1.6.0
@@ -28,6 +29,7 @@ require (
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/miekg/dns v1.1.61 // indirect
 	github.com/rogpeppe/go-internal v1.15.0 // indirect
+	github.com/rs/xid v1.4.0 // indirect
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e // indirect
 	github.com/tadglines/go-pkgs v0.0.0-20210623144937-b983b20f54f9 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect

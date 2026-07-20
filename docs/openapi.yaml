@@ -917,6 +917,7 @@ components:
         sequence: { type: integer, minimum: 0, description: Provider-local snapshot sequence when available. }
         disabled: { type: boolean, description: Persisted operator preference; Provider events cannot make the device online while true. }
         removed: { type: boolean, description: Tombstone retained after the Provider removes the device identity. }
+        runtimeMode: { type: string, enum: [pending, local, cloud], description: Actual runtime source selected by transport-aware Providers; Xiaomi MIoT Cloud reports local after a successful LAN sync and cloud after cloud polling or auto fallback. }
         endpoints: { type: array, items: { type: object, additionalProperties: true } }
         lastUpdateAt: { type: string, format: date-time }
     DeviceCommandResponse:

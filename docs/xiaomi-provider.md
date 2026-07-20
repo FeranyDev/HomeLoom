@@ -171,6 +171,8 @@ MIoT Spec 只用于构造 Provider 原始目录，不会自动改变统一模型
 
 `connectionMode` 是逐设备配置：`auto` 为默认值；`local` 在缺少私网 IP、16 字节 Token 或局域网不可达时直接报告不可用；`cloud` 完全跳过局域网尝试。管理 API 只返回 `localIp` 和 `localAvailable`，云目录中的设备 Token 只保存在 Provider 运行时内存，既不写入设备映射也不返回前端。局域网目标只允许私网或链路本地 IP，避免把云端目录数据用于访问公网地址。
 
+发布到设备中心的云设备还携带实际 `runtimeMode`：首次状态同步前为 `pending`；最近一次成功的状态同步来自 LAN MIoT 时为 `local`；使用云端轮询或 `auto` 本地失败后成功回退云端时为 `cloud`。设备卡片分别显示“等待判定”“局域网”“云端轮询”标签；这不是静态的 `connectionMode` 配置回显，而是 Provider 当前采用的状态来源。
+
 账号密码、`ssecurity` 与 `serviceToken` 都属于敏感 Provider 配置：写入 PostgreSQL 时使用项目主密钥加密，管理 API 返回 `********`。页面会先调用登录入口；如果小米要求身份验证，HomeLoom 创建一个仅保存在内存、10 分钟过期且最多尝试 5 次的登录挑战。用户在小米验证页发送短信或邮件验证码但不在该页提交，再回到 HomeLoom 回填验证码。后端在原 Cookie 会话中完成验证，成功取得完整三元组后才允许保存并初始化 Provider。一次性验证码和账号密码不会写入挑战数据库，登录响应统一使用 `Cache-Control: no-store`。
 
 该接口依赖未公开的兼容 API，可能随小米服务变化。它采用轮询，适合空调、净化器、灯、插座等持续状态 Wi‑Fi 设备；不适合无线开关、人体/门窗传感器等需要瞬时事件的设备。事件型设备继续优先使用中枢 MQTT。

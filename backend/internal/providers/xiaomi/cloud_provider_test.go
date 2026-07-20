@@ -174,6 +174,10 @@ func TestCloudProviderAutoPrefersLocalForReadWriteAndAction(t *testing.T) {
 		t.Fatal(err)
 	}
 	provider.local = fakeLocal
+	pending, err := provider.DiscoverDevices(context.Background())
+	if err != nil || len(pending) != 1 || pending[0].RuntimeMode != device.RuntimeModePending {
+		t.Fatalf("pending devices = %#v, error = %v", pending, err)
+	}
 	ctx := context.Background()
 	if err := provider.Initialize(ctx); err != nil {
 		t.Fatal(err)
@@ -196,6 +200,20 @@ func TestCloudProviderAutoPrefersLocalForReadWriteAndAction(t *testing.T) {
 	fakeCloud.mu.Unlock()
 	if localReads < 2 || localWrites != 1 || localActions != 1 || cloudReads != 0 || cloudWrites != 0 || cloudActions != 0 {
 		t.Fatalf("local=%d/%d/%d cloud=%d/%d/%d", localReads, localWrites, localActions, cloudReads, cloudWrites, cloudActions)
+	}
+	items, err := provider.DiscoverDevices(ctx)
+	if err != nil || len(items) != 1 || items[0].RuntimeMode != device.RuntimeModeLocal {
+		t.Fatalf("runtime devices = %#v, error = %v", items, err)
+	}
+	fakeLocal.mu.Lock()
+	fakeLocal.readErr = errors.New("LAN became unavailable")
+	fakeLocal.mu.Unlock()
+	if _, err := provider.ReadProperty(ctx, providersdk.PropertyReadRequest{DeviceID: "xiaomi-switch", EndpointID: "main", CapabilityID: "switch", PropertyID: "power"}); err != nil {
+		t.Fatalf("dynamic cloud fallback: %v", err)
+	}
+	items, err = provider.DiscoverDevices(ctx)
+	if err != nil || len(items) != 1 || items[0].RuntimeMode != device.RuntimeModeCloud {
+		t.Fatalf("fallback runtime devices = %#v, error = %v", items, err)
 	}
 }
 
@@ -232,6 +250,10 @@ func TestCloudProviderAutoFallsBackToCloudAfterLocalFailure(t *testing.T) {
 	if len(fakeCloud.writes) != 1 || len(fakeCloud.actions) != 1 {
 		t.Fatalf("cloud writes/actions = %d/%d", len(fakeCloud.writes), len(fakeCloud.actions))
 	}
+	items, err := provider.DiscoverDevices(ctx)
+	if err != nil || len(items) != 1 || items[0].RuntimeMode != device.RuntimeModeCloud {
+		t.Fatalf("runtime devices = %#v, error = %v", items, err)
+	}
 }
 
 func TestCloudProviderCloudModeSkipsAvailableLocalTransport(t *testing.T) {
@@ -256,6 +278,10 @@ func TestCloudProviderCloudModeSkipsAvailableLocalTransport(t *testing.T) {
 	defer fakeLocal.mu.Unlock()
 	if fakeLocal.reads != 0 {
 		t.Fatalf("local reads = %d", fakeLocal.reads)
+	}
+	items, err := provider.DiscoverDevices(ctx)
+	if err != nil || len(items) != 1 || items[0].RuntimeMode != device.RuntimeModeCloud {
+		t.Fatalf("runtime devices = %#v, error = %v", items, err)
 	}
 }
 

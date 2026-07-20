@@ -2,6 +2,7 @@ package device
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -62,6 +63,10 @@ func TestAvailabilityNormalizationAndValidation(t *testing.T) {
 	conflict := Device{SchemaVersion: SchemaVersion, ID: "device", ProviderID: "provider", Availability: AvailabilityOnline}
 	if err := conflict.Validate(); !errors.Is(err, ErrInvalidModel) {
 		t.Fatalf("conflicting projection error = %v", err)
+	}
+	invalidMode := Device{SchemaVersion: SchemaVersion, ID: "device", ProviderID: "provider", RuntimeMode: "invalid"}
+	if err := invalidMode.ValidateStructure(); !errors.Is(err, ErrInvalidModel) || !strings.Contains(err.Error(), "runtime mode") {
+		t.Fatalf("runtime mode error = %v", err)
 	}
 }
 

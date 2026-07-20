@@ -12,6 +12,7 @@ type Type string
 type ValueType string
 type Availability string
 type ParameterLevel string
+type RuntimeMode string
 
 const (
 	SchemaVersion = 1
@@ -60,6 +61,12 @@ const (
 	AvailabilityOnline  Availability = "online"
 	AvailabilityOffline Availability = "offline"
 	AvailabilityUnknown Availability = "unknown"
+)
+
+const (
+	RuntimeModePending RuntimeMode = "pending"
+	RuntimeModeLocal   RuntimeMode = "local"
+	RuntimeModeCloud   RuntimeMode = "cloud"
 )
 
 var stableIDPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$`)
@@ -158,12 +165,13 @@ type Device struct {
 	Type          Type         `json:"type"`
 	Availability  Availability `json:"availability"`
 	// Online is retained as a compatibility projection for schema v1 clients.
-	Online       bool       `json:"online"`
-	Sequence     uint64     `json:"sequence,omitempty"`
-	Disabled     bool       `json:"disabled,omitempty"`
-	Removed      bool       `json:"removed,omitempty"`
-	Endpoints    []Endpoint `json:"endpoints"`
-	LastUpdateAt time.Time  `json:"lastUpdateAt"`
+	Online       bool        `json:"online"`
+	Sequence     uint64      `json:"sequence,omitempty"`
+	Disabled     bool        `json:"disabled,omitempty"`
+	Removed      bool        `json:"removed,omitempty"`
+	RuntimeMode  RuntimeMode `json:"runtimeMode,omitempty"`
+	Endpoints    []Endpoint  `json:"endpoints"`
+	LastUpdateAt time.Time   `json:"lastUpdateAt"`
 }
 
 func ValidStableID(value string) bool { return stableIDPattern.MatchString(value) }
@@ -209,6 +217,9 @@ func (d Device) ValidateStructure() error {
 	}
 	if d.Availability != "" && d.Online != (d.Availability == AvailabilityOnline) {
 		return fmt.Errorf("%w: online compatibility projection conflicts with availability", ErrInvalidModel)
+	}
+	if d.RuntimeMode != "" && d.RuntimeMode != RuntimeModePending && d.RuntimeMode != RuntimeModeLocal && d.RuntimeMode != RuntimeModeCloud {
+		return fmt.Errorf("%w: invalid runtime mode %q", ErrInvalidModel, d.RuntimeMode)
 	}
 	if (d.Disabled || d.Removed) && d.IsOnline() {
 		return fmt.Errorf("%w: disabled or removed device cannot be online", ErrInvalidModel)

@@ -1,4 +1,4 @@
-import { availabilityLabel, deviceProperty, type Device } from '../types/device'
+import { availabilityLabel, deviceProperty, runtimeModeLabel, type Device } from '../types/device'
 import { deviceTypeLabel } from '../presentationLabels'
 import { DeviceTypeIcon } from './DeviceTypeIcon'
 
@@ -35,6 +35,7 @@ export function DeviceCard({ device, pending, onPowerChange, onDetails, onMappin
       <div className="device-card__topline">
         <span className={`status-dot is-${device.availability}`} />
         <span>{device.removed ? '来源已删除' : device.disabled ? '已禁用' : availabilityLabel(device.availability)}</span>
+		{device.runtimeMode && <span className={`device-runtime-mode is-${device.runtimeMode}`}>{runtimeModeLabel(device.runtimeMode)}</span>}
 		<span className="provider">{device.providerId}</span>
       </div>
 	  <div className="device-card__identity">

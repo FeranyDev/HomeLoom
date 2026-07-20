@@ -110,7 +110,7 @@ Apple Home 写入后可以短暂显示乐观值，但必须等待 Provider 上�
 | HTTP | `echo` |
 | 配置 | PostgreSQL；YAML 仅用于进程启动参数 |
 | 数据库 | PostgreSQL 17 + GORM AutoMigrate + pgx |
-| MQTT | Eclipse Paho `autopaho` |
+| MQTT | Eclipse Paho `autopaho`（客户端）+ Mochi MQTT（内嵌服务端） |
 | 日志 | `log/slog` |
 | 指标 | Prometheus Client |
 | Apple HAP | 阶段 0 PoC 后确定库和封装边界 |
@@ -412,7 +412,8 @@ Web 只提供一个管理员身份，不建设普通用户或角色系统。日�
 
 工作内容：
 
-- 连接、认证、自动重连；
+- 客户端连接外部 Broker，或服务端内嵌 Broker 接受设备连接；
+- 客户端自动重连，以及服务端监听、认证和路由 ACL；
 - Topic 订阅和命令发布；
 - Availability、QoS、Retained Message；
 - 设备发现消息 schema；
@@ -421,7 +422,7 @@ Web 只提供一个管理员身份，不建设普通用户或角色系统。日�
 
 退出条件：
 
-- MQTT 设备能自动创建且不重复；
+- MQTT 设备路由配置后由 retained Discovery 创建且不重复；
 - MQTT → Apple Home 状态同步正常；
 - Apple Home → MQTT 命令及确认正常；
 - Broker 重启后自动恢复连接和设备状态。

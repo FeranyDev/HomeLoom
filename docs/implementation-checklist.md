@@ -402,12 +402,20 @@ M2 性能验收：
 
 - [x] MQTT Provider 数据库配置；
 - [x] 前端新增 MQTT Provider；
+- [x] 区分 MQTT 客户端（连接外部 Broker）与 MQTT 服务端（内嵌 Broker 接受设备连接）运行模式；
+- [x] MQTT Client 与 MQTT Server 提升为和小米 Provider 平级的创建入口，表单内不再二次选择运行模式；
+- [x] 服务端 TCP/TLS/mTLS 监听、账户认证和设备路由生成的最小权限 ACL；
+- [x] 旧 MQTT 配置缺少 `mode` 时兼容为客户端模式；
 - [x] Broker 地址；
 - [x] TLS/mTLS；
 - [x] 用户名和密码；
 - [x] Client ID；
-- [x] Topic prefix；
-- [x] QoS；
+- [x] Topic Prefix 与 QoS 移至单设备路由；
+- [x] 单设备 Discovery/Availability/State/Command Topic 模板；
+- [x] 设备路由严格白名单与订阅冲突校验；
+- [x] 设备增删改热订阅并复用现有客户端会话或服务端监听，服务端同步热更新 ACL；
+- [x] 单设备显式协议选择（当前 `homeloom-v1`），不再把自有 Payload 契约伪装成任意 MQTT 协议；
+- [x] Discovery 完整来源属性进入设备级 Provider Profile，复用统一转换步骤完成枚举、范围和双向映射；
 - [x] Retained 状态最大年龄配置；
 - [x] Keep Alive；
 - [x] 自动重连；
@@ -433,12 +441,13 @@ M2 性能验收：
 ### 9.3 集成测试
 
 - [x] Compose 启动 Mosquitto 开发服务；
-- [x] 自动发现设备（Provider 单元测试）；
+- [x] 已配置路由的 retained Discovery 创建设备（Provider 单元测试）；
 - [x] MQTT 状态同步至 Registry（跨层 race 测试）；
 - [ ] MQTT 状态同步至 Apple Home；
 - [ ] Apple Home 命令发布 MQTT；
 - [x] MQTT 回报确认命令（跨层 race 测试）；
 - [x] Broker 重启恢复（测试内真实 MQTT 5 TCP Broker 原端口重启）；
+- [x] 内嵌 MQTT 服务端的真实客户端认证、设备发布与命令下发集成测试；
 - [x] 网络中断恢复（Paho 自动重连、重新订阅和恢复命令发布）；
 - [x] 不重复创建设备（remote sequence 去重）；
 - [x] 不恢复过期实时状态；
@@ -489,6 +498,7 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [x] 来源属性同步展示当前值、上次值或未知状态，并保留观察时间和读取错误；
 - [x] 设备详情仅展示统一模型标准/已登记自定义属性，Provider 完整原始属性只在设备映射入口展示；
 - [x] 两段映射分别选择转换 Profile、启停和删除；
+- [x] 逐设备展示 Provider → 统一模型的有效恒等默认映射，并允许可视化编辑为数据库覆盖；已有覆盖支持重新载入修改；
 - [x] Provider 与 Consumer 两段路由均按具体 Provider/设备隔离，同型号设备互不继承映射；
 - [x] 前端统一模型自定义属性三级编辑入口；
 - [x] 顶层统一模型页面完整展示所有设备模型、三级属性、参数分级及 Provider/Consumer 规则，并将 Profile 工具收纳为次级入口；
@@ -659,6 +669,7 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [x] 中枢客户端证书按有效期提前续签，复用 UID、Virtual DID 与 Ed25519 私钥，校验新证书后写回 PostgreSQL 并无断连热应用；
 - [x] 中枢 OAuth 已获取家庭 UID；MIoT 云通过合并家庭目录按 DID 获取本人/共享家庭名称与房间名称，并作为设备级映射元数据保存；
 - [x] MIoT 云设备支持逐设备 `auto/local/cloud`；`auto` 使用云目录私网 IP/Token 优先执行 LAN MIoT，失败自动回退云端，Token 不经管理 API 暴露；
+- [x] MIoT 云发布设备记录实际 `runtimeMode`，设备中心以“局域网 / 云端轮询 / 等待判定”标签展示最近成功的状态同步来源；
 - [~] mDNS 中枢发现、设备列表握手和配置设备发现已实现，未映射设备的自动导入仍待完成；
 - [x] MIoT Spec V2 实例获取、型号索引解析、PostgreSQL 缓存和完整性错误状态；
 - [x] 有界并发属性读取；

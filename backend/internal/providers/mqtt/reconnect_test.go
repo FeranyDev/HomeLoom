@@ -300,10 +300,53 @@ func waitUntil(t *testing.T, timeout time.Duration, description string, conditio
 	t.Fatalf("timed out waiting for %s", description)
 }
 
+func TestPahoTransportAddsDeviceSubscriptionWithoutReconnect(t *testing.T) {
+	broker := newTestMQTTBroker(t, "127.0.0.1:0")
+	defer broker.close()
+	address := broker.address()
+	create := func(raw string) (*Provider, error) {
+		return newProviderFromConfig(providerconfig.Config{ID: "mqtt-hot", Name: "Hot", Config: json.RawMessage(raw)}, func(config Config, brokerURL *url.URL, tlsConfig *tls.Config, handlers transportHandlers) mqttTransport {
+			return newPahoTransport(config, brokerURL, tlsConfig, handlers)
+		})
+	}
+	provider, err := create(fmt.Sprintf(`{"brokerUrl":"mqtt://%s","connectTimeoutSeconds":2,"devices":[]}`, address))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := provider.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = provider.Close(context.Background()) }()
+	replacement, err := create(fmt.Sprintf(`{"brokerUrl":"mqtt://%s","connectTimeoutSeconds":2,"devices":[{"id":"hot-switch","topicPrefix":"hot","qos":1}]}`, address))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handled, err := provider.Reconfigure(ctx, replacement)
+	if err != nil || !handled {
+		t.Fatalf("Reconfigure() = %v, %v", handled, err)
+	}
+	waitUntil(t, time.Second, "hot MQTT subscriptions", func() bool { return broker.subscriptions.Load() == 1 })
+	broker.mu.Lock()
+	clientCount := len(broker.clients)
+	broker.mu.Unlock()
+	if clientCount != 1 {
+		t.Fatalf("broker clients = %d, want one reused connection", clientCount)
+	}
+	events := make(chan device.Device, 2)
+	provider.Subscribe(func(item device.Device) { events <- item })
+	discovered := mqttSwitch("hot-switch", true, false)
+	broker.publish(t, discoveryTopic("hot", discovered.ID), discovered)
+	if item := waitDevice(t, events); item.ID != discovered.ID {
+		t.Fatalf("hot subscribed item = %#v", item)
+	}
+}
+
 func TestPahoTransportRecoversAfterBrokerRestart(t *testing.T) {
 	firstBroker := newTestMQTTBroker(t, "127.0.0.1:0")
 	address := firstBroker.address()
-	provider, err := newProviderFromConfig(providerconfig.Config{ID: "mqtt-reconnect", Name: "Reconnect", Config: json.RawMessage(fmt.Sprintf(`{"brokerUrl":"mqtt://%s","topicPrefix":"reconnect","qos":1,"connectTimeoutSeconds":2}`, address))}, func(config Config, brokerURL *url.URL, tlsConfig *tls.Config, handlers transportHandlers) mqttTransport {
+	provider, err := newProviderFromConfig(providerconfig.Config{ID: "mqtt-reconnect", Name: "Reconnect", Config: json.RawMessage(fmt.Sprintf(`{"brokerUrl":"mqtt://%s","connectTimeoutSeconds":2,"devices":[{"id":"reconnect-switch","topicPrefix":"reconnect","qos":1}]}`, address))}, func(config Config, brokerURL *url.URL, tlsConfig *tls.Config, handlers transportHandlers) mqttTransport {
 		transport := newPahoTransport(config, brokerURL, tlsConfig, handlers).(*pahoTransport)
 		transport.reconnectBackoff = autopaho.Backoff(func(int) time.Duration { return 20 * time.Millisecond })
 		return transport

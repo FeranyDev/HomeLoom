@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"sync"
 	"testing"
@@ -26,14 +27,26 @@ type publishedMessage struct {
 }
 
 type fakeTransport struct {
-	handlers  transportHandlers
-	mu        sync.Mutex
-	published []publishedMessage
-	closed    bool
+	handlers      transportHandlers
+	mu            sync.Mutex
+	published     []publishedMessage
+	subscriptions []mqttSubscription
+	onReplace     func()
+	closed        bool
 }
 
 func (f *fakeTransport) Start(context.Context, context.Context, time.Duration) error {
 	f.handlers.onConnectionUp()
+	return nil
+}
+func (f *fakeTransport) ReplaceSubscriptions(_ context.Context, subscriptions []mqttSubscription) error {
+	f.mu.Lock()
+	f.subscriptions = append([]mqttSubscription(nil), subscriptions...)
+	onReplace := f.onReplace
+	f.mu.Unlock()
+	if onReplace != nil {
+		onReplace()
+	}
 	return nil
 }
 func (f *fakeTransport) Publish(_ context.Context, topic string, qos byte, retained bool, payload []byte) error {
@@ -82,7 +95,7 @@ func newTestProvider(t *testing.T) (*Provider, *fakeTransport) {
 func newUninitializedTestProvider(t *testing.T) (*Provider, *fakeTransport) {
 	t.Helper()
 	transport := &fakeTransport{}
-	provider, err := newProviderFromConfig(providerconfig.Config{ID: "mqtt-main", Name: "MQTT", Config: json.RawMessage(`{"brokerUrl":"mqtt://broker:1883","topicPrefix":"house","qos":1,"retainedStateMaxAgeSeconds":60}`)}, func(_ Config, _ *url.URL, _ *tls.Config, handlers transportHandlers) mqttTransport {
+	provider, err := newProviderFromConfig(providerconfig.Config{ID: "mqtt-main", Name: "MQTT", Config: testProviderConfig("mqtt://broker:1883")}, func(_ Config, _ *url.URL, _ *tls.Config, handlers transportHandlers) mqttTransport {
 		transport.handlers = handlers
 		return transport
 	})
@@ -92,10 +105,14 @@ func newUninitializedTestProvider(t *testing.T) (*Provider, *fakeTransport) {
 	return provider, transport
 }
 
+func testProviderConfig(broker string) json.RawMessage {
+	return json.RawMessage(fmt.Sprintf(`{"brokerUrl":%q,"retainedStateMaxAgeSeconds":60,"devices":[{"id":"kitchen-switch","topicPrefix":"house","qos":1},{"id":"desk-lamp","topicPrefix":"house","qos":1},{"id":"hall-switch","topicPrefix":"house","qos":1}]}`, broker))
+}
+
 func TestProviderReconfiguresNameWithoutReplacingBrokerSession(t *testing.T) {
 	current, transport := newTestProvider(t)
 	replacementTransport := &fakeTransport{}
-	replacement, err := newProviderFromConfig(providerconfig.Config{ID: "mqtt-main", Name: "Updated MQTT", Config: json.RawMessage(`{"brokerUrl":"mqtt://broker:1883","topicPrefix":"house","qos":1,"retainedStateMaxAgeSeconds":60}`)}, func(_ Config, _ *url.URL, _ *tls.Config, handlers transportHandlers) mqttTransport {
+	replacement, err := newProviderFromConfig(providerconfig.Config{ID: "mqtt-main", Name: "Updated MQTT", Config: testProviderConfig("mqtt://broker:1883")}, func(_ Config, _ *url.URL, _ *tls.Config, handlers transportHandlers) mqttTransport {
 		replacementTransport.handlers = handlers
 		return replacementTransport
 	})
@@ -117,9 +134,64 @@ func TestProviderReconfiguresNameWithoutReplacingBrokerSession(t *testing.T) {
 	}
 }
 
+func TestProviderHotReconfiguresDeviceSubscriptionsWithoutReplacingBrokerSession(t *testing.T) {
+	current, transport := newTestProvider(t)
+	events := make(chan device.Device, 8)
+	unsubscribe := current.Subscribe(func(item device.Device) { events <- item })
+	defer unsubscribe()
+	discovered := mqttSwitch("kitchen-switch", true, false)
+	transport.emit(discoveryTopic("house", discovered.ID), discovered, false)
+	waitDevice(t, events)
+
+	replacementTransport := &fakeTransport{}
+	replacement, err := newProviderFromConfig(providerconfig.Config{ID: "mqtt-main", Name: "Updated MQTT", Config: json.RawMessage(`{"brokerUrl":"mqtt://broker:1883","retainedStateMaxAgeSeconds":60,"devices":[{"id":"hall-switch","topicPrefix":"other","qos":2}]}`)}, func(_ Config, _ *url.URL, _ *tls.Config, handlers transportHandlers) mqttTransport {
+		replacementTransport.handlers = handlers
+		return replacementTransport
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hall := mqttSwitch("hall-switch", true, false)
+	transport.mu.Lock()
+	transport.onReplace = func() { transport.emit(discoveryTopic("other", hall.ID), hall, true) }
+	transport.mu.Unlock()
+	handled, err := current.Reconfigure(context.Background(), replacement)
+	if err != nil || !handled {
+		t.Fatalf("Reconfigure() = %v, %v", handled, err)
+	}
+	removed := waitDevice(t, events)
+	if removed.ID != "kitchen-switch" || !removed.Removed {
+		t.Fatalf("removed device = %#v", removed)
+	}
+	transport.mu.Lock()
+	subscriptions := append([]mqttSubscription(nil), transport.subscriptions...)
+	closed := transport.closed
+	transport.mu.Unlock()
+	if closed || len(subscriptions) != 3 || subscriptions[0].Topic != "other/discovery/hall-switch" || subscriptions[0].QoS != 2 || replacementTransport.handlers.onMessage != nil {
+		t.Fatalf("closed=%v subscriptions=%#v replacement initialized=%v", closed, subscriptions, replacementTransport.handlers.onMessage != nil)
+	}
+	if item := waitDevice(t, events); item.ID != hall.ID {
+		t.Fatalf("new route device = %#v", item)
+	}
+}
+
 func TestProviderRequiresReplacementWhenBrokerConnectionChanges(t *testing.T) {
 	current, _ := newUninitializedTestProvider(t)
-	replacement, err := newProviderFromConfig(providerconfig.Config{ID: "mqtt-main", Name: "MQTT", Config: json.RawMessage(`{"brokerUrl":"mqtt://other-broker:1883","topicPrefix":"house","qos":1}`)}, func(_ Config, _ *url.URL, _ *tls.Config, handlers transportHandlers) mqttTransport {
+	replacement, err := newProviderFromConfig(providerconfig.Config{ID: "mqtt-main", Name: "MQTT", Config: testProviderConfig("mqtt://other-broker:1883")}, func(_ Config, _ *url.URL, _ *tls.Config, handlers transportHandlers) mqttTransport {
+		return &fakeTransport{handlers: handlers}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handled, err := current.Reconfigure(context.Background(), replacement)
+	if err != nil || handled {
+		t.Fatalf("Reconfigure() = %v, %v", handled, err)
+	}
+}
+
+func TestProviderRequiresReplacementWhenRuntimeModeChanges(t *testing.T) {
+	current, _ := newUninitializedTestProvider(t)
+	replacement, err := newProviderFromConfig(providerconfig.Config{ID: "mqtt-main", Name: "MQTT", Config: json.RawMessage(`{"mode":"server","listenAddress":"127.0.0.1:1883","devices":[]}`)}, func(_ Config, _ *url.URL, _ *tls.Config, handlers transportHandlers) mqttTransport {
 		return &fakeTransport{handlers: handlers}
 	})
 	if err != nil {
@@ -225,14 +297,45 @@ func TestProviderPublishesPropertyAndActionCommands(t *testing.T) {
 	}
 }
 
+func TestProviderUsesCustomTopicsForOneConfiguredDevice(t *testing.T) {
+	transport := &fakeTransport{}
+	provider, err := newProviderFromConfig(providerconfig.Config{ID: "mqtt-custom", Name: "Custom", Config: json.RawMessage(`{"brokerUrl":"mqtt://broker:1883","devices":[{"id":"desk-lamp","topicPrefix":"fallback","qos":2,"topics":{"discovery":"catalog/desk-lamp","availability":"presence/desk-lamp","state":"telemetry/desk-lamp/{endpointId}/{capabilityId}/{propertyId}","command":"control/desk-lamp/{endpointId}/{capabilityId}/{operationId}"}}]}`)}, func(_ Config, _ *url.URL, _ *tls.Config, handlers transportHandlers) mqttTransport {
+		transport.handlers = handlers
+		return transport
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = provider.Close(context.Background()) })
+	events := make(chan device.Device, 4)
+	provider.Subscribe(func(item device.Device) { events <- item })
+	discovered := mqttSwitch("desk-lamp", true, false)
+	transport.emit("catalog/desk-lamp", discovered, false)
+	waitDevice(t, events)
+	now := time.Now().UTC()
+	transport.emit("telemetry/desk-lamp/main/switch/power", stateMessage{SchemaVersion: 1, Value: valuePointer(device.BoolValue(true)), Sequence: 1, ObservedAt: now}, false)
+	assertDevicePower(t, waitDevice(t, events), true)
+	if _, err := provider.WriteProperty(context.Background(), providersdk.PropertyWriteRequest{DeviceID: "desk-lamp", EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Value: device.BoolValue(false)}); err != nil {
+		t.Fatal(err)
+	}
+	publications := transport.publications()
+	if len(publications) != 1 || publications[0].topic != "control/desk-lamp/main/switch/power" || publications[0].qos != 2 {
+		t.Fatalf("custom topic publications = %#v", publications)
+	}
+}
+
 func TestProviderRejectsInvalidDiscoveryWithoutPoisoningState(t *testing.T) {
 	provider, transport := newTestProvider(t)
 	transport.emit("house/discovery/Bad ID", map[string]any{"schemaVersion": 1}, false)
+	transport.emit(discoveryTopic("house", "unconfigured-switch"), mqttSwitch("unconfigured-switch", true, false), false)
 	deadline := time.Now().Add(time.Second)
-	for provider.Stats().MessagesInvalid == 0 && time.Now().Before(deadline) {
+	for provider.Stats().MessagesInvalid < 2 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
-	if stats := provider.Stats(); stats.MessagesInvalid != 1 {
+	if stats := provider.Stats(); stats.MessagesInvalid != 2 {
 		t.Fatalf("stats = %#v", stats)
 	}
 	items, _ := provider.DiscoverDevices(context.Background())

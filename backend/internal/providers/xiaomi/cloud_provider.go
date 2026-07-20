@@ -93,6 +93,7 @@ func newCloudProvider(id, name string, config CloudConfig, factory cloudClientFa
 	}
 	for _, configured := range config.Devices {
 		item := buildDevice(id, configured)
+		item.RuntimeMode = device.RuntimeModePending
 		if err := item.NormalizeModelParameters(); err != nil {
 			return nil, fmt.Errorf("Xiaomi MIoT cloud device %q model mapping: %w", configured.ID, err)
 		}
@@ -332,6 +333,7 @@ func (p *CloudProvider) loadCloudSpecs(ctx context.Context, directory []HubDevic
 			model = configured.Model
 		}
 		item := buildDevice(p.id, configured)
+		item.RuntimeMode = device.RuntimeModePending
 		metadata := providersdk.SourceCatalogMetadata{Complete: false, Source: "configured-mapping-fallback", Model: model, SpecType: hub.SpecType}
 		if loadedItem.err != nil {
 			metadata.Error = loadedItem.err.Error()
@@ -353,6 +355,9 @@ func (p *CloudProvider) loadCloudSpecs(ctx context.Context, directory []HubDevic
 		p.mu.RLock()
 		previous, exists := p.devices[item.ID]
 		p.mu.RUnlock()
+		if exists {
+			item.RuntimeMode = previous.RuntimeMode
+		}
 		if exists && !automapped {
 			item = preserveDeviceState(item, previous)
 		}
@@ -449,6 +454,7 @@ func (p *CloudProvider) getProperties(ctx context.Context, configured DeviceConf
 		p.localRequests.Add(1)
 		result, err := p.local.GetProperties(ctx, access, input)
 		if err == nil && propertyResultsSuccessful(result, len(input)) {
+			p.setRuntimeMode(configured.ID, device.RuntimeModeLocal)
 			return result, nil
 		}
 		p.localFailures.Add(1)
@@ -469,7 +475,26 @@ func (p *CloudProvider) getProperties(ctx context.Context, configured DeviceConf
 		return nil, err
 	}
 	p.requests.Add(1)
-	return client.GetProperties(ctx, input)
+	result, err := client.GetProperties(ctx, input)
+	if err == nil {
+		p.setRuntimeMode(configured.ID, device.RuntimeModeCloud)
+	}
+	return result, err
+}
+
+func (p *CloudProvider) setRuntimeMode(id string, mode device.RuntimeMode) {
+	p.mu.Lock()
+	item, exists := p.devices[id]
+	if !exists || item.RuntimeMode == mode {
+		p.mu.Unlock()
+		return
+	}
+	item.RuntimeMode = mode
+	p.sequence++
+	item.Sequence, item.LastUpdateAt = p.sequence, time.Now().UTC()
+	p.devices[id] = item
+	p.mu.Unlock()
+	p.broadcastCloud(item.Clone())
 }
 
 func (p *CloudProvider) setProperties(ctx context.Context, configured DeviceConfig, input []cloudProperty) ([]cloudProperty, error) {

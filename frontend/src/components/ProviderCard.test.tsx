@@ -7,6 +7,17 @@ import type { Provider } from '../types/provider'
 const provider: Provider = { id: 'virtual-main', type: 'virtual', name: 'Virtual', enabled: true, config: {}, status: 'running', retryCount: 0, capabilities: { discovery: true, propertyRead: true, propertyWrite: true, events: true } }
 
 describe('ProviderCard simulation', () => {
+	it('distinguishes MQTT client and server runtime modes', () => {
+		const server: Provider = { ...provider, id: 'mqtt-server', type: 'mqtt', name: '设备接入', config: { mode: 'server', listenAddress: '0.0.0.0:1883', devices: [] } }
+		render(<ProviderCard provider={server} devices={[]} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} onTest={vi.fn()} />)
+		expect(screen.getByText(/MQTT 服务端（SERVER）/)).toBeInTheDocument()
+		expect(screen.getByText('mqtt-server')).toHaveClass('provider')
+		expect(screen.getByText('服务端监听中')).toBeInTheDocument()
+		expect(screen.getByText('0.0.0.0:1883')).toBeInTheDocument()
+		expect(screen.getByRole('button', { name: '监听配置' })).toBeInTheDocument()
+		expect(screen.getByRole('button', { name: '重启监听' })).toBeInTheDocument()
+	})
+
 	it('shows renewable credential deadlines without exposing credential values', () => {
 		const xiaomi: Provider = { ...provider, id: 'xiaomi-main', type: 'xiaomi', config: { oauth: { clientId: '1', oauthUuid: 'uuid', virtualDid: '2' }, clientId: '2', clientCertificate: '********', privateKey: '********' }, credentials: { managed: true, refreshAt: '2026-07-16T10:00:00Z', tokenExpiresAt: '2026-07-16T12:00:00Z', certificateExpiresAt: '2026-08-16T12:00:00Z' }, credentialError: 'cloud unavailable', credentialRetryAt: '2026-07-16T10:01:00Z' }
 		render(<ProviderCard provider={xiaomi} devices={[]} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} />)
@@ -21,6 +32,17 @@ describe('ProviderCard simulation', () => {
 		expect(screen.getByText('小米 MIoT 云 · 第三方兼容 · xiaomi-miot-cloud-main')).toBeInTheDocument()
 		expect(screen.getByText('轮询 30 秒 · 非官方兼容接口')).toBeInTheDocument()
 		expect(screen.queryByText('小米中枢网关')).not.toBeInTheDocument()
+	})
+
+	it('shows the actual runtime mode for each published MIoT cloud device', () => {
+		const cloud: Provider = { ...provider, id: 'xiaomi-miot-cloud-main', type: 'xiaomi-miot-cloud', name: 'MIoT 云', config: { username: 'owner@example.com', password: '********', devices: [] } }
+		const devices = [
+			{ schemaVersion: 1, id: 'local-air-conditioner', providerId: cloud.id, name: '客厅空调', type: 'air-conditioner' as const, availability: 'online' as const, online: true, runtimeMode: 'local' as const, endpoints: [], lastUpdateAt: '' },
+			{ schemaVersion: 1, id: 'cloud-air-conditioner', providerId: cloud.id, name: '卧室空调', type: 'air-conditioner' as const, availability: 'online' as const, online: true, runtimeMode: 'cloud' as const, endpoints: [], lastUpdateAt: '' },
+		]
+		render(<ProviderCard provider={cloud} devices={devices} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} />)
+		expect(screen.getByText('局域网')).toHaveClass('device-runtime-mode', 'is-local')
+		expect(screen.getByText('云端轮询')).toHaveClass('device-runtime-mode', 'is-cloud')
 	})
 
   it('sends ephemeral availability and temperature changes', async () => {
