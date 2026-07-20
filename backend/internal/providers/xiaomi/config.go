@@ -20,6 +20,9 @@ const (
 	defaultPort         = 8883
 	defaultTimeout      = 10
 	defaultPollInterval = 60
+	connectionModeAuto  = "auto"
+	connectionModeLocal = "local"
+	connectionModeCloud = "cloud"
 )
 
 // Config contains the durable Xiaomi central-hub configuration. Credentials
@@ -135,6 +138,10 @@ func (c *Config) applyDefaults() {
 		item := &c.Devices[deviceIndex]
 		item.DID = strings.TrimSpace(item.DID)
 		item.ID = strings.TrimSpace(item.ID)
+		item.ConnectionMode = strings.ToLower(strings.TrimSpace(item.ConnectionMode))
+		if item.ConnectionMode == "" {
+			item.ConnectionMode = connectionModeAuto
+		}
 		if item.ID == "" {
 			item.ID = "xiaomi-" + stableID(item.DID)
 		}
@@ -198,6 +205,12 @@ func (c Config) validate() (*url.URL, error) {
 			return nil, fmt.Errorf("duplicate Xiaomi device id %q", item.ID)
 		}
 		seenDevices[item.ID] = true
+		if item.ConnectionMode != connectionModeAuto && item.ConnectionMode != connectionModeLocal && item.ConnectionMode != connectionModeCloud {
+			return nil, fmt.Errorf("device %q connectionMode must be auto, local or cloud", item.ID)
+		}
+		if item.ConnectionMode == connectionModeCloud && (c.OAuth == nil || strings.TrimSpace(c.OAuth.AccessToken) == "") {
+			return nil, fmt.Errorf("device %q requires Xiaomi OAuth accessToken for cloud control", item.ID)
+		}
 		seenProperties := make(map[string]bool)
 		for _, mapping := range item.Properties {
 			key := mapping.EndpointID + "/" + mapping.CapabilityID + "/" + mapping.PropertyID

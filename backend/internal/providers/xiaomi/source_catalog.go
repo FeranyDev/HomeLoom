@@ -117,17 +117,7 @@ func (p *Provider) markCatalogError(cause error) {
 }
 
 func (p *Provider) refreshSourceCatalog(ctx context.Context) {
-	client, err := p.currentClient()
-	if err != nil {
-		p.markCatalogError(err)
-		return
-	}
-	raw, err := client.DeviceList(ctx)
-	if err != nil {
-		p.markCatalogError(err)
-		return
-	}
-	items, err := parseHubDeviceList(raw)
+	items, err := p.refreshDirectory(ctx)
 	if err != nil {
 		p.markCatalogError(err)
 		return

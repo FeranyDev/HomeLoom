@@ -14,18 +14,22 @@ import (
 // HubDevice is the identity and location metadata returned by a Xiaomi source
 // before a device is mapped into HomeLoom's unified model.
 type HubDevice struct {
-	DID      string `json:"did"`
-	Name     string `json:"name"`
-	Model    string `json:"model,omitempty"`
-	HomeID   string `json:"homeId,omitempty"`
-	HomeName string `json:"homeName,omitempty"`
-	RoomID   string `json:"roomId,omitempty"`
-	RoomName string `json:"roomName,omitempty"`
-	LocalIP  string `json:"localIp,omitempty"`
-	Local    bool   `json:"localAvailable"`
-	Token    string `json:"-"`
-	SpecType string `json:"specType,omitempty"`
-	Online   *bool  `json:"online,omitempty"`
+	DID                   string `json:"did"`
+	Name                  string `json:"name"`
+	Model                 string `json:"model,omitempty"`
+	HomeID                string `json:"homeId,omitempty"`
+	HomeName              string `json:"homeName,omitempty"`
+	RoomID                string `json:"roomId,omitempty"`
+	RoomName              string `json:"roomName,omitempty"`
+	LocalIP               string `json:"localIp,omitempty"`
+	Local                 bool   `json:"localAvailable"`
+	GatewayAvailable      bool   `json:"gatewayAvailable"`
+	LocalControlAvailable bool   `json:"localControlAvailable"`
+	CloudAvailable        bool   `json:"cloudAvailable"`
+	PushAvailable         bool   `json:"pushAvailable"`
+	Token                 string `json:"-"`
+	SpecType              string `json:"specType,omitempty"`
+	Online                *bool  `json:"online,omitempty"`
 }
 
 // DiscoverHubDevices opens a short-lived mTLS/MQTT connection and asks the
@@ -130,8 +134,16 @@ func collectHubDevices(value any, output map[string]HubDevice, deviceList bool) 
 			if name == "" {
 				name = did
 			}
-			item := HubDevice{DID: did, Name: name, Model: model, HomeID: firstString(current, "homeId", "home_id", "homeDid", "home_did"), HomeName: firstString(current, "homeName", "home_name", "home", "home_name_i18n"), RoomID: firstString(current, "roomId", "room_id", "roomDid", "room_did"), RoomName: firstString(current, "roomName", "room_name", "room", "room_name_i18n"), LocalIP: firstString(current, "localIp", "localip", "local_ip", "lanIp", "lan_ip"), Token: firstString(current, "token"), SpecType: firstString(current, "specType", "spec_type", "urn", "type")}
+			item := HubDevice{DID: did, Name: name, Model: model, HomeID: firstString(current, "homeId", "home_id", "homeDid", "home_did"), HomeName: firstString(current, "homeName", "home_name", "home", "home_name_i18n"), RoomID: firstString(current, "roomId", "room_id", "roomDid", "room_did"), RoomName: firstString(current, "roomName", "room_name", "room", "room_name_i18n"), LocalIP: firstString(current, "localIp", "localip", "local_ip", "lanIp", "lan_ip"), Token: firstString(current, "token"), SpecType: firstString(current, "specType", "spec_type", "urn", "type"), GatewayAvailable: true}
 			item.Local = validLocalAccess(item.LocalIP, item.Token)
+			item.LocalControlAvailable = true
+			if available, ok := boolValue(firstValue(current, "specv2Access", "specv2_access", "specV2Access", "miotSpecV2Access")); ok {
+				item.LocalControlAvailable = available
+			}
+			item.PushAvailable = true
+			if available, ok := boolValue(firstValue(current, "pushAvailable", "push_available", "eventPushAvailable", "event_push_available")); ok {
+				item.PushAvailable = available
+			}
 			if online, ok := boolValue(firstValue(current, "online", "isOnline", "is_online")); ok {
 				item.Online = &online
 			}
@@ -156,6 +168,53 @@ func collectHubDevices(value any, output map[string]HubDevice, deviceList bool) 
 			collectHubDevices(child, output, nestedList)
 		}
 	}
+}
+
+// mergeHubAndCloudDevices produces the account directory exposed by the
+// central Provider. Cloud metadata normally has better home/room names, while
+// gateway metadata is authoritative for local-control and push availability.
+func mergeHubAndCloudDevices(local, cloud []HubDevice) []HubDevice {
+	items := make(map[string]HubDevice, len(local)+len(cloud))
+	for _, item := range cloud {
+		item.CloudAvailable = true
+		items[item.DID] = item
+	}
+	for _, localItem := range local {
+		localItem.GatewayAvailable = true
+		current, exists := items[localItem.DID]
+		if !exists {
+			items[localItem.DID] = localItem
+			continue
+		}
+		current.GatewayAvailable = true
+		current.LocalControlAvailable = localItem.LocalControlAvailable
+		current.PushAvailable = localItem.PushAvailable
+		if localItem.Name != "" {
+			current.Name = localItem.Name
+		}
+		if current.Model == "" {
+			current.Model = localItem.Model
+		}
+		if current.SpecType == "" {
+			current.SpecType = localItem.SpecType
+		}
+		if current.HomeID == "" {
+			current.HomeID, current.HomeName = localItem.HomeID, localItem.HomeName
+		}
+		if current.RoomID == "" {
+			current.RoomID, current.RoomName = localItem.RoomID, localItem.RoomName
+		}
+		if localItem.Online != nil {
+			current.Online = localItem.Online
+		}
+		items[localItem.DID] = current
+	}
+	result := make([]HubDevice, 0, len(items))
+	for _, item := range items {
+		result = append(result, item)
+	}
+	sortHubDevices(result)
+	return result
 }
 
 func firstValue(input map[string]any, keys ...string) any {

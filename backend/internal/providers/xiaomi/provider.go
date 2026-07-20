@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"reflect"
 	"sort"
 	"strconv"
@@ -20,6 +21,12 @@ import (
 
 type clientFactory func() hubClient
 
+type deviceRoute struct {
+	local bool
+	cloud bool
+	push  bool
+}
+
 type Provider struct {
 	id       string
 	name     string
@@ -29,8 +36,11 @@ type Provider struct {
 
 	mu            sync.RWMutex
 	client        hubClient
+	cloud         homeCloudClient
 	devices       map[string]device.Device
 	byDID         map[string]string
+	routes        map[string]deviceRoute
+	directory     []HubDevice
 	rawProperties map[string]PropertyMapping
 	rawActions    map[string]ActionMapping
 	catalog       map[string]providersdk.SourceCatalogMetadata
@@ -42,9 +52,13 @@ type Provider struct {
 	lifecycle     context.Context
 	done          chan struct{}
 
-	requests atomic.Uint64
-	events   atomic.Uint64
-	errors   atomic.Uint64
+	requests       atomic.Uint64
+	events         atomic.Uint64
+	errors         atomic.Uint64
+	localRequests  atomic.Uint64
+	localFailures  atomic.Uint64
+	cloudRequests  atomic.Uint64
+	cloudFallbacks atomic.Uint64
 }
 
 var (
@@ -65,7 +79,14 @@ func NewProviderFromConfigWithSpecResolver(item providerconfig.Config, resolver 
 		return nil, err
 	}
 	factory := func() hubClient { return newMIPSClient(config, brokerURL, tlsConfig) }
-	return newProviderWithResolver(item.ID, item.Name, config, factory, resolver)
+	provider, err := newProviderWithResolver(item.ID, item.Name, config, factory, resolver)
+	if err != nil {
+		return nil, err
+	}
+	if config.OAuth != nil && strings.TrimSpace(config.OAuth.AccessToken) != "" {
+		provider.cloud = newHTTPHomeCloudClient(*config.OAuth, &http.Client{Timeout: config.requestTimeout()})
+	}
+	return provider, nil
 }
 
 func newProvider(id, name string, config Config, factory clientFactory) (*Provider, error) {
@@ -73,9 +94,10 @@ func newProvider(id, name string, config Config, factory clientFactory) (*Provid
 }
 
 func newProviderWithResolver(id, name string, config Config, factory clientFactory, resolver *SpecResolver) (*Provider, error) {
-	provider := &Provider{id: id, name: name, config: config, factory: factory, resolver: resolver, devices: make(map[string]device.Device), byDID: make(map[string]string), rawProperties: make(map[string]PropertyMapping), rawActions: make(map[string]ActionMapping), catalog: make(map[string]providersdk.SourceCatalogMetadata), valueStatus: make(map[string]providersdk.SourceValueStatus), listeners: make(map[uint64]func(device.Device))}
+	provider := &Provider{id: id, name: name, config: config, factory: factory, resolver: resolver, devices: make(map[string]device.Device), byDID: make(map[string]string), routes: make(map[string]deviceRoute), rawProperties: make(map[string]PropertyMapping), rawActions: make(map[string]ActionMapping), catalog: make(map[string]providersdk.SourceCatalogMetadata), valueStatus: make(map[string]providersdk.SourceValueStatus), listeners: make(map[uint64]func(device.Device))}
 	for _, configured := range config.Devices {
 		item := buildDevice(id, configured)
+		item.RuntimeMode = device.RuntimeModePending
 		if err := item.NormalizeModelParameters(); err != nil {
 			return nil, fmt.Errorf("Xiaomi device %q model mapping: %w", configured.ID, err)
 		}
@@ -120,31 +142,79 @@ func (p *Provider) Initialize(ctx context.Context) error {
 		return fmt.Errorf("connect Xiaomi central hub: %w", err)
 	}
 	requestCtx, requestCancel := context.WithTimeout(ctx, p.config.requestTimeout())
-	deviceList, err := client.DeviceList(requestCtx)
+	directory, err := p.refreshDirectory(requestCtx)
 	requestCancel()
-	if err == nil {
-		err = responseOK(deviceList)
-	}
 	if err != nil {
 		_ = client.Close(context.Background())
 		cancel()
 		p.mu.Lock()
 		p.client, p.cancel, p.lifecycle = nil, nil, nil
 		p.mu.Unlock()
-		return fmt.Errorf("request Xiaomi device list: %w", err)
+		return fmt.Errorf("request Xiaomi device directory: %w", err)
 	}
-	hubDevices, parseErr := parseHubDeviceList(deviceList)
-	if parseErr == nil {
-		p.loadSourceSpecs(ctx, hubDevices)
-	} else {
-		p.markCatalogError(parseErr)
-	}
+	p.loadSourceSpecs(ctx, directory)
 	// Initial reads run concurrently with a bounded worker count. Individual
 	// unavailable properties remain at their typed zero value and are retried by
 	// the calibration loop instead of preventing the provider from starting.
-	p.refreshAll(ctx)
+	p.refreshAll(ctx, true)
 	go p.pollLoop(lifecycle)
 	return nil
+}
+
+// refreshDirectory merges the gateway directory with the account directory.
+// A central Provider can therefore expose cloud-only devices while preserving
+// gateway availability as the authoritative local-route signal.
+func (p *Provider) refreshDirectory(ctx context.Context) ([]HubDevice, error) {
+	client, localClientErr := p.currentClient()
+	var local []HubDevice
+	var localErr error
+	if localClientErr == nil {
+		p.requests.Add(1)
+		p.localRequests.Add(1)
+		raw, err := client.DeviceList(ctx)
+		if err == nil {
+			err = responseOK(raw)
+		}
+		if err == nil {
+			local, err = parseHubDeviceList(raw)
+		}
+		localErr = err
+		if err != nil {
+			p.localFailures.Add(1)
+		}
+	} else {
+		localErr = localClientErr
+	}
+
+	p.mu.RLock()
+	cloud := p.cloud
+	p.mu.RUnlock()
+	var cloudItems []HubDevice
+	var cloudErr error
+	if cloud != nil {
+		p.requests.Add(1)
+		p.cloudRequests.Add(1)
+		cloudItems, cloudErr = cloud.DeviceList(ctx)
+	}
+	if localErr != nil && (cloud == nil || cloudErr != nil) {
+		p.errors.Add(1)
+		if cloudErr != nil {
+			return nil, fmt.Errorf("gateway directory: %v; cloud directory: %w", localErr, cloudErr)
+		}
+		return nil, localErr
+	}
+	if cloudErr != nil {
+		p.errors.Add(1)
+	}
+	directory := mergeHubAndCloudDevices(local, cloudItems)
+	p.mu.Lock()
+	p.directory = append([]HubDevice(nil), directory...)
+	p.routes = make(map[string]deviceRoute, len(directory))
+	for _, item := range directory {
+		p.routes[item.DID] = deviceRoute{local: item.GatewayAvailable && item.LocalControlAvailable, cloud: item.CloudAvailable, push: item.GatewayAvailable && item.PushAvailable}
+	}
+	p.mu.Unlock()
+	return directory, nil
 }
 
 func (p *Provider) Close(ctx context.Context) error {
@@ -216,7 +286,15 @@ func (p *Provider) Reconfigure(ctx context.Context, replacement providersdk.Prov
 	}
 	lifecycle := p.lifecycle
 	timeout := p.config.requestTimeout()
+	if p.cloud == nil && next.cloud != nil {
+		p.cloud = next.cloud
+	}
+	cloud := p.cloud
+	oauth := p.config.OAuth
 	p.mu.Unlock()
+	if cloud != nil && oauth != nil {
+		cloud.UpdateOAuth(*oauth)
+	}
 
 	// Refresh in the provider lifecycle so saving a large mapping set is not
 	// coupled to the HTTP request deadline. Each property update is broadcast as
@@ -226,7 +304,7 @@ func (p *Provider) Reconfigure(ctx context.Context, replacement providersdk.Prov
 			refreshCtx, cancel := context.WithTimeout(lifecycle, timeout)
 			defer cancel()
 			p.refreshSourceCatalog(refreshCtx)
-			p.refreshAll(refreshCtx)
+			p.refreshAll(refreshCtx, true)
 		}()
 	}
 	return true, nil
@@ -287,24 +365,10 @@ func (p *Provider) MatchesGateway(host string, port int) bool {
 	return matches
 }
 
-// DiscoverHubDevices reads the central gateway directory through the active
-// connection without changing configured unified-model mappings.
+// DiscoverHubDevices reads the active central gateway and merges its directory
+// with the OAuth account directory. The name is kept for API compatibility.
 func (p *Provider) DiscoverHubDevices(ctx context.Context) ([]HubDevice, error) {
-	client, err := p.currentClient()
-	if err != nil {
-		return nil, err
-	}
-	p.requests.Add(1)
-	raw, err := client.DeviceList(ctx)
-	if err != nil {
-		p.errors.Add(1)
-		return nil, err
-	}
-	items, err := parseHubDeviceList(raw)
-	if err != nil {
-		p.errors.Add(1)
-	}
-	return items, err
+	return p.refreshDirectory(ctx)
 }
 
 func (p *Provider) ReadProperty(ctx context.Context, request providersdk.PropertyReadRequest) (device.Property, error) {
@@ -315,17 +379,7 @@ func (p *Provider) ReadProperty(ctx context.Context, request providersdk.Propert
 	if mapping.Readable != nil && !*mapping.Readable {
 		return device.Property{}, providersdk.ErrPropertyUnsupported
 	}
-	client, err := p.currentClient()
-	if err != nil {
-		return device.Property{}, err
-	}
-	p.requests.Add(1)
-	reply, err := client.GetProperty(ctx, configured.DID, mapping.SIID, mapping.PIID)
-	if err != nil {
-		p.errors.Add(1)
-		return device.Property{}, err
-	}
-	raw, err := responseValue(reply)
+	raw, err := p.readPropertyRaw(ctx, configured, mapping)
 	if err != nil {
 		p.errors.Add(1)
 		return device.Property{}, err
@@ -371,17 +425,7 @@ func (p *Provider) WriteProperty(ctx context.Context, request providersdk.Proper
 	if err != nil {
 		return device.Device{}, providersdk.ErrPropertyInvalid
 	}
-	client, err := p.currentClient()
-	if err != nil {
-		return device.Device{}, err
-	}
-	p.requests.Add(1)
-	reply, err := client.SetProperty(ctx, configured.DID, mapping.SIID, mapping.PIID, raw)
-	if err != nil {
-		p.errors.Add(1)
-		return device.Device{}, providersdk.ErrWriteRejected
-	}
-	if err := responseOK(reply); err != nil {
+	if err := p.writePropertyRaw(ctx, configured, mapping, raw); err != nil {
 		p.errors.Add(1)
 		return device.Device{}, providersdk.ErrWriteRejected
 	}
@@ -403,18 +447,188 @@ func (p *Provider) ExecuteCommand(ctx context.Context, request providersdk.Comma
 		}
 		input = append(input, plainPropertyValue(value))
 	}
-	client, err := p.currentClient()
-	if err != nil {
-		return device.Device{}, err
-	}
-	p.requests.Add(1)
-	reply, err := client.Action(ctx, configured.DID, action.SIID, action.AIID, input)
-	if err != nil || responseOK(reply) != nil {
+	if err := p.executeActionRaw(ctx, configured, action, input); err != nil {
 		p.errors.Add(1)
 		return device.Device{}, providersdk.ErrWriteRejected
 	}
 	item, _ := p.snapshot(configured.ID)
 	return item, nil
+}
+
+func (p *Provider) readPropertyRaw(ctx context.Context, configured DeviceConfig, mapping PropertyMapping) (any, error) {
+	mode, route, local, cloud := p.routeFor(configured)
+	var localErr error
+	if mode != connectionModeCloud && route.local && local != nil {
+		p.requests.Add(1)
+		p.localRequests.Add(1)
+		reply, err := local.GetProperty(ctx, configured.DID, mapping.SIID, mapping.PIID)
+		if err == nil {
+			var value any
+			value, err = responseValue(reply)
+			if err == nil {
+				p.setRuntimeMode(configured.ID, device.RuntimeModeLocal)
+				return value, nil
+			}
+		}
+		localErr = err
+		p.localFailures.Add(1)
+		if mode == connectionModeLocal {
+			return nil, err
+		}
+	} else if mode == connectionModeLocal {
+		return nil, errors.New("device is not available through the Xiaomi central gateway")
+	}
+	if cloud == nil || !route.cloud {
+		if localErr != nil {
+			return nil, localErr
+		}
+		return nil, errors.New("Xiaomi Home cloud route is unavailable")
+	}
+	if mode == connectionModeAuto {
+		p.cloudFallbacks.Add(1)
+	}
+	p.requests.Add(1)
+	p.cloudRequests.Add(1)
+	result, err := cloud.GetProperties(ctx, []cloudProperty{{DID: configured.DID, SIID: mapping.SIID, PIID: mapping.PIID}})
+	if err != nil || len(result) != 1 || !miotResultOK(result[0].Code) {
+		if err != nil {
+			return nil, err
+		}
+		return nil, errors.New("Xiaomi Home cloud property response was incomplete")
+	}
+	p.setRuntimeMode(configured.ID, device.RuntimeModeCloud)
+	return result[0].Value, nil
+}
+
+func (p *Provider) writePropertyRaw(ctx context.Context, configured DeviceConfig, mapping PropertyMapping, value any) error {
+	mode, route, local, cloud := p.routeFor(configured)
+	var localErr error
+	if mode != connectionModeCloud && route.local && local != nil {
+		p.requests.Add(1)
+		p.localRequests.Add(1)
+		reply, err := local.SetProperty(ctx, configured.DID, mapping.SIID, mapping.PIID, value)
+		if err == nil {
+			err = responseOK(reply)
+			if err == nil {
+				p.setRuntimeMode(configured.ID, device.RuntimeModeLocal)
+				return nil
+			}
+		}
+		localErr = err
+		p.localFailures.Add(1)
+		if mode == connectionModeLocal {
+			return err
+		}
+	} else if mode == connectionModeLocal {
+		return errors.New("device is not available through the Xiaomi central gateway")
+	}
+	if cloud == nil || !route.cloud {
+		if localErr != nil {
+			return localErr
+		}
+		return errors.New("Xiaomi Home cloud route is unavailable")
+	}
+	if mode == connectionModeAuto {
+		p.cloudFallbacks.Add(1)
+	}
+	p.requests.Add(1)
+	p.cloudRequests.Add(1)
+	result, err := cloud.SetProperties(ctx, []cloudProperty{{DID: configured.DID, SIID: mapping.SIID, PIID: mapping.PIID, Value: value}})
+	if err != nil {
+		return err
+	}
+	if len(result) != 1 || !miotResultOK(result[0].Code) {
+		return errors.New("Xiaomi Home cloud rejected the property write")
+	}
+	p.setRuntimeMode(configured.ID, device.RuntimeModeCloud)
+	return nil
+}
+
+func (p *Provider) executeActionRaw(ctx context.Context, configured DeviceConfig, action ActionMapping, input []any) error {
+	mode, route, local, cloud := p.routeFor(configured)
+	var localErr error
+	if mode != connectionModeCloud && route.local && local != nil {
+		p.requests.Add(1)
+		p.localRequests.Add(1)
+		reply, err := local.Action(ctx, configured.DID, action.SIID, action.AIID, input)
+		if err == nil {
+			err = responseOK(reply)
+			if err == nil {
+				p.setRuntimeMode(configured.ID, device.RuntimeModeLocal)
+				return nil
+			}
+		}
+		localErr = err
+		p.localFailures.Add(1)
+		if mode == connectionModeLocal {
+			return err
+		}
+	} else if mode == connectionModeLocal {
+		return errors.New("device is not available through the Xiaomi central gateway")
+	}
+	if cloud == nil || !route.cloud {
+		if localErr != nil {
+			return localErr
+		}
+		return errors.New("Xiaomi Home cloud route is unavailable")
+	}
+	if mode == connectionModeAuto {
+		p.cloudFallbacks.Add(1)
+	}
+	p.requests.Add(1)
+	p.cloudRequests.Add(1)
+	if err := cloud.Action(ctx, cloudAction{DID: configured.DID, SIID: action.SIID, AIID: action.AIID, Input: input}); err != nil {
+		return err
+	}
+	p.setRuntimeMode(configured.ID, device.RuntimeModeCloud)
+	return nil
+}
+
+func (p *Provider) routeFor(configured DeviceConfig) (string, deviceRoute, hubClient, homeCloudClient) {
+	p.mu.RLock()
+	route, known := p.routes[configured.DID]
+	local, cloud := p.client, p.cloud
+	p.mu.RUnlock()
+	if !known {
+		// Preserve compatibility with gateways that omit route capability fields.
+		route.local, route.cloud, route.push = local != nil, cloud != nil, true
+	}
+	// The account directory is useful discovery metadata, not an authorization
+	// boundary. Some Wi-Fi and shared devices can be controlled through MIoT
+	// HTTP even when a particular directory response temporarily omits them.
+	// Keep auto fallback available whenever this Provider owns a valid OAuth
+	// cloud client; an actual cloud rejection is still returned to the caller.
+	if cloud != nil {
+		route.cloud = true
+	}
+	mode := configured.ConnectionMode
+	if mode == "" {
+		mode = connectionModeAuto
+	}
+	if mode == connectionModeCloud {
+		route.local = false
+	}
+	if mode == connectionModeLocal {
+		route.cloud = false
+	}
+	return mode, route, local, cloud
+}
+
+func miotResultOK(code int) bool { return code == 0 || code == 1 }
+
+func (p *Provider) setRuntimeMode(id string, mode device.RuntimeMode) {
+	p.mu.Lock()
+	item, exists := p.devices[id]
+	if !exists || item.RuntimeMode == mode {
+		p.mu.Unlock()
+		return
+	}
+	item.RuntimeMode = mode
+	p.sequence++
+	item.Sequence, item.LastUpdateAt = p.sequence, time.Now().UTC()
+	p.devices[id] = item
+	p.mu.Unlock()
+	p.broadcast(item.Clone())
 }
 
 func (p *Provider) Subscribe(handler func(device.Device)) func() {
@@ -431,7 +645,11 @@ func (p *Provider) Subscribe(handler func(device.Device)) func() {
 }
 
 func (p *Provider) ProviderMetrics() map[string]uint64 {
-	return map[string]uint64{"requests": p.requests.Load(), "events": p.events.Load(), "errors": p.errors.Load()}
+	return map[string]uint64{
+		"requests": p.requests.Load(), "events": p.events.Load(), "errors": p.errors.Load(),
+		"localRequests": p.localRequests.Load(), "localFailures": p.localFailures.Load(),
+		"cloudRequests": p.cloudRequests.Load(), "cloudFallbacks": p.cloudFallbacks.Load(),
+	}
 }
 
 func (p *Provider) pollLoop(ctx context.Context) {
@@ -457,66 +675,82 @@ func (p *Provider) pollLoop(ctx context.Context) {
 			timeout := p.config.requestTimeout()
 			p.mu.RUnlock()
 			refreshCtx, cancel := context.WithTimeout(ctx, timeout)
-			p.refreshAll(refreshCtx)
+			p.refreshAll(refreshCtx, false)
 			cancel()
 		}
 	}
 }
 
-func (p *Provider) refreshAll(ctx context.Context) {
-	type job struct {
-		device DeviceConfig
-		mapTo  PropertyMapping
-	}
-	jobs := make(chan job)
+func (p *Provider) refreshAll(ctx context.Context, initial bool) {
+	jobs := make(chan DeviceConfig)
 	var workers sync.WaitGroup
-	workerCount := 8
+	workerCount := 4
 	for index := 0; index < workerCount; index++ {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			for current := range jobs {
-				readable := current.mapTo.Readable == nil || *current.mapTo.Readable
-				if !readable {
-					continue
-				}
-				_, err := p.ReadProperty(ctx, providersdk.PropertyReadRequest{DeviceID: current.device.ID, EndpointID: current.mapTo.EndpointID, CapabilityID: current.mapTo.CapabilityID, PropertyID: current.mapTo.PropertyID})
-				if err != nil {
-					p.markValueError(current.device.ID, current.mapTo, err)
+			for configured := range jobs {
+				for _, mapping := range p.readableMappings(configured) {
+					readable := mapping.Readable == nil || *mapping.Readable
+					if !readable {
+						continue
+					}
+					_, err := p.ReadProperty(ctx, providersdk.PropertyReadRequest{DeviceID: configured.ID, EndpointID: mapping.EndpointID, CapabilityID: mapping.CapabilityID, PropertyID: mapping.PropertyID})
+					if err != nil {
+						p.markValueError(configured.ID, mapping, err)
+					}
 				}
 			}
 		}()
 	}
 	p.mu.RLock()
 	configuredDevices := append([]DeviceConfig(nil), p.config.Devices...)
-	rawMappings := make(map[string]PropertyMapping, len(p.rawProperties))
-	for key, mapping := range p.rawProperties {
-		rawMappings[key] = mapping
-	}
 	p.mu.RUnlock()
 sendLoop:
 	for _, configured := range configuredDevices {
-		for _, mapping := range configured.Properties {
-			select {
-			case jobs <- job{device: configured, mapTo: mapping}:
-			case <-ctx.Done():
-				break sendLoop
-			}
+		if !initial && !p.shouldCalibrate(configured) {
+			continue
 		}
-		prefix := configured.ID + "\x00"
-		for key, mapping := range rawMappings {
-			if !strings.HasPrefix(key, prefix) {
-				continue
-			}
-			select {
-			case jobs <- job{device: configured, mapTo: mapping}:
-			case <-ctx.Done():
-				break sendLoop
-			}
+		select {
+		case jobs <- configured:
+		case <-ctx.Done():
+			break sendLoop
 		}
 	}
 	close(jobs)
 	workers.Wait()
+}
+
+func (p *Provider) readableMappings(configured DeviceConfig) []PropertyMapping {
+	p.mu.RLock()
+	rawMappings := make([]PropertyMapping, 0)
+	prefix := configured.ID + "\x00"
+	for key, mapping := range p.rawProperties {
+		if strings.HasPrefix(key, prefix) {
+			rawMappings = append(rawMappings, mapping)
+		}
+	}
+	p.mu.RUnlock()
+	result := append([]PropertyMapping(nil), configured.Properties...)
+	result = append(result, rawMappings...)
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].SIID != result[j].SIID {
+			return result[i].SIID < result[j].SIID
+		}
+		return result[i].PIID < result[j].PIID
+	})
+	return result
+}
+
+func (p *Provider) shouldCalibrate(configured DeviceConfig) bool {
+	mode, route, _, _ := p.routeFor(configured)
+	if mode == connectionModeCloud || !route.local || !route.push {
+		return true
+	}
+	p.mu.RLock()
+	item, exists := p.devices[configured.ID]
+	p.mu.RUnlock()
+	return !exists || item.RuntimeMode != device.RuntimeModeLocal
 }
 
 func (p *Provider) handleIncoming(incoming hubIncoming) {
@@ -537,6 +771,7 @@ func (p *Provider) handleIncoming(incoming hubIncoming) {
 			continue
 		}
 		p.events.Add(1)
+		p.setRuntimeMode(configured.ID, device.RuntimeModeLocal)
 		p.broadcast(p.updateProperty(configured.ID, mapping, value))
 	}
 }

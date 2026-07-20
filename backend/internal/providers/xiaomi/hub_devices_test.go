@@ -63,3 +63,26 @@ func TestParseHubDeviceListAcceptsDIDKeyedDirectory(t *testing.T) {
 		t.Fatalf("devices = %#v", devices)
 	}
 }
+
+func TestParseHubDeviceListExposesLocalRouteCapabilities(t *testing.T) {
+	devices, err := parseHubDeviceList(json.RawMessage(`{"code":0,"result":[{"did":"wifi-1","name":"空调","specv2_access":false,"push_available":false}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 1 || !devices[0].GatewayAvailable || devices[0].LocalControlAvailable || devices[0].PushAvailable {
+		t.Fatalf("route capabilities = %#v", devices)
+	}
+}
+
+func TestMergeHubAndCloudDevicesKeepsCloudLocationAndGatewayCapabilities(t *testing.T) {
+	local := []HubDevice{{DID: "123", Name: "中枢名称", Model: "vendor.air.v1", GatewayAvailable: true, LocalControlAvailable: true, PushAvailable: true}}
+	cloud := []HubDevice{{DID: "123", Name: "云端名称", HomeID: "home-1", HomeName: "我的家", RoomID: "room-1", RoomName: "客厅", CloudAvailable: true}}
+	devices := mergeHubAndCloudDevices(local, cloud)
+	if len(devices) != 1 {
+		t.Fatalf("devices = %#v", devices)
+	}
+	item := devices[0]
+	if item.Name != "中枢名称" || item.HomeName != "我的家" || item.RoomName != "客厅" || !item.GatewayAvailable || !item.LocalControlAvailable || !item.CloudAvailable || !item.PushAvailable {
+		t.Fatalf("merged device = %#v", item)
+	}
+}

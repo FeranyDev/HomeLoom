@@ -45,6 +45,17 @@ describe('ProviderCard simulation', () => {
 		expect(screen.getByText('云端轮询')).toHaveClass('device-runtime-mode', 'is-cloud')
 	})
 
+	it('shows central gateway local/cloud route metrics and device runtime mode', () => {
+		const central: Provider = { ...provider, id: 'xiaomi-main', type: 'xiaomi', name: '家庭中枢', config: { host: '192.168.1.50', port: 8883, oauth: { clientId: '1', oauthUuid: 'uuid', virtualDid: '2' }, clientId: '2', clientCertificate: '********', privateKey: '********', devices: [] }, metrics: { localRequests: 12, cloudFallbacks: 2, cloudRequests: 4 } }
+		const devices = [{ schemaVersion: 1, id: 'cloud-ac', providerId: central.id, name: 'Wi-Fi 空调', type: 'air-conditioner' as const, availability: 'online' as const, online: true, runtimeMode: 'cloud' as const, endpoints: [], lastUpdateAt: '' }]
+		render(<ProviderCard provider={central} devices={devices} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} />)
+		expect(screen.getByText(/MQTT 本地优先 \/ OAuth 官方云回退/)).toBeInTheDocument()
+		expect(screen.getByText(/^本地/)).toHaveTextContent('12')
+		expect(screen.getByText(/^转云/)).toHaveTextContent('2')
+		expect(screen.getByText(/^云请求/)).toHaveTextContent('4')
+		expect(screen.getByText('云端轮询')).toHaveClass('device-runtime-mode', 'is-cloud')
+	})
+
   it('sends ephemeral availability and temperature changes', async () => {
     const onSimulate = vi.fn().mockResolvedValue(undefined); const onRestart = vi.fn().mockResolvedValue(undefined)
     render(<ProviderCard provider={provider} devices={[{ schemaVersion: 1, id: 'temp-1', providerId: provider.id, name: '温度', type: 'single-property-sensor', availability: 'online', online: true, endpoints: [{ id: 'main', name: 'Main', type: 'sensor', capabilities: [{ id: 'sensor', type: 'sensor', properties: [{ definition: { id: 'value', name: '传感器值', type: 'number', unit: 'celsius', readable: true, writable: false, notifiable: true }, value: { type: 'number', number: 20 } }] }] }], lastUpdateAt: '' }]} onEdit={() => {}} onDelete={() => {}} onRestart={onRestart} onSimulate={onSimulate} />)

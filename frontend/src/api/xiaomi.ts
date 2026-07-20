@@ -44,6 +44,10 @@ export interface XiaomiHubDevice {
 	roomName?: string
 	localIp?: string
 	localAvailable?: boolean
+	gatewayAvailable?: boolean
+	localControlAvailable?: boolean
+	cloudAvailable?: boolean
+	pushAvailable?: boolean
 	specType?: string
 	online?: boolean
 }

@@ -149,7 +149,7 @@ HomeLoom 随程序提供 provider、capability 和 target 三类内置示例 Pro
 
 ## 小米设备目录
 
-`GET /api/v1/xiaomi/providers/{id}/devices` 只接受正在运行的 `xiaomi` 中枢 Provider，并复用其现有 MQTT 连接读取子设备。`GET /api/v1/xiaomi-miot-cloud/providers/{id}/devices` 只接受正在运行的 `xiaomi-miot-cloud` 第三方兼容 Provider，并复用其现有账号会话读取云端设备。两个接口不互相回退，也不会按 DID 合并目录；未来官方 `xiaomi-home-cloud` 使用独立类型和接口。
+`GET /api/v1/xiaomi/providers/{id}/devices` 只接受正在运行的 `xiaomi` 中枢 Provider，复用其现有 MQTT 连接和 OAuth 官方云客户端，按 DID 合并中枢目录与账号家庭/房间目录。每项可返回 `gatewayAvailable`、`localControlAvailable`、`cloudAvailable` 和 `pushAvailable`，供前端配置逐设备 `auto/local/cloud`。`GET /api/v1/xiaomi-miot-cloud/providers/{id}/devices` 仍只接受独立的第三方兼容 Provider，并复用其账号会话；它不与前者合并 Provider 实例、凭据或运行状态。
 
 第三方 MIoT 云登录使用 `POST /api/v1/xiaomi-miot-cloud/login/start` 与 `POST /api/v1/xiaomi-miot-cloud/login/verify`。前者可能直接返回完整会话，也可能返回 `verification_required`、短时 `challengeId` 和小米验证 URL；用户在小米页面触发短信/邮件后，将验证码提交给后者。挑战仅在进程内保存 10 分钟并复用首次登录的 Cookie，成功后单次失效；两个响应均禁止缓存。
 
