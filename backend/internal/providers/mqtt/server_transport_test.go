@@ -77,7 +77,7 @@ func TestServerModeAcceptsDevicePublicationsAndDeliversCommands(t *testing.T) {
 	if _, err := client.Publish(ctx, &paho.Publish{Topic: discoveryTopic("server", discovered.ID), QoS: 1, Retain: true, Payload: payload}); err != nil {
 		t.Fatalf("publish discovery: %v", err)
 	}
-	if item := waitDevice(t, events); item.ID != discovered.ID {
+	if item := waitDevice(t, events); item.ID != discovered.ID || !item.IsOnline() {
 		t.Fatalf("discovered item = %#v", item)
 	}
 
@@ -91,6 +91,30 @@ func TestServerModeAcceptsDevicePublicationsAndDeliversCommands(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("embedded broker did not deliver command")
+	}
+}
+
+func TestEmbeddedBrokerDistinguishesRetainedReplayFromLiveRetainedPublish(t *testing.T) {
+	server := mochimqtt.New(&mochimqtt.Options{InlineClient: true})
+	t.Cleanup(func() { _ = server.Close() })
+	topic := "server/discovery/server-switch"
+	if err := server.Publish(topic, []byte("historical"), true, 1); err != nil {
+		t.Fatal(err)
+	}
+	messages := make(chan inboundMessage, 2)
+	if err := subscribeBroker(server, []mqttSubscription{{Topic: topic, QoS: 1}}, transportHandlers{onMessage: func(message inboundMessage) { messages <- message }}); err != nil {
+		t.Fatal(err)
+	}
+	replayed := <-messages
+	if !replayed.retained || string(replayed.payload) != "historical" {
+		t.Fatalf("retained replay = %#v", replayed)
+	}
+	if err := server.Publish(topic, []byte("live"), true, 1); err != nil {
+		t.Fatal(err)
+	}
+	live := <-messages
+	if live.retained || string(live.payload) != "live" {
+		t.Fatalf("live retained publish = %#v", live)
 	}
 }
 

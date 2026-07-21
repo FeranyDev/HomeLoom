@@ -216,14 +216,24 @@ func TestProviderLoadsCompleteMIoTSourceCatalog(t *testing.T) {
 	if err != nil || read.Value.Number == nil || *read.Value.Number != 23.5 {
 		t.Fatalf("native read=%#v err=%v", read, err)
 	}
-	written, err := provider.WriteProperty(ctx, providersdk.PropertyWriteRequest{DeviceID: "xiaomi-switch", EndpointID: "miot-2", CapabilityID: "service-2", PropertyID: "property-2", Value: device.NumberValue(24.5)})
-	writtenProperty, _ := written.Property("miot-2", "service-2", "property-2")
-	if err != nil || writtenProperty.Value.Number == nil || *writtenProperty.Value.Number != 24.5 {
-		t.Fatalf("native write=%#v err=%v", writtenProperty, err)
-	}
 	discovered, _ := provider.DiscoverDevices(ctx)
 	if len(discovered) != 1 || discovered[0].NormalizeModelParameters() != nil {
-		t.Fatalf("complete native snapshot did not preserve unified model compatibility: %#v", discovered)
+		t.Fatalf("unified snapshot is invalid: %#v", discovered)
+	}
+	if _, exposed := discovered[0].Property("miot-2", "service-2", "property-2"); exposed {
+		t.Fatalf("device detail snapshot exposed native MIoT property: %#v", discovered[0])
+	}
+	written, err := provider.WriteProperty(ctx, providersdk.PropertyWriteRequest{DeviceID: "xiaomi-switch", EndpointID: "miot-2", CapabilityID: "service-2", PropertyID: "property-2", Value: device.NumberValue(24.5)})
+	if err != nil {
+		t.Fatalf("native write=%#v err=%v", written, err)
+	}
+	if _, exposed := written.Property("miot-2", "service-2", "property-2"); exposed {
+		t.Fatalf("write response exposed native MIoT property: %#v", written)
+	}
+	catalog, _ = provider.SourceCatalog(ctx)
+	writtenProperty, _ := catalog[0].Property("miot-2", "service-2", "property-2")
+	if writtenProperty.Value.Number == nil || *writtenProperty.Value.Number != 24.5 {
+		t.Fatalf("mapping catalog did not retain native write value: %#v", writtenProperty)
 	}
 
 	events := make(chan device.Device, 1)
@@ -232,12 +242,16 @@ func TestProviderLoadsCompleteMIoTSourceCatalog(t *testing.T) {
 	hub.handler(hubIncoming{Topic: "master/appMsg/notify/iot/123/property/2.2", Payload: json.RawMessage(`{"did":"123","siid":2,"piid":2,"value":25.5}`)})
 	select {
 	case updated := <-events:
-		property, _ := updated.Property("miot-2", "service-2", "property-2")
-		if property.Value.Number == nil || *property.Value.Number != 25.5 {
-			t.Fatalf("native notification=%#v", property)
+		if _, exposed := updated.Property("miot-2", "service-2", "property-2"); exposed {
+			t.Fatalf("public device event exposed native MIoT property: %#v", updated)
 		}
 	case <-ctx.Done():
 		t.Fatal("native notification was not broadcast")
+	}
+	catalog, _ = provider.SourceCatalog(ctx)
+	notifiedProperty, _ := catalog[0].Property("miot-2", "service-2", "property-2")
+	if notifiedProperty.Value.Number == nil || *notifiedProperty.Value.Number != 25.5 {
+		t.Fatalf("mapping catalog did not retain native notification: %#v", notifiedProperty)
 	}
 }
 

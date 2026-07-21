@@ -75,11 +75,13 @@ func (p *Provider) loadSourceSpecs(ctx context.Context, hubDevices []HubDevice) 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	nextDevices := make(map[string]device.Device, len(configuredDevices))
+	nextSourceDevices := make(map[string]device.Device, len(configuredDevices))
 	nextRawProperties := make(map[string]PropertyMapping)
 	nextRawActions := make(map[string]ActionMapping)
 	nextCatalog := make(map[string]providersdk.SourceCatalogMetadata, len(configuredDevices))
 	for _, result := range loaded {
 		item := buildDevice(p.id, result.configured)
+		sourceItem := item.Clone()
 		model := result.hub.Model
 		if model == "" {
 			model = result.configured.Model
@@ -90,7 +92,7 @@ func (p *Provider) loadSourceSpecs(ctx context.Context, hubDevices []HubDevice) 
 		} else {
 			var properties map[string]PropertyMapping
 			var actions map[string]ActionMapping
-			item, properties, actions = mergeMIoTSpec(item, result.configured, result.document)
+			sourceItem, properties, actions = mergeMIoTSpec(sourceItem, result.configured, result.document)
 			for key, mapping := range properties {
 				nextRawProperties[key] = mapping
 			}
@@ -102,9 +104,15 @@ func (p *Provider) loadSourceSpecs(ctx context.Context, hubDevices []HubDevice) 
 		if previous, ok := p.devices[item.ID]; ok {
 			item = preserveDeviceState(item, previous)
 		}
-		nextDevices[item.ID], nextCatalog[item.ID] = item, metadata
+		if previous, ok := p.sourceDevices[sourceItem.ID]; ok {
+			sourceItem = preserveDeviceState(sourceItem, previous)
+		} else {
+			sourceItem.Availability, sourceItem.Online = item.Availability, item.Online
+			sourceItem.Sequence, sourceItem.LastUpdateAt, sourceItem.RuntimeMode = item.Sequence, item.LastUpdateAt, item.RuntimeMode
+		}
+		nextDevices[item.ID], nextSourceDevices[item.ID], nextCatalog[item.ID] = item, sourceItem, metadata
 	}
-	p.devices, p.rawProperties, p.rawActions, p.catalog = nextDevices, nextRawProperties, nextRawActions, nextCatalog
+	p.devices, p.sourceDevices, p.rawProperties, p.rawActions, p.catalog = nextDevices, nextSourceDevices, nextRawProperties, nextRawActions, nextCatalog
 }
 
 func (p *Provider) markCatalogError(cause error) {
@@ -127,8 +135,8 @@ func (p *Provider) refreshSourceCatalog(ctx context.Context) {
 
 func (p *Provider) SourceCatalog(context.Context) ([]providersdk.SourceCatalogDevice, error) {
 	p.mu.RLock()
-	result := make([]providersdk.SourceCatalogDevice, 0, len(p.devices))
-	for id, item := range p.devices {
+	result := make([]providersdk.SourceCatalogDevice, 0, len(p.sourceDevices))
+	for id, item := range p.sourceDevices {
 		metadata := p.catalog[id]
 		metadata.Values = make(map[string]providersdk.SourceValueStatus)
 		prefix := id + "\x00"

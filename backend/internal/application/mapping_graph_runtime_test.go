@@ -2,6 +2,7 @@ package application_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -14,7 +15,105 @@ import (
 type rawMappingProvider struct {
 	item      device.Device
 	lastWrite providersdk.PropertyWriteRequest
+	handler   func(device.Device)
 }
+
+type failingCatalogProvider struct {
+	public device.Device
+	source device.Device
+}
+
+func (p *failingCatalogProvider) Manifest() providersdk.Manifest {
+	return providersdk.Manifest{ID: "failing-source", Type: "test", Name: "Failing source", Version: "1"}
+}
+func (p *failingCatalogProvider) Capabilities() providersdk.Capabilities {
+	return providersdk.Capabilities{Discovery: true}
+}
+func (p *failingCatalogProvider) Initialize(context.Context) error { return nil }
+func (p *failingCatalogProvider) Close(context.Context) error      { return nil }
+func (p *failingCatalogProvider) DiscoverDevices(context.Context) ([]device.Device, error) {
+	return []device.Device{p.public.Clone()}, nil
+}
+func (p *failingCatalogProvider) SourceCatalog(context.Context) ([]providersdk.SourceCatalogDevice, error) {
+	return []providersdk.SourceCatalogDevice{{Device: p.source.Clone(), Catalog: providersdk.SourceCatalogMetadata{Complete: true, Source: "test-native-spec"}}}, nil
+}
+
+type rejectingRawMapper struct{}
+
+func (rejectingRawMapper) TransformProperty(_, _, endpointID, _, _ string, value device.PropertyValue, _ mapping.Direction) (device.PropertyValue, string, bool, error) {
+	if endpointID == "native" {
+		return device.PropertyValue{}, "broken-binding", true, errors.New("invalid test conversion")
+	}
+	return value, "", false, nil
+}
+func (rejectingRawMapper) TransformPropertyDefinition(_, _, endpointID, _, _ string, definition device.PropertyDefinition) (device.PropertyDefinition, string, bool, error) {
+	if endpointID == "native" {
+		return device.PropertyDefinition{}, "broken-binding", true, errors.New("invalid test conversion")
+	}
+	return definition, "", false, nil
+}
+
+type airConditionerMappingProvider struct {
+	public    device.Device
+	source    device.Device
+	lastWrite providersdk.PropertyWriteRequest
+}
+
+func newAirConditionerMappingProvider() *airConditionerMappingProvider {
+	public := device.Device{
+		SchemaVersion: 1, ID: "xiaomi-126772242", ProviderID: "xiaomi-2231ed", Name: "空调伴侣", Type: device.TypeAirConditioner,
+		Availability: device.AvailabilityOnline, Online: true, LastUpdateAt: time.Now().UTC(),
+		Endpoints: []device.Endpoint{{ID: "main", Name: "Main", Type: "main", Capabilities: []device.Capability{
+			{ID: "air-conditioner", Type: "air-conditioner", Properties: []device.Property{
+				{Definition: device.PropertyDefinition{ID: "active", Name: "启用", Type: device.ValueTypeBool, Readable: true, Writable: true, Notifiable: true}, Value: device.BoolValue(true)},
+				{Definition: device.PropertyDefinition{ID: "target-mode", Name: "运行模式", Type: device.ValueTypeEnum, Enum: []string{"auto", "cool", "dry", "heat", "fan"}, Readable: true, Writable: true, Notifiable: true}, Value: device.EnumValue("cool")},
+			}},
+			{ID: "temperature", Type: "temperature", Properties: []device.Property{
+				{Definition: device.PropertyDefinition{ID: "target-temperature", Name: "目标温度", Type: device.ValueTypeNumber, Unit: "celsius", Min: numberPointer(16), Max: numberPointer(32), Step: numberPointer(0.5), Readable: true, Writable: true, Notifiable: true}, Value: device.NumberValue(24)},
+			}},
+		}}},
+	}
+	source := public.Clone()
+	source.Endpoints = append(source.Endpoints, device.Endpoint{ID: "miot-3", Name: "Fan Control", Type: "fan-control", Capabilities: []device.Capability{{ID: "service-3", Type: "fan-control", Properties: []device.Property{{
+		Definition: device.PropertyDefinition{ID: "property-1", Name: "Fan Level", Type: device.ValueTypeEnum, Enum: []string{"Auto", "Low", "Medium", "High"}, Readable: true, Writable: true, Notifiable: true},
+		Value:      device.EnumValue("High"),
+	}}}}})
+	return &airConditionerMappingProvider{public: public, source: source}
+}
+
+func (p *airConditionerMappingProvider) Manifest() providersdk.Manifest {
+	return providersdk.Manifest{ID: "xiaomi-2231ed", Type: "xiaomi", Name: "Xiaomi", Version: "1"}
+}
+func (p *airConditionerMappingProvider) Capabilities() providersdk.Capabilities {
+	return providersdk.Capabilities{Discovery: true, PropertyWrite: true}
+}
+func (p *airConditionerMappingProvider) Initialize(context.Context) error { return nil }
+func (p *airConditionerMappingProvider) Close(context.Context) error      { return nil }
+func (p *airConditionerMappingProvider) DiscoverDevices(context.Context) ([]device.Device, error) {
+	return []device.Device{p.public.Clone()}, nil
+}
+func (p *airConditionerMappingProvider) SourceCatalog(context.Context) ([]providersdk.SourceCatalogDevice, error) {
+	return []providersdk.SourceCatalogDevice{{Device: p.source.Clone(), Catalog: providersdk.SourceCatalogMetadata{Complete: true, Source: "miot-spec-cache"}}}, nil
+}
+func (p *airConditionerMappingProvider) WriteProperty(_ context.Context, request providersdk.PropertyWriteRequest) (device.Device, error) {
+	p.lastWrite = request
+	for endpointIndex := range p.source.Endpoints {
+		for capabilityIndex := range p.source.Endpoints[endpointIndex].Capabilities {
+			for propertyIndex := range p.source.Endpoints[endpointIndex].Capabilities[capabilityIndex].Properties {
+				property := &p.source.Endpoints[endpointIndex].Capabilities[capabilityIndex].Properties[propertyIndex]
+				if p.source.Endpoints[endpointIndex].ID == request.EndpointID && p.source.Endpoints[endpointIndex].Capabilities[capabilityIndex].ID == request.CapabilityID && property.Definition.ID == request.PropertyID {
+					property.Value = request.Value
+				}
+			}
+		}
+	}
+	p.source.Sequence++
+	p.source.LastUpdateAt = time.Now().UTC()
+	p.public.Sequence, p.public.LastUpdateAt = p.source.Sequence, p.source.LastUpdateAt
+	return p.public.Clone(), nil
+}
+
+func numberPointer(value float64) *float64 { return &value }
 
 func newRawMappingProvider() *rawMappingProvider {
 	return &rawMappingProvider{item: device.Device{
@@ -36,7 +135,17 @@ func (p *rawMappingProvider) Capabilities() providersdk.Capabilities {
 func (p *rawMappingProvider) Initialize(context.Context) error { return nil }
 func (p *rawMappingProvider) Close(context.Context) error      { return nil }
 func (p *rawMappingProvider) DiscoverDevices(context.Context) ([]device.Device, error) {
-	return []device.Device{p.item}, nil
+	return []device.Device{p.publicSnapshot()}, nil
+}
+func (p *rawMappingProvider) SourceCatalog(context.Context) ([]providersdk.SourceCatalogDevice, error) {
+	return []providersdk.SourceCatalogDevice{{
+		Device: p.item.Clone(),
+		Catalog: providersdk.SourceCatalogMetadata{
+			Complete: true,
+			Source:   "test-native-spec",
+			Values:   providersdk.SnapshotValueStatuses(p.item),
+		},
+	}}, nil
 }
 func (p *rawMappingProvider) ReadProperty(_ context.Context, request providersdk.PropertyReadRequest) (device.Property, error) {
 	property, _ := p.item.Property(request.EndpointID, request.CapabilityID, request.PropertyID)
@@ -47,7 +156,22 @@ func (p *rawMappingProvider) WriteProperty(_ context.Context, request providersd
 	p.item.Endpoints[0].Capabilities[0].Properties[0].Value = request.Value
 	p.item.Sequence++
 	p.item.LastUpdateAt = time.Now().UTC()
-	return p.item, nil
+	public := p.publicSnapshot()
+	if p.handler != nil {
+		p.handler(public)
+	}
+	return public, nil
+}
+
+func (p *rawMappingProvider) Subscribe(handler func(device.Device)) func() {
+	p.handler = handler
+	return func() { p.handler = nil }
+}
+
+func (p *rawMappingProvider) publicSnapshot() device.Device {
+	item := p.item.Clone()
+	item.Endpoints = nil
+	return item
 }
 
 func TestProviderRouteRelocatesRawPathAndResolvesReverseWrite(t *testing.T) {
@@ -90,11 +214,131 @@ func TestProviderRouteRelocatesRawPathAndResolvesReverseWrite(t *testing.T) {
 	if _, ok := catalog[0].Property("main", "vendor", "firmware-channel"); !ok {
 		t.Fatal("unmapped Provider attribute missing from mapping catalog")
 	}
-	if _, _, err := service.ExecuteProperty(ctx, "raw-switch-1", "main", "switch", "power", device.BoolValue(true)); err != nil {
+	updated, _, err := service.ExecuteProperty(ctx, "raw-switch-1", "main", "switch", "power", device.BoolValue(true))
+	if err != nil {
 		t.Fatal(err)
+	}
+	updatedPower, ok := updated.Property("main", "switch", "power")
+	if !ok || updatedPower.Value.Bool == nil || !*updatedPower.Value.Bool {
+		t.Fatalf("mapped write response = %#v", updatedPower)
 	}
 	if provider.lastWrite.CapabilityID != "vendor" || provider.lastWrite.PropertyID != "raw-power" || provider.lastWrite.Value.Bool == nil || !*provider.lastWrite.Value.Bool {
 		t.Fatalf("raw write = %#v", provider.lastWrite)
+	}
+	if err := service.RefreshDevices(ctx); err != nil {
+		t.Fatal(err)
+	}
+	refreshed, err := service.List(ctx)
+	if err != nil || len(refreshed) != 1 {
+		t.Fatalf("refresh = %#v, %v", refreshed, err)
+	} else if refreshedPower, found := refreshed[0].Property("main", "switch", "power"); !found || refreshedPower.Value.Bool == nil || !*refreshedPower.Value.Bool {
+		t.Fatalf("mapped refreshed property = %#v, found=%v", refreshedPower, found)
+	}
+}
+
+func TestPublicProviderEventUsesCompleteCatalogOnlyInsideMappingBoundary(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, err := application.NewProfileService(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := profiles.CreateBinding(ctx, mapping.Binding{
+		ID: "event-route-raw-power", Stage: mapping.StageProvider, DeviceType: device.TypeSwitch,
+		ProviderID: "raw-main", DeviceID: "raw-switch-1", EndpointID: "main", CapabilityID: "vendor", PropertyID: "raw-power",
+		ModelEndpointID: "main", ModelCapabilityID: "switch", ModelPropertyID: "power", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	provider := newRawMappingProvider()
+	service := application.NewDeviceService(provider, profiles)
+	defer service.Close()
+	events := make(chan device.Device, 1)
+	unsubscribe := service.Subscribe(func(item device.Device) { events <- item })
+	defer unsubscribe()
+	provider.item.Endpoints[0].Capabilities[0].Properties[0].Value = device.BoolValue(true)
+	provider.item.Sequence++
+	provider.item.LastUpdateAt = time.Now().UTC()
+	provider.handler(provider.publicSnapshot())
+	select {
+	case item := <-events:
+		power, found := item.Property("main", "switch", "power")
+		if !found || power.Value.Bool == nil || !*power.Value.Bool {
+			t.Fatalf("manual mapping missing from public event: %#v", item)
+		}
+		if _, leaked := item.Property("main", "vendor", "firmware-channel"); leaked {
+			t.Fatalf("complete source property leaked into public event: %#v", item)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for mapped public event")
+	}
+}
+
+func TestInvalidSourceMappingNeverLeaksCompleteCatalogIntoDeviceRegistry(t *testing.T) {
+	public := device.Device{
+		SchemaVersion: 1, ID: "safe-switch", ProviderID: "failing-source", Name: "Safe Switch", Type: device.TypeSwitch,
+		Availability: device.AvailabilityOnline, Online: true, LastUpdateAt: time.Now().UTC(),
+		Endpoints: []device.Endpoint{{ID: "main", Name: "Main", Type: "main", Capabilities: []device.Capability{{ID: "switch", Type: "switch", Properties: []device.Property{{Definition: device.PropertyDefinition{ID: "power", Name: "Power", Type: device.ValueTypeBool, Readable: true}, Value: device.BoolValue(false)}}}}}},
+	}
+	source := public.Clone()
+	source.Endpoints = append(source.Endpoints, device.Endpoint{ID: "native", Name: "Native", Type: "vendor", Capabilities: []device.Capability{{ID: "miot", Type: "vendor", Properties: []device.Property{{Definition: device.PropertyDefinition{ID: "property-99", Name: "Native secret", Type: device.ValueTypeInt, Readable: true}, Value: device.IntValue(7)}}}}})
+	service := application.NewDeviceService(&failingCatalogProvider{public: public, source: source}, rejectingRawMapper{})
+	defer service.Close()
+	items, err := service.List(context.Background())
+	if err != nil || len(items) != 1 {
+		t.Fatalf("devices = %#v, %v", items, err)
+	}
+	if _, found := items[0].Property("main", "switch", "power"); !found {
+		t.Fatal("safe public unified property was lost during mapping fallback")
+	}
+	if _, leaked := items[0].Property("native", "miot", "property-99"); leaked {
+		t.Fatalf("complete source catalog leaked after mapping failure: %#v", items[0])
+	}
+}
+
+func TestAirConditionerIdentityEnumBindingShowsFourthPropertyAndWritesBack(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, err := application.NewProfileService(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := profiles.CreateBinding(ctx, mapping.Binding{
+		ID: "binding-fan-speed", Stage: mapping.StageProvider, DeviceType: device.TypeAirConditioner,
+		ProviderID: "xiaomi-2231ed", DeviceID: "xiaomi-126772242", EndpointID: "miot-3", CapabilityID: "service-3", PropertyID: "property-1",
+		ModelEndpointID: "main", ModelCapabilityID: "air-conditioner", ModelPropertyID: "fan-speed", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	provider := newAirConditionerMappingProvider()
+	service := application.NewDeviceService(provider, profiles)
+	defer service.Close()
+	items, err := service.List(ctx)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("devices = %#v, %v", items, err)
+	}
+	property, found := items[0].Property("main", "air-conditioner", "fan-speed")
+	if !found || property.Value.String == nil || *property.Value.String != "high" {
+		t.Fatalf("fourth mapped fan-speed property = %#v, found=%v", property, found)
+	}
+	updated, _, err := service.ExecuteProperty(ctx, items[0].ID, "main", "air-conditioner", "fan-speed", device.EnumValue("low"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.lastWrite.EndpointID != "miot-3" || provider.lastWrite.CapabilityID != "service-3" || provider.lastWrite.PropertyID != "property-1" || provider.lastWrite.Value.String == nil || *provider.lastWrite.Value.String != "Low" {
+		t.Fatalf("reverse fan-speed write = %#v", provider.lastWrite)
+	}
+	property, found = updated.Property("main", "air-conditioner", "fan-speed")
+	if !found || property.Value.String == nil || *property.Value.String != "low" {
+		t.Fatalf("updated fan-speed property = %#v, found=%v", property, found)
 	}
 }
 

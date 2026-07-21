@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
+	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 )
 
 const airConditionerCompanionSpec = `{"type":"urn:miot-spec-v2:device:air-conditioner:0000A004:lumi-mcn02:1","description":"Air Conditioner","services":[{"iid":2,"type":"urn:miot-spec-v2:service:air-conditioner:0000780F:lumi-mcn02:1","description":"Air Conditioner","properties":[{"iid":1,"type":"urn:miot-spec-v2:property:on:00000006:lumi-mcn02:1","description":"Switch Status","format":"bool","access":["read","write","notify"]},{"iid":2,"type":"urn:miot-spec-v2:property:mode:00000008:lumi-mcn02:1","description":"Mode","format":"uint8","access":["read","write","notify"],"value-list":[{"value":0,"description":"Auto"},{"value":1,"description":"Cool"},{"value":2,"description":"Dry"},{"value":3,"description":"Heat"},{"value":4,"description":"Fan"}]},{"iid":3,"type":"urn:miot-spec-v2:property:target-temperature:00000021:lumi-mcn02:1","description":"Target Temperature","format":"float","access":["read","write","notify"],"unit":"celsius","value-range":[16,30,1]}]}]}`
@@ -84,6 +85,43 @@ func TestCloudProviderPublishesAirConditionerCompanionWithoutPollingGuessedPrope
 	provider.mu.RUnlock()
 	if len(runtimeMappings) != 3 || runtimeMappings[1].PIID != 2 || runtimeMappings[2].PIID != 3 {
 		t.Fatalf("runtime mappings = %#v", runtimeMappings)
+	}
+}
+
+func TestCloudProviderKeepsCompleteSpecOutOfUnifiedDeviceSnapshot(t *testing.T) {
+	const (
+		model    = "vendor.switch.v1"
+		specType = "urn:miot-spec-v2:device:switch:0000A003:vendor-v1:1"
+		document = `{"type":"urn:miot-spec-v2:device:switch:0000A003:vendor-v1:1","description":"Switch","services":[{"iid":2,"type":"urn:miot-spec-v2:service:switch:0000780C:vendor-v1:1","description":"Switch","properties":[{"iid":1,"type":"urn:miot-spec-v2:property:on:00000006:vendor-v1:1","description":"Switch Status","format":"bool","access":["read","write","notify"]},{"iid":2,"type":"urn:miot-spec-v2:property:temperature:00000020:vendor-v1:1","description":"Temperature","format":"float","access":["read","notify"],"unit":"celsius","value-range":[-20,80,0.1]}]}]}`
+	)
+	config := cloudTestConfig()
+	config.Devices[0].Model = model
+	cache := &memorySpecCache{document: []byte(document), specType: specType, model: model, fetchedAt: time.Now().UTC()}
+	fake := &fakeMIoTCloud{directory: []HubDevice{{DID: "123", Name: "云端开关", Model: model, SpecType: specType}}, values: map[string]any{"2.1": false, "2.2": 23.5}}
+	provider, err := newCloudProvider("xiaomi-miot-cloud-main", "Cloud", config, func() miotCloudClient { return fake }, NewSpecResolver(cache))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := provider.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close(ctx)
+	items, err := provider.DiscoverDevices(ctx)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("devices=%#v err=%v", items, err)
+	}
+	if _, exposed := items[0].Property("miot-2", "service-2", "property-2"); exposed {
+		t.Fatalf("device detail snapshot exposed native cloud property: %#v", items[0])
+	}
+	catalog, err := provider.SourceCatalog(ctx)
+	if err != nil || len(catalog) != 1 || !catalog[0].Catalog.Complete {
+		t.Fatalf("catalog=%#v err=%v", catalog, err)
+	}
+	property, exists := catalog[0].Property("miot-2", "service-2", "property-2")
+	status := catalog[0].Catalog.Values[providersdk.SourceValueKey("miot-2", "service-2", "property-2")]
+	if !exists || property.Value.Number == nil || *property.Value.Number != 23.5 || !status.Known {
+		t.Fatalf("native catalog property=%#v status=%#v", property, status)
 	}
 }
 

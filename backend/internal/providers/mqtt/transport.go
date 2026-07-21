@@ -392,11 +392,21 @@ func uniqueSubscriptions(items []mqttSubscription) []mqttSubscription {
 func subscribeBroker(server *mochimqtt.Server, items []mqttSubscription, handlers transportHandlers) error {
 	for index, item := range uniqueSubscriptions(items) {
 		subscription := item
+		// Mochi invokes retained replay handlers synchronously inside Subscribe,
+		// then invokes the same inline handler with the publisher's original
+		// packet for later live traffic. Unlike a normal MQTT client delivery,
+		// that live packet still carries the publisher's RETAIN bit. Restrict the
+		// retained marker to the synchronous replay phase so server mode has the
+		// same semantics as client mode: retained means historical subscription
+		// replay, not merely that the publisher asked the broker to store it.
+		var replayingRetained atomic.Bool
+		replayingRetained.Store(true)
 		err := server.Subscribe(subscription.Topic, index+1, func(_ *mochimqtt.Client, _ packets.Subscription, packet packets.Packet) {
 			if handlers.onMessage != nil {
-				handlers.onMessage(inboundMessage{topic: packet.TopicName, payload: append([]byte(nil), packet.Payload...), retained: packet.FixedHeader.Retain})
+				handlers.onMessage(inboundMessage{topic: packet.TopicName, payload: append([]byte(nil), packet.Payload...), retained: packet.FixedHeader.Retain && replayingRetained.Load()})
 			}
 		})
+		replayingRetained.Store(false)
 		if err != nil {
 			return fmt.Errorf("subscribe embedded mqtt topic %q: %w", subscription.Topic, err)
 		}

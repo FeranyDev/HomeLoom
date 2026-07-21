@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { Device } from '../types/device'
@@ -175,5 +175,37 @@ describe('BindingManager', () => {
     await screen.findByText('当前值未知')
     expect(screen.queryByText('当前 false')).not.toBeInTheDocument()
     expect(screen.getByText('read timed out')).toBeInTheDocument()
+  })
+
+  it('visualizes format-equivalent and target-only enum values before saving', async () => {
+	const airConditioner: Device = { schemaVersion: 1, id: 'xiaomi-126772242', providerId: 'xiaomi-2231ed', name: '空调伴侣', type: 'air-conditioner', availability: 'online', online: true, lastUpdateAt: new Date().toISOString(), endpoints: [] }
+	const source = { ...airConditioner, endpoints: [{ id: 'miot-3', name: 'Fan Control', type: 'fan-control', capabilities: [{ id: 'service-3', type: 'fan-control', properties: [{ definition: { id: 'property-1', name: 'Fan Level', type: 'enum' as const, enum: ['Auto', 'Low', 'Medium', 'High'], readable: true, writable: true, notifiable: true }, value: { type: 'enum' as const, string: 'High' } }] }] }], catalog: { complete: true, source: 'miot-spec-cache' } }
+	const enumCatalog = vi.fn(async () => ({ providers: [source], models: [{ deviceType: 'air-conditioner' as const, version: 2, builtIn: true, custom: { publisher: { level: 'custom' as const, behavior: 'preserve' }, consumer: { level: 'custom' as const, behavior: 'explicit' } }, parameters: [{ path: { endpointId: 'main', capabilityId: 'air-conditioner', propertyId: 'fan-speed' }, name: '风速档位', level: 'optional' as const, type: 'enum' as const, enum: ['auto', 'low', 'medium', 'high', 'turbo'], readable: true, writable: true, notifiable: true, publisher: { level: 'optional' as const, behavior: 'may-publish' }, consumer: { level: 'optional' as const, behavior: 'may-map' } }] }], consumers: [] }))
+	const api = { listBindings: vi.fn(async () => []), listProfiles: vi.fn(async () => []), create: vi.fn(), update: vi.fn(), remove: vi.fn(), catalog: enumCatalog }
+	render(<BindingManager device={airConditioner} api={api} providerOnly />)
+	const compatibility = await screen.findByRole('status')
+	expect(within(compatibility).getByText('部分兼容，存在模型独有值')).toBeInTheDocument()
+	expect(compatibility).toHaveTextContent('Auto → auto')
+	expect(compatibility).toHaveTextContent('High → high')
+	expect(compatibility).toHaveTextContent('模型独有：turbo')
+	expect(screen.getByText(/来源枚举：Auto \/ Low \/ Medium \/ High/)).toBeInTheDocument()
+	expect(screen.getByText(/模型枚举：auto \/ low \/ medium \/ high \/ turbo/)).toBeInTheDocument()
+	expect(screen.getByRole('button', { name: /保存第.*一.*段路由/ })).toBeEnabled()
+  })
+
+  it('requires an enum Profile when source values cannot be aligned semantically', async () => {
+	const airConditioner: Device = { schemaVersion: 1, id: 'xiaomi-ac', providerId: 'xiaomi-main', name: '空调', type: 'air-conditioner', availability: 'online', online: true, lastUpdateAt: new Date().toISOString(), endpoints: [] }
+	const source = { ...airConditioner, endpoints: [{ id: 'miot-3', name: 'Fan', type: 'fan', capabilities: [{ id: 'service-3', type: 'fan', properties: [{ definition: { id: 'property-1', name: 'Fan Level', type: 'enum' as const, enum: ['Automatic', 'Silent'], readable: true, writable: true, notifiable: true }, value: { type: 'enum' as const, string: 'Silent' } }] }] }], catalog: { complete: true, source: 'miot-spec-cache' } }
+	const enumCatalog = vi.fn(async () => ({ providers: [source], models: [{ deviceType: 'air-conditioner' as const, version: 2, builtIn: true, custom: { publisher: { level: 'custom' as const, behavior: 'preserve' }, consumer: { level: 'custom' as const, behavior: 'explicit' } }, parameters: [{ path: { endpointId: 'main', capabilityId: 'air-conditioner', propertyId: 'fan-speed' }, name: '风速档位', level: 'optional' as const, type: 'enum' as const, enum: ['auto', 'low', 'medium', 'high'], readable: true, writable: true, notifiable: true, publisher: { level: 'optional' as const, behavior: 'may-publish' }, consumer: { level: 'optional' as const, behavior: 'may-map' } }] }], consumers: [] }))
+	const api = { listBindings: vi.fn(async () => []), listProfiles: vi.fn(async () => [{ schemaVersion: 1 as const, id: 'fan-level-map', version: 1, kind: 'provider' as const, inputType: 'enum' as const, outputType: 'enum' as const, transforms: [{ type: 'enum' as const, values: { Automatic: 'auto', Silent: 'low' } }], builtIn: false }]), create: vi.fn(), update: vi.fn(), remove: vi.fn(), catalog: enumCatalog }
+	render(<BindingManager device={airConditioner} api={api} providerOnly />)
+	const compatibility = await screen.findByRole('status')
+	expect(within(compatibility).getByText('语义不一致，需要 Profile')).toBeInTheDocument()
+	expect(compatibility).toHaveTextContent('无法自动对齐：Automatic / Silent')
+	const save = screen.getByRole('button', { name: /保存第.*一.*段路由/ })
+	expect(save).toBeDisabled()
+	await userEvent.selectOptions(screen.getByLabelText('映射转换 Profile'), 'fan-level-map')
+	expect(within(compatibility).getByText('由 Profile fan-level-map 转换')).toBeInTheDocument()
+	expect(save).toBeEnabled()
   })
 })

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,6 +31,7 @@ var (
 type DeviceService struct {
 	provider       providersdk.Provider
 	discoverer     providersdk.Discoverer
+	cataloger      providersdk.SourceCataloger
 	reader         providersdk.PropertyReader
 	writer         providersdk.PropertyWriter
 	executor       providersdk.CommandExecutor
@@ -212,11 +214,12 @@ func (s *DeviceService) SetCommandHistoryLimit(limit int) { s.commands.SetMaxIte
 
 func NewDeviceService(provider providersdk.Provider, dependencies ...any) *DeviceService {
 	discoverer, _ := provider.(providersdk.Discoverer)
+	cataloger, _ := provider.(providersdk.SourceCataloger)
 	reader, _ := provider.(providersdk.PropertyReader)
 	writer, _ := provider.(providersdk.PropertyWriter)
 	executor, _ := provider.(providersdk.CommandExecutor)
 	service := &DeviceService{
-		provider: provider, discoverer: discoverer, reader: reader, writer: writer, executor: executor,
+		provider: provider, discoverer: discoverer, cataloger: cataloger, reader: reader, writer: writer, executor: executor,
 		registry: registry.NewDeviceRegistry(nil),
 		states:   statestore.NewStore(), commands: commandtracker.NewTracker(5 * time.Second), commandQueue: newCommandCoordinator(),
 		listeners: make(map[uint64]*deviceSubscription), stateListeners: make(map[uint64]*stateSubscription), snapshotSeq: make(map[string]uint64), disabled: make(map[string]struct{}), propertyOps: make(map[domainstate.Key]*propertyOperation),
@@ -236,10 +239,26 @@ func NewDeviceService(provider providersdk.Provider, dependencies ...any) *Devic
 	if discoverer != nil {
 		items, _ = discoverer.DiscoverDevices(context.Background())
 	}
+	publicItems := make(map[string]device.Device, len(items))
 	for _, item := range items {
-		mapped, err := service.mapSnapshot(item)
-		if err == nil {
-			item = mapped
+		publicItems[item.ID] = item.Clone()
+	}
+	items = service.sourceSnapshots(context.Background(), items)
+	for _, source := range items {
+		item, err := service.mapSnapshot(source)
+		if err != nil {
+			// A SourceCatalog snapshot can contain every Provider-native field.
+			// Never put it in the public registry when a binding or conversion is
+			// invalid. Fall back to the Provider's deliberately narrow discovery
+			// snapshot, which can still expose its valid built-in model mapping.
+			public, exists := publicItems[source.ID]
+			if !exists {
+				continue
+			}
+			item, err = service.mapSnapshot(public)
+			if err != nil {
+				continue
+			}
 		}
 		item.NormalizeAvailability()
 		service.registry.Upsert(item)
@@ -337,6 +356,9 @@ func (s *DeviceService) SetDeviceEnabled(ctx context.Context, id string, enabled
 			for _, snapshot := range snapshots {
 				if snapshot.ID == id {
 					item = snapshot
+					if projected, projectErr := s.projectLatestSnapshot(ctx, item); projectErr == nil {
+						item = projected
+					}
 					item.Disabled, item.Removed = false, false
 					item.NormalizeAvailability()
 					break
@@ -396,7 +418,7 @@ func (s *DeviceService) Simulate(ctx context.Context, request providersdk.Simula
 	if err != nil {
 		return item, err
 	}
-	mapped, mapErr := s.mapSnapshot(item)
+	mapped, mapErr := s.projectLatestSnapshot(ctx, item)
 	if mapErr != nil {
 		return device.Device{}, mapErr
 	}
@@ -416,7 +438,7 @@ func (s *DeviceService) RefreshDevices(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	for _, item := range items {
+	for _, item := range s.sourceSnapshots(ctx, items) {
 		s.resetSnapshotSequence(item.ID)
 		s.handleEvent(eventbus.Event{DeviceID: item.ID, Payload: item, TraceID: CorrelationID(ctx)})
 	}
@@ -572,13 +594,14 @@ func (s *DeviceService) SetPower(ctx context.Context, id string, power bool) (de
 	if err != nil {
 		return device.Device{}, err
 	}
+	value = s.alignProviderEnumValue(ctx, id, providerPath, value)
 	updated, err := s.writer.WriteProperty(ctx, providersdk.PropertyWriteRequest{
 		DeviceID: id, EndpointID: providerPath.EndpointID, CapabilityID: providerPath.CapabilityID, PropertyID: providerPath.PropertyID, Value: value,
 	})
 	if err != nil {
 		return device.Device{}, err
 	}
-	return s.mapSnapshot(updated)
+	return s.projectLatestSnapshot(ctx, updated)
 }
 
 func (s *DeviceService) ReadProperty(ctx context.Context, deviceID, endpointID, capabilityID, propertyID string) (device.Property, error) {
@@ -616,6 +639,13 @@ func (s *DeviceService) ReadProperty(ctx context.Context, deviceID, endpointID, 
 	}
 	property.Value = mapped
 	property.Definition.ID = propertyID
+	if resolver, ok := s.propertyMapper.(ModelDefinitionMapper); ok {
+		path := device.ParameterPath{EndpointID: endpointID, CapabilityID: capabilityID, PropertyID: propertyID}
+		if definition, found := resolver.ResolveModelDefinition(item.Type, path, property.Definition); found {
+			property.Definition = definition
+			property.Value = alignEnumValue(property.Value, definition.Enum)
+		}
+	}
 	return property, nil
 }
 
@@ -754,6 +784,7 @@ func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointI
 		current, _ := s.commands.Get(command.ID)
 		return device.Device{}, current, pathErr
 	}
+	providerValue = s.alignProviderEnumValue(operation.ctx, deviceID, providerPath, providerValue)
 	item, err := s.writer.WriteProperty(operation.ctx, providersdk.PropertyWriteRequest{
 		DeviceID: deviceID, EndpointID: providerPath.EndpointID, CapabilityID: providerPath.CapabilityID, PropertyID: providerPath.PropertyID, Value: providerValue,
 	})
@@ -773,7 +804,7 @@ func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointI
 		return device.Device{}, current, ErrCommandSuperseded
 	}
 	s.commands.Accepted(command.ID)
-	if mapped, mapErr := s.mapSnapshot(item); mapErr == nil {
+	if mapped, mapErr := s.projectLatestSnapshot(operation.ctx, item); mapErr == nil {
 		item = mapped
 	}
 	current, _ := s.commands.Get(command.ID)
@@ -928,6 +959,9 @@ func (s *DeviceService) ExecuteCommand(ctx context.Context, request providersdk.
 		s.metrics.commandsRejected.Add(1)
 		current, _ := s.commands.Get(command.ID)
 		return device.Device{}, current, err
+	}
+	if mapped, mapErr := s.projectLatestSnapshot(ctx, item); mapErr == nil {
+		item = mapped
 	}
 	s.registry.Upsert(item)
 	s.commands.Confirmed(command.ID)
@@ -1113,7 +1147,10 @@ func (s *DeviceService) handleEvent(event eventbus.Event) {
 		return
 	}
 	s.metrics.eventsProcessed.Add(1)
-	mapped, err := s.mapSnapshot(item)
+	// Provider events are deliberately public/narrow snapshots. Pull the
+	// Provider-native snapshot from SourceCatalog only inside the mapping
+	// boundary so raw attributes can never escape through the event stream.
+	mapped, err := s.projectLatestSnapshot(context.Background(), item)
 	if err != nil {
 		return
 	}
@@ -1193,6 +1230,7 @@ func (s *DeviceService) mapSnapshot(item device.Device) (device.Device, error) {
 						continue
 					}
 				}
+				value = alignEnumValue(value, definition.Enum)
 				property.Definition, property.Value = definition, value
 				target := ensureCapability(&result, targetPath, endpoint.Name, endpoint.Type, capability.Type)
 				for _, existing := range target.Properties {
@@ -1208,6 +1246,101 @@ func (s *DeviceService) mapSnapshot(item device.Device) (device.Device, error) {
 		return device.Device{}, fmt.Errorf("normalize mapped device %q: %w", item.ID, err)
 	}
 	return result, nil
+}
+
+// sourceSnapshots supplies the mapping engine with Provider-native fields
+// while keeping those fields out of the public registry. Providers with a
+// complete source catalog (for example Xiaomi MIoT) can therefore expose a
+// narrow unified snapshot from DiscoverDevices without breaking explicit
+// Provider -> model bindings.
+func (s *DeviceService) sourceSnapshots(ctx context.Context, fallback []device.Device) []device.Device {
+	if s.propertyMapper == nil || s.cataloger == nil {
+		return fallback
+	}
+	catalog, err := s.cataloger.SourceCatalog(ctx)
+	if err != nil || len(catalog) == 0 {
+		return fallback
+	}
+	byID := make(map[string]device.Device, len(catalog))
+	for _, item := range catalog {
+		byID[item.ID] = item.Device.Clone()
+	}
+	result := make([]device.Device, 0, len(fallback))
+	for _, item := range fallback {
+		if source, exists := byID[item.ID]; exists {
+			result = append(result, source)
+		} else {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func (s *DeviceService) projectLatestSnapshot(ctx context.Context, fallback device.Device) (device.Device, error) {
+	items := s.sourceSnapshots(ctx, []device.Device{fallback})
+	if len(items) == 1 {
+		fallback = items[0]
+	}
+	return s.mapSnapshot(fallback)
+}
+
+// alignProviderEnumValue preserves identity mappings across harmless enum
+// spelling differences such as MIoT "High" and unified-model "high". A real
+// semantic conversion still requires a Profile; this only accepts a unique
+// case/space/hyphen-equivalent source option.
+func (s *DeviceService) alignProviderEnumValue(ctx context.Context, deviceID string, path device.ParameterPath, value device.PropertyValue) device.PropertyValue {
+	if value.Type != device.ValueTypeEnum || value.String == nil || s.cataloger == nil {
+		return value
+	}
+	catalog, err := s.cataloger.SourceCatalog(ctx)
+	if err != nil {
+		return value
+	}
+	for _, item := range catalog {
+		if item.ID != deviceID {
+			continue
+		}
+		property, found := item.Property(path.EndpointID, path.CapabilityID, path.PropertyID)
+		if found {
+			return alignEnumValue(value, property.Definition.Enum)
+		}
+	}
+	return value
+}
+
+func alignEnumValue(value device.PropertyValue, options []string) device.PropertyValue {
+	if value.Type != device.ValueTypeEnum || value.String == nil || len(options) == 0 {
+		return value
+	}
+	for _, option := range options {
+		if option == *value.String {
+			return value
+		}
+	}
+	canonical := canonicalEnumToken(*value.String)
+	match := ""
+	for _, option := range options {
+		if canonicalEnumToken(option) != canonical {
+			continue
+		}
+		if match != "" {
+			return value
+		}
+		match = option
+	}
+	if match == "" {
+		return value
+	}
+	return device.EnumValue(match)
+}
+
+func canonicalEnumToken(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.NewReplacer("_", "-", " ", "-").Replace(value)
+	for strings.Contains(value, "--") {
+		value = strings.ReplaceAll(value, "--", "-")
+	}
+	return strings.Trim(value, "-")
 }
 
 func ensureCapability(item *device.Device, path device.ParameterPath, endpointName, endpointType, capabilityType string) *device.Capability {

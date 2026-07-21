@@ -42,6 +42,7 @@ type CloudProvider struct {
 	client        miotCloudClient
 	directory     []HubDevice
 	devices       map[string]device.Device
+	sourceDevices map[string]device.Device
 	rawProperties map[string]PropertyMapping
 	rawActions    map[string]ActionMapping
 	catalog       map[string]providersdk.SourceCatalogMetadata
@@ -88,7 +89,7 @@ func newCloudProvider(id, name string, config CloudConfig, factory cloudClientFa
 	provider := &CloudProvider{
 		id: id, name: name, config: config, factory: factory, resolver: resolver,
 		local:   newUDPMIoTLocalClient(localMIoTTimeout(config.requestTimeout())),
-		devices: make(map[string]device.Device), rawProperties: make(map[string]PropertyMapping), rawActions: make(map[string]ActionMapping),
+		devices: make(map[string]device.Device), sourceDevices: make(map[string]device.Device), rawProperties: make(map[string]PropertyMapping), rawActions: make(map[string]ActionMapping),
 		catalog: make(map[string]providersdk.SourceCatalogMetadata), valueStatus: make(map[string]providersdk.SourceValueStatus), listeners: make(map[uint64]func(device.Device)),
 	}
 	for _, configured := range config.Devices {
@@ -98,6 +99,7 @@ func newCloudProvider(id, name string, config CloudConfig, factory cloudClientFa
 			return nil, fmt.Errorf("Xiaomi MIoT cloud device %q model mapping: %w", configured.ID, err)
 		}
 		provider.devices[item.ID] = item
+		provider.sourceDevices[item.ID] = item.Clone()
 		provider.catalog[item.ID] = providersdk.SourceCatalogMetadata{Complete: false, Source: "configured-mapping-fallback", Model: configured.Model, Error: "MIoT Spec has not been loaded"}
 	}
 	return provider, nil
@@ -173,6 +175,10 @@ func (p *CloudProvider) Close(ctx context.Context) error {
 		item.SetOnline(false)
 		p.devices[id] = item
 	}
+	for id, item := range p.sourceDevices {
+		item.SetOnline(false)
+		p.sourceDevices[id] = item
+	}
 	p.mu.Unlock()
 	return nil
 }
@@ -192,13 +198,20 @@ func (p *CloudProvider) Reconfigure(ctx context.Context, replacement providersdk
 	}
 	p.mu.Lock()
 	updated := make(map[string]device.Device, len(next.devices))
+	updatedSources := make(map[string]device.Device, len(next.sourceDevices))
 	for id, item := range next.devices {
 		if previous, exists := p.devices[id]; exists {
 			item = preserveDeviceState(item, previous)
 		}
 		updated[id] = item
 	}
-	p.name, p.config, p.factory, p.devices = next.name, next.config, next.factory, updated
+	for id, item := range next.sourceDevices {
+		if previous, exists := p.sourceDevices[id]; exists {
+			item = preserveDeviceState(item, previous)
+		}
+		updatedSources[id] = item
+	}
+	p.name, p.config, p.factory, p.devices, p.sourceDevices = next.name, next.config, next.factory, updated, updatedSources
 	p.rawProperties, p.rawActions, p.catalog = next.rawProperties, next.rawActions, next.catalog
 	p.mu.Unlock()
 	go func() {
@@ -247,8 +260,8 @@ func (p *CloudProvider) DiscoverCloudDevices(ctx context.Context) ([]HubDevice, 
 
 func (p *CloudProvider) SourceCatalog(context.Context) ([]providersdk.SourceCatalogDevice, error) {
 	p.mu.RLock()
-	result := make([]providersdk.SourceCatalogDevice, 0, len(p.devices))
-	for id, item := range p.devices {
+	result := make([]providersdk.SourceCatalogDevice, 0, len(p.sourceDevices))
+	for id, item := range p.sourceDevices {
 		metadata := p.catalog[id]
 		metadata.Values = make(map[string]providersdk.SourceValueStatus)
 		prefix := id + "\x00"
@@ -317,6 +330,7 @@ func (p *CloudProvider) loadCloudSpecs(ctx context.Context, directory []HubDevic
 	}
 	sort.Slice(loaded, func(i, j int) bool { return loaded[i].configured.ID < loaded[j].configured.ID })
 	nextDevices := make(map[string]device.Device, len(configuredDevices))
+	nextSourceDevices := make(map[string]device.Device, len(configuredDevices))
 	nextProperties := make(map[string]PropertyMapping)
 	nextActions := make(map[string]ActionMapping)
 	nextCatalog := make(map[string]providersdk.SourceCatalogMetadata, len(configuredDevices))
@@ -334,13 +348,14 @@ func (p *CloudProvider) loadCloudSpecs(ctx context.Context, directory []HubDevic
 		}
 		item := buildDevice(p.id, configured)
 		item.RuntimeMode = device.RuntimeModePending
+		sourceItem := item.Clone()
 		metadata := providersdk.SourceCatalogMetadata{Complete: false, Source: "configured-mapping-fallback", Model: model, SpecType: hub.SpecType}
 		if loadedItem.err != nil {
 			metadata.Error = loadedItem.err.Error()
 		} else {
 			var properties map[string]PropertyMapping
 			var actions map[string]ActionMapping
-			item, properties, actions = mergeMIoTSpec(item, configured, loadedItem.document)
+			sourceItem, properties, actions = mergeMIoTSpec(sourceItem, configured, loadedItem.document)
 			for key, mapping := range properties {
 				nextProperties[key] = mapping
 			}
@@ -351,6 +366,7 @@ func (p *CloudProvider) loadCloudSpecs(ctx context.Context, directory []HubDevic
 		}
 		if hub.Online != nil {
 			item.SetOnline(*hub.Online)
+			sourceItem.SetOnline(*hub.Online)
 		}
 		p.mu.RLock()
 		previous, exists := p.devices[item.ID]
@@ -361,10 +377,19 @@ func (p *CloudProvider) loadCloudSpecs(ctx context.Context, directory []HubDevic
 		if exists && !automapped {
 			item = preserveDeviceState(item, previous)
 		}
-		nextDevices[item.ID], nextCatalog[item.ID] = item, metadata
+		p.mu.RLock()
+		previousSource, sourceExists := p.sourceDevices[sourceItem.ID]
+		p.mu.RUnlock()
+		if sourceExists && !automapped {
+			sourceItem = preserveDeviceState(sourceItem, previousSource)
+		} else {
+			sourceItem.Availability, sourceItem.Online = item.Availability, item.Online
+			sourceItem.Sequence, sourceItem.LastUpdateAt, sourceItem.RuntimeMode = item.Sequence, item.LastUpdateAt, item.RuntimeMode
+		}
+		nextDevices[item.ID], nextSourceDevices[item.ID], nextCatalog[item.ID] = item, sourceItem, metadata
 	}
 	p.mu.Lock()
-	p.config.Devices, p.devices, p.rawProperties, p.rawActions, p.catalog = nextConfigured, nextDevices, nextProperties, nextActions, nextCatalog
+	p.config.Devices, p.devices, p.sourceDevices, p.rawProperties, p.rawActions, p.catalog = nextConfigured, nextDevices, nextSourceDevices, nextProperties, nextActions, nextCatalog
 	p.mu.Unlock()
 }
 
@@ -386,7 +411,13 @@ func (p *CloudProvider) ReadProperty(ctx context.Context, request providersdk.Pr
 	}
 	updated := p.updateCloudProperty(configured.ID, mapping, value)
 	p.broadcastCloud(updated)
-	property, _ := updated.Property(mapping.EndpointID, mapping.CapabilityID, mapping.PropertyID)
+	property, ok := updated.Property(mapping.EndpointID, mapping.CapabilityID, mapping.PropertyID)
+	if !ok {
+		p.mu.RLock()
+		source := p.sourceDevices[configured.ID]
+		p.mu.RUnlock()
+		property, _ = source.Property(mapping.EndpointID, mapping.CapabilityID, mapping.PropertyID)
+	}
 	return property, nil
 }
 
@@ -403,6 +434,12 @@ func (p *CloudProvider) WriteProperty(ctx context.Context, request providersdk.P
 		return device.Device{}, providersdk.ErrDeviceNotFound
 	}
 	property, ok := item.Property(mapping.EndpointID, mapping.CapabilityID, mapping.PropertyID)
+	if !ok {
+		p.mu.RLock()
+		source := p.sourceDevices[configured.ID]
+		p.mu.RUnlock()
+		property, ok = source.Property(mapping.EndpointID, mapping.CapabilityID, mapping.PropertyID)
+	}
 	if !ok {
 		return device.Device{}, providersdk.ErrPropertyUnsupported
 	}
@@ -493,6 +530,10 @@ func (p *CloudProvider) setRuntimeMode(id string, mode device.RuntimeMode) {
 	p.sequence++
 	item.Sequence, item.LastUpdateAt = p.sequence, time.Now().UTC()
 	p.devices[id] = item
+	if source, ok := p.sourceDevices[id]; ok {
+		source.RuntimeMode, source.Sequence, source.LastUpdateAt = mode, item.Sequence, item.LastUpdateAt
+		p.sourceDevices[id] = source
+	}
 	p.mu.Unlock()
 	p.broadcastCloud(item.Clone())
 }
@@ -744,11 +785,16 @@ func (p *CloudProvider) updateCloudProperty(id string, mapping PropertyMapping, 
 	p.mu.Lock()
 	item := p.devices[id]
 	setObservedProperty(&item, mapping.EndpointID, mapping.CapabilityID, mapping.PropertyID, value)
+	source := p.sourceDevices[id]
+	setObservedProperty(&source, mapping.EndpointID, mapping.CapabilityID, mapping.PropertyID, value)
 	p.valueStatus[sourcePropertyKey(id, mapping.EndpointID, mapping.CapabilityID, mapping.PropertyID)] = providersdk.SourceValueStatus{Known: true, Available: true, ObservedAt: time.Now().UTC()}
 	p.sequence++
 	item.Sequence, item.LastUpdateAt = p.sequence, time.Now().UTC()
 	item.SetOnline(true)
 	p.devices[id] = item
+	source.Sequence, source.LastUpdateAt, source.RuntimeMode = item.Sequence, item.LastUpdateAt, item.RuntimeMode
+	source.SetOnline(true)
+	p.sourceDevices[id] = source
 	p.mu.Unlock()
 	return item.Clone()
 }

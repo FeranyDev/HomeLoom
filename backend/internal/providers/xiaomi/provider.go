@@ -38,6 +38,7 @@ type Provider struct {
 	client        hubClient
 	cloud         homeCloudClient
 	devices       map[string]device.Device
+	sourceDevices map[string]device.Device
 	byDID         map[string]string
 	routes        map[string]deviceRoute
 	directory     []HubDevice
@@ -94,7 +95,7 @@ func newProvider(id, name string, config Config, factory clientFactory) (*Provid
 }
 
 func newProviderWithResolver(id, name string, config Config, factory clientFactory, resolver *SpecResolver) (*Provider, error) {
-	provider := &Provider{id: id, name: name, config: config, factory: factory, resolver: resolver, devices: make(map[string]device.Device), byDID: make(map[string]string), routes: make(map[string]deviceRoute), rawProperties: make(map[string]PropertyMapping), rawActions: make(map[string]ActionMapping), catalog: make(map[string]providersdk.SourceCatalogMetadata), valueStatus: make(map[string]providersdk.SourceValueStatus), listeners: make(map[uint64]func(device.Device))}
+	provider := &Provider{id: id, name: name, config: config, factory: factory, resolver: resolver, devices: make(map[string]device.Device), sourceDevices: make(map[string]device.Device), byDID: make(map[string]string), routes: make(map[string]deviceRoute), rawProperties: make(map[string]PropertyMapping), rawActions: make(map[string]ActionMapping), catalog: make(map[string]providersdk.SourceCatalogMetadata), valueStatus: make(map[string]providersdk.SourceValueStatus), listeners: make(map[uint64]func(device.Device))}
 	for _, configured := range config.Devices {
 		item := buildDevice(id, configured)
 		item.RuntimeMode = device.RuntimeModePending
@@ -102,6 +103,7 @@ func newProviderWithResolver(id, name string, config Config, factory clientFacto
 			return nil, fmt.Errorf("Xiaomi device %q model mapping: %w", configured.ID, err)
 		}
 		provider.devices[item.ID] = item
+		provider.sourceDevices[item.ID] = item.Clone()
 		provider.byDID[configured.DID] = item.ID
 		provider.catalog[item.ID] = providersdk.SourceCatalogMetadata{Complete: false, Source: "configured-mapping-fallback", Model: configured.Model, Error: "MIoT Spec has not been loaded"}
 	}
@@ -243,6 +245,10 @@ func (p *Provider) Close(ctx context.Context) error {
 		item.SetOnline(false)
 		p.devices[id] = item
 	}
+	for id, item := range p.sourceDevices {
+		item.SetOnline(false)
+		p.sourceDevices[id] = item
+	}
 	p.mu.Unlock()
 	return err
 }
@@ -271,6 +277,7 @@ func (p *Provider) Reconfigure(ctx context.Context, replacement providersdk.Prov
 		return false, nil
 	}
 	updated := make(map[string]device.Device, len(next.devices))
+	updatedSources := make(map[string]device.Device, len(next.sourceDevices))
 	for id, item := range next.devices {
 		item = item.Clone()
 		if previous, exists := p.devices[id]; exists {
@@ -278,7 +285,13 @@ func (p *Provider) Reconfigure(ctx context.Context, replacement providersdk.Prov
 		}
 		updated[id] = item
 	}
-	p.name, p.config, p.factory, p.devices = next.name, next.config, next.factory, updated
+	for id, item := range next.sourceDevices {
+		if previous, exists := p.sourceDevices[id]; exists {
+			item = preserveDeviceState(item, previous)
+		}
+		updatedSources[id] = item
+	}
+	p.name, p.config, p.factory, p.devices, p.sourceDevices = next.name, next.config, next.factory, updated, updatedSources
 	p.rawProperties, p.rawActions, p.catalog = next.rawProperties, next.rawActions, next.catalog
 	p.byDID = make(map[string]string, len(next.byDID))
 	for did, id := range next.byDID {
@@ -390,7 +403,13 @@ func (p *Provider) ReadProperty(ctx context.Context, request providersdk.Propert
 	}
 	updated := p.updateProperty(configured.ID, mapping, value)
 	p.broadcast(updated)
-	property, _ := updated.Property(mapping.EndpointID, mapping.CapabilityID, mapping.PropertyID)
+	property, ok := updated.Property(mapping.EndpointID, mapping.CapabilityID, mapping.PropertyID)
+	if !ok {
+		p.mu.RLock()
+		source := p.sourceDevices[configured.ID]
+		p.mu.RUnlock()
+		property, _ = source.Property(mapping.EndpointID, mapping.CapabilityID, mapping.PropertyID)
+	}
 	return property, nil
 }
 
@@ -407,6 +426,12 @@ func (p *Provider) WriteProperty(ctx context.Context, request providersdk.Proper
 		return device.Device{}, providersdk.ErrDeviceNotFound
 	}
 	property, ok := current.Property(mapping.EndpointID, mapping.CapabilityID, mapping.PropertyID)
+	if !ok {
+		p.mu.RLock()
+		source := p.sourceDevices[request.DeviceID]
+		p.mu.RUnlock()
+		property, ok = source.Property(mapping.EndpointID, mapping.CapabilityID, mapping.PropertyID)
+	}
 	if !ok || property.Definition.Type != request.Value.Type {
 		return device.Device{}, providersdk.ErrPropertyInvalid
 	}
@@ -627,6 +652,10 @@ func (p *Provider) setRuntimeMode(id string, mode device.RuntimeMode) {
 	p.sequence++
 	item.Sequence, item.LastUpdateAt = p.sequence, time.Now().UTC()
 	p.devices[id] = item
+	if source, ok := p.sourceDevices[id]; ok {
+		source.RuntimeMode, source.Sequence, source.LastUpdateAt = mode, item.Sequence, item.LastUpdateAt
+		p.sourceDevices[id] = source
+	}
 	p.mu.Unlock()
 	p.broadcast(item.Clone())
 }
@@ -780,12 +809,17 @@ func (p *Provider) updateProperty(id string, mapping PropertyMapping, value devi
 	p.mu.Lock()
 	item := p.devices[id]
 	setObservedProperty(&item, mapping.EndpointID, mapping.CapabilityID, mapping.PropertyID, value)
+	source := p.sourceDevices[id]
+	setObservedProperty(&source, mapping.EndpointID, mapping.CapabilityID, mapping.PropertyID, value)
 	p.valueStatus[sourcePropertyKey(id, mapping.EndpointID, mapping.CapabilityID, mapping.PropertyID)] = providersdk.SourceValueStatus{Known: true, Available: true, ObservedAt: time.Now().UTC()}
 	p.sequence++
 	item.Sequence = p.sequence
 	item.LastUpdateAt = time.Now().UTC()
 	item.SetOnline(true)
 	p.devices[id] = item
+	source.Sequence, source.LastUpdateAt, source.RuntimeMode = item.Sequence, item.LastUpdateAt, item.RuntimeMode
+	source.SetOnline(true)
+	p.sourceDevices[id] = source
 	p.mu.Unlock()
 	return item.Clone()
 }
