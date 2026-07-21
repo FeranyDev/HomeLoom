@@ -105,6 +105,16 @@ func OpenForBackup(ctx context.Context, databaseURL, keyPath string) (*Store, er
 }
 
 func (s *Store) initialize(ctx context.Context) error {
+	// Provider routes are one-to-many from a source property. Remove the old
+	// source-side unique index through GORM before synchronizing the current
+	// non-unique lookup index; the model-side unique index remains authoritative
+	// for deterministic reverse writes.
+	migrator := s.orm.WithContext(ctx).Migrator()
+	if migrator.HasIndex(&mappingBindingRow{}, "mapping_provider_source_unique") {
+		if err := migrator.DropIndex(&mappingBindingRow{}, "mapping_provider_source_unique"); err != nil {
+			return fmt.Errorf("update Provider mapping source index: %w", err)
+		}
+	}
 	if err := s.orm.WithContext(ctx).AutoMigrate(currentModels()...); err != nil {
 		return fmt.Errorf("synchronize PostgreSQL models: %w", err)
 	}

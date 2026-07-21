@@ -30,7 +30,7 @@ describe('BindingManager', () => {
 
     expect(await screen.findByText('模型默认（DEFAULT）')).toBeInTheDocument()
     expect(screen.getByText('1 / 1 生效')).toBeInTheDocument()
-    expect(screen.getByText(/路径与类型一致时自动生效/)).toBeInTheDocument()
+    expect(screen.getByText(/目标未被手工路由占用时生效/)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '编辑默认映射 power' }))
     expect(screen.getByText(/正在修改默认映射/)).toBeInTheDocument()
     await userEvent.selectOptions(screen.getByLabelText('映射转换 Profile'), 'builtin-active-low')
@@ -60,6 +60,23 @@ describe('BindingManager', () => {
     await userEvent.selectOptions(screen.getByLabelText('映射转换 Profile'), 'builtin-active-low')
     await userEvent.click(screen.getByRole('button', { name: '保存路由修改' }))
     await waitFor(() => expect(update).toHaveBeenCalledWith('current-route', expect.objectContaining({ id: 'current-route', profileId: 'builtin-active-low' })))
+  })
+
+  it('keeps a non-conflicting default while one source fans out through a manual route', async () => {
+    const current: MappingBinding = { id: 'mirror-route', stage: 'provider', providerId: device.providerId, deviceId: device.id, deviceType: 'switch', endpointId: 'main', capabilityId: 'switch', propertyId: 'power', modelEndpointId: 'main', modelCapabilityId: 'aux', modelPropertyId: 'mirrored-power', enabled: true }
+    const fanOutCatalog = vi.fn(async () => ({
+      ...(await catalog()),
+      models: [{ ...(await catalog()).models[0], parameters: [
+        ...(await catalog()).models[0].parameters,
+        { path: { endpointId: 'main', capabilityId: 'aux', propertyId: 'mirrored-power' }, name: '镜像开关', level: 'custom' as const, type: 'bool' as const, readable: true, writable: true, notifiable: true, publisher: { level: 'custom' as const, behavior: 'explicit' }, consumer: { level: 'custom' as const, behavior: 'explicit' } },
+      ] }],
+    }))
+    const api = { listBindings: vi.fn(async () => [current]), listProfiles: vi.fn(async () => []), create: vi.fn(), update: vi.fn(), remove: vi.fn(), catalog: fanOutCatalog }
+    render(<BindingManager device={device} api={api} providerOnly />)
+    expect(await screen.findByText('2 / 2 生效')).toBeInTheDocument()
+    expect(screen.getByText('模型默认（DEFAULT）')).toBeInTheDocument()
+    expect(screen.getByText(/同一来源可以保留多条/)).toBeInTheDocument()
+    expect(screen.getByText(/main\.switch\.power → main\.aux\.mirrored-power/)).toBeInTheDocument()
   })
 
   it('creates a visual Provider to unified-model route', async () => {

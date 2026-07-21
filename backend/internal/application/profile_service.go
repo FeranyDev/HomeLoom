@@ -47,7 +47,7 @@ type ProfileService struct {
 	profiles         map[string]mapping.Profile
 	builtIns         map[string]mapping.Profile
 	bindings         map[string]mapping.Binding
-	bindingsByKey    map[string]string
+	bindingsByKey    map[string][]string
 	bindingsByModel  map[string]string
 	customProperties map[string]mapping.CustomModelProperty
 	customModels     map[device.Type]mapping.CustomModel
@@ -56,7 +56,7 @@ type ProfileService struct {
 }
 
 func NewProfileService(ctx context.Context, store ProfileStore) (*ProfileService, error) {
-	service := &ProfileService{profiles: make(map[string]mapping.Profile), builtIns: make(map[string]mapping.Profile), bindings: make(map[string]mapping.Binding), bindingsByKey: make(map[string]string), bindingsByModel: make(map[string]string), customProperties: make(map[string]mapping.CustomModelProperty), customModels: make(map[device.Type]mapping.CustomModel), store: store}
+	service := &ProfileService{profiles: make(map[string]mapping.Profile), builtIns: make(map[string]mapping.Profile), bindings: make(map[string]mapping.Binding), bindingsByKey: make(map[string][]string), bindingsByModel: make(map[string]string), customProperties: make(map[string]mapping.CustomModelProperty), customModels: make(map[device.Type]mapping.CustomModel), store: store}
 	for _, item := range BuiltInProfiles() {
 		if err := mapping.Validate(item); err != nil {
 			return nil, fmt.Errorf("validate built-in mapping profile %q: %w", item.ID, err)
@@ -115,11 +115,11 @@ func NewProfileService(ctx context.Context, store ProfileStore) (*ProfileService
 		if err := service.validateBindingLocked(item); err != nil {
 			return nil, fmt.Errorf("validate stored mapping binding %q: %w", item.ID, err)
 		}
-		if _, duplicate := service.bindingsByKey[item.Key()]; duplicate {
+		if item.EffectiveStage() == mapping.StageConsumer && len(service.bindingsByKey[item.Key()]) > 0 {
 			return nil, fmt.Errorf("stored mapping binding %q duplicates property path %s", item.ID, mapping.BindingPath(item))
 		}
 		service.bindings[item.ID] = item
-		service.bindingsByKey[item.Key()] = item.ID
+		service.addBindingKeyLocked(item.Key(), item.ID)
 		if item.EffectiveStage() == mapping.StageProvider {
 			if _, duplicate := service.bindingsByModel[item.ModelKey()]; duplicate {
 				return nil, fmt.Errorf("stored mapping binding %q duplicates unified model path %s", item.ID, item.ModelPath())

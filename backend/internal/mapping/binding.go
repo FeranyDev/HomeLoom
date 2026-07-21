@@ -65,8 +65,9 @@ func (b Binding) ModelPath() device.ParameterPath {
 	return path
 }
 
-// Key identifies the source side of a route. A Provider source property and a
-// Consumer target property may each have at most one active route.
+// Key identifies the source side of a route. Provider source properties may
+// fan out to multiple unified-model properties; Consumer targets remain
+// unique inside their target virtual-device scope.
 func (b Binding) Key() string {
 	if b.EffectiveStage() == StageConsumer {
 		return strings.Join([]string{string(StageConsumer), b.ProviderID, b.DeviceID, b.TargetID, b.ConsumerDeviceID, b.ConsumerID, b.ConsumerProperty}, "\x00")

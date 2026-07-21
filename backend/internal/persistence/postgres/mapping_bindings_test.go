@@ -7,24 +7,29 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/mapping"
 )
 
-func TestMappingBindingsPersistAndEnforceUniquePropertyPath(t *testing.T) {
+func TestProviderMappingSourceFansOutWhileModelTargetRemainsUnique(t *testing.T) {
 	ctx := context.Background()
 	store, err := openTestStore(t, ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	item := mapping.Binding{ID: "binding-one", ProfileID: "builtin-active-low", ProviderID: "virtual-main", DeviceID: "virtual-switch-1", EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Enabled: true}
+	item := mapping.Binding{ID: "binding-one", ProfileID: "builtin-active-low", ProviderID: "virtual-main", DeviceID: "virtual-switch-1", EndpointID: "main", CapabilityID: "vendor", PropertyID: "raw-power", ModelEndpointID: "main", ModelCapabilityID: "switch", ModelPropertyID: "power", Enabled: true}
 	if err := store.SaveMappingBinding(ctx, item); err != nil {
 		t.Fatal(err)
 	}
-	duplicate := item
-	duplicate.ID = "binding-two"
-	if err := store.SaveMappingBinding(ctx, duplicate); err == nil {
-		t.Fatal("duplicate property binding was accepted")
+	second := item
+	second.ID, second.ModelCapabilityID, second.ModelPropertyID = "binding-two", "aux", "mirrored-power"
+	if err := store.SaveMappingBinding(ctx, second); err != nil {
+		t.Fatalf("same Provider source could not fan out: %v", err)
+	}
+	duplicateTarget := item
+	duplicateTarget.ID, duplicateTarget.PropertyID = "binding-three", "other-raw-power"
+	if err := store.SaveMappingBinding(ctx, duplicateTarget); err == nil {
+		t.Fatal("duplicate unified-model target was accepted")
 	}
 	items, err := store.ListMappingBindings(ctx)
-	if err != nil || len(items) != 1 || items[0].ID != item.ID || items[0].EffectiveStage() != mapping.StageProvider || items[0].ModelPath() != item.SourcePath() || items[0].ProfileID != item.ProfileID || !items[0].Enabled {
+	if err != nil || len(items) != 2 {
 		t.Fatalf("bindings = %#v, error = %v", items, err)
 	}
 	item.Enabled = false
@@ -32,10 +37,15 @@ func TestMappingBindingsPersistAndEnforceUniquePropertyPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	items, _ = store.ListMappingBindings(ctx)
-	if items[0].Enabled {
-		t.Fatal("binding update was not persisted")
+	for _, current := range items {
+		if current.ID == item.ID && current.Enabled {
+			t.Fatal("binding update was not persisted")
+		}
 	}
 	if err := store.DeleteMappingBinding(ctx, item.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteMappingBinding(ctx, second.ID); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -46,6 +46,14 @@ describe('XiaomiDeviceManager', () => {
 		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ devices: [expect.objectContaining({ did: '123.456', connectionMode: 'cloud' })] }) }), true))
 	})
 
+	it('opens mapping configuration for a configured device missing from the device center', async () => {
+		const onMapping = vi.fn()
+		const mapped = { ...provider, config: { ...provider.config, devices: [{ did: '123.456', id: 'xiaomi-123.456', name: '客厅灯', type: 'lightbulb', connectionMode: 'auto', properties: [], actions: [] }] } }
+		render(<XiaomiDeviceManager provider={mapped} onClose={() => {}} onSave={vi.fn()} onMapping={onMapping} />)
+		await userEvent.click(screen.getByRole('button', { name: '配置 客厅灯 属性映射' }))
+		expect(onMapping).toHaveBeenCalledWith(expect.objectContaining({ id: 'xiaomi-123.456', providerId: 'xiaomi-main', name: '客厅灯', type: 'lightbulb', endpoints: [] }))
+	})
+
 	it('requires an established MQTT connection', () => {
 		render(<XiaomiDeviceManager provider={{ ...provider, status: 'failed' }} onClose={() => {}} onSave={vi.fn()} />)
 		expect(screen.getByText(/状态变为 running 后才能读取设备目录/)).toBeInTheDocument()

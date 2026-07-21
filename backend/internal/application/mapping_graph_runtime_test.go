@@ -59,6 +59,60 @@ type airConditionerMappingProvider struct {
 	lastWrite providersdk.PropertyWriteRequest
 }
 
+type windowMappingProvider struct {
+	item      device.Device
+	lastWrite providersdk.PropertyWriteRequest
+}
+
+func newWindowMappingProvider() *windowMappingProvider {
+	return &windowMappingProvider{item: device.Device{
+		SchemaVersion: 1, ID: "xiaomi-1207372895", ProviderID: "xiaomi-2231ed", Name: "窗帘", Type: device.TypeWindowCovering,
+		Availability: device.AvailabilityOnline, Online: true, LastUpdateAt: time.Now().UTC(),
+		Endpoints: []device.Endpoint{{
+			ID: "main", Name: "Main", Type: "main",
+			Capabilities: []device.Capability{{
+				ID: "window-covering", Type: "window-covering",
+				Properties: []device.Property{
+					{Definition: device.PropertyDefinition{ID: "current-position", Name: "当前位置", Type: device.ValueTypeInt, Unit: "percent", Min: numberPointer(0), Max: numberPointer(100), Step: numberPointer(1), Readable: true, Notifiable: true}, Value: device.IntValue(20)},
+					{Definition: device.PropertyDefinition{ID: "target-position", Name: "目标位置", Type: device.ValueTypeInt, Unit: "percent", Min: numberPointer(0), Max: numberPointer(100), Step: numberPointer(1), Readable: true, Writable: true, Notifiable: true}, Value: device.IntValue(80)},
+					{Definition: device.PropertyDefinition{ID: "position-state", Name: "运动状态", Type: device.ValueTypeEnum, Enum: []string{"decreasing", "increasing", "stopped"}, Readable: true, Notifiable: true}, Value: device.EnumValue("stopped")},
+				},
+			}},
+		}},
+	}}
+}
+
+func (p *windowMappingProvider) Manifest() providersdk.Manifest {
+	return providersdk.Manifest{ID: "xiaomi-2231ed", Type: "xiaomi", Name: "Xiaomi", Version: "1"}
+}
+func (p *windowMappingProvider) Capabilities() providersdk.Capabilities {
+	return providersdk.Capabilities{Discovery: true, PropertyWrite: true}
+}
+func (p *windowMappingProvider) Initialize(context.Context) error { return nil }
+func (p *windowMappingProvider) Close(context.Context) error      { return nil }
+func (p *windowMappingProvider) DiscoverDevices(context.Context) ([]device.Device, error) {
+	return []device.Device{p.item.Clone()}, nil
+}
+func (p *windowMappingProvider) SourceCatalog(context.Context) ([]providersdk.SourceCatalogDevice, error) {
+	return []providersdk.SourceCatalogDevice{{Device: p.item.Clone(), Catalog: providersdk.SourceCatalogMetadata{Complete: true, Source: "miot-spec-cache"}}}, nil
+}
+func (p *windowMappingProvider) WriteProperty(_ context.Context, request providersdk.PropertyWriteRequest) (device.Device, error) {
+	p.lastWrite = request
+	for endpointIndex := range p.item.Endpoints {
+		for capabilityIndex := range p.item.Endpoints[endpointIndex].Capabilities {
+			for propertyIndex := range p.item.Endpoints[endpointIndex].Capabilities[capabilityIndex].Properties {
+				property := &p.item.Endpoints[endpointIndex].Capabilities[capabilityIndex].Properties[propertyIndex]
+				if p.item.Endpoints[endpointIndex].ID == request.EndpointID && p.item.Endpoints[endpointIndex].Capabilities[capabilityIndex].ID == request.CapabilityID && property.Definition.ID == request.PropertyID {
+					property.Value = request.Value
+				}
+			}
+		}
+	}
+	p.item.Sequence++
+	p.item.LastUpdateAt = time.Now().UTC()
+	return p.item.Clone(), nil
+}
+
 func newAirConditionerMappingProvider() *airConditionerMappingProvider {
 	public := device.Device{
 		SchemaVersion: 1, ID: "xiaomi-126772242", ProviderID: "xiaomi-2231ed", Name: "空调伴侣", Type: device.TypeAirConditioner,
@@ -339,6 +393,86 @@ func TestAirConditionerIdentityEnumBindingShowsFourthPropertyAndWritesBack(t *te
 	property, found = updated.Property("main", "air-conditioner", "fan-speed")
 	if !found || property.Value.String == nil || *property.Value.String != "low" {
 		t.Fatalf("updated fan-speed property = %#v, found=%v", property, found)
+	}
+}
+
+func TestManualProviderRouteOverridesConflictingAutomaticRouteWithoutDroppingDevice(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, err := application.NewProfileService(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := profiles.CreateBinding(ctx, mapping.Binding{
+		ID: "curtain-target-as-current", Stage: mapping.StageProvider, DeviceType: device.TypeWindowCovering,
+		ProviderID: "xiaomi-2231ed", DeviceID: "xiaomi-1207372895",
+		EndpointID: "main", CapabilityID: "window-covering", PropertyID: "target-position",
+		ModelEndpointID: "main", ModelCapabilityID: "window-covering", ModelPropertyID: "current-position", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	provider := newWindowMappingProvider()
+	service := application.NewDeviceService(provider, profiles)
+	defer service.Close()
+	items, err := service.List(ctx)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("devices = %#v, %v", items, err)
+	}
+	current, currentFound := items[0].Property("main", "window-covering", "current-position")
+	target, targetFound := items[0].Property("main", "window-covering", "target-position")
+	state, stateFound := items[0].Property("main", "window-covering", "position-state")
+	if !currentFound || !targetFound || !stateFound || current.Value.Int == nil || *current.Value.Int != 80 || target.Value.Int == nil || *target.Value.Int != 80 || state.Value.String == nil {
+		t.Fatalf("manual-over-default projection = current %#v, target %#v, state %#v", current, target, state)
+	}
+}
+
+func TestOneProviderSourcePropertyFansOutToMultipleUnifiedProperties(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, err := application.NewProfileService(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := profiles.CreateCustomModelProperty(ctx, mapping.CustomModelProperty{
+		ID: "switch-mirrored-power", DeviceType: device.TypeSwitch,
+		EndpointID: "main", EndpointName: "Main", EndpointType: "main", CapabilityID: "aux", CapabilityType: "aux",
+		Definition: device.PropertyDefinition{ID: "mirrored-power", Name: "镜像开关", Type: device.ValueTypeBool, Readable: true, Writable: true, Notifiable: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, binding := range []mapping.Binding{
+		{ID: "raw-power-primary", Stage: mapping.StageProvider, DeviceType: device.TypeSwitch, ProviderID: "raw-main", DeviceID: "raw-switch-1", EndpointID: "main", CapabilityID: "vendor", PropertyID: "raw-power", ModelEndpointID: "main", ModelCapabilityID: "switch", ModelPropertyID: "power", Enabled: true},
+		{ID: "raw-power-mirror", Stage: mapping.StageProvider, DeviceType: device.TypeSwitch, ProviderID: "raw-main", DeviceID: "raw-switch-1", EndpointID: "main", CapabilityID: "vendor", PropertyID: "raw-power", ModelEndpointID: "main", ModelCapabilityID: "aux", ModelPropertyID: "mirrored-power", Enabled: true},
+	} {
+		if _, err := profiles.CreateBinding(ctx, binding); err != nil {
+			t.Fatal(err)
+		}
+	}
+	provider := newRawMappingProvider()
+	service := application.NewDeviceService(provider, profiles)
+	defer service.Close()
+	items, err := service.List(ctx)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("devices = %#v, %v", items, err)
+	}
+	primary, primaryFound := items[0].Property("main", "switch", "power")
+	mirror, mirrorFound := items[0].Property("main", "aux", "mirrored-power")
+	if !primaryFound || !mirrorFound || primary.Value.Bool == nil || mirror.Value.Bool == nil || *primary.Value.Bool != *mirror.Value.Bool {
+		t.Fatalf("fan-out projection = primary %#v, mirror %#v", primary, mirror)
+	}
+	if _, _, err := service.ExecuteProperty(ctx, items[0].ID, "main", "aux", "mirrored-power", device.BoolValue(true)); err != nil {
+		t.Fatal(err)
+	}
+	if provider.lastWrite.CapabilityID != "vendor" || provider.lastWrite.PropertyID != "raw-power" || provider.lastWrite.Value.Bool == nil || !*provider.lastWrite.Value.Bool {
+		t.Fatalf("fan-out reverse route = %#v", provider.lastWrite)
 	}
 }
 

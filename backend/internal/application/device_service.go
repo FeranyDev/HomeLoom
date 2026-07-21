@@ -94,6 +94,18 @@ type PropertyPathMapper interface {
 	ResolvePropertyPath(providerID, deviceID, endpointID, capabilityID, propertyID string, direction mapping.Direction) (device.ParameterPath, string, bool, error)
 }
 
+type ProviderPropertyProjection struct {
+	Path       device.ParameterPath
+	Definition device.PropertyDefinition
+	Value      device.PropertyValue
+	BindingID  string
+	Explicit   bool
+}
+
+type ProviderPropertyProjector interface {
+	ProjectProviderProperty(providerID, deviceID, endpointID, capabilityID, propertyID string, definition device.PropertyDefinition, value device.PropertyValue) ([]ProviderPropertyProjection, error)
+}
+
 type ConsumerPropertyMapper interface {
 	ProjectConsumerDevice(consumerID string, item device.Device) (device.Device, error)
 	ResolveConsumerWrite(providerID, deviceID, consumerID string, deviceType device.Type, endpointID, capabilityID, propertyID string, value device.PropertyValue) (device.ParameterPath, device.PropertyValue, string, bool, error)
@@ -625,19 +637,24 @@ func (s *DeviceService) ReadProperty(ctx context.Context, deviceID, endpointID, 
 	if err != nil {
 		return device.Property{}, err
 	}
-	if s.propertyMapper != nil {
-		definition, _, _, definitionErr := s.propertyMapper.TransformPropertyDefinition(item.ProviderID, deviceID, providerPath.EndpointID, providerPath.CapabilityID, providerPath.PropertyID, property.Definition)
-		if definitionErr != nil {
-			s.metrics.mappingErrors.Add(1)
-			return device.Property{}, definitionErr
-		}
-		property.Definition = definition
-	}
-	mapped, _, _, err := s.mapProperty(item.ProviderID, deviceID, providerPath.EndpointID, providerPath.CapabilityID, providerPath.PropertyID, property.Value, mapping.DirectionForward)
+	projections, err := s.providerPropertyProjections(item.ProviderID, deviceID, providerPath.EndpointID, providerPath.CapabilityID, providerPath.PropertyID, property)
 	if err != nil {
 		return device.Property{}, err
 	}
-	property.Value = mapped
+	targetPath := device.ParameterPath{EndpointID: endpointID, CapabilityID: capabilityID, PropertyID: propertyID}
+	found := false
+	for _, projection := range projections {
+		if projection.Path != targetPath {
+			continue
+		}
+		property.Definition, property.Value, found = projection.Definition, projection.Value, true
+		if projection.Explicit {
+			break
+		}
+	}
+	if !found {
+		return device.Property{}, ErrPropertyUnsupported
+	}
 	property.Definition.ID = propertyID
 	if resolver, ok := s.propertyMapper.(ModelDefinitionMapper); ok {
 		path := device.ParameterPath{EndpointID: endpointID, CapabilityID: capabilityID, PropertyID: propertyID}
@@ -1201,51 +1218,96 @@ func (s *DeviceService) mapSnapshot(item device.Device) (device.Device, error) {
 	}
 	result := item
 	result.Endpoints = nil
+	type projectedProperty struct {
+		path                                       device.ParameterPath
+		property                                   device.Property
+		endpointName, endpointType, capabilityType string
+		explicit                                   bool
+	}
+	projected := make([]projectedProperty, 0)
+	byTarget := make(map[string]int)
 	for _, endpoint := range item.Endpoints {
 		for _, capability := range endpoint.Capabilities {
 			for _, sourceProperty := range capability.Properties {
-				property := sourceProperty
-				definition, _, _, definitionErr := s.propertyMapper.TransformPropertyDefinition(item.ProviderID, item.ID, endpoint.ID, capability.ID, property.Definition.ID, property.Definition)
-				if definitionErr != nil {
-					s.metrics.mappingErrors.Add(1)
-					return device.Device{}, definitionErr
-				}
-				value, _, _, err := s.mapProperty(item.ProviderID, item.ID, endpoint.ID, capability.ID, property.Definition.ID, property.Value, mapping.DirectionForward)
+				projections, err := s.providerPropertyProjections(item.ProviderID, item.ID, endpoint.ID, capability.ID, sourceProperty.Definition.ID, sourceProperty)
 				if err != nil {
 					return device.Device{}, err
 				}
-				targetPath, _, _, pathErr := s.resolvePropertyPath(item.ProviderID, item.ID, endpoint.ID, capability.ID, property.Definition.ID, mapping.DirectionForward)
-				if pathErr != nil {
-					s.metrics.mappingErrors.Add(1)
-					return device.Device{}, pathErr
-				}
-				definition.ID = targetPath.PropertyID
-				if resolver, ok := s.propertyMapper.(ModelDefinitionMapper); ok {
-					var modelProperty bool
-					definition, modelProperty = resolver.ResolveModelDefinition(item.Type, targetPath, definition)
-					if !modelProperty {
-						// Native Provider attributes are intentionally kept out of the
-						// unified registry. They remain available through ProviderCatalog
-						// and only enter the model after an explicit standard/custom route.
+				for _, projection := range projections {
+					definition := projection.Definition
+					definition.ID = projection.Path.PropertyID
+					if resolver, ok := s.propertyMapper.(ModelDefinitionMapper); ok {
+						var modelProperty bool
+						definition, modelProperty = resolver.ResolveModelDefinition(item.Type, projection.Path, definition)
+						if !modelProperty {
+							// Native Provider attributes stay in ProviderCatalog until an
+							// explicit route places them in the unified model.
+							continue
+						}
+					}
+					property := sourceProperty
+					property.Definition, property.Value = definition, alignEnumValue(projection.Value, definition.Enum)
+					candidate := projectedProperty{path: projection.Path, property: property, endpointName: endpoint.Name, endpointType: endpoint.Type, capabilityType: capability.Type, explicit: projection.Explicit}
+					key := projection.Path.Key()
+					if index, exists := byTarget[key]; exists {
+						current := projected[index]
+						if current.explicit && !candidate.explicit {
+							continue
+						}
+						if current.explicit == candidate.explicit {
+							return device.Device{}, fmt.Errorf("mapping produces duplicate %s unified property %s for device %q", map[bool]string{true: "manual", false: "automatic"}[candidate.explicit], projection.Path, item.ID)
+						}
+						projected[index] = candidate
 						continue
 					}
+					byTarget[key] = len(projected)
+					projected = append(projected, candidate)
 				}
-				value = alignEnumValue(value, definition.Enum)
-				property.Definition, property.Value = definition, value
-				target := ensureCapability(&result, targetPath, endpoint.Name, endpoint.Type, capability.Type)
-				for _, existing := range target.Properties {
-					if existing.Definition.ID == targetPath.PropertyID {
-						return device.Device{}, fmt.Errorf("mapping produces duplicate unified property %s for device %q", targetPath, item.ID)
-					}
-				}
-				target.Properties = append(target.Properties, property)
 			}
 		}
+	}
+	for _, projection := range projected {
+		target := ensureCapability(&result, projection.path, projection.endpointName, projection.endpointType, projection.capabilityType)
+		target.Properties = append(target.Properties, projection.property)
 	}
 	if err := result.NormalizeModelParameters(); err != nil {
 		return device.Device{}, fmt.Errorf("normalize mapped device %q: %w", item.ID, err)
 	}
 	return result, nil
+}
+
+func (s *DeviceService) providerPropertyProjections(providerID, deviceID, endpointID, capabilityID, propertyID string, property device.Property) ([]ProviderPropertyProjection, error) {
+	if s.propertyMapper == nil {
+		return []ProviderPropertyProjection{{Path: device.ParameterPath{EndpointID: endpointID, CapabilityID: capabilityID, PropertyID: propertyID}, Definition: property.Definition, Value: property.Value}}, nil
+	}
+	if projector, ok := s.propertyMapper.(ProviderPropertyProjector); ok {
+		result, err := projector.ProjectProviderProperty(providerID, deviceID, endpointID, capabilityID, propertyID, property.Definition, property.Value)
+		if err != nil {
+			s.metrics.mappingErrors.Add(1)
+			return nil, err
+		}
+		for _, projection := range result {
+			if projection.Explicit {
+				s.metrics.mappingApplied.Add(1)
+			}
+		}
+		return result, nil
+	}
+	definition, _, definitionApplied, err := s.propertyMapper.TransformPropertyDefinition(providerID, deviceID, endpointID, capabilityID, propertyID, property.Definition)
+	if err != nil {
+		s.metrics.mappingErrors.Add(1)
+		return nil, err
+	}
+	value, _, valueApplied, err := s.mapProperty(providerID, deviceID, endpointID, capabilityID, propertyID, property.Value, mapping.DirectionForward)
+	if err != nil {
+		return nil, err
+	}
+	path, _, pathApplied, err := s.resolvePropertyPath(providerID, deviceID, endpointID, capabilityID, propertyID, mapping.DirectionForward)
+	if err != nil {
+		s.metrics.mappingErrors.Add(1)
+		return nil, err
+	}
+	return []ProviderPropertyProjection{{Path: path, Definition: definition, Value: value, Explicit: definitionApplied || valueApplied || pathApplied}}, nil
 }
 
 // sourceSnapshots supplies the mapping engine with Provider-native fields

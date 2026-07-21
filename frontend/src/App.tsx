@@ -80,7 +80,7 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
   const [deviceQuery, setDeviceQuery] = useState('')
   const [deviceStatus, setDeviceStatus] = useState<'all' | 'online' | 'offline' | 'unknown' | 'disabled' | 'removed'>('all')
   const [selectedDeviceID, setSelectedDeviceID] = useState<string | null>(null)
-  const [mappingDeviceID, setMappingDeviceID] = useState<string | null>(null)
+  const [mappingDevice, setMappingDevice] = useState<Device | null>(null)
   const { toasts, notify, dismiss } = useToasts()
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
@@ -192,7 +192,6 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
 	const summary = page === 'devices' ? devices.filter((item) => item.availability === 'online').length : page === 'providers' ? providers.filter((item) => item.status === 'running').length : page === 'targets' ? targets.filter((item) => item.status === 'running').length : page === 'mapping' ? modelCount : diagnostics?.eventsProcessed ?? 0
 	const filteredDevices = devices.filter((item) => { const matchesText = `${item.name} ${item.id} ${item.providerId}`.toLowerCase().includes(deviceQuery.trim().toLowerCase()); const matchesStatus = deviceStatus === 'all' || (deviceStatus === 'disabled' ? item.disabled : deviceStatus === 'removed' ? item.removed : item.availability === deviceStatus && !item.disabled && !item.removed); return matchesText && matchesStatus })
 	const selectedDevice = selectedDeviceID ? devices.find((item) => item.id === selectedDeviceID) ?? null : null
-	const mappingDevice = mappingDeviceID ? devices.find((item) => item.id === mappingDeviceID) ?? null : null
 	const targetDeviceTarget = targetDeviceID ? targets.find((item) => item.id === targetDeviceID) ?? null : null
 
   return (<>
@@ -239,12 +238,12 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
               pending={pendingIds.has(device.id)}
               onPowerChange={(item, value) => void handlePowerChange(item, value)}
 			  onDetails={(item) => setSelectedDeviceID(item.id)}
-			  onMapping={(item) => setMappingDeviceID(item.id)}
+			  onMapping={setMappingDevice}
 			  onEnabledChange={(item, enabled) => void handleDeviceEnabled(item, enabled)}
             />
           ))}
 		  {filteredDevices.length === 0 && <CollectionEmpty title="没有匹配的设备" description={devices.length ? '请调整搜索文字或在线状态筛选。' : '启用 Provider 后，发现的设备会显示在这里。'} />}
-		</section> : page === 'providers' ? deviceProvider ? deviceProvider.type === 'mqtt' ? <MQTTDeviceManager provider={deviceProvider} devices={devices.filter((item) => item.providerId === deviceProvider.id && !item.removed)} onClose={() => setDeviceProviderID(null)} onSave={async (input, editing) => { await handleProviderSave(input, editing); setDeviceProviderID(null) }} /> : <XiaomiDeviceManager provider={deviceProvider} onClose={() => setDeviceProviderID(null)} onSave={async (input, editing) => { await handleProviderSave(input, editing); setDeviceProviderID(null) }} /> : <ProviderWorkspace providers={providers} devices={devices} onEdit={(item) => setProviderForm({ open: true, provider: item })} onManageDevices={(item) => setDeviceProviderID(item.id)} onDelete={(item) => void handleProviderDelete(item)} onRestart={handleProviderRestart} onTest={handleProviderTest} onSimulate={handleSimulation} /> : page === 'mapping' ? <MappingWorkspace /> : page === 'system' ? <SystemDashboard diagnostics={diagnostics} commands={commands} auditEvents={auditEvents} settings={runtimeSettings} onSettingsSave={handleRuntimeSettingsSave} /> : targetDeviceTarget ? <TargetDeviceManager target={targetDeviceTarget} devices={devices.filter((item) => !item.removed)} onClose={() => setTargetDeviceID(null)} onSave={async (input) => { await saveTarget(input, true); await refresh(); notify('success', '消费端设备已保存并实时应用到目标实例') }} /> : <section className="target-list">
+		</section> : page === 'providers' ? deviceProvider ? deviceProvider.type === 'mqtt' ? <MQTTDeviceManager provider={deviceProvider} devices={devices.filter((item) => item.providerId === deviceProvider.id && !item.removed)} onClose={() => setDeviceProviderID(null)} onSave={async (input, editing) => { await handleProviderSave(input, editing); setDeviceProviderID(null) }} /> : <XiaomiDeviceManager provider={deviceProvider} onMapping={setMappingDevice} onClose={() => setDeviceProviderID(null)} onSave={async (input, editing) => { await handleProviderSave(input, editing); setDeviceProviderID(null) }} /> : <ProviderWorkspace providers={providers} devices={devices} onEdit={(item) => setProviderForm({ open: true, provider: item })} onManageDevices={(item) => setDeviceProviderID(item.id)} onDelete={(item) => void handleProviderDelete(item)} onRestart={handleProviderRestart} onTest={handleProviderTest} onSimulate={handleSimulation} /> : page === 'mapping' ? <MappingWorkspace /> : page === 'system' ? <SystemDashboard diagnostics={diagnostics} commands={commands} auditEvents={auditEvents} settings={runtimeSettings} onSettingsSave={handleRuntimeSettingsSave} /> : targetDeviceTarget ? <TargetDeviceManager target={targetDeviceTarget} devices={devices.filter((item) => !item.removed)} onClose={() => setTargetDeviceID(null)} onSave={async (input) => { await saveTarget(input, true); await refresh(); notify('success', '消费端设备已保存并实时应用到目标实例') }} /> : <section className="target-list">
 		  <div className="config-note">
 		    <span>配置来源</span>
 		    <strong>PostgreSQL · targets</strong>
@@ -257,7 +256,7 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
 	  {targetForm.open && <TargetForm target={targetForm.target} onCancel={() => setTargetForm({ open: false, target: null })} onSave={handleTargetSave} />}
 	  {providerForm.open && <ProviderForm provider={providerForm.provider} onCancel={() => setProviderForm({ open: false, provider: null })} onSave={handleProviderSave} onTest={handleProviderTest} />}
 	  {selectedDevice && <DeviceDetails device={selectedDevice} onClose={() => setSelectedDeviceID(null)} onPropertyWrite={(endpointId, capabilityId, propertyId, value) => handlePropertyWrite(selectedDevice, endpointId, capabilityId, propertyId, value)} onCommandExecute={(endpointId, capabilityId, commandId, parameters, idempotencyKey) => handleCommandExecute(selectedDevice, endpointId, capabilityId, commandId, parameters, idempotencyKey)} />}
-	  {mappingDevice && <DeviceMappingDialog device={mappingDevice} onClose={() => setMappingDeviceID(null)} />}
+	  {mappingDevice && <DeviceMappingDialog device={mappingDevice} onClose={() => setMappingDevice(null)} />}
 	  <ToastCenter toasts={toasts} dismiss={dismiss} />
     </main>
 	</>)

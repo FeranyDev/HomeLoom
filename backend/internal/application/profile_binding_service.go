@@ -64,7 +64,7 @@ func (s *ProfileService) CreateBinding(ctx context.Context, item mapping.Binding
 		s.mu.Unlock()
 		return mapping.Binding{}, ErrBindingExists
 	}
-	if _, exists := s.bindingsByKey[item.Key()]; exists {
+	if item.EffectiveStage() == mapping.StageConsumer && len(s.bindingsByKey[item.Key()]) > 0 {
 		s.mu.Unlock()
 		return mapping.Binding{}, ErrBindingExists
 	}
@@ -79,7 +79,7 @@ func (s *ProfileService) CreateBinding(ctx context.Context, item mapping.Binding
 		return mapping.Binding{}, err
 	}
 	s.bindings[item.ID] = item
-	s.bindingsByKey[item.Key()] = item.ID
+	s.addBindingKeyLocked(item.Key(), item.ID)
 	if item.EffectiveStage() == mapping.StageProvider {
 		s.bindingsByModel[item.ModelKey()] = item.ID
 	}
@@ -101,7 +101,7 @@ func (s *ProfileService) UpdateBinding(ctx context.Context, id string, item mapp
 		s.mu.Unlock()
 		return mapping.Binding{}, err
 	}
-	if owner, exists := s.bindingsByKey[item.Key()]; exists && owner != id {
+	if item.EffectiveStage() == mapping.StageConsumer && s.hasOtherBindingKeyLocked(item.Key(), id) {
 		s.mu.Unlock()
 		return mapping.Binding{}, ErrBindingExists
 	}
@@ -115,12 +115,12 @@ func (s *ProfileService) UpdateBinding(ctx context.Context, id string, item mapp
 		s.mu.Unlock()
 		return mapping.Binding{}, err
 	}
-	delete(s.bindingsByKey, current.Key())
+	s.removeBindingKeyLocked(current.Key(), id)
 	if current.EffectiveStage() == mapping.StageProvider {
 		delete(s.bindingsByModel, current.ModelKey())
 	}
 	s.bindings[id] = item
-	s.bindingsByKey[item.Key()] = id
+	s.addBindingKeyLocked(item.Key(), id)
 	if item.EffectiveStage() == mapping.StageProvider {
 		s.bindingsByModel[item.ModelKey()] = id
 	}
@@ -148,7 +148,7 @@ func (s *ProfileService) DeleteBinding(ctx context.Context, id string) error {
 		return err
 	}
 	delete(s.bindings, id)
-	delete(s.bindingsByKey, item.Key())
+	s.removeBindingKeyLocked(item.Key(), id)
 	if item.EffectiveStage() == mapping.StageProvider {
 		delete(s.bindingsByModel, item.ModelKey())
 	}
@@ -180,6 +180,11 @@ func (s *ProfileService) TransformPropertyDefinition(providerID, deviceID, endpo
 	if binding.ProfileID == "" {
 		return definition, binding.ID, true, nil
 	}
+	result, err := transformProviderPropertyDefinition(binding, profile, definition)
+	return result, binding.ID, true, err
+}
+
+func transformProviderPropertyDefinition(binding mapping.Binding, profile mapping.Profile, definition device.PropertyDefinition) (device.PropertyDefinition, error) {
 	result := definition
 	result.Type = profile.OutputType
 	if profile.OutputType != device.ValueTypeNumber && profile.OutputType != device.ValueTypeInt {
@@ -210,14 +215,14 @@ func (s *ProfileService) TransformPropertyDefinition(providerID, deviceID, endpo
 		if definition.Min != nil {
 			value, mapErr := mapNumber(*definition.Min)
 			if mapErr != nil {
-				return device.PropertyDefinition{}, binding.ID, true, fmt.Errorf("binding %q minimum: %w", binding.ID, mapErr)
+				return device.PropertyDefinition{}, fmt.Errorf("binding %q minimum: %w", binding.ID, mapErr)
 			}
 			minimum = &value
 		}
 		if definition.Max != nil {
 			value, mapErr := mapNumber(*definition.Max)
 			if mapErr != nil {
-				return device.PropertyDefinition{}, binding.ID, true, fmt.Errorf("binding %q maximum: %w", binding.ID, mapErr)
+				return device.PropertyDefinition{}, fmt.Errorf("binding %q maximum: %w", binding.ID, mapErr)
 			}
 			maximum = &value
 		}
@@ -232,7 +237,7 @@ func (s *ProfileService) TransformPropertyDefinition(providerID, deviceID, endpo
 				if zeroErr != nil {
 					stepErr = zeroErr
 				}
-				return device.PropertyDefinition{}, binding.ID, true, fmt.Errorf("binding %q step: %w", binding.ID, stepErr)
+				return device.PropertyDefinition{}, fmt.Errorf("binding %q step: %w", binding.ID, stepErr)
 			}
 			step := math.Abs(stepped - zero)
 			if step > 0 {
@@ -252,7 +257,7 @@ func (s *ProfileService) TransformPropertyDefinition(providerID, deviceID, endpo
 				if previewErr == nil {
 					previewErr = fmt.Errorf("enum definition transform did not produce a string")
 				}
-				return device.PropertyDefinition{}, binding.ID, true, fmt.Errorf("binding %q enum option %q: %w", binding.ID, raw, previewErr)
+				return device.PropertyDefinition{}, fmt.Errorf("binding %q enum option %q: %w", binding.ID, raw, previewErr)
 			}
 			result.Enum = append(result.Enum, *preview.Value.String)
 		}
@@ -285,7 +290,58 @@ func (s *ProfileService) TransformPropertyDefinition(providerID, deviceID, endpo
 			result.Unit = transform.ToUnit
 		}
 	}
-	return result, binding.ID, true, nil
+	return result, nil
+}
+
+// ProjectProviderProperty returns the implicit identity route plus every
+// enabled device-scoped manual route for one Provider source property. The
+// DeviceService resolves target collisions after all source properties have
+// been visited, with Explicit projections taking precedence over identity.
+func (s *ProfileService) ProjectProviderProperty(providerID, deviceID, endpointID, capabilityID, propertyID string, definition device.PropertyDefinition, value device.PropertyValue) ([]ProviderPropertyProjection, error) {
+	identity := ProviderPropertyProjection{
+		Path:       device.ParameterPath{EndpointID: endpointID, CapabilityID: capabilityID, PropertyID: propertyID},
+		Definition: definition,
+		Value:      value,
+	}
+	key := (mapping.Binding{Stage: mapping.StageProvider, ProviderID: providerID, DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID, PropertyID: propertyID}).Key()
+	s.mu.RLock()
+	bindings := make([]mapping.Binding, 0, len(s.bindingsByKey[key]))
+	profiles := make(map[string]mapping.Profile)
+	for _, id := range s.bindingsByKey[key] {
+		binding := s.bindings[id]
+		if binding.EffectiveStage() != mapping.StageProvider || !binding.Enabled {
+			continue
+		}
+		bindings = append(bindings, binding)
+		if binding.ProfileID != "" {
+			if profile, exists := s.profileLocked(binding.ProfileID); exists {
+				profiles[binding.ProfileID] = profile
+			}
+		}
+	}
+	s.mu.RUnlock()
+
+	result := []ProviderPropertyProjection{identity}
+	for _, binding := range bindings {
+		projected := ProviderPropertyProjection{Path: binding.ModelPath(), Definition: definition, Value: value, BindingID: binding.ID, Explicit: true}
+		if binding.ProfileID != "" {
+			profile, exists := profiles[binding.ProfileID]
+			if !exists {
+				return nil, fmt.Errorf("mapping profile %q not found", binding.ProfileID)
+			}
+			mappedDefinition, err := transformProviderPropertyDefinition(binding, profile, definition)
+			if err != nil {
+				return nil, err
+			}
+			preview, err := mapping.Preview(mapping.PreviewRequest{Profile: profile, Direction: mapping.DirectionForward, Value: &value})
+			if err != nil {
+				return nil, fmt.Errorf("binding %q (%s): %w", binding.ID, mapping.BindingPath(binding), err)
+			}
+			projected.Definition, projected.Value = mappedDefinition, preview.Value
+		}
+		result = append(result, projected)
+	}
+	return result, nil
 }
 
 func uniqueStrings(values []string) []string {
@@ -325,7 +381,12 @@ func (s *ProfileService) resolveProviderBinding(providerID, deviceID, endpointID
 		probe.ModelEndpointID, probe.ModelCapabilityID, probe.ModelPropertyID = endpointID, capabilityID, propertyID
 		id, ok = s.bindingsByModel[probe.ModelKey()]
 	} else {
-		id, ok = s.bindingsByKey[key]
+		for _, candidate := range s.bindingsByKey[key] {
+			if s.bindings[candidate].Enabled {
+				id, ok = candidate, true
+				break
+			}
+		}
 	}
 	if !ok || !s.bindings[id].Enabled {
 		s.mu.RUnlock()
@@ -342,6 +403,41 @@ func (s *ProfileService) resolveProviderBinding(providerID, deviceID, endpointID
 		return binding, mapping.Profile{}, true, fmt.Errorf("mapping profile %q not found", binding.ProfileID)
 	}
 	return binding, profile, true, nil
+}
+
+func (s *ProfileService) addBindingKeyLocked(key, id string) {
+	for _, current := range s.bindingsByKey[key] {
+		if current == id {
+			return
+		}
+	}
+	s.bindingsByKey[key] = append(s.bindingsByKey[key], id)
+	sort.Strings(s.bindingsByKey[key])
+}
+
+func (s *ProfileService) removeBindingKeyLocked(key, id string) {
+	ids := s.bindingsByKey[key]
+	for index, current := range ids {
+		if current != id {
+			continue
+		}
+		ids = append(ids[:index], ids[index+1:]...)
+		break
+	}
+	if len(ids) == 0 {
+		delete(s.bindingsByKey, key)
+		return
+	}
+	s.bindingsByKey[key] = ids
+}
+
+func (s *ProfileService) hasOtherBindingKeyLocked(key, id string) bool {
+	for _, current := range s.bindingsByKey[key] {
+		if current != id {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *ProfileService) validateBindingLocked(item mapping.Binding) error {

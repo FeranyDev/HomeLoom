@@ -85,7 +85,11 @@ func (s *ProfileService) ResolveConsumerWriteInstance(providerID, deviceID, targ
 func (s *ProfileService) resolveConsumerBinding(providerID, deviceID, targetID, consumerDeviceID, consumerID string, deviceType device.Type, target string) (mapping.Binding, mapping.Profile, bool, error) {
 	key := (mapping.Binding{Stage: mapping.StageConsumer, ProviderID: providerID, DeviceID: deviceID, TargetID: targetID, ConsumerDeviceID: consumerDeviceID, ConsumerID: consumerID, DeviceType: deviceType, ConsumerProperty: target}).Key()
 	s.mu.RLock()
-	id, ok := s.bindingsByKey[key]
+	ids := s.bindingsByKey[key]
+	id, ok := "", false
+	if len(ids) > 0 {
+		id, ok = ids[0], true
+	}
 	if !ok || !s.bindings[id].Enabled {
 		s.mu.RUnlock()
 		return mapping.Binding{}, mapping.Profile{}, false, nil
