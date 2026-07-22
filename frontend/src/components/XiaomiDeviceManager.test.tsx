@@ -23,7 +23,7 @@ describe('XiaomiDeviceManager', () => {
 		await userEvent.click(screen.getByRole('button', { name: '从中枢读取子设备' }))
 		await waitFor(() => expect(api.discoverXiaomiDevices).toHaveBeenCalledWith('xiaomi-main', 'xiaomi'))
 		expect(await screen.findByText('客厅灯')).toBeInTheDocument()
-		expect(screen.getByText(/我的家 \/ 客厅/)).toBeInTheDocument()
+		expect(screen.getAllByText(/我的家 \/ 客厅/).length).toBeGreaterThan(0)
 		expect(screen.getByText('中枢本地可控')).toHaveClass('is-ready')
 		expect(screen.getByText('OAuth 官方云可用')).toHaveClass('is-ready')
 		expect(screen.getByText('中枢实时')).toHaveClass('is-ready')
@@ -74,5 +74,20 @@ describe('XiaomiDeviceManager', () => {
 		await userEvent.click(await screen.findByRole('button', { name: '加入映射' }))
 		await userEvent.click(screen.getByRole('button', { name: '保存子设备映射' }))
 		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ type: 'xiaomi-miot-cloud', config: expect.objectContaining({ devices: [expect.objectContaining({ id: 'xiaomi-miot-123.456', connectionMode: 'auto' })] }) }), true))
+	})
+
+	it('filters the discovery directory by home and room before mapping', async () => {
+		api.discoverXiaomiDevices.mockResolvedValue([
+			{ did: '123.456', name: '客厅灯', homeId: 'home-main', homeName: '我的家', roomId: 'room-living', roomName: '客厅' },
+			{ did: '789.000', name: '卧室空调', homeId: 'home-parents', homeName: '父母家', roomId: 'room-bedroom', roomName: '卧室' },
+		])
+		render(<XiaomiDeviceManager provider={provider} onClose={() => {}} onSave={vi.fn()} />)
+		await userEvent.click(screen.getByRole('button', { name: '从中枢读取子设备' }))
+		await screen.findByText('客厅灯')
+		await userEvent.selectOptions(screen.getByLabelText('小米设备家庭'), 'id:home-parents')
+		expect(screen.getByText('卧室空调')).toBeInTheDocument()
+		expect(screen.queryByText('客厅灯')).not.toBeInTheDocument()
+		await userEvent.selectOptions(screen.getByLabelText('小米设备房间'), 'id:home-parents::id:room-bedroom')
+		expect(screen.getByText('1 / 2 台')).toBeInTheDocument()
 	})
 })

@@ -1769,7 +1769,19 @@ func buildDevice(providerID string, configured DeviceConfig) device.Device {
 		endpointList = append(endpointList, *endpoint)
 	}
 	sort.Slice(endpointList, func(i, j int) bool { return endpointList[i].ID < endpointList[j].ID })
-	item := device.Device{SchemaVersion: device.SchemaVersion, ID: configured.ID, ProviderID: providerID, Name: configured.Name, Type: configured.Type, Endpoints: endpointList, LastUpdateAt: time.Now().UTC()}
+	item := device.Device{
+		SchemaVersion: device.SchemaVersion,
+		ID:            configured.ID,
+		ProviderID:    providerID,
+		Name:          configured.Name,
+		Type:          configured.Type,
+		HomeID:        configured.HomeID,
+		HomeName:      configured.Home,
+		RoomID:        configured.RoomID,
+		RoomName:      configured.Room,
+		Endpoints:     endpointList,
+		LastUpdateAt:  time.Now().UTC(),
+	}
 	item.SetAvailability(device.AvailabilityUnknown)
 	return item
 }

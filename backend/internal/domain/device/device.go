@@ -172,6 +172,10 @@ type Device struct {
 	ProviderID    string       `json:"providerId"`
 	Name          string       `json:"name"`
 	Type          Type         `json:"type"`
+	HomeID        string       `json:"homeId,omitempty"`
+	HomeName      string       `json:"homeName,omitempty"`
+	RoomID        string       `json:"roomId,omitempty"`
+	RoomName      string       `json:"roomName,omitempty"`
 	Availability  Availability `json:"availability"`
 	// Online is retained as a compatibility projection for schema v1 clients.
 	Online         bool           `json:"online"`

@@ -68,4 +68,18 @@ describe('TargetDeviceManager', () => {
 		await userEvent.click(screen.getByRole('button', { name: '保存消费端设备并应用目标' }))
 		expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ devices: [expect.objectContaining({ sourceDeviceId: 'source-switch', auxiliarySourceDeviceIds: ['source-vacuum'] })] }))
 	})
+
+	it('filters selectable main and auxiliary sources by home and room', async () => {
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		const living = { ...source, homeId: 'home-a', homeName: '我的家', roomId: 'living', roomName: '客厅' }
+		const parents = { ...robot, homeId: 'home-b', homeName: '父母家', roomId: 'bedroom', roomName: '卧室' }
+		render(<TargetDeviceManager target={target} devices={[living, parents]} onClose={() => {}} onSave={onSave} />)
+		await userEvent.selectOptions(screen.getByLabelText('来源设备家庭'), 'id:home-b')
+		await waitFor(() => expect(screen.getByLabelText('来源统一设备')).toHaveValue('source-vacuum'))
+		expect(screen.queryByRole('option', { name: /来源开关/ })).not.toBeInTheDocument()
+		expect(screen.getByRole('option', { name: /扫地机器人.*父母家 \/ 卧室/ })).toBeInTheDocument()
+		await userEvent.click(screen.getByRole('button', { name: '＋ 添加消费端设备' }))
+		await userEvent.click(screen.getByRole('button', { name: '保存消费端设备并应用目标' }))
+		expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ devices: [expect.objectContaining({ sourceDeviceId: 'source-vacuum' })] }))
+	})
 })

@@ -3,6 +3,7 @@ import { discoverXiaomiDevices, type XiaomiHubDevice } from '../api/xiaomi'
 import type { Device, DeviceType } from '../types/device'
 import type { Provider, ProviderInput } from '../types/provider'
 import { inferXiaomiDeviceType, requiredXiaomiProperties, stableXiaomiID, xiaomiDeviceTypes } from '../xiaomiMappings'
+import { homeLocationOptions, matchesDeviceLocation, roomLocationOptions } from '../deviceLocation'
 
 function configuredMappings(provider: Provider): Array<Record<string, unknown>> {
 	return Array.isArray(provider.config.devices) ? provider.config.devices.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item))) : []
@@ -24,14 +25,20 @@ export function XiaomiDeviceManager({ provider, onClose, onSave, onMapping }: {
 	const [saving, setSaving] = useState(false)
 	const [error, setError] = useState<string | null>(null)
 	const [result, setResult] = useState<string | null>(null)
+	const [deviceHome, setDeviceHome] = useState('')
+	const [deviceRoom, setDeviceRoom] = useState('')
 	const connected = provider.enabled && provider.status === 'running'
 	const mappedDIDs = new Set(mappings.map((item) => String(item.did ?? '')).filter(Boolean))
+	const homeOptions = useMemo(() => homeLocationOptions(hubDevices), [hubDevices])
+	const roomOptions = useMemo(() => roomLocationOptions(hubDevices, deviceHome), [hubDevices, deviceHome])
+	const filteredHubDevices = useMemo(() => hubDevices.filter((item) => matchesDeviceLocation(item, deviceHome, deviceRoom)), [hubDevices, deviceHome, deviceRoom])
 	const mappingSubject = (item: Record<string, unknown>): Device => {
 		const did = String(item.did ?? '')
 		const fallbackID = provider.type === 'xiaomi-miot-cloud' ? stableXiaomiID(did).replace(/^xiaomi-/, 'xiaomi-miot-') : stableXiaomiID(did)
 		return {
 			schemaVersion: 1, id: String(item.id || fallbackID), providerId: provider.id,
 			name: String(item.name || did || '未命名设备'), type: String(item.type || 'switch') as DeviceType,
+			homeId: String(item.homeId ?? ''), homeName: String(item.home ?? ''), roomId: String(item.roomId ?? ''), roomName: String(item.room ?? ''),
 			availability: 'unknown', online: false, endpoints: [], lastUpdateAt: new Date(0).toISOString(),
 		}
 	}
@@ -90,8 +97,9 @@ export function XiaomiDeviceManager({ provider, onClose, onSave, onMapping }: {
 		{!connected && <p className="inline-error" role="alert">请先完成{central ? ' OAuth、证书和 MQTT' : '小米账号或会话凭据'}配置并启用 Provider；状态变为 running 后才能读取设备目录。</p>}
 		{error && <p className="inline-error" role="alert">{error}</p>}{result && <p className="test-success">{result}</p>}
 		<div className="xiaomi-device-binding">
-			<div className="xiaomi-device-binding__heading"><div><strong>{central ? '中枢与官方云设备目录' : 'MIoT 云设备目录'}</strong><small>选择统一模型和设备级连接策略；已映射设备也可以直接调整。</small></div><span>{hubDevices.length} 台已读取</span></div>
-			{hubDevices.length === 0 ? <p className="xiaomi-device-binding__empty">连接就绪后读取设备目录，再选择需要作为来源发布的设备。</p> : <div className="xiaomi-hub-device-list">{hubDevices.map((item) => {
+			<div className="xiaomi-device-binding__heading"><div><strong>{central ? '中枢与官方云设备目录' : 'MIoT 云设备目录'}</strong><small>选择统一模型和设备级连接策略；已映射设备也可以直接调整。</small></div><span>{filteredHubDevices.length} / {hubDevices.length} 台</span></div>
+			{hubDevices.length > 0 && <div className="device-picker-filters" aria-label="小米设备位置筛选"><label>家庭<select aria-label="小米设备家庭" value={deviceHome} onChange={(event) => { setDeviceHome(event.target.value); setDeviceRoom('') }}><option value="">全部家庭</option>{homeOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label>房间<select aria-label="小米设备房间" value={deviceRoom} onChange={(event) => setDeviceRoom(event.target.value)}><option value="">全部房间</option>{roomOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label></div>}
+			{hubDevices.length === 0 ? <p className="xiaomi-device-binding__empty">连接就绪后读取设备目录，再选择需要作为来源发布的设备。</p> : filteredHubDevices.length === 0 ? <p className="xiaomi-device-binding__empty">当前家庭和房间下没有可选设备。</p> : <div className="xiaomi-hub-device-list">{filteredHubDevices.map((item) => {
 				const mapped = mappedDIDs.has(item.did)
 				const location = `${item.homeName || '未知家庭'} / ${item.roomName || '未分配房间'}`
 				const localAvailable = central ? item.localControlAvailable !== false && item.gatewayAvailable !== false : Boolean(item.localAvailable)

@@ -23,6 +23,16 @@ type fakeHub struct {
 	deviceList  json.RawMessage
 }
 
+func TestBuildDevicePreservesConfiguredLocation(t *testing.T) {
+	item := buildDevice("xiaomi-main", DeviceConfig{
+		DID: "123", ID: "xiaomi-123", Name: "客厅灯", Type: device.TypeLightbulb,
+		HomeID: "home-main", Home: "我的家", RoomID: "room-living", Room: "客厅",
+	})
+	if item.HomeID != "home-main" || item.HomeName != "我的家" || item.RoomID != "room-living" || item.RoomName != "客厅" {
+		t.Fatalf("unexpected published device location: %+v", item)
+	}
+}
+
 func (f *fakeHub) Connect(context.Context, context.Context) error {
 	f.mu.Lock()
 	f.connects++

@@ -1,6 +1,7 @@
 import { availabilityLabel, deviceProperty, runtimeModeLabel, type Device } from '../types/device'
 import { deviceTypeLabel } from '../presentationLabels'
 import { DeviceTypeIcon } from './DeviceTypeIcon'
+import { deviceLocationLabel } from '../deviceLocation'
 
 interface DeviceCardProps {
   device: Device
@@ -63,7 +64,7 @@ export function DeviceCard({ device, pending, onPowerChange, onDetails, onMappin
         : <div className={`sensor-state ${device.online && (contact || motion) ? 'is-active' : ''}`}><strong>{!device.online ? '不可用' : device.type === 'contact-sensor' ? (contact ? '已闭合' : '已打开') : (motion ? '检测到活动' : '无活动')}</strong><span>{device.type === 'contact-sensor' ? 'CONTACT' : 'MOTION'}</span></div>
       }</div>
 
-	  <dl className="device-card__metadata"><div><dt>Provider</dt><dd>{device.providerId}</dd></div><div><dt>统一模型</dt><dd>{device.type}</dd></div><div><dt>上次更新</dt><dd>{updatedAt}</dd></div></dl>
+	  <dl className="device-card__metadata"><div><dt>设备来源</dt><dd>{device.providerId}</dd></div><div><dt>统一模型</dt><dd>{device.type}</dd></div><div><dt>家庭 / 房间</dt><dd>{deviceLocationLabel(device)}</dd></div><div><dt>上次更新</dt><dd>{updatedAt}</dd></div></dl>
 	  <footer><div className="device-card__actions"><button onClick={() => onDetails(device)}>查看详情</button>{onMapping && !device.removed && <button className="is-primary" onClick={() => onMapping(device)}>配置映射</button>}</div>{onEnabledChange && !device.removed && <button className="device-card__disable" disabled={pending} onClick={() => onEnabledChange(device, Boolean(device.disabled))}>{device.disabled ? '重新启用' : '禁用设备'}</button>}</footer>
     </article>
   )

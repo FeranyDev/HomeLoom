@@ -116,4 +116,33 @@ describe('App integration', () => {
 		expect(await screen.findByRole('region', { name: '设备列表' })).toBeInTheDocument()
 		expect(screen.getByRole('status')).toHaveTextContent('0 / 0')
 	})
+
+	it('filters the device center by source, model, home, and room', async () => {
+		api.listProviders.mockResolvedValue([
+			{ id: 'xiaomi-main', type: 'xiaomi', name: '家庭中枢', enabled: true, status: 'running', capabilities: {}, config: {} },
+			{ id: 'virtual-main', type: 'virtual', name: '虚拟来源', enabled: true, status: 'running', capabilities: {}, config: {} },
+		])
+		api.listDevices.mockResolvedValue([
+			{ schemaVersion: 1, id: 'living-light', providerId: 'xiaomi-main', name: '客厅灯', type: 'lightbulb', homeId: 'home-a', homeName: '我的家', roomId: 'living', roomName: '客厅', availability: 'online', online: true, endpoints: [], lastUpdateAt: '2026-07-22T00:00:00Z' },
+			{ schemaVersion: 1, id: 'bedroom-switch', providerId: 'xiaomi-main', name: '卧室开关', type: 'switch', homeId: 'home-a', homeName: '我的家', roomId: 'bedroom', roomName: '卧室', availability: 'offline', online: false, endpoints: [], lastUpdateAt: '2026-07-22T00:00:00Z' },
+			{ schemaVersion: 1, id: 'parents-switch', providerId: 'virtual-main', name: '父母家开关', type: 'switch', homeId: 'home-b', homeName: '父母家', roomId: 'living', roomName: '客厅', availability: 'online', online: true, endpoints: [], lastUpdateAt: '2026-07-22T00:00:00Z' },
+		])
+		api.getAuthStatus.mockResolvedValue({ initialized: true, authenticated: true, username: 'admin' })
+		render(<App />)
+		const user = userEvent.setup()
+		expect(await screen.findByRole('heading', { name: '客厅灯' })).toBeInTheDocument()
+
+		await user.selectOptions(screen.getByLabelText('家庭筛选'), 'id:home-a')
+		expect(screen.queryByRole('heading', { name: '父母家开关' })).not.toBeInTheDocument()
+		await user.selectOptions(screen.getByLabelText('房间筛选'), 'id:home-a::id:living')
+		expect(screen.getByRole('heading', { name: '客厅灯' })).toBeInTheDocument()
+		expect(screen.queryByRole('heading', { name: '卧室开关' })).not.toBeInTheDocument()
+		expect(screen.getByRole('status')).toHaveTextContent('1 / 3')
+
+		await user.selectOptions(screen.getByLabelText('家庭筛选'), '')
+		await user.selectOptions(screen.getByLabelText('设备来源筛选'), 'virtual-main')
+		await user.selectOptions(screen.getByLabelText('统一模型筛选'), 'switch')
+		expect(screen.getByRole('heading', { name: '父母家开关' })).toBeInTheDocument()
+		expect(screen.queryByRole('heading', { name: '客厅灯' })).not.toBeInTheDocument()
+	})
 })

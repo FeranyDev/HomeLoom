@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { executeDeviceCommand, listDevices, setDeviceEnabled, setDevicePower, setDeviceProperty, simulateDevice, subscribeDevices } from './api/devices'
 import { clearTargetPairingIdentity, deleteTarget, listTargets, regenerateTargetPairing, saveTarget, subscribeTargets } from './api/targets'
 import { deleteProvider, listProviders, restartProvider, saveProvider, testProviderConnection } from './api/providers'
@@ -29,6 +29,8 @@ import { MQTTDeviceManager } from './components/MQTTDeviceManager'
 import { DeviceMappingDialog } from './components/DeviceMappingDialog'
 import { BrandMark } from './components/BrandMark'
 import { listModelContracts } from './api/mapping'
+import { homeLocationOptions, matchesDeviceLocation, roomLocationOptions } from './deviceLocation'
+import { deviceTypeLabel } from './presentationLabels'
 
 export function App() {
 	const [auth, setAuth] = useState<AuthStatus | null>(null)
@@ -79,6 +81,10 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
   const [live, setLive] = useState(false)
   const [deviceQuery, setDeviceQuery] = useState('')
   const [deviceStatus, setDeviceStatus] = useState<'all' | 'online' | 'offline' | 'unknown' | 'disabled' | 'removed'>('all')
+  const [deviceProviderFilter, setDeviceProviderFilter] = useState('')
+  const [deviceType, setDeviceType] = useState('')
+  const [deviceHome, setDeviceHome] = useState('')
+  const [deviceRoom, setDeviceRoom] = useState('')
   const [selectedDeviceID, setSelectedDeviceID] = useState<string | null>(null)
   const [mappingDevice, setMappingDevice] = useState<Device | null>(null)
   const { toasts, notify, dismiss } = useToasts()
@@ -190,7 +196,15 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
 	const deviceProvider = deviceProviderID ? providers.find((item) => item.id === deviceProviderID && (item.type === 'mqtt' || item.type === 'xiaomi' || item.type === 'xiaomi-miot-cloud')) ?? null : null
 	const pageCopy = page === 'devices' ? { title: '把家的状态织在一起。', intro: '设备状态驻留内存，映射从每台设备独立进入配置。', eyebrow: 'DEVICES', section: '设备中心' } : page === 'providers' ? { title: '让所有数据源有序接入。', intro: 'Virtual、MQTT、小米中枢与第三方兼容 MIoT 云按独立实例运行。', eyebrow: 'PROVIDERS', section: '设备来源管理' } : page === 'targets' ? { title: '一个目标，或很多个目标。', intro: '每个目标实例选择独立的 Consumer 适配器、设备身份和属性目录；协议专属配置互不混用。', eyebrow: 'TARGETS', section: '桥接中心' } : page === 'mapping' ? { title: '定义一次，处处使用。', intro: '集中查看统一设备模型，配置端点、能力和属性三级字段；设备路由仍从对应设备进入。', eyebrow: 'UNIFIED MODELS', section: '统一模型配置' } : { title: '看见系统的每一次呼吸。', intro: '观察事件队列、设备连接和命令生命周期。', eyebrow: 'SYSTEM', section: '系统诊断' }
 	const summary = page === 'devices' ? devices.filter((item) => item.availability === 'online').length : page === 'providers' ? providers.filter((item) => item.status === 'running').length : page === 'targets' ? targets.filter((item) => item.status === 'running').length : page === 'mapping' ? modelCount : diagnostics?.eventsProcessed ?? 0
-	const filteredDevices = devices.filter((item) => { const matchesText = `${item.name} ${item.id} ${item.providerId}`.toLowerCase().includes(deviceQuery.trim().toLowerCase()); const matchesStatus = deviceStatus === 'all' || (deviceStatus === 'disabled' ? item.disabled : deviceStatus === 'removed' ? item.removed : item.availability === deviceStatus && !item.disabled && !item.removed); return matchesText && matchesStatus })
+	const deviceHomeOptions = useMemo(() => homeLocationOptions(devices), [devices])
+	const deviceRoomOptions = useMemo(() => roomLocationOptions(devices, deviceHome), [devices, deviceHome])
+	const deviceTypes = useMemo(() => Array.from(new Set(devices.map((item) => item.type))).sort((left, right) => deviceTypeLabel(left).localeCompare(deviceTypeLabel(right), 'zh-CN')), [devices])
+	const filteredDevices = devices.filter((item) => {
+		const query = deviceQuery.trim().toLowerCase()
+		const matchesText = `${item.name} ${item.id} ${item.providerId} ${item.homeName ?? ''} ${item.roomName ?? ''}`.toLowerCase().includes(query)
+		const matchesStatus = deviceStatus === 'all' || (deviceStatus === 'disabled' ? item.disabled : deviceStatus === 'removed' ? item.removed : item.availability === deviceStatus && !item.disabled && !item.removed)
+		return matchesText && matchesStatus && (!deviceProviderFilter || item.providerId === deviceProviderFilter) && (!deviceType || item.type === deviceType) && matchesDeviceLocation(item, deviceHome, deviceRoom)
+	})
 	const selectedDevice = selectedDeviceID ? devices.find((item) => item.id === selectedDeviceID) ?? null : null
 	const targetDeviceTarget = targetDeviceID ? targets.find((item) => item.id === targetDeviceID) ?? null : null
 
@@ -224,7 +238,15 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
         </div>
 		<div className="heading-actions">{page === 'providers' && !deviceProvider && <button className="add-button" onClick={() => setProviderForm({ open: true, provider: null })}>＋ 新建设备来源</button>}{page === 'targets' && <button className="add-button" onClick={() => setTargetForm({ open: true, target: null })}>＋ 新建目标</button>}{page !== 'devices' && <button className="refresh-button" onClick={() => void refresh()} disabled={loading}>刷新状态</button>}</div>
       </section>
-	  {page === 'devices' && <div className="device-filters"><label className="device-search"><i aria-hidden="true" /><input aria-label="搜索设备" value={deviceQuery} onChange={(event) => setDeviceQuery(event.target.value)} placeholder="搜索名称、ID 或 Provider" /></label><select aria-label="设备状态" value={deviceStatus} onChange={(event) => setDeviceStatus(event.target.value as typeof deviceStatus)}><option value="all">全部状态</option><option value="online">仅在线</option><option value="offline">暂时离线</option><option value="unknown">可用性未知</option><option value="disabled">人工禁用</option><option value="removed">来源已删除</option></select><span className="device-count" role="status">{filteredDevices.length} / {devices.length}</span><button className="refresh-button" onClick={() => void refresh()} disabled={loading}>刷新</button></div>}
+	  {page === 'devices' && <div className="device-filters" aria-label="设备筛选">
+		<label className="device-search"><i aria-hidden="true" /><input aria-label="搜索设备" value={deviceQuery} onChange={(event) => setDeviceQuery(event.target.value)} placeholder="搜索名称、ID、来源或位置" /></label>
+		<select aria-label="设备状态" value={deviceStatus} onChange={(event) => setDeviceStatus(event.target.value as typeof deviceStatus)}><option value="all">全部状态</option><option value="online">仅在线</option><option value="offline">暂时离线</option><option value="unknown">可用性未知</option><option value="disabled">人工禁用</option><option value="removed">来源已删除</option></select>
+		<select aria-label="设备来源筛选" value={deviceProviderFilter} onChange={(event) => setDeviceProviderFilter(event.target.value)}><option value="">全部设备来源</option>{providers.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.id}</option>)}</select>
+		<select aria-label="统一模型筛选" value={deviceType} onChange={(event) => setDeviceType(event.target.value)}><option value="">全部统一模型</option>{deviceTypes.map((item) => <option key={item} value={item}>{deviceTypeLabel(item)}（{item}）</option>)}</select>
+		<select aria-label="家庭筛选" value={deviceHome} onChange={(event) => { setDeviceHome(event.target.value); setDeviceRoom('') }}><option value="">全部家庭</option>{deviceHomeOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
+		<select aria-label="房间筛选" value={deviceRoom} onChange={(event) => setDeviceRoom(event.target.value)}><option value="">全部房间</option>{deviceRoomOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
+		<span className="device-count" role="status">{filteredDevices.length} / {devices.length}</span><button className="refresh-button" onClick={() => void refresh()} disabled={loading}>刷新</button>
+	  </div>}
 
       {error && <div className="error-banner" role="alert">{error}，请确认后端已在 8090 端口运行。</div>}
       {loading ? (

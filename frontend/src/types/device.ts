@@ -23,6 +23,7 @@ export interface Capability { id: string; type: string; properties: Property[]; 
 export interface Endpoint { id: string; name: string; type: string; capabilities: Capability[] }
 export interface Device {
   schemaVersion: number; id: string; providerId: string; name: string; type: DeviceType; availability: DeviceAvailability; online: boolean
+  homeId?: string; homeName?: string; roomId?: string; roomName?: string
   sequence?: number; disabled?: boolean; removed?: boolean; runtimeMode?: DeviceRuntimeMode; stateTransport?: DeviceStateTransport; endpoints: Endpoint[]; lastUpdateAt: string
 }
 
