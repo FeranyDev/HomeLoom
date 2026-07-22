@@ -692,6 +692,7 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [x] 中枢与官方云推送设备改为初始读取后事件驱动；健康推送链路只对不支持 `notify` 的属性执行定时补偿；
 - [x] 官方云与中枢共享单个 Provider 生命周期，Token 热更新不创建第二条 MQTT/HTTP 连接，并暴露本地请求、失败、云请求和转云指标；
 - [x] 按 `docs/xiaomi-cloud-mips-plan.md` 增加官方云 MQTT/MIPS 长连接，复用现有 `xiaomi` Provider 生命周期，不创建第二个 Provider；
+- [x] 进程内 Fake Broker 覆盖 MQTT v5 握手、消息投递、增量订阅、断线重连、订阅拒绝重试，以及旧 Token 认证失败后的热更新恢复；
 - [x] 官方云属性和在线状态已改为 MQTT 实时推送；瞬时事件通过独立 Provider → Manager → DeviceService → SSE `device-event` 通道投递，不写入状态仓库；HTTP 已收敛为目录、初始化、控制、重连对账和不可通知属性补偿；
 - [x] 官方云初始与补偿属性读取改为有界并发批量请求，移除共享短超时下的逐属性全量轮询；
 - [x] 中枢与官方云双推送按属性时间、来源优先级和值摘要归并去重，旧 HTTP 响应不得覆盖更新的 MQTT 推送；

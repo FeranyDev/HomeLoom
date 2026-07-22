@@ -1,6 +1,6 @@
 # 小米官方云 MQTT/MIPS 实时状态改造方案
 
-状态：实现中（阶段 A–D 代码主链完成；剩余 Fake Broker 与实体设备验收）
+状态：代码与自动化测试已完成；仅剩实体设备验收
 作用范围：`xiaomi` 小米中枢网关 Provider 及其复用的 OAuth 官方云路径  
 不包含：`xiaomi-miot-cloud` 第三方兼容 Provider
 
@@ -332,7 +332,7 @@ Provider 卡片展示两个独立通道：
 - [x] 接入 Token 热更新，后续认证握手读取最新 Access Token；
 - [x] 完成协议解析、订阅集合、Token 与 Provider 生命周期测试；
 - [x] 热更新设备集合时增量替换订阅，不创建第二条云连接；
-- [ ] 补充进程内 Fake Broker 的连接/断线握手测试。
+- [x] 使用进程内 Mochi MQTT Broker 完成 MQTT v5 握手、订阅、消息投递、增量换订阅、断线重连、订阅拒绝重试，以及旧 Token 认证失败后热更新恢复测试。
 
 退出条件：长连接可稳定恢复，添加设备不会产生第二条连接，Token 更新后可继续收消息。
 
