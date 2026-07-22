@@ -1,6 +1,6 @@
 # HomeLoom 详细实施清单
 
-更新时间：2026-07-20
+更新时间：2026-07-21
 
 状态说明：
 
@@ -53,6 +53,9 @@
 - [x] 单桥设备绑定；
 - [x] Target 配置拆分为桥实例与桥内虚拟设备两级；
 - [x] 桥内虚拟设备使用独立稳定身份并绑定统一模型来源设备；
+- [x] 桥内虚拟设备类型可独立于来源统一模型类型选择；
+- [x] 单个桥内虚拟设备可按“主来源 → 辅助来源”聚合多个统一设备，手动映射优先且冲突时主来源优先；
+- [x] 同一个统一设备可绑定到多个独立 HomeKit 虚拟设备；
 - [x] Consumer 属性映射按桥和桥内虚拟设备隔离并支持独立转换；
 - [x] 删除桥、删除虚拟设备或更换来源时清理失效 Consumer 路由；
 - [x] 单桥热启动、停止和重建；
@@ -372,10 +375,28 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 - [x] 单属性与温湿度传感器的可选 Battery Level / Low Battery；
 - [x] Contact Sensor；
 - [x] Motion Sensor；
+- [x] Illuminance Sensor；
+- [x] Occupancy Sensor；
+- [x] Leak Sensor；
+- [x] Smoke Sensor；
+- [x] Carbon Monoxide Sensor；
+- [x] Carbon Dioxide Sensor；
+- [x] Air Quality Sensor；
 - [x] Fan；
 - [x] Air Purifier；
 - [x] Filter Maintenance（Air Purifier 链接服务）；
+- [x] Thermostat；
+- [x] Air Conditioner（HomeKit HeaterCooler，支持开关、模式、温度、风速和摆风）；
+- [x] Heater Cooler；
+- [x] Humidifier Dehumidifier；
+- [x] Lock Mechanism；
+- [x] Garage Door Opener；
+- [x] Security System；
+- [x] Valve；
+- [x] Speaker；
 - [x] Window Covering。
+
+当前 27 种内置统一模型中，26 种已登记 HomeKit Consumer 合约；`robot-vacuum` 因 HAP 没有原生扫地机器人 Service 而明确保持不支持，不伪装成开关或风扇。详细对应关系见 `docs/homekit-model-support.md`。
 
 每种设备必须完成：
 
@@ -668,8 +689,15 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [x] 中枢 Provider 复用现有 OAuth 身份增加官方 MIoT HTTP 云路由，按 DID 合并中枢与账号家庭/房间目录；
 - [x] 中枢设备逐台支持 `auto/local/cloud`，`auto` 本地优先并在传输/协议失败或中枢不可控时回退官方云端，显式 `local` 不回退；
 - [x] 中枢设备目录与管理页展示本地控制、OAuth 云和事件推送能力，已映射设备可原地修改连接策略；
-- [x] 本地推送设备改为初始读取后事件驱动；云端、无推送和待判定设备继续定时校准；
+- [x] 中枢与官方云推送设备改为初始读取后事件驱动；健康推送链路只对不支持 `notify` 的属性执行定时补偿；
 - [x] 官方云与中枢共享单个 Provider 生命周期，Token 热更新不创建第二条 MQTT/HTTP 连接，并暴露本地请求、失败、云请求和转云指标；
+- [x] 按 `docs/xiaomi-cloud-mips-plan.md` 增加官方云 MQTT/MIPS 长连接，复用现有 `xiaomi` Provider 生命周期，不创建第二个 Provider；
+- [~] 官方云属性和在线状态已改为 MQTT 实时推送，事件已强类型解析但仍待独立应用层/Consumer 投递通道；HTTP 已收敛为目录、初始化、控制、重连对账和不可通知属性补偿；
+- [x] 官方云初始与补偿属性读取改为有界并发批量请求，移除共享短超时下的逐属性全量轮询；
+- [x] 中枢与官方云双推送按属性时间、来源优先级和值摘要归并去重，旧 HTTP 响应不得覆盖更新的 MQTT 推送；
+- [~] 状态来源已区分中枢实时、官方云实时和官方云校准，并将 HTTP 快照标记为 `polled`；TTL 已跟随通知能力与补偿周期动态计算，显式覆盖与断线宽限仍待完成；
+- [~] 已处理中枢 `devListChange` 并防抖刷新当前目录/Spec；官方云目录低频刷新仍待完成；
+- [~] Provider、子设备和设备中心已展示中枢实时、官方云实时和官方云校准；两条 MQTT 的断线原因、重试时间和最近成功时间仍待补充；
 - [~] Token 获取、加密持久化、70% 有效期自动刷新和指数退避已实现；主动吊销仍待完成；
 - [x] 中枢客户端证书按有效期提前续签，复用 UID、Virtual DID 与 Ed25519 私钥，校验新证书后写回 PostgreSQL 并无断连热应用；
 - [x] 中枢 OAuth 已获取家庭 UID；MIoT 云通过合并家庭目录按 DID 获取本人/共享家庭名称与房间名称，并作为设备级映射元数据保存；

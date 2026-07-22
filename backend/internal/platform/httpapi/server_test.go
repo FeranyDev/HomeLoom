@@ -1068,6 +1068,14 @@ func TestMappingCatalogCustomPropertyAndConsumerRouteAPI(t *testing.T) {
 			t.Fatalf("catalog = %d %s", response.Code, response.Body.String())
 		}
 	}
+	consumers := httptest.NewRequest(http.MethodGet, "/api/v1/mapping/consumers", nil)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, consumers)
+	for _, expected := range []string{`"id":"homekit"`, `"deviceType":"air-conditioner"`, `"deviceType":"thermostat"`, `"deviceType":"speaker"`} {
+		if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(expected)) {
+			t.Fatalf("consumer catalogs = %d %s", response.Code, response.Body.String())
+		}
+	}
 
 	consumerBinding := httptest.NewRequest(http.MethodPost, "/api/v1/mapping/bindings", bytes.NewBufferString(`{"stage":"consumer","providerId":"virtual-main","deviceId":"virtual-switch-1","deviceType":"switch","modelEndpointId":"main","modelCapabilityId":"switch","modelPropertyId":"power","consumerId":"homekit","consumerProperty":"Switch.On","enabled":true}`))
 	consumerBinding.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)

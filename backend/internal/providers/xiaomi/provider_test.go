@@ -14,12 +14,13 @@ import (
 )
 
 type fakeHub struct {
-	mu         sync.Mutex
-	value      any
-	handler    func(hubIncoming)
-	actions    int
-	connects   int
-	deviceList json.RawMessage
+	mu          sync.Mutex
+	value       any
+	handler     func(hubIncoming)
+	actions     int
+	connects    int
+	deviceLists int
+	deviceList  json.RawMessage
 }
 
 func (f *fakeHub) Connect(context.Context, context.Context) error {
@@ -30,10 +31,46 @@ func (f *fakeHub) Connect(context.Context, context.Context) error {
 }
 func (f *fakeHub) Close(context.Context) error { return nil }
 func (f *fakeHub) DeviceList(context.Context) (json.RawMessage, error) {
-	if len(f.deviceList) > 0 {
-		return append(json.RawMessage(nil), f.deviceList...), nil
+	f.mu.Lock()
+	f.deviceLists++
+	deviceList := append(json.RawMessage(nil), f.deviceList...)
+	f.mu.Unlock()
+	if len(deviceList) > 0 {
+		return deviceList, nil
 	}
 	return json.RawMessage(`{"code":0,"result":{"list":[{"did":"123"}]}}`), nil
+}
+
+func TestProviderDebouncesGatewayDirectoryChanges(t *testing.T) {
+	hub := &fakeHub{value: false}
+	provider, err := newProvider("xiaomi-main", "米家", testConfig(), func() hubClient { return hub })
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := provider.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close(ctx)
+	for index := 0; index < 3; index++ {
+		hub.handler(hubIncoming{Topic: topicDeviceListChange, Payload: json.RawMessage(`{}`)})
+	}
+	for {
+		hub.mu.Lock()
+		calls := hub.deviceLists
+		hub.mu.Unlock()
+		if calls >= 2 || ctx.Err() != nil {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	hub.mu.Lock()
+	calls := hub.deviceLists
+	hub.mu.Unlock()
+	if calls != 2 || provider.ProviderMetrics()["directoryRefreshes"] != 1 {
+		t.Fatalf("device list calls=%d metrics=%#v", calls, provider.ProviderMetrics())
+	}
 }
 func (f *fakeHub) GetProperty(context.Context, string, int, int) (json.RawMessage, error) {
 	f.mu.Lock()

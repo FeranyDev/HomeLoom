@@ -20,6 +20,16 @@ describe('DeviceCard device types', () => {
 		expect(screen.getByText(label)).toHaveClass('device-runtime-mode', `is-${runtimeMode}`)
 	})
 
+	it.each([
+		['local-mqtt', '中枢实时'],
+		['cloud-mqtt', '官方云实时'],
+		['cloud-http', '官方云校准'],
+	] as const)('renders the precise Xiaomi state transport %s', (stateTransport, label) => {
+		const device = { ...sensorDevice('single-property-sensor', 'sensor', 'value', { type: 'number', number: 20 }), providerId: 'xiaomi-main', runtimeMode: stateTransport === 'local-mqtt' ? 'local' as const : 'cloud' as const, stateTransport }
+		render(<DeviceCard device={device} pending={false} onPowerChange={() => {}} onDetails={() => {}} />)
+		expect(screen.getByText(label)).toBeInTheDocument()
+	})
+
 	it('opens mapping configuration from the corresponding device card', async () => {
 		const device = sensorDevice('single-property-sensor', 'sensor', 'value', { type: 'number', number: 20 }, 'celsius')
 		const onMapping = vi.fn()

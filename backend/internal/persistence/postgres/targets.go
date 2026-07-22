@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -34,22 +35,53 @@ func (s *Store) SaveTarget(ctx context.Context, item target.Config) error {
 		}
 		rows := make([]targetVirtualDeviceRow, 0, len(devices))
 		for _, current := range devices {
-			rows = append(rows, targetVirtualDeviceRow{TargetID: item.ID, ID: current.ID, Name: current.Name, Type: string(current.Type), SourceDeviceID: current.SourceDeviceID, Enabled: current.Enabled, CreatedAt: now, UpdatedAt: now})
+			auxiliaryJSON, err := json.Marshal(current.AuxiliarySourceDeviceIDs)
+			if err != nil {
+				return fmt.Errorf("encode target virtual device %q auxiliary sources: %w", current.ID, err)
+			}
+			rows = append(rows, targetVirtualDeviceRow{TargetID: item.ID, ID: current.ID, Name: current.Name, Type: string(current.Type), SourceDeviceID: current.SourceDeviceID, AuxiliarySourceDeviceIDsJSON: string(auxiliaryJSON), Enabled: current.Enabled, CreatedAt: now, UpdatedAt: now})
 		}
 		if len(rows) > 0 {
 			if err := tx.Create(&rows).Error; err != nil {
 				return fmt.Errorf("save target virtual devices: %w", err)
 			}
 		}
-		// This relational predicate is intentionally kept in SQL while GORM owns
-		// the transaction and deletion, because it expresses orphan detection.
-		if err := tx.Where("stage = 'consumer' AND target_id = ?", item.ID).
-			Where(`NOT EXISTS (SELECT 1 FROM target_virtual_devices AS virtual
-				WHERE virtual.target_id = mapping_bindings.target_id
-				AND virtual.id = mapping_bindings.consumer_device_id
-				AND virtual.source_device_id = mapping_bindings.device_id)`).
-			Delete(&mappingBindingRow{}).Error; err != nil {
-			return fmt.Errorf("clear stale target consumer mappings: %w", err)
+		type virtualDeviceScope struct {
+			sources map[string]struct{}
+			typeID  string
+		}
+		allowedSources := make(map[string]virtualDeviceScope, len(devices))
+		for _, current := range devices {
+			scope := virtualDeviceScope{sources: make(map[string]struct{}), typeID: string(current.Type)}
+			for _, sourceID := range current.SourceDeviceIDs() {
+				scope.sources[sourceID] = struct{}{}
+			}
+			allowedSources[current.ID] = scope
+		}
+		var scopedBindings []mappingBindingRow
+		if err := tx.Where("stage = ? AND target_id = ?", "consumer", item.ID).Find(&scopedBindings).Error; err != nil {
+			return fmt.Errorf("list target consumer mappings: %w", err)
+		}
+		staleIDs := make([]string, 0)
+		for _, binding := range scopedBindings {
+			if scope, exists := allowedSources[binding.ConsumerDeviceID]; !exists {
+				staleIDs = append(staleIDs, binding.ID)
+			} else if _, exists := scope.sources[binding.DeviceID]; !exists {
+				staleIDs = append(staleIDs, binding.ID)
+			} else {
+				consumerType := binding.ConsumerDeviceType
+				if consumerType == "" {
+					consumerType = binding.DeviceType
+				}
+				if consumerType != scope.typeID {
+					staleIDs = append(staleIDs, binding.ID)
+				}
+			}
+		}
+		if len(staleIDs) > 0 {
+			if err := tx.Where("id IN ?", staleIDs).Delete(&mappingBindingRow{}).Error; err != nil {
+				return fmt.Errorf("clear stale target consumer mappings: %w", err)
+			}
 		}
 		return nil
 	})
@@ -94,9 +126,16 @@ func (s *Store) ListTargets(ctx context.Context) ([]target.Config, error) {
 			return nil, err
 		}
 		result[index].Devices = devices
+		seenSourceIDs := make(map[string]struct{})
 		for _, current := range devices {
 			if current.Enabled {
-				result[index].DeviceIDs = append(result[index].DeviceIDs, current.SourceDeviceID)
+				for _, sourceID := range current.SourceDeviceIDs() {
+					if _, exists := seenSourceIDs[sourceID]; exists {
+						continue
+					}
+					seenSourceIDs[sourceID] = struct{}{}
+					result[index].DeviceIDs = append(result[index].DeviceIDs, sourceID)
+				}
 			}
 		}
 	}
@@ -110,7 +149,13 @@ func (s *Store) targetVirtualDevices(ctx context.Context, targetID string) ([]ta
 	}
 	result := make([]target.VirtualDevice, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, target.VirtualDevice{ID: row.ID, Name: row.Name, Type: device.Type(row.Type), SourceDeviceID: row.SourceDeviceID, Enabled: row.Enabled})
+		var auxiliaryIDs []string
+		if row.AuxiliarySourceDeviceIDsJSON != "" {
+			if err := json.Unmarshal([]byte(row.AuxiliarySourceDeviceIDsJSON), &auxiliaryIDs); err != nil {
+				return nil, fmt.Errorf("decode target virtual device %q auxiliary sources: %w", row.ID, err)
+			}
+		}
+		result = append(result, target.VirtualDevice{ID: row.ID, Name: row.Name, Type: device.Type(row.Type), SourceDeviceID: row.SourceDeviceID, AuxiliarySourceDeviceIDs: auxiliaryIDs, Enabled: row.Enabled})
 	}
 	return result, nil
 }

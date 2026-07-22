@@ -468,7 +468,7 @@ func TestTargetSaveBindingsAndDelete(t *testing.T) {
 	item := target.Config{
 		ID: "apple-second", Type: "apple-hap", Name: "Second", Enabled: false,
 		Address: ":51827", Pin: "00203004", SetupID: "HLM2", StorePath: "./hap/second",
-		Devices: []target.VirtualDevice{{ID: "living-switch", Name: "客厅开关", Type: device.TypeSwitch, SourceDeviceID: "virtual-switch-1", Enabled: true}},
+		Devices: []target.VirtualDevice{{ID: "living-switch", Name: "客厅开关", Type: device.TypeSwitch, SourceDeviceID: "virtual-switch-1", AuxiliarySourceDeviceIDs: []string{"virtual-temperature-1"}, Enabled: true}},
 	}
 	if err := store.SaveTarget(ctx, item); err != nil {
 		t.Fatalf("SaveTarget() error = %v", err)
@@ -477,11 +477,16 @@ func TestTargetSaveBindingsAndDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTargets() error = %v", err)
 	}
-	if len(items) != 2 || len(items[1].Devices) != 1 || items[1].Devices[0].ID != "living-switch" || items[1].Devices[0].SourceDeviceID != "virtual-switch-1" || len(items[1].DeviceIDs) != 1 || items[1].DeviceIDs[0] != "virtual-switch-1" {
+	if len(items) != 2 || len(items[1].Devices) != 1 || items[1].Devices[0].ID != "living-switch" || items[1].Devices[0].SourceDeviceID != "virtual-switch-1" || len(items[1].Devices[0].AuxiliarySourceDeviceIDs) != 1 || items[1].Devices[0].AuxiliarySourceDeviceIDs[0] != "virtual-temperature-1" || len(items[1].DeviceIDs) != 2 {
 		t.Fatalf("saved targets = %#v", items)
 	}
 	binding := mapping.Binding{ID: "living-switch-on", Stage: mapping.StageConsumer, ProviderID: "virtual-main", DeviceID: "virtual-switch-1", DeviceType: device.TypeSwitch, ModelEndpointID: "main", ModelCapabilityID: "switch", ModelPropertyID: "power", TargetID: item.ID, ConsumerDeviceID: "living-switch", ConsumerID: "homekit", ConsumerProperty: "Switch.On", Enabled: true}
 	if err := store.SaveMappingBinding(ctx, binding); err != nil {
+		t.Fatal(err)
+	}
+	auxiliaryBinding := binding
+	auxiliaryBinding.ID, auxiliaryBinding.DeviceID = "living-switch-aux", "virtual-temperature-1"
+	if err := store.SaveMappingBinding(ctx, auxiliaryBinding); err != nil {
 		t.Fatal(err)
 	}
 	item.Devices[0].SourceDeviceID = "virtual-switch-2"
@@ -496,6 +501,13 @@ func TestTargetSaveBindingsAndDelete(t *testing.T) {
 		if current.ID == binding.ID {
 			t.Fatal("mapping for the previous virtual-device source was retained")
 		}
+	}
+	foundAuxiliary := false
+	for _, current := range bindings {
+		foundAuxiliary = foundAuxiliary || current.ID == auxiliaryBinding.ID
+	}
+	if !foundAuxiliary {
+		t.Fatal("mapping for an unchanged auxiliary source was removed")
 	}
 	binding.ID, binding.DeviceID = "living-switch-on-new", "virtual-switch-2"
 	if err := store.SaveMappingBinding(ctx, binding); err != nil {

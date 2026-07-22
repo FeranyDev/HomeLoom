@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 )
@@ -118,7 +119,7 @@ func TestCloudOnlyRouteSkipsGatewayWhenDeviceIsNotLocallyControllable(t *testing
 	if hub.getCalls != 0 || cloud.getCalls != 1 {
 		t.Fatalf("hub reads=%d cloud reads=%d", hub.getCalls, cloud.getCalls)
 	}
-	if !provider.shouldCalibrate(configured) {
+	if len(provider.calibrationMappings(configured, false)) == 0 {
 		t.Fatal("cloud-only device must be periodically calibrated")
 	}
 }
@@ -138,7 +139,79 @@ func TestExplicitLocalRouteNeverFallsBackToCloud(t *testing.T) {
 func TestLocalPushDeviceDoesNotNeedPeriodicCalibration(t *testing.T) {
 	provider, configured := routeTestProvider(t, connectionModeAuto, &routeHub{}, &routeCloud{}, deviceRoute{local: true, cloud: true, push: true})
 	provider.setRuntimeMode(configured.ID, device.RuntimeModeLocal)
-	if provider.shouldCalibrate(configured) {
+	if len(provider.calibrationMappings(configured, false)) != 0 {
 		t.Fatal("local push-capable device should be event-driven after its initial read")
+	}
+}
+
+func TestCloudRefreshBatchesPropertiesAndBroadcastsOneSnapshot(t *testing.T) {
+	config := testConfig()
+	second := config.Devices[0].Properties[0]
+	second.CapabilityID, second.PropertyID, second.PIID = "secondary", "enabled", 2
+	config.Devices[0].Properties = append(config.Devices[0].Properties, second)
+	hub, cloud := &routeHub{}, &routeCloud{value: true}
+	provider, err := newProvider("xiaomi-route", "米家路由", config, func() hubClient { return hub })
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.client, provider.cloud = hub, cloud
+	provider.routes[config.Devices[0].DID] = deviceRoute{cloud: true}
+	events := make(chan device.Device, 2)
+	unsubscribe := provider.Subscribe(func(item device.Device) { events <- item })
+	defer unsubscribe()
+
+	provider.refreshDevice(context.Background(), config.Devices[0], true)
+	if cloud.getCalls != 1 {
+		t.Fatalf("cloud get calls=%d want one batched request", cloud.getCalls)
+	}
+	select {
+	case item := <-events:
+		first, _ := item.Property("main", "switch", "power")
+		secondProperty, _ := item.Property("main", "secondary", "enabled")
+		if first.Value.Bool == nil || !*first.Value.Bool || secondProperty.Value.Bool == nil || !*secondProperty.Value.Bool {
+			t.Fatalf("batched snapshot=%#v", item)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("batched refresh was not broadcast")
+	}
+	select {
+	case item := <-events:
+		t.Fatalf("refresh emitted more than one snapshot: %#v", item)
+	default:
+	}
+	if provider.ProviderMetrics()["cloudHttpInitialReads"] != 1 {
+		t.Fatalf("metrics=%#v", provider.ProviderMetrics())
+	}
+}
+
+func TestConnectedCloudMIPSOnlyCompensatesNonNotifiableProperties(t *testing.T) {
+	provider, configured := routeTestProvider(t, connectionModeCloud, &routeHub{}, &routeCloud{}, deviceRoute{cloud: true})
+	provider.cloudMIPS = &fakeCloudMIPS{}
+	if got := provider.calibrationMappings(configured, false); len(got) != 0 {
+		t.Fatalf("notifiable mappings should use push: %#v", got)
+	}
+	notifiable := false
+	configured.Properties[0].Notifiable = &notifiable
+	if got := provider.calibrationMappings(configured, false); len(got) != 1 {
+		t.Fatalf("non-notifiable mappings must be compensated: %#v", got)
+	}
+}
+
+func TestCentralProviderTTLTracksNotifyAndCompensationInterval(t *testing.T) {
+	config := testConfig()
+	config.PollIntervalSec = 90
+	notifiable := false
+	second := config.Devices[0].Properties[0]
+	second.CapabilityID, second.PropertyID, second.PIID, second.Notifiable = "secondary", "enabled", 2, &notifiable
+	config.Devices[0].Properties = append(config.Devices[0].Properties, second)
+	provider, err := newProvider("xiaomi-main", "米家", config, func() hubClient { return &routeHub{} })
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, _ := provider.snapshot("xiaomi-switch")
+	push, _ := item.Property("main", "switch", "power")
+	polled, _ := item.Property("main", "secondary", "enabled")
+	if push.Definition.StaleAfterSeconds != 360 || polled.Definition.StaleAfterSeconds != 180 {
+		t.Fatalf("push TTL=%d polled TTL=%d", push.Definition.StaleAfterSeconds, polled.Definition.StaleAfterSeconds)
 	}
 }

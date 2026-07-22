@@ -27,23 +27,31 @@ const (
 // unified model. Existing schema-v1 bindings without stage/model fields are
 // treated as Provider identity-path bindings.
 type Binding struct {
-	ID                string       `json:"id"`
-	Stage             BindingStage `json:"stage"`
-	ProfileID         string       `json:"profileId,omitempty"`
-	ProviderID        string       `json:"providerId,omitempty"`
-	DeviceID          string       `json:"deviceId,omitempty"`
-	EndpointID        string       `json:"endpointId,omitempty"`
-	CapabilityID      string       `json:"capabilityId,omitempty"`
-	PropertyID        string       `json:"propertyId,omitempty"`
-	DeviceType        device.Type  `json:"deviceType,omitempty"`
-	ModelEndpointID   string       `json:"modelEndpointId"`
-	ModelCapabilityID string       `json:"modelCapabilityId"`
-	ModelPropertyID   string       `json:"modelPropertyId"`
-	ConsumerID        string       `json:"consumerId,omitempty"`
-	TargetID          string       `json:"targetId,omitempty"`
-	ConsumerDeviceID  string       `json:"consumerDeviceId,omitempty"`
-	ConsumerProperty  string       `json:"consumerProperty,omitempty"`
-	Enabled           bool         `json:"enabled"`
+	ID                 string       `json:"id"`
+	Stage              BindingStage `json:"stage"`
+	ProfileID          string       `json:"profileId,omitempty"`
+	ProviderID         string       `json:"providerId,omitempty"`
+	DeviceID           string       `json:"deviceId,omitempty"`
+	EndpointID         string       `json:"endpointId,omitempty"`
+	CapabilityID       string       `json:"capabilityId,omitempty"`
+	PropertyID         string       `json:"propertyId,omitempty"`
+	DeviceType         device.Type  `json:"deviceType,omitempty"`
+	ConsumerDeviceType device.Type  `json:"consumerDeviceType,omitempty"`
+	ModelEndpointID    string       `json:"modelEndpointId"`
+	ModelCapabilityID  string       `json:"modelCapabilityId"`
+	ModelPropertyID    string       `json:"modelPropertyId"`
+	ConsumerID         string       `json:"consumerId,omitempty"`
+	TargetID           string       `json:"targetId,omitempty"`
+	ConsumerDeviceID   string       `json:"consumerDeviceId,omitempty"`
+	ConsumerProperty   string       `json:"consumerProperty,omitempty"`
+	Enabled            bool         `json:"enabled"`
+}
+
+func (b Binding) EffectiveConsumerDeviceType() device.Type {
+	if b.ConsumerDeviceType != "" {
+		return b.ConsumerDeviceType
+	}
+	return b.DeviceType
 }
 
 func (b Binding) EffectiveStage() BindingStage {
@@ -140,6 +148,9 @@ func ValidateBinding(b Binding) error {
 		}
 		if !device.ValidStableID(string(b.DeviceType)) {
 			fields["binding.deviceType"] = "must be a stable lowercase identifier"
+		}
+		if !device.ValidStableID(string(b.EffectiveConsumerDeviceType())) {
+			fields["binding.consumerDeviceType"] = "must be a stable lowercase identifier"
 		}
 		if strings.TrimSpace(b.ConsumerProperty) == "" || len(b.ConsumerProperty) > 160 {
 			fields["binding.consumerProperty"] = "must be between 1 and 160 characters"

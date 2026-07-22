@@ -75,3 +75,48 @@ func TestConsumerContractRegistryDoesNotFallBackToHomeKit(t *testing.T) {
 		t.Fatalf("unregistered Matter support = known %v, supported %v", known, supported)
 	}
 }
+
+func TestAirConditionerOffersHomeKitHeaterCoolerSemantics(t *testing.T) {
+	contract, found := HomeKitConsumerContract(device.TypeAirConditioner)
+	if !found {
+		t.Fatal("HomeKit air-conditioner contract is missing")
+	}
+	want := map[string]device.ParameterLevel{
+		"HeaterCooler.Active":                      device.ParameterRequired,
+		"HeaterCooler.CurrentHeaterCoolerState":    device.ParameterOptional,
+		"HeaterCooler.TargetHeaterCoolerState":     device.ParameterRequired,
+		"HeaterCooler.CurrentTemperature":          device.ParameterOptional,
+		"HeaterCooler.TargetTemperature":           device.ParameterRequired,
+		"HeaterCooler.RotationSpeed":               device.ParameterOptional,
+		"HeaterCooler.SwingMode":                   device.ParameterOptional,
+		"HumiditySensor.CurrentRelativeHumidity":   device.ParameterOptional,
+		"HeaterCooler.TemperatureDisplayUnits":     device.ParameterOptional,
+		"FilterMaintenance.FilterLifeLevel":        device.ParameterOptional,
+		"FilterMaintenance.FilterChangeIndication": device.ParameterOptional,
+	}
+	if len(contract.Parameters) != len(want) {
+		t.Fatalf("air-conditioner parameters = %#v", contract.Parameters)
+	}
+	for _, parameter := range contract.Parameters {
+		if level, ok := want[parameter.Target]; !ok || level != parameter.Level {
+			t.Fatalf("unexpected air-conditioner mapping = %#v", parameter)
+		}
+	}
+	if known, supported := ConsumerModelSupport("homekit", device.TypeAirConditioner); !known || !supported {
+		t.Fatalf("HomeKit air-conditioner support = known %v, supported %v", known, supported)
+	}
+}
+
+func TestHomeKitSupportsEveryNativeUnifiedModel(t *testing.T) {
+	unsupported := map[device.Type]bool{device.TypeRobotVacuum: true}
+	contracts := HomeKitConsumerContracts()
+	if len(contracts) != len(device.ModelContracts())-len(unsupported) {
+		t.Fatalf("HomeKit contracts = %d, models = %d", len(contracts), len(device.ModelContracts()))
+	}
+	for _, model := range device.ModelContracts() {
+		_, found := HomeKitConsumerContract(model.DeviceType)
+		if found == unsupported[model.DeviceType] {
+			t.Errorf("HomeKit support for %q = %v, unsupported = %v", model.DeviceType, found, unsupported[model.DeviceType])
+		}
+	}
+}

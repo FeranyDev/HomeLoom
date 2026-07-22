@@ -453,7 +453,7 @@ func (s *ProfileService) validateBindingLocked(item mapping.Binding) error {
 	}
 	var consumerProperty *mapping.ConsumerProperty
 	if item.EffectiveStage() == mapping.StageConsumer {
-		if candidate, found := mapping.FindConsumerProperty(item.ConsumerID, item.DeviceType, item.ConsumerProperty); found {
+		if candidate, found := mapping.FindConsumerProperty(item.ConsumerID, item.EffectiveConsumerDeviceType(), item.ConsumerProperty); found {
 			consumerProperty = &candidate
 		}
 		if consumerProperty == nil {

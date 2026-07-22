@@ -10,9 +10,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"testing"
 
+	"github.com/brutella/hap/accessory"
 	"github.com/brutella/hap/characteristic"
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
@@ -335,6 +337,154 @@ func TestAccessoryBindingsMapAndWriteAdvancedDeviceTypes(t *testing.T) {
 	if _, status := bindings.actives["purifier"].SetValueRequest(characteristic.ActiveInactive, request); status != -70402 || bindings.actives["purifier"].Value() != characteristic.ActiveActive {
 		t.Fatalf("offline HomeKit write status=%d value=%d", status, bindings.actives["purifier"].Value())
 	}
+}
+
+func TestAccessoryBindingsMapAndWriteAirConditioner(t *testing.T) {
+	provider, err := virtual.NewProviderFromConfig(providerconfig.Config{ID: "climate", Config: []byte(`{"devices":[{"id":"ac","name":"客厅空调","type":"air-conditioner"}]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := application.NewDeviceService(provider)
+	defer service.Close()
+	items, err := service.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		contract, found := homeKitModelContract(item.Type)
+		if !found {
+			t.Errorf("HomeKit contract for %q is missing", item.Type)
+			continue
+		}
+		if _, projectErr := device.ProjectForConsumer(item, contract); projectErr != nil {
+			t.Errorf("HomeKit projection for %q failed: %v", item.Type, projectErr)
+		}
+	}
+	bindings := newAccessoryBindings(items, map[string]bool{}, nil, service, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if len(bindings.accessories) != 1 || bindings.actives["ac"] == nil || bindings.heaterCurrent["ac"] == nil || bindings.heaterTargets["ac"] == nil || bindings.temperatures["ac"] == nil || bindings.coolingTargets["ac"] == nil || bindings.heatingTargets["ac"] == nil || bindings.speeds["ac"] == nil || bindings.swingModes["ac"] == nil || bindings.humidities["ac"] == nil || bindings.filterLife["ac"] == nil || bindings.filterChange["ac"] == nil || findHomeKitCharacteristic(bindings.byDevice["ac"], characteristic.TypeTemperatureDisplayUnits) == nil {
+		t.Fatalf("air-conditioner bindings = %#v", bindings)
+	}
+	if bindings.heaterCurrent["ac"].Value() != characteristic.CurrentHeaterCoolerStateInactive || bindings.heaterTargets["ac"].Value() != characteristic.TargetHeaterCoolerStateAuto || bindings.temperatures["ac"].Value() != 23.5 || bindings.coolingTargets["ac"].Value() != 22 || bindings.heatingTargets["ac"].Value() != 22 {
+		t.Fatal("initial air-conditioner values were not mapped")
+	}
+	request := &http.Request{}
+	if _, status := bindings.actives["ac"].SetValueRequest(characteristic.ActiveActive, request); status != 0 {
+		t.Fatalf("active write status = %d", status)
+	}
+	active, err := provider.ReadProperty(context.Background(), providersdk.PropertyReadRequest{DeviceID: "ac", EndpointID: "main", CapabilityID: "air-conditioner", PropertyID: "active"})
+	if err != nil || active.Value.Bool == nil || !*active.Value.Bool {
+		t.Fatalf("active was not written back: %#v, %v", active, err)
+	}
+	if _, status := bindings.heaterTargets["ac"].SetValueRequest(characteristic.TargetHeaterCoolerStateCool, request); status != 0 {
+		t.Fatalf("target mode write status = %d", status)
+	}
+	mode, err := provider.ReadProperty(context.Background(), providersdk.PropertyReadRequest{DeviceID: "ac", EndpointID: "main", CapabilityID: "air-conditioner", PropertyID: "target-mode"})
+	if err != nil || mode.Value.String == nil || *mode.Value.String != "cool" {
+		t.Fatalf("target mode was not written back: %#v, %v", mode, err)
+	}
+	if _, status := bindings.coolingTargets["ac"].SetValueRequest(24.5, request); status != 0 {
+		t.Fatalf("target temperature write status = %d", status)
+	}
+	temperature, err := provider.ReadProperty(context.Background(), providersdk.PropertyReadRequest{DeviceID: "ac", EndpointID: "main", CapabilityID: "temperature", PropertyID: "target-temperature"})
+	if err != nil || temperature.Value.Number == nil || *temperature.Value.Number != 24.5 {
+		t.Fatalf("target temperature was not written back: %#v, %v", temperature, err)
+	}
+}
+
+func TestAccessoryBindingsBuildAllExtendedHomeKitDeviceTypes(t *testing.T) {
+	types := []string{
+		"illuminance-sensor", "occupancy-sensor", "leak-sensor", "smoke-sensor", "carbon-monoxide-sensor", "carbon-dioxide-sensor", "air-quality-sensor",
+		"thermostat", "heater-cooler", "humidifier-dehumidifier", "lock", "garage-door", "security-system", "valve", "speaker",
+	}
+	definitions := make([]virtual.DeviceConfig, 0, len(types))
+	for _, deviceType := range types {
+		definitions = append(definitions, virtual.DeviceConfig{ID: deviceType, Name: deviceType, Type: deviceType})
+	}
+	raw, err := json.Marshal(virtual.Config{Devices: definitions})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := virtual.NewProviderFromConfig(providerconfig.Config{ID: "extended", Config: raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := application.NewDeviceService(provider)
+	defer service.Close()
+	items, err := service.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != len(types) {
+		t.Fatalf("extended unified devices = %d, want %d", len(items), len(types))
+	}
+	for _, item := range items {
+		contract, found := homeKitModelContract(item.Type)
+		if !found {
+			t.Errorf("HomeKit contract for %q is missing", item.Type)
+			continue
+		}
+		if _, projectErr := device.ProjectForConsumer(item, contract); projectErr != nil {
+			t.Errorf("HomeKit projection for %q failed: %v", item.Type, projectErr)
+		}
+	}
+	bindings := newAccessoryBindings(items, map[string]bool{}, nil, service, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if len(bindings.accessories) != len(types) {
+		t.Fatalf("extended HomeKit accessories = %d, want %d", len(bindings.accessories), len(types))
+	}
+	for _, deviceType := range types {
+		if bindings.byDevice[deviceType] == nil || bindings.faults[deviceType] == nil {
+			t.Errorf("HomeKit accessory %q was not built", deviceType)
+		}
+	}
+
+	type writeCase struct {
+		deviceID, characteristicType, capabilityID, propertyID string
+		input                                                  any
+		want                                                   device.PropertyValue
+	}
+	writes := []writeCase{
+		{"thermostat", characteristic.TypeTargetHeatingCoolingState, "thermostat", "target-mode", characteristic.TargetHeatingCoolingStateCool, device.EnumValue("cool")},
+		{"thermostat", characteristic.TypeTargetTemperature, "temperature", "target-temperature", 24.0, device.NumberValue(24)},
+		{"heater-cooler", characteristic.TypeTargetHeaterCoolerState, "heater-cooler", "target-state", characteristic.TargetHeaterCoolerStateHeat, device.EnumValue("heat")},
+		{"humidifier-dehumidifier", characteristic.TypeTargetHumidifierDehumidifierState, "humidifier-dehumidifier", "target-state", characteristic.TargetHumidifierDehumidifierStateDehumidifier, device.EnumValue("dehumidify")},
+		{"lock", characteristic.TypeLockTargetState, "lock", "target-state", characteristic.LockTargetStateSecured, device.EnumValue("secured")},
+		{"garage-door", characteristic.TypeTargetDoorState, "garage-door", "target-state", characteristic.TargetDoorStateClosed, device.EnumValue("closed")},
+		{"security-system", characteristic.TypeSecuritySystemTargetState, "security-system", "target-state", characteristic.SecuritySystemTargetStateAwayArm, device.EnumValue("away-arm")},
+		{"valve", characteristic.TypeActive, "valve", "active", characteristic.ActiveActive, device.BoolValue(true)},
+		{"speaker", characteristic.TypeMute, "speaker", "mute", true, device.BoolValue(true)},
+		{"speaker", characteristic.TypeVolume, "speaker", "volume", 55, device.NumberValue(55)},
+		{"speaker", characteristic.TypeTargetMediaState, "speaker", "target-media-state", characteristic.TargetMediaStatePause, device.EnumValue("pause")},
+	}
+	request := &http.Request{}
+	for _, test := range writes {
+		current := findHomeKitCharacteristic(bindings.byDevice[test.deviceID], test.characteristicType)
+		if current == nil {
+			t.Errorf("%s characteristic %s is missing", test.deviceID, test.characteristicType)
+			continue
+		}
+		if _, status := current.SetValueRequest(test.input, request); status != 0 {
+			t.Errorf("%s characteristic %s write status = %d", test.deviceID, test.characteristicType, status)
+			continue
+		}
+		property, readErr := provider.ReadProperty(context.Background(), providersdk.PropertyReadRequest{DeviceID: test.deviceID, EndpointID: "main", CapabilityID: test.capabilityID, PropertyID: test.propertyID})
+		if readErr != nil || !reflect.DeepEqual(property.Value, test.want) {
+			t.Errorf("%s/%s write = %#v, %v; want %#v", test.deviceID, test.propertyID, property.Value, readErr, test.want)
+		}
+	}
+}
+
+func findHomeKitCharacteristic(item *accessory.A, characteristicType string) *characteristic.C {
+	if item == nil {
+		return nil
+	}
+	for _, currentService := range item.Ss {
+		for _, current := range currentService.Cs {
+			if current.Type == characteristicType {
+				return current
+			}
+		}
+	}
+	return nil
 }
 
 func TestAccessoryBindingsHandleOneHundredAccessoriesAndBurstUpdates(t *testing.T) {

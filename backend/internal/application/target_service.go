@@ -224,9 +224,16 @@ func (s *TargetService) withDefaults(item domaintarget.Config) (domaintarget.Con
 		}
 	}
 	item.DeviceIDs = item.DeviceIDs[:0]
+	seenSourceIDs := make(map[string]struct{})
 	for _, current := range item.Devices {
 		if current.Enabled {
-			item.DeviceIDs = append(item.DeviceIDs, current.SourceDeviceID)
+			for _, sourceID := range current.SourceDeviceIDs() {
+				if _, exists := seenSourceIDs[sourceID]; exists {
+					continue
+				}
+				seenSourceIDs[sourceID] = struct{}{}
+				item.DeviceIDs = append(item.DeviceIDs, sourceID)
+			}
 		}
 	}
 	return item, nil
@@ -385,6 +392,18 @@ func validateTarget(item domaintarget.Config) error {
 			fields[prefix+".sourceDeviceId"] = "required"
 		} else if !device.ValidStableID(current.SourceDeviceID) {
 			fields[prefix+".sourceDeviceId"] = "must reference a stable unified device ID"
+		}
+		seenSources := map[string]bool{current.SourceDeviceID: true}
+		for sourceIndex, sourceID := range current.AuxiliarySourceDeviceIDs {
+			field := fmt.Sprintf("%s.auxiliarySourceDeviceIds.%d", prefix, sourceIndex)
+			if strings.TrimSpace(sourceID) == "" {
+				fields[field] = "must not be empty"
+			} else if !device.ValidStableID(sourceID) {
+				fields[field] = "must reference a stable unified device ID"
+			} else if seenSources[sourceID] {
+				fields[field] = "must be unique and different from the primary source"
+			}
+			seenSources[sourceID] = true
 		}
 		if current.Type != "" {
 			if _, supported := device.ModelContractFor(current.Type); !supported {

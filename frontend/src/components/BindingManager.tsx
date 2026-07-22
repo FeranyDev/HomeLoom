@@ -81,9 +81,9 @@ function propertyValueText(value: PropertyValue): string {
   return value.string ?? '—'
 }
 
-export function BindingManager({ device, profileRevision = 0, catalogRevision = 0, api = defaultAPI, initialStage = 'provider', providerOnly = false, consumerOnly = false, consumerLabel, targetId, consumerDeviceId, consumerId }: {
+export function BindingManager({ device, profileRevision = 0, catalogRevision = 0, api = defaultAPI, initialStage = 'provider', providerOnly = false, consumerOnly = false, consumerLabel, targetId, consumerDeviceId, consumerId, consumerDeviceType }: {
   device: Device; profileRevision?: number; catalogRevision?: number; api?: BindingAPI
-  initialStage?: 'provider' | 'consumer'; providerOnly?: boolean; consumerOnly?: boolean; consumerLabel?: string; targetId?: string; consumerDeviceId?: string; consumerId?: string
+  initialStage?: 'provider' | 'consumer'; providerOnly?: boolean; consumerOnly?: boolean; consumerLabel?: string; targetId?: string; consumerDeviceId?: string; consumerId?: string; consumerDeviceType?: DeviceType
 }) {
   const [stage, setStage] = useState<'provider' | 'consumer'>(consumerOnly ? 'consumer' : initialStage)
   const fallbackMetadata: SourceCatalogMetadata = { complete: false, source: 'device-snapshot', error: '原始属性目录尚未加载' }
@@ -118,11 +118,12 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
   const source = sources.find((item) => item.key === sourceKey)
   const consumerDevice = catalogDevice
   const effectiveType = stage === 'provider' ? source?.deviceType ?? device.type : consumerDevice.type
+  const targetConsumerType = consumerDeviceType ?? consumerDevice.type
   const model = catalog.models.find((item) => item.deviceType === effectiveType)
   const parameters = useMemo(() => model?.parameters ?? [], [model])
   const modelParameter = parameters.find((item) => pathKey(item.path) === modelKey)
   const consumerCatalogs = consumerId ? catalog.consumers.filter((item) => item.id === consumerId) : catalog.consumers
-  const consumers = consumerCatalogs.flatMap((item) => item.properties.map((property) => ({ consumer: item, property }))).filter((item) => item.property.deviceType === effectiveType)
+  const consumers = consumerCatalogs.flatMap((item) => item.properties.map((property) => ({ consumer: item, property }))).filter((item) => item.property.deviceType === targetConsumerType)
   const consumer = consumers.find((item) => `${item.consumer.id}/${item.property.id}` === consumerKey)
   const inputType = stage === 'provider' ? source?.definition.type : modelParameter?.type
   const outputType = stage === 'provider' ? modelParameter?.type : consumer?.property.type
@@ -170,7 +171,7 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
         if (editingID) await api.update(editingID, { ...input, id: editingID })
         else await api.create(input)
       } else if (consumer && consumerDevice) {
-        const input = { ...common, providerId: consumerDevice.providerId, deviceId: consumerDevice.id, deviceType: consumerDevice.type, targetId, consumerDeviceId, consumerId: consumer.consumer.id, consumerProperty: consumer.property.id }
+		const input = { ...common, providerId: consumerDevice.providerId, deviceId: consumerDevice.id, deviceType: consumerDevice.type, consumerDeviceType: targetConsumerType, targetId, consumerDeviceId, consumerId: consumer.consumer.id, consumerProperty: consumer.property.id }
         if (editingID) await api.update(editingID, { ...input, id: editingID })
         else await api.create(input)
       }

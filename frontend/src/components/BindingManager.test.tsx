@@ -130,6 +130,21 @@ describe('BindingManager', () => {
     })))
   })
 
+  it('stores source and Consumer device types separately for cross-type binding', async () => {
+    const create = vi.fn(async (input) => ({ ...input, id: 'consumer-cross-type' }))
+    const crossTypeCatalog = vi.fn(async () => ({
+      ...(await catalog()),
+      consumers: [{ id: 'homekit', name: 'Apple Home / HomeKit', properties: [{ id: 'Outlet.On', name: 'Outlet.On', deviceType: 'outlet' as const, defaultModelPath: { endpointId: 'main', capabilityId: 'switch', propertyId: 'power' }, level: 'required' as const, type: 'bool' as const, readable: true, writable: true, notifiable: true }] }],
+    }))
+    const api = { listBindings: vi.fn(async () => []), listProfiles: vi.fn(async () => []), create, update: vi.fn(), remove: vi.fn(), catalog: crossTypeCatalog }
+    render(<BindingManager device={device} api={api} initialStage="consumer" consumerOnly consumerId="homekit" consumerDeviceType="outlet" targetId="apple-main" consumerDeviceId="living-outlet" />)
+    await userEvent.click(await screen.findByRole('button', { name: /保存第.*二.*段路由/ }))
+    await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      deviceType: 'switch', consumerDeviceType: 'outlet', consumerProperty: 'Outlet.On',
+      modelEndpointId: 'main', modelCapabilityId: 'switch', modelPropertyId: 'power',
+    })))
+  })
+
   it('isolates Consumer routes for one bridge-owned virtual device', async () => {
     const current: MappingBinding = { id: 'bridge-current', stage: 'consumer', providerId: device.providerId, deviceId: device.id, deviceType: 'switch', modelEndpointId: 'main', modelCapabilityId: 'switch', modelPropertyId: 'power', targetId: 'apple-main', consumerDeviceId: 'living-switch', consumerId: 'homekit', consumerProperty: 'Switch.On', enabled: true }
     const other: MappingBinding = { ...current, id: 'bridge-other', targetId: 'apple-guest', consumerDeviceId: 'guest-switch' }

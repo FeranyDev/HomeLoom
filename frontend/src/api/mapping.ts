@@ -1,5 +1,5 @@
 import { requestData } from './client'
-import type { CustomModel, CustomModelProperty, MappingBinding, MappingCatalog, MappingPreviewRequest, MappingPreviewResult, MappingProfile, MappingProfileInfo, ModelContract } from '../types/mapping'
+import type { ConsumerCatalog, CustomModel, CustomModelProperty, MappingBinding, MappingCatalog, MappingPreviewRequest, MappingPreviewResult, MappingProfile, MappingProfileInfo, ModelContract } from '../types/mapping'
 
 export const previewMapping = (input: MappingPreviewRequest): Promise<MappingPreviewResult> => requestData('/api/v1/mapping/preview', { method: 'POST', body: JSON.stringify(input) })
 export const listMappingProfiles = (): Promise<MappingProfileInfo[]> => requestData('/api/v1/mapping/profiles')
@@ -12,6 +12,7 @@ export const createMappingBinding = (binding: Omit<MappingBinding, 'id'> & { id?
 export const updateMappingBinding = (id: string, binding: MappingBinding): Promise<MappingBinding> => requestData(`/api/v1/mapping/bindings/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(binding) })
 export const deleteMappingBinding = (id: string): Promise<void> => requestData(`/api/v1/mapping/bindings/${encodeURIComponent(id)}`, { method: 'DELETE' })
 export const getMappingCatalog = (): Promise<MappingCatalog> => requestData('/api/v1/mapping/catalog')
+export const listConsumerCatalogs = (): Promise<ConsumerCatalog[]> => requestData('/api/v1/mapping/consumers')
 export const listModelContracts = (signal?: AbortSignal): Promise<ModelContract[]> => requestData('/api/v1/device-models', { signal })
 export const createCustomModel = (item: CustomModel): Promise<CustomModel> => requestData('/api/v1/device-models/custom-models', { method: 'POST', body: JSON.stringify(item) })
 export const deleteCustomModel = (deviceType: string): Promise<void> => requestData(`/api/v1/device-models/custom-models/${encodeURIComponent(deviceType)}`, { method: 'DELETE' })

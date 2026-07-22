@@ -13,6 +13,7 @@ type ValueType string
 type Availability string
 type ParameterLevel string
 type RuntimeMode string
+type StateTransport string
 
 const (
 	SchemaVersion = 1
@@ -69,6 +70,13 @@ const (
 	RuntimeModeCloud   RuntimeMode = "cloud"
 )
 
+const (
+	StateTransportPending   StateTransport = "pending"
+	StateTransportLocalMQTT StateTransport = "local-mqtt"
+	StateTransportCloudMQTT StateTransport = "cloud-mqtt"
+	StateTransportCloudHTTP StateTransport = "cloud-http"
+)
+
 var stableIDPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$`)
 
 var ErrInvalidModel = errors.New("invalid device model")
@@ -118,8 +126,9 @@ type PropertyDefinition struct {
 }
 
 type Property struct {
-	Definition PropertyDefinition `json:"definition"`
-	Value      PropertyValue      `json:"value"`
+	Definition     PropertyDefinition `json:"definition"`
+	Value          PropertyValue      `json:"value"`
+	StateTransport StateTransport     `json:"stateTransport,omitempty"`
 }
 
 type Capability struct {
@@ -165,13 +174,14 @@ type Device struct {
 	Type          Type         `json:"type"`
 	Availability  Availability `json:"availability"`
 	// Online is retained as a compatibility projection for schema v1 clients.
-	Online       bool        `json:"online"`
-	Sequence     uint64      `json:"sequence,omitempty"`
-	Disabled     bool        `json:"disabled,omitempty"`
-	Removed      bool        `json:"removed,omitempty"`
-	RuntimeMode  RuntimeMode `json:"runtimeMode,omitempty"`
-	Endpoints    []Endpoint  `json:"endpoints"`
-	LastUpdateAt time.Time   `json:"lastUpdateAt"`
+	Online         bool           `json:"online"`
+	Sequence       uint64         `json:"sequence,omitempty"`
+	Disabled       bool           `json:"disabled,omitempty"`
+	Removed        bool           `json:"removed,omitempty"`
+	RuntimeMode    RuntimeMode    `json:"runtimeMode,omitempty"`
+	StateTransport StateTransport `json:"stateTransport,omitempty"`
+	Endpoints      []Endpoint     `json:"endpoints"`
+	LastUpdateAt   time.Time      `json:"lastUpdateAt"`
 }
 
 func ValidStableID(value string) bool { return stableIDPattern.MatchString(value) }
@@ -220,6 +230,9 @@ func (d Device) ValidateStructure() error {
 	}
 	if d.RuntimeMode != "" && d.RuntimeMode != RuntimeModePending && d.RuntimeMode != RuntimeModeLocal && d.RuntimeMode != RuntimeModeCloud {
 		return fmt.Errorf("%w: invalid runtime mode %q", ErrInvalidModel, d.RuntimeMode)
+	}
+	if d.StateTransport != "" && d.StateTransport != StateTransportPending && d.StateTransport != StateTransportLocalMQTT && d.StateTransport != StateTransportCloudMQTT && d.StateTransport != StateTransportCloudHTTP {
+		return fmt.Errorf("%w: invalid state transport %q", ErrInvalidModel, d.StateTransport)
 	}
 	if (d.Disabled || d.Removed) && d.IsOnline() {
 		return fmt.Errorf("%w: disabled or removed device cannot be online", ErrInvalidModel)
@@ -313,6 +326,9 @@ func validValueType(value ValueType) bool {
 
 func (p Property) Validate() error {
 	value := p.Value
+	if p.StateTransport != "" && p.StateTransport != StateTransportPending && p.StateTransport != StateTransportLocalMQTT && p.StateTransport != StateTransportCloudMQTT && p.StateTransport != StateTransportCloudHTTP {
+		return fmt.Errorf("unsupported state transport %q", p.StateTransport)
+	}
 	if p.Definition.ParameterLevel != "" && p.Definition.ParameterLevel != ParameterRequired && p.Definition.ParameterLevel != ParameterOptional && p.Definition.ParameterLevel != ParameterCustom {
 		return fmt.Errorf("unsupported parameter level %q", p.Definition.ParameterLevel)
 	}

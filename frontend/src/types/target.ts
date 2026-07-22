@@ -6,6 +6,7 @@ export interface TargetVirtualDevice {
 	name: string
 	type: import('./device').DeviceType
 	sourceDeviceId: string
+	auxiliarySourceDeviceIds?: string[]
 	enabled: boolean
 }
 

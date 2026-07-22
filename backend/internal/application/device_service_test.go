@@ -53,6 +53,8 @@ func (p *devicePreferenceMetrics) SetDeviceDisabled(_ context.Context, id string
 }
 
 type integerSnapshotProvider struct{}
+type polledSnapshotProvider struct{ integerSnapshotProvider }
+type mixedTransportSnapshotProvider struct{ integerSnapshotProvider }
 
 func (*integerSnapshotProvider) Manifest() providersdk.Manifest {
 	return providersdk.Manifest{ID: "integer", Type: "test", Name: "Integer", Version: "1"}
@@ -67,6 +69,26 @@ func (*integerSnapshotProvider) DiscoverDevices(context.Context) ([]device.Devic
 	item := device.Device{SchemaVersion: device.SchemaVersion, ID: "counter", ProviderID: "integer", Name: "Counter", Type: device.Type("counter"), LastUpdateAt: time.Now().UTC(), Endpoints: []device.Endpoint{{ID: "main", Name: "Main", Type: "counter", Capabilities: []device.Capability{{ID: "counter", Type: "counter", Properties: []device.Property{{Definition: device.PropertyDefinition{ID: "value", Name: "Value", Type: device.ValueTypeInt, Readable: true, Writable: true, Max: &maximum}, Value: device.IntValue(7)}}}}}}}
 	item.SetOnline(true)
 	return []device.Device{item}, nil
+}
+
+func (p *polledSnapshotProvider) DiscoverDevices(ctx context.Context) ([]device.Device, error) {
+	items, err := p.integerSnapshotProvider.DiscoverDevices(ctx)
+	if err == nil && len(items) > 0 {
+		items[0].StateTransport = device.StateTransportCloudHTTP
+	}
+	return items, err
+}
+
+func (p *mixedTransportSnapshotProvider) DiscoverDevices(ctx context.Context) ([]device.Device, error) {
+	items, err := p.integerSnapshotProvider.DiscoverDevices(ctx)
+	if err == nil && len(items) > 0 {
+		items[0].StateTransport = device.StateTransportCloudHTTP
+		items[0].Endpoints[0].Capabilities[0].Properties[0].StateTransport = device.StateTransportCloudMQTT
+		second := items[0].Endpoints[0].Capabilities[0].Properties[0]
+		second.Definition.ID, second.StateTransport = "calibration", device.StateTransportCloudHTTP
+		items[0].Endpoints[0].Capabilities[0].Properties = append(items[0].Endpoints[0].Capabilities[0].Properties, second)
+	}
+	return items, err
 }
 
 func (p *skewedSnapshotProvider) Manifest() providersdk.Manifest { return p.inner.Manifest() }
@@ -171,6 +193,31 @@ func TestDeviceServiceRoutesProviderEvents(t *testing.T) {
 	states := service.States("virtual-switch-1")
 	if len(states) != 1 || states[0].Version != 2 {
 		t.Fatalf("States() = %#v", states)
+	}
+}
+
+func TestDeviceServiceMarksCloudHTTPSnapshotsAsPolled(t *testing.T) {
+	service := application.NewDeviceService(&polledSnapshotProvider{})
+	defer service.Close()
+	states := service.States("counter")
+	if len(states) != 1 || states[0].Source != domainstate.SourcePolled || states[0].Quality != domainstate.QualityPolled {
+		t.Fatalf("cloud HTTP states=%#v", states)
+	}
+}
+
+func TestDeviceServiceUsesPerPropertyStateTransport(t *testing.T) {
+	service := application.NewDeviceService(&mixedTransportSnapshotProvider{})
+	defer service.Close()
+	states := service.States("counter")
+	if len(states) != 2 {
+		t.Fatalf("states=%#v", states)
+	}
+	byProperty := map[string]domainstate.StateValue{}
+	for _, state := range states {
+		byProperty[state.Key.PropertyID] = state
+	}
+	if byProperty["value"].Source != domainstate.SourceReported || byProperty["calibration"].Source != domainstate.SourcePolled {
+		t.Fatalf("mixed transport states=%#v", states)
 	}
 }
 

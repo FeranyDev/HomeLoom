@@ -484,6 +484,9 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 			"providers": items, "models": models, "consumers": mapping.BuiltInConsumerCatalogs(),
 		}})
 	})
+	e.GET("/api/v1/mapping/consumers", func(c echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]any{"data": mapping.BuiltInConsumerCatalogs()})
+	})
 	e.GET("/api/v1/device-models/custom-properties", func(c echo.Context) error {
 		if server.profiles == nil {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "custom model properties are unavailable")

@@ -50,6 +50,67 @@ func (s *ProfileService) ProjectConsumerDeviceInstance(consumerID, targetID, con
 	return result, nil
 }
 
+// ProjectConsumerDeviceSourcesInstance composes one Consumer-owned device from
+// an ordered set of unified devices. Explicit per-source bindings are applied
+// first (primary source first), then compatible primary-source identity values
+// fill any still-unmapped properties.
+func (s *ProfileService) ProjectConsumerDeviceSourcesInstance(consumerID, targetID, consumerDeviceID string, targetType device.Type, items []device.Device) (device.Device, error) {
+	if len(items) == 0 {
+		return device.Device{}, fmt.Errorf("consumer device %q has no source devices", consumerDeviceID)
+	}
+	contract, supported := consumerContract(consumerID, targetType)
+	if !supported {
+		return device.Device{}, fmt.Errorf("consumer %q does not support device type %q", consumerID, targetType)
+	}
+	primary := items[0]
+	result := cloneDevice(primary)
+	result.Type = targetType
+	if primary.Type != targetType {
+		result.Endpoints = nil
+	}
+	for _, current := range items[1:] {
+		if current.LastUpdateAt.After(result.LastUpdateAt) {
+			result.LastUpdateAt = current.LastUpdateAt
+		}
+		if current.IsOnline() {
+			result.SetAvailability(device.AvailabilityOnline)
+		}
+	}
+
+	for _, parameter := range contract.Parameters {
+		for _, source := range items {
+			binding, profile, applied, err := s.resolveConsumerBinding(source.ProviderID, source.ID, targetID, consumerDeviceID, consumerID, targetType, parameter.Target)
+			if err != nil {
+				return device.Device{}, err
+			}
+			if !applied {
+				continue
+			}
+			path := binding.ModelPath()
+			property, exists := source.Property(path.EndpointID, path.CapabilityID, path.PropertyID)
+			if !exists {
+				continue
+			}
+			if binding.ProfileID != "" {
+				preview, previewErr := mapping.Preview(mapping.PreviewRequest{Profile: profile, Direction: mapping.DirectionForward, Value: &property.Value})
+				if previewErr != nil {
+					return device.Device{}, fmt.Errorf("consumer binding %q: %w", binding.ID, previewErr)
+				}
+				property.Value = preview.Value
+				property.Definition.Type = profile.OutputType
+			}
+			property.Definition.ID = parameter.Source.PropertyID
+			property.Definition.ParameterLevel = parameter.Level
+			upsertConsumerProperty(&result, parameter.Source, property)
+			break
+		}
+	}
+	if _, err := device.ProjectForConsumer(result, contract); err != nil {
+		return device.Device{}, err
+	}
+	return result, nil
+}
+
 // ResolveConsumerWrite maps the adapter's stable default path back to the
 // configured unified-model source and reverses the Consumer conversion.
 func (s *ProfileService) ResolveConsumerWrite(providerID, deviceID, consumerID string, deviceType device.Type, endpointID, capabilityID, propertyID string, value device.PropertyValue) (device.ParameterPath, device.PropertyValue, string, bool, error) {

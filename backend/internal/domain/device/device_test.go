@@ -26,6 +26,13 @@ func TestPropertyLookupAndUpdate(t *testing.T) {
 	}
 }
 
+func TestPropertyRejectsInvalidStateTransport(t *testing.T) {
+	property := Property{Definition: PropertyDefinition{ID: "power", Type: ValueTypeBool}, Value: BoolValue(true), StateTransport: "invalid"}
+	if err := property.Validate(); err == nil || !strings.Contains(err.Error(), "state transport") {
+		t.Fatalf("validation error=%v", err)
+	}
+}
+
 func TestTypedValues(t *testing.T) {
 	boolean := BoolValue(true)
 	integer := IntValue(42)
@@ -67,6 +74,10 @@ func TestAvailabilityNormalizationAndValidation(t *testing.T) {
 	invalidMode := Device{SchemaVersion: SchemaVersion, ID: "device", ProviderID: "provider", RuntimeMode: "invalid"}
 	if err := invalidMode.ValidateStructure(); !errors.Is(err, ErrInvalidModel) || !strings.Contains(err.Error(), "runtime mode") {
 		t.Fatalf("runtime mode error = %v", err)
+	}
+	invalidTransport := Device{SchemaVersion: SchemaVersion, ID: "device", ProviderID: "provider", StateTransport: "invalid"}
+	if err := invalidTransport.ValidateStructure(); !errors.Is(err, ErrInvalidModel) || !strings.Contains(err.Error(), "state transport") {
+		t.Fatalf("state transport error = %v", err)
 	}
 }
 

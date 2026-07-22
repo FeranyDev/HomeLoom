@@ -201,10 +201,15 @@ paths:
   /api/v1/mapping/catalog:
     get:
       operationId: getMappingCatalog
-      description: Returns native Provider source catalogs before Provider-to-model projection. Every Provider device includes catalog provenance and an explicit completeness flag; Xiaomi catalogs are expanded from cached MIoT Spec definitions when available.
-      description: Returns unprojected Provider attributes, the merged three-level unified model catalog, and every built-in Consumer property.
+      description: Returns unprojected Provider attributes, the merged three-level unified model catalog, and every built-in Consumer property. Provider devices include catalog provenance and completeness metadata.
       responses:
         "200": { description: Visual mapping catalog, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/MappingCatalog" } } } } } }
+  /api/v1/mapping/consumers:
+    get:
+      operationId: listConsumerCatalogs
+      description: Returns only the static Consumer capability catalogs without querying Provider source devices.
+      responses:
+        "200": { description: Consumer adapter properties and supported unified models, content: { application/json: { schema: { type: object, required: [data], properties: { data: { type: array, items: { $ref: "#/components/schemas/ConsumerCatalog" } } } } } } }
   /api/v1/mapping/bindings:
     get:
       operationId: listMappingBindings
@@ -764,6 +769,7 @@ components:
       properties:
         definition: { type: object, additionalProperties: true }
         value: { $ref: "#/components/schemas/PropertyValue" }
+        stateTransport: { type: string, enum: [pending, local-mqtt, cloud-mqtt, cloud-http], description: Most recent acquisition path for this property. }
     ParameterRole:
       type: object
       required: [level, behavior]
@@ -795,7 +801,8 @@ components:
       type: object
       required: [deviceType, version, builtIn, parameters, custom]
       properties:
-        deviceType: { type: string }
+        deviceType: { type: string, description: Unified source model type containing the selected model path. }
+        consumerDeviceType: { type: string, description: Consumer-owned virtual-device type; defaults to deviceType for existing same-type bindings. }
         name: { type: string }
         version: { type: integer, minimum: 1 }
         builtIn: { type: boolean }
@@ -859,6 +866,13 @@ components:
         readable: { type: boolean }
         writable: { type: boolean }
         notifiable: { type: boolean }
+    ConsumerCatalog:
+      type: object
+      required: [id, name, properties]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        properties: { type: array, items: { $ref: "#/components/schemas/ConsumerProperty" } }
     MappingCatalog:
       type: object
       required: [providers, models, consumers]
@@ -867,13 +881,7 @@ components:
         models: { type: array, items: { $ref: "#/components/schemas/DeviceModelContract" } }
         consumers:
           type: array
-          items:
-            type: object
-            required: [id, name, properties]
-            properties:
-              id: { type: string }
-              name: { type: string }
-              properties: { type: array, items: { $ref: "#/components/schemas/ConsumerProperty" } }
+          items: { $ref: "#/components/schemas/ConsumerCatalog" }
     SourceCatalogDevice:
       allOf:
         - { $ref: "#/components/schemas/Device" }
@@ -918,6 +926,7 @@ components:
         disabled: { type: boolean, description: Persisted operator preference; Provider events cannot make the device online while true. }
         removed: { type: boolean, description: Tombstone retained after the Provider removes the device identity. }
         runtimeMode: { type: string, enum: [pending, local, cloud], description: Actual runtime source selected by transport-aware Providers; Xiaomi MIoT Cloud reports local after a successful LAN sync and cloud after cloud polling or auto fallback. }
+        stateTransport: { type: string, enum: [pending, local-mqtt, cloud-mqtt, cloud-http], description: Precise state acquisition path; the Xiaomi central Provider distinguishes gateway push, official cloud push, and official cloud HTTP calibration. }
         endpoints: { type: array, items: { type: object, additionalProperties: true } }
         lastUpdateAt: { type: string, format: date-time }
     DeviceCommandResponse:
@@ -1018,8 +1027,9 @@ components:
       properties:
         id: { type: string, description: Stable Consumer-side device identity within one bridge. }
         name: { type: string }
-        type: { type: string, description: Unified model type. }
-        sourceDeviceId: { type: string, description: Concrete unified-registry device backing this virtual device. }
+        type: { type: string, description: Consumer-owned device type; may differ from every source unified-model type. }
+        sourceDeviceId: { type: string, description: Primary unified-registry source. It has the highest routing priority. }
+        auxiliarySourceDeviceIds: { type: array, description: Ordered auxiliary unified-registry sources aggregated into this Consumer device., items: { type: string } }
         enabled: { type: boolean }
     TargetInput:
       type: object

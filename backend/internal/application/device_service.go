@@ -116,6 +116,10 @@ type ScopedConsumerPropertyMapper interface {
 	ResolveConsumerWriteInstance(providerID, deviceID, targetID, consumerDeviceID, consumerID string, deviceType device.Type, endpointID, capabilityID, propertyID string, value device.PropertyValue) (device.ParameterPath, device.PropertyValue, string, bool, error)
 }
 
+type ScopedConsumerPropertyComposer interface {
+	ProjectConsumerDeviceSourcesInstance(consumerID, targetID, consumerDeviceID string, targetType device.Type, items []device.Device) (device.Device, error)
+}
+
 type ModelDefinitionMapper interface {
 	ResolveModelDefinition(deviceType device.Type, path device.ParameterPath, fallback device.PropertyDefinition) (device.PropertyDefinition, bool)
 }
@@ -686,6 +690,25 @@ func (s *DeviceService) ProjectForConsumerInstance(consumerID, targetID, consume
 	return mapper.ProjectConsumerDeviceInstance(consumerID, targetID, consumerDeviceID, item)
 }
 
+func (s *DeviceService) ProjectSourcesForConsumerInstance(consumerID, targetID, consumerDeviceID string, targetType device.Type, sourceDeviceIDs []string) (device.Device, error) {
+	items := make([]device.Device, 0, len(sourceDeviceIDs))
+	for _, sourceID := range sourceDeviceIDs {
+		item, ok := s.registry.Get(sourceID)
+		if !ok {
+			return device.Device{}, fmt.Errorf("%w: %s", ErrDeviceNotFound, sourceID)
+		}
+		items = append(items, item)
+	}
+	composer, ok := s.propertyMapper.(ScopedConsumerPropertyComposer)
+	if !ok {
+		if len(items) == 0 {
+			return device.Device{}, ErrDeviceNotFound
+		}
+		return s.ProjectForConsumerInstance(consumerID, targetID, consumerDeviceID, items[0])
+	}
+	return composer.ProjectConsumerDeviceSourcesInstance(consumerID, targetID, consumerDeviceID, targetType, items)
+}
+
 func (s *DeviceService) ExecuteConsumerProperty(ctx context.Context, consumerID, deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) (device.Device, domaincommand.Command, error) {
 	item, ok := s.registry.Get(deviceID)
 	if !ok {
@@ -716,6 +739,42 @@ func (s *DeviceService) ExecuteConsumerPropertyInstance(ctx context.Context, con
 		return device.Device{}, domaincommand.Command{}, err
 	}
 	return s.ExecuteProperty(ctx, deviceID, path.EndpointID, path.CapabilityID, path.PropertyID, mapped)
+}
+
+// ExecuteConsumerPropertySourcesInstance resolves explicit mappings across all
+// aggregate sources before falling back to identity routing on the primary
+// source. This keeps manual mappings above automatic model-path matching.
+func (s *DeviceService) ExecuteConsumerPropertySourcesInstance(ctx context.Context, consumerID, targetID, consumerDeviceID string, targetType device.Type, sourceDeviceIDs []string, endpointID, capabilityID, propertyID string, value device.PropertyValue) (device.Device, domaincommand.Command, error) {
+	if len(sourceDeviceIDs) == 0 {
+		return device.Device{}, domaincommand.Command{}, ErrDeviceNotFound
+	}
+	mapper, ok := s.propertyMapper.(ScopedConsumerPropertyMapper)
+	if !ok {
+		return s.ExecuteConsumerProperty(ctx, consumerID, sourceDeviceIDs[0], endpointID, capabilityID, propertyID, value)
+	}
+	items := make([]device.Device, 0, len(sourceDeviceIDs))
+	for _, sourceID := range sourceDeviceIDs {
+		item, exists := s.registry.Get(sourceID)
+		if !exists {
+			return device.Device{}, domaincommand.Command{}, fmt.Errorf("%w: %s", ErrDeviceNotFound, sourceID)
+		}
+		items = append(items, item)
+		path, mapped, _, applied, err := mapper.ResolveConsumerWriteInstance(item.ProviderID, item.ID, targetID, consumerDeviceID, consumerID, targetType, endpointID, capabilityID, propertyID, value)
+		if err != nil {
+			return device.Device{}, domaincommand.Command{}, err
+		}
+		if applied {
+			if _, exists := item.Property(path.EndpointID, path.CapabilityID, path.PropertyID); !exists {
+				continue
+			}
+			return s.ExecuteProperty(ctx, item.ID, path.EndpointID, path.CapabilityID, path.PropertyID, mapped)
+		}
+	}
+	primary := items[0]
+	if primary.Type != targetType {
+		return device.Device{}, domaincommand.Command{}, ErrPropertyUnsupported
+	}
+	return s.ExecuteProperty(ctx, primary.ID, endpointID, capabilityID, propertyID, value)
 }
 
 func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) (result device.Device, resultCommand domaincommand.Command, resultErr error) {
@@ -1493,10 +1552,18 @@ func (s *DeviceService) applySnapshot(item device.Device, traceID string) {
 	for _, endpoint := range item.Endpoints {
 		for _, capability := range endpoint.Capabilities {
 			for _, property := range capability.Properties {
+				source, quality := domainstate.SourceReported, domainstate.QualityReported
+				transport := property.StateTransport
+				if transport == "" {
+					transport = item.StateTransport
+				}
+				if transport == device.StateTransportCloudHTTP {
+					source, quality = domainstate.SourcePolled, domainstate.QualityPolled
+				}
 				value := domainstate.StateValue{
 					Key:        domainstate.Key{DeviceID: item.ID, EndpointID: endpoint.ID, CapabilityID: capability.ID, PropertyID: property.Definition.ID},
-					ProviderID: item.ProviderID, Source: domainstate.SourceReported,
-					ObservedAt: observedAt, ReceivedAt: receivedAt, Sequence: item.Sequence, Quality: domainstate.QualityReported, TraceID: traceID,
+					ProviderID: item.ProviderID, Source: source,
+					ObservedAt: observedAt, ReceivedAt: receivedAt, Sequence: item.Sequence, Quality: quality, TraceID: traceID,
 				}
 				if property.Definition.StaleAfterSeconds > 0 {
 					value.ExpiresAt = receivedAt.Add(time.Duration(property.Definition.StaleAfterSeconds) * time.Second)

@@ -82,7 +82,7 @@ func TestConsumerMappingUniquenessIsScopedPerTargetVirtualDevice(t *testing.T) {
 	defer store.Close()
 	first := mapping.Binding{
 		ID: "target-consumer-one", Stage: mapping.StageConsumer,
-		ProviderID: "virtual-main", DeviceID: "switch-one", DeviceType: "switch",
+		ProviderID: "virtual-main", DeviceID: "switch-one", DeviceType: "switch", ConsumerDeviceType: "outlet",
 		ModelEndpointID: "main", ModelCapabilityID: "switch", ModelPropertyID: "power",
 		TargetID: "apple-main", ConsumerDeviceID: "living-room-switch",
 		ConsumerID: "homekit", ConsumerProperty: "Switch.On", Enabled: true,
@@ -96,7 +96,7 @@ func TestConsumerMappingUniquenessIsScopedPerTargetVirtualDevice(t *testing.T) {
 		t.Fatalf("same source and characteristic on another virtual device was rejected: %v", err)
 	}
 	items, err := store.ListMappingBindings(ctx)
-	if err != nil || len(items) != 2 || items[0].TargetID == "" || items[1].ConsumerDeviceID == "" {
+	if err != nil || len(items) != 2 || items[0].TargetID == "" || items[1].ConsumerDeviceID == "" || items[0].ConsumerDeviceType != "outlet" || items[1].ConsumerDeviceType != "outlet" {
 		t.Fatalf("scoped bindings = %#v, error = %v", items, err)
 	}
 	duplicate := first

@@ -8,6 +8,7 @@ import (
 
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	"github.com/feranydev/homeloom/backend/internal/domain/target"
+	"github.com/feranydev/homeloom/backend/internal/mapping"
 )
 
 type targetStoreStub struct {
@@ -131,6 +132,68 @@ func TestTargetSaveRejectsInvalidConfiguration(t *testing.T) {
 		if _, err := service.Save(context.Background(), item); err == nil {
 			t.Fatalf("Save() accepted %#v", item)
 		}
+	}
+}
+
+func TestTargetSaveAcceptsHomeKitAirConditioner(t *testing.T) {
+	store := &targetStoreStub{}
+	service := NewTargetService(nil, store)
+	config := target.Config{
+		ID: "apple-main", Type: "apple-hap", Name: "Main", Pin: "12345678", Address: ":51826", SetupID: "HLM1", StorePath: "data/hap/apple-main",
+		Devices: []target.VirtualDevice{{ID: "living-room-ac", Name: "客厅空调", Type: device.TypeAirConditioner, SourceDeviceID: "xiaomi-ac", Enabled: true}},
+	}
+	if _, err := service.Save(context.Background(), config); err != nil {
+		t.Fatalf("Save() rejected HomeKit air conditioner: %v", err)
+	}
+	if len(store.saved) != 1 || store.saved[0].Devices[0].Type != device.TypeAirConditioner {
+		t.Fatalf("saved target = %#v", store.saved)
+	}
+}
+
+func TestTargetSaveAcceptsIndependentConsumerTypeAndAuxiliarySources(t *testing.T) {
+	store := &targetStoreStub{}
+	service := NewTargetService(nil, store)
+	config := target.Config{
+		ID: "apple-aggregate", Type: "apple-hap", Name: "Aggregate", Pin: "12345678", Address: ":51826", SetupID: "AGG1", StorePath: "data/hap/apple-aggregate",
+		Devices: []target.VirtualDevice{{ID: "homekit-outlet", Name: "组合插座", Type: device.TypeOutlet, SourceDeviceID: "source-switch", AuxiliarySourceDeviceIDs: []string{"source-power-meter"}, Enabled: true}},
+	}
+	info, err := service.Save(context.Background(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(info.DeviceIDs) != 2 || len(store.saved) != 1 || len(store.saved[0].Devices[0].AuxiliarySourceDeviceIDs) != 1 {
+		t.Fatalf("saved aggregate target = %#v", store.saved)
+	}
+	config.Devices[0].AuxiliarySourceDeviceIDs = []string{"source-switch"}
+	if _, err := service.Save(context.Background(), config); err == nil {
+		t.Fatal("Save() accepted a primary source duplicated as an auxiliary source")
+	}
+}
+
+func TestTargetSaveAcceptsEveryHomeKitConsumerModel(t *testing.T) {
+	store := &targetStoreStub{}
+	service := NewTargetService(nil, store)
+	var devices []target.VirtualDevice
+	for _, model := range device.ModelContracts() {
+		known, supported := mapping.ConsumerModelSupport("homekit", model.DeviceType)
+		if !known {
+			t.Fatalf("HomeKit consumer registry is missing")
+		}
+		if !supported {
+			if model.DeviceType != device.TypeRobotVacuum {
+				t.Errorf("unexpected unsupported HomeKit model %q", model.DeviceType)
+			}
+			continue
+		}
+		id := "homekit-" + string(model.DeviceType)
+		devices = append(devices, target.VirtualDevice{ID: id, Name: id, Type: model.DeviceType, SourceDeviceID: "source-" + string(model.DeviceType), Enabled: true})
+	}
+	config := target.Config{ID: "apple-all", Type: "apple-hap", Name: "All", Pin: "12345678", Address: ":51826", SetupID: "ALL1", StorePath: "data/hap/apple-all", Devices: devices}
+	if _, err := service.Save(context.Background(), config); err != nil {
+		t.Fatalf("Save() rejected a HomeKit-supported model: %v", err)
+	}
+	if len(store.saved) != 1 || len(store.saved[0].Devices) != len(device.ModelContracts())-1 {
+		t.Fatalf("saved HomeKit devices = %d", len(store.saved[0].Devices))
 	}
 }
 

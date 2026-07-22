@@ -81,6 +81,7 @@ func (p *Provider) loadSourceSpecs(ctx context.Context, hubDevices []HubDevice) 
 	nextCatalog := make(map[string]providersdk.SourceCatalogMetadata, len(configuredDevices))
 	for _, result := range loaded {
 		item := buildDevice(p.id, result.configured)
+		applyCentralStalePolicy(&item, p.config.pollInterval())
 		sourceItem := item.Clone()
 		model := result.hub.Model
 		if model == "" {
@@ -93,6 +94,7 @@ func (p *Provider) loadSourceSpecs(ctx context.Context, hubDevices []HubDevice) 
 			var properties map[string]PropertyMapping
 			var actions map[string]ActionMapping
 			sourceItem, properties, actions = mergeMIoTSpec(sourceItem, result.configured, result.document)
+			applyCentralStalePolicy(&sourceItem, p.config.pollInterval())
 			for key, mapping := range properties {
 				nextRawProperties[key] = mapping
 			}
@@ -108,7 +110,7 @@ func (p *Provider) loadSourceSpecs(ctx context.Context, hubDevices []HubDevice) 
 			sourceItem = preserveDeviceState(sourceItem, previous)
 		} else {
 			sourceItem.Availability, sourceItem.Online = item.Availability, item.Online
-			sourceItem.Sequence, sourceItem.LastUpdateAt, sourceItem.RuntimeMode = item.Sequence, item.LastUpdateAt, item.RuntimeMode
+			sourceItem.Sequence, sourceItem.LastUpdateAt, sourceItem.RuntimeMode, sourceItem.StateTransport = item.Sequence, item.LastUpdateAt, item.RuntimeMode, item.StateTransport
 		}
 		nextDevices[item.ID], nextSourceDevices[item.ID], nextCatalog[item.ID] = item, sourceItem, metadata
 	}

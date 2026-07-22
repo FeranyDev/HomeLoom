@@ -569,20 +569,38 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .target-device-manager > header h3 { margin: 7px 0; font-size: clamp(25px, 4vw, 38px); }
 .target-device-manager > header p:not(.eyebrow) { margin: 0; color: #7e827a; }
 .target-device-manager > header button { padding: 9px 13px; border: 1px solid #555b52; background: #f7f6f1; color: #4f554d; cursor: pointer; }
-.target-device-create { display: grid; grid-template-columns: 1.4fr 1fr 1fr auto; gap: 10px; align-items: end; padding: 20px; border: 1px solid #d2d0c7; background: rgba(250,249,245,.7); }
+.target-device-create { display: grid; grid-template-columns: 1.3fr 1fr 1fr 1fr; gap: 10px; align-items: end; padding: 20px; border: 1px solid #d2d0c7; background: rgba(250,249,245,.7); }
 .target-device-create label { display: grid; gap: 6px; color: #777b73; font-size: 11px; }
 .target-device-create input, .target-device-create select, .target-device-create button { min-width: 0; padding: 9px 11px; border: 1px solid #c4c5bd; background: #f8f7f1; color: #545950; }
 .target-device-create button { cursor: pointer; }
+.target-device-create .consumer-support-note { grid-column: 1 / -1; color: #7a5b43; line-height: 1.6; }
+.target-auxiliary-sources { grid-column: 1 / -2; display: flex; flex-wrap: wrap; gap: 8px 18px; min-width: 0; margin: 0; padding: 10px 12px; border: 1px solid #d2d0c7; }
+.target-auxiliary-sources legend { padding: 0 6px; color: #777b73; font-size: 11px; }
+.target-auxiliary-sources label { display: flex; grid-template-columns: none; align-items: center; gap: 6px; color: #545950; }
+.target-auxiliary-sources input { min-width: auto; }
 .target-virtual-device-list { border: 1px solid #d2d0c7; background: rgba(250,249,245,.7); }
 .target-virtual-device-list > p { margin: 0; padding: 25px; color: #92958e; }
 .target-virtual-device-list article { display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: center; padding: 15px 18px; border-top: 1px solid #dfddd5; }
-.target-virtual-device-list article > div:first-child { display: grid; grid-template-columns: auto 1fr minmax(180px, auto) minmax(220px, auto); gap: 10px; align-items: center; }
+.target-virtual-device-list article > div:first-child { display: grid; grid-template-columns: auto minmax(150px, 1fr) minmax(150px, auto) minmax(220px, auto); gap: 10px; align-items: center; }
 .target-virtual-device-list article > div:last-child { display: flex; gap: 7px; }
 .target-virtual-device-list article input { min-width: 120px; padding: 7px 9px; border: 1px solid transparent; background: transparent; color: #454b43; font-weight: 650; }
 .target-virtual-device-list article input:focus { outline: none; border-color: #aeb2a9; background: #f8f7f1; }
 .target-virtual-device-list code, .target-virtual-device-list small { color: #858981; font-size: 10px; }
 .target-virtual-device-list button { padding: 7px 9px; border: 1px solid #c4c5bd; background: #f8f7f1; color: #545950; cursor: pointer; }
 .target-virtual-device-list button:disabled { cursor: not-allowed; opacity: .55; }
+.target-device-type-edit { display: grid; gap: 3px; color: #858981; font-size: 10px; }
+.target-device-type-edit select, .target-device-sources-edit select { min-width: 0; padding: 6px 8px; border: 1px solid #c4c5bd; background: #f8f7f1; color: #545950; }
+.target-virtual-device-list article small, .target-device-sources-edit { grid-column: 2 / -1; }
+.target-device-sources-edit summary { cursor: pointer; color: #5e7457; font-size: 11px; }
+.target-device-sources-edit > label, .target-device-sources-edit fieldset { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin-top: 9px; }
+.target-device-sources-edit fieldset { padding: 9px; border: 1px solid #d2d0c7; }
+.target-device-sources-edit fieldset label { display: flex; align-items: center; gap: 5px; font-size: 11px; }
+.target-source-mappings { display: grid; gap: 12px; }
+.target-source-mappings > header { padding: 16px 18px; border: 1px solid #d2d0c7; background: rgba(250,249,245,.7); }
+.target-source-mappings > header h3, .target-source-mappings > header p { margin: 0; }
+.target-source-mappings > header p { margin-top: 6px; color: #777b73; font-size: 12px; line-height: 1.6; }
+.target-source-mappings > details { border: 1px solid #d2d0c7; background: rgba(250,249,245,.45); }
+.target-source-mappings > details > summary { padding: 12px 16px; cursor: pointer; color: #4f6449; font-weight: 650; }
 .provider-grid { display: grid; grid-template-columns: 1fr; gap: 18px; }
 .provider-grid .config-note { grid-column: 1 / -1; }
 .provider-card { min-height: 270px; padding: 28px; border: 1px solid #d2d0c7; background: rgba(250, 249, 245, .72); }

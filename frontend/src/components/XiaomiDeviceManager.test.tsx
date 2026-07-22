@@ -10,6 +10,7 @@ vi.mock('../api/xiaomi', () => ({ discoverXiaomiDevices: api.discoverXiaomiDevic
 const provider: Provider = {
 	id: 'xiaomi-main', type: 'xiaomi', name: '家庭中枢', enabled: true, status: 'running', retryCount: 0,
 	capabilities: { discovery: true, propertyRead: true, propertyWrite: true, commands: true, events: true },
+	metrics: { cloudMqttConnected: 1 },
 	config: { host: '192.168.1.50', port: 8883, clientId: '123', clientCertificate: '********', privateKey: '********', devices: [] },
 }
 
@@ -24,8 +25,9 @@ describe('XiaomiDeviceManager', () => {
 		expect(await screen.findByText('客厅灯')).toBeInTheDocument()
 		expect(screen.getByText(/我的家 \/ 客厅/)).toBeInTheDocument()
 		expect(screen.getByText('中枢本地可控')).toHaveClass('is-ready')
-		expect(screen.getByText('OAuth 云可用')).toHaveClass('is-ready')
-		expect(screen.getByText('本地事件推送')).toHaveClass('is-ready')
+		expect(screen.getByText('OAuth 官方云可用')).toHaveClass('is-ready')
+		expect(screen.getByText('中枢实时')).toHaveClass('is-ready')
+		expect(screen.getByText('官方云实时')).toHaveClass('is-ready')
 		expect(screen.getByLabelText('客厅灯 统一模型')).toHaveValue('lightbulb')
 		expect(screen.getByLabelText('客厅灯 连接策略')).toHaveValue('auto')
 		await userEvent.click(screen.getByRole('button', { name: '加入映射' }))

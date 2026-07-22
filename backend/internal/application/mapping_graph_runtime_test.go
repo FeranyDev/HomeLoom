@@ -8,8 +8,10 @@ import (
 
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
+	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	"github.com/feranydev/homeloom/backend/internal/mapping"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
+	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
 )
 
 type rawMappingProvider struct {
@@ -602,6 +604,85 @@ func TestConsumerRouteIsScopedToTargetVirtualDevice(t *testing.T) {
 	path, value, bindingID, applied, err := profiles.ResolveConsumerWriteInstance("provider-1", "switch-1", "apple-main", "virtual-switch", "homekit", device.TypeSwitch, "main", "switch", "power", device.BoolValue(false))
 	if err != nil || !applied || bindingID != "bridge-switch-on" || path.String() != "main/switch/power" || value.Bool == nil || !*value.Bool {
 		t.Fatalf("scoped reverse = %s %#v %q %v %v", path, value, bindingID, applied, err)
+	}
+}
+
+func TestConsumerDeviceComposesAuxiliarySourcesAndRoutesWritesByPriority(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, err := application.NewProfileService(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := virtual.NewProviderFromConfig(providerconfig.Config{ID: "aggregate", Name: "Aggregate", Config: []byte(`{"devices":[{"id":"primary-switch","name":"Primary","type":"switch","power":false},{"id":"aux-switch","name":"Auxiliary","type":"switch","power":true}]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := application.NewDeviceService(provider, profiles)
+	defer service.Close()
+	auxiliaryBinding := mapping.Binding{
+		ID: "aggregate-aux-outlet-on", Stage: mapping.StageConsumer,
+		ProviderID: "aggregate", DeviceID: "aux-switch", DeviceType: device.TypeSwitch, ConsumerDeviceType: device.TypeOutlet,
+		ModelEndpointID: "main", ModelCapabilityID: "switch", ModelPropertyID: "power",
+		TargetID: "apple-main", ConsumerDeviceID: "aggregate-outlet", ConsumerID: "homekit", ConsumerProperty: "Outlet.On", Enabled: true,
+	}
+	if _, err := profiles.CreateBinding(ctx, auxiliaryBinding); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, bindingID, applied, err := profiles.ResolveConsumerWriteInstance("aggregate", "aux-switch", "apple-main", "aggregate-outlet", "homekit", device.TypeOutlet, "main", "switch", "power", device.BoolValue(false)); err != nil || !applied || bindingID != auxiliaryBinding.ID {
+		t.Fatalf("auxiliary binding resolution = %q, applied=%v, err=%v", bindingID, applied, err)
+	}
+	sourceIDs := []string{"primary-switch", "aux-switch"}
+	projected, err := service.ProjectSourcesForConsumerInstance("homekit", "apple-main", "aggregate-outlet", device.TypeOutlet, sourceIDs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	power, found := projected.Property("main", "switch", "power")
+	if !found || power.Value.Bool == nil || !*power.Value.Bool || projected.Type != device.TypeOutlet {
+		t.Fatalf("auxiliary projection = %#v, found=%v", projected, found)
+	}
+	primaryBinding := auxiliaryBinding
+	primaryBinding.ID, primaryBinding.DeviceID = "aggregate-primary-outlet-on", "primary-switch"
+	if _, err := profiles.CreateBinding(ctx, primaryBinding); err != nil {
+		t.Fatal(err)
+	}
+	projected, err = service.ProjectSourcesForConsumerInstance("homekit", "apple-main", "aggregate-outlet", device.TypeOutlet, sourceIDs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	power, _ = projected.Property("main", "switch", "power")
+	if power.Value.Bool == nil || *power.Value.Bool {
+		t.Fatalf("primary source did not win mapping conflict: %#v", power.Value)
+	}
+	if _, _, err := service.ExecuteProperty(ctx, "aux-switch", "main", "switch", "power", device.BoolValue(false)); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RefreshDevices(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := service.ExecuteConsumerPropertySourcesInstance(ctx, "homekit", "apple-main", "aggregate-outlet", device.TypeOutlet, sourceIDs, "main", "switch", "power", device.BoolValue(true)); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RefreshDevices(ctx); err != nil {
+		t.Fatal(err)
+	}
+	items, err := service.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := make(map[string]bool)
+	for _, item := range items {
+		property, _ := item.Property("main", "switch", "power")
+		if property.Value.Bool != nil {
+			values[item.ID] = *property.Value.Bool
+		}
+	}
+	if !values["primary-switch"] || values["aux-switch"] {
+		t.Fatalf("write routing updated wrong source: %#v", values)
 	}
 }
 

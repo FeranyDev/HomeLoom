@@ -44,7 +44,7 @@ export interface MappingProfileInfo extends MappingProfile { builtIn: boolean }
 export interface MappingBinding {
   id: string; stage: 'provider' | 'consumer'; profileId?: string; enabled: boolean
   providerId?: string; deviceId?: string; endpointId?: string; capabilityId?: string; propertyId?: string
-  deviceType?: DeviceType; modelEndpointId: string; modelCapabilityId: string; modelPropertyId: string
+  deviceType?: DeviceType; consumerDeviceType?: DeviceType; modelEndpointId: string; modelCapabilityId: string; modelPropertyId: string
   consumerId?: string; consumerProperty?: string
 	targetId?: string; consumerDeviceId?: string
 }

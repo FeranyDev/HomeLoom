@@ -2,9 +2,11 @@
 
 HomeLoom 将三种小米接入方式视为不同 Provider 类型，不共享名称或运行连接：
 
+> 官方云 MQTT/MIPS 已进入实现阶段：`xiaomi` 现已建立云 MQTT 长连接，接收属性、事件和在线状态，并以批量 HTTP 完成初始化/补偿。目录刷新、事件向消费者投递、动态 TTL 与实机验收仍在继续；详见 [小米官方云 MQTT/MIPS 实时状态改造方案](./xiaomi-cloud-mips-plan.md)。
+
 | Provider 类型 | 页面名称 | 运行方式 | 定位 |
 | --- | --- | --- | --- |
-| `xiaomi` | 小米中枢网关 | 局域网 mTLS + MQTT/MIPS，OAuth 官方 HTTP 云回退 | 当前首选；本地事件驱动，无法经中枢控制的设备可逐台转云 |
+| `xiaomi` | 小米中枢网关 | 局域网 mTLS MQTT/MIPS + 官方云 MQTT 推送 + 官方云 HTTP 初始化/控制/补偿 | 当前首选；本地事件驱动，无法经中枢控制的设备可逐台转云 |
 | `xiaomi-miot-cloud` | 小米 MIoT 云 · 第三方兼容 | 账号会话 + MIoT 云端轮询 | 参考 `al-one/hass-xiaomi-miot`，补充中枢不易适配的 Wi‑Fi 设备 |
 | `xiaomi-home-cloud` | 小米官方 Cloud（独立类型预留） | 未来用于不绑定中枢的纯云实例 | 尚未注册；`xiaomi` 已复用其 OAuth 身份提供设备级官方云路径 |
 
@@ -24,13 +26,15 @@ HomeLoom 的 Xiaomi Provider 通过小米中枢网关的局域网 MQTT 5/MIPS �
 - `_miot-central._tcp.local.` mDNS 中枢发现与主中枢筛选；
 - MQTT 5 双向 TLS、QoS 2、离线队列和自动重连；
 - MIPS TLV 编解码和请求/响应关联；
+- 官方云 MQTT 5 长连接、按设备增量订阅和 Token 热更新；
+- 官方云属性、事件、在线状态强类型解析与有界队列归并；
 - 网关设备列表握手；
 - MIoT 属性读取、写入和 Action；
 - 属性事件订阅；
 - 合并中枢目录与 OAuth 账号家庭/房间目录；
 - 每台设备独立选择 `auto`、`local` 或 `cloud`；
 - `auto` 在中枢协议/传输失败时转入官方 `prop/get`、`prop/set`、`action` HTTP 路径；
-- 有界并发初始读取；本地推送可用时事件驱动，云端、无推送或待判定设备才定时校准；
+- 有界并发、按设备批量初始读取；中枢/云推送可用时事件驱动，仅无 `notify`、断线或待判定属性执行补偿；
 - Provider 热添加、修改、停用和重新连接。
 
 账号密码始终由小米账号页面处理，HomeLoom 不接触也不保存账号密码。
@@ -47,7 +51,7 @@ HomeLoom 的 Xiaomi Provider 通过小米中枢网关的局域网 MQTT 5/MIPS �
 6. 测试 MQTT 5 双向 TLS 连接，保存并启用 Provider，等待运行状态变为 `running`；
 7. 返回米家中枢列表，进入该中枢独立的“管理子设备”页面；
 8. 子设备页面复用当前正在运行的 MQTT 连接调用 `master/proxy/getDevList`，同时使用已保存的 OAuth Token 读取账号家庭与设备目录；两份目录按 DID 合并，但不创建第二条 MQTT 连接；
-9. 从设备目录中选择要接入的设备、统一模型和设备级连接策略，再生成设备映射；页面同时展示“中枢本地可控”“OAuth 云可用”“本地事件推送”能力；
+9. 从设备目录中选择要接入的设备、统一模型和设备级连接策略，再生成设备映射；页面同时展示“中枢本地可控”“OAuth 官方云可用”“中枢实时”“官方云实时/HTTP 补偿”能力；
 10. 在高级 JSON 中按设备 MIoT Spec 核对 `siid/piid/aiid`，保存后实时应用。
 
 新建 Xiaomi Provider 时 `devices` 默认为空数组，不再生成 DID 为空的示例设备。Provider 配置页不展示、读取或修改子设备映射，防止在 OAuth、证书或 MQTT 尚未就绪时越级发现设备。网关目录提供设备身份、名称、房间、型号和可用的 `specType`；设备加入 HomeLoom 后，Provider 根据 `specType` 或 `model` 从 MIoT Spec V2 实例目录加载完整的 Property、Action 和 Event 定义并缓存到 PostgreSQL。自动生成的旧式映射仍只覆盖统一模型必需参数，但设备中心的来源目录不再受这些已配置属性限制。
@@ -178,7 +182,7 @@ MIoT Spec 只用于构造 Provider 原始目录，不会自动改变统一模型
 
 `connectionMode` 是逐设备配置：`auto` 为默认值；`local` 在缺少私网 IP、16 字节 Token 或局域网不可达时直接报告不可用；`cloud` 完全跳过局域网尝试。管理 API 只返回 `localIp` 和 `localAvailable`，云目录中的设备 Token 只保存在 Provider 运行时内存，既不写入设备映射也不返回前端。局域网目标只允许私网或链路本地 IP，避免把云端目录数据用于访问公网地址。
 
-发布到设备中心的云设备还携带实际 `runtimeMode`：首次状态同步前为 `pending`；最近一次成功的状态同步来自 LAN MIoT 时为 `local`；使用云端轮询或 `auto` 本地失败后成功回退云端时为 `cloud`。设备卡片分别显示“等待判定”“局域网”“云端轮询”标签；这不是静态的 `connectionMode` 配置回显，而是 Provider 当前采用的状态来源。
+发布到设备中心的设备携带粗粒度 `runtimeMode` 与精确 `stateTransport`。`stateTransport` 分为 `local-mqtt`、`cloud-mqtt`、`cloud-http` 和 `pending`，页面分别显示“中枢实时”“官方云实时”“官方云校准”和“等待判定”；第三方 `xiaomi-miot-cloud` 未提供精确传输信息时仍按 `runtimeMode` 显示“局域网/云端轮询”。云 HTTP 快照进入状态仓库时标记为 `polled`，两类 MQTT 推送标记为 `reported`。
 
 账号密码、`ssecurity` 与 `serviceToken` 都属于敏感 Provider 配置：写入 PostgreSQL 时使用项目主密钥加密，管理 API 返回 `********`。页面会先调用登录入口；如果小米要求身份验证，HomeLoom 创建一个仅保存在内存、10 分钟过期且最多尝试 5 次的登录挑战。用户在小米验证页发送短信或邮件验证码但不在该页提交，再回到 HomeLoom 回填验证码。后端在原 Cookie 会话中完成验证，成功取得完整三元组后才允许保存并初始化 Provider。一次性验证码和账号密码不会写入挑战数据库，登录响应统一使用 `Cache-Control: no-store`。
 
