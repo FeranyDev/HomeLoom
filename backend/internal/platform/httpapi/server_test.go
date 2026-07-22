@@ -1297,10 +1297,10 @@ func TestSimulateAdvancedHomeKitProperties(t *testing.T) {
 	}
 }
 
-func TestDeviceEventStreamPublishesSnapshots(t *testing.T) {
+func TestUnifiedEventStreamPublishesDeviceChanges(t *testing.T) {
 	httpServer := httptest.NewServer(newTestServer().Handler())
 	defer httpServer.Close()
-	request, _ := http.NewRequest(http.MethodGet, httpServer.URL+"/api/v1/events/devices", nil)
+	request, _ := http.NewRequest(http.MethodGet, httpServer.URL+"/api/v1/events", nil)
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
@@ -1338,10 +1338,45 @@ func TestDeviceEventStreamPublishesSnapshots(t *testing.T) {
 	}
 }
 
-func TestCommandEventStreamPublishesLifecycle(t *testing.T) {
+func TestLegacySplitEventStreamsAreRemoved(t *testing.T) {
 	httpServer := httptest.NewServer(newTestServer().Handler())
 	defer httpServer.Close()
-	response, err := http.Get(httpServer.URL + "/api/v1/events/commands")
+	for _, path := range []string{"audit", "devices", "runtime", "commands", "states", "targets"} {
+		response, err := http.Get(httpServer.URL + "/api/v1/events/" + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusNotFound {
+			t.Fatalf("legacy event stream %q status = %d", path, response.StatusCode)
+		}
+	}
+}
+
+func TestRuntimeChangesOnlyIncludesChangedCategories(t *testing.T) {
+	providers := []map[string]any{{"id": "xiaomi", "status": "running"}}
+	diagnostics := map[string]any{"eventsProcessed": float64(3)}
+	previousProviders, _ := json.Marshal(providers)
+	previousDiagnostics, _ := json.Marshal(diagnostics)
+
+	delta, _, _ := runtimeChanges(previousProviders, previousDiagnostics, providers, diagnostics)
+	if len(delta) != 0 {
+		t.Fatalf("unchanged runtime delta = %#v", delta)
+	}
+	diagnostics["eventsProcessed"] = float64(4)
+	delta, encodedProviders, encodedDiagnostics := runtimeChanges(previousProviders, previousDiagnostics, providers, diagnostics)
+	if len(delta) != 1 || delta["diagnostics"] == nil {
+		t.Fatalf("diagnostic runtime delta = %#v", delta)
+	}
+	if !bytes.Equal(encodedProviders, previousProviders) || bytes.Equal(encodedDiagnostics, previousDiagnostics) {
+		t.Fatalf("encoded runtime snapshots did not preserve category changes")
+	}
+}
+
+func TestUnifiedEventStreamPublishesCommandLifecycle(t *testing.T) {
+	httpServer := httptest.NewServer(newTestServer().Handler())
+	defer httpServer.Close()
+	response, err := http.Get(httpServer.URL + "/api/v1/events")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1363,9 +1398,14 @@ func TestCommandEventStreamPublishesLifecycle(t *testing.T) {
 	}
 	writeResponse.Body.Close()
 	statuses := make([]string, 0, 4)
+	commandEvent := false
 	for scanner.Scan() {
 		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
+		if strings.HasPrefix(line, "event: ") {
+			commandEvent = line == "event: command"
+			continue
+		}
+		if !commandEvent || !strings.HasPrefix(line, "data: ") {
 			continue
 		}
 		var command struct {
@@ -1387,7 +1427,7 @@ func TestCommandEventStreamPublishesLifecycle(t *testing.T) {
 	}
 }
 
-func TestAuditEventStreamPublishesPersistedMutation(t *testing.T) {
+func TestUnifiedEventStreamPublishesPersistedAuditMutation(t *testing.T) {
 	ctx := context.Background()
 	store, err := openTestStore(t, ctx)
 	if err != nil {
@@ -1401,7 +1441,7 @@ func TestAuditEventStreamPublishesPersistedMutation(t *testing.T) {
 	httpServer := httptest.NewServer(server.Handler())
 	defer httpServer.Close()
 
-	response, err := http.Get(httpServer.URL + "/api/v1/events/audit")
+	response, err := http.Get(httpServer.URL + "/api/v1/events")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1436,10 +1476,10 @@ func TestAuditEventStreamPublishesPersistedMutation(t *testing.T) {
 	t.Fatalf("audit event not received: %v", scanner.Err())
 }
 
-func TestStateEventStreamPublishesQualityChanges(t *testing.T) {
+func TestUnifiedEventStreamPublishesStateQualityChanges(t *testing.T) {
 	httpServer := httptest.NewServer(newTestServer().Handler())
 	defer httpServer.Close()
-	response, err := http.Get(httpServer.URL + "/api/v1/events/states?deviceId=virtual-switch-1")
+	response, err := http.Get(httpServer.URL + "/api/v1/events")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1473,14 +1513,14 @@ func TestStateEventStreamPublishesQualityChanges(t *testing.T) {
 	}
 }
 
-func TestTargetEventStreamPublishesRuntimeStatus(t *testing.T) {
+func TestUnifiedEventStreamPublishesTargetRuntimeStatus(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	devices := application.NewDeviceService(virtual.NewProvider())
 	defer devices.Close()
 	targets := application.NewTargetService([]application.TargetRegistration{{Info: application.TargetInfo{ID: "bridge", Name: "Bridge", Status: "running"}}}, nil)
 	httpServer := httptest.NewServer(NewServer(":0", devices, targets, logger).Handler())
 	defer httpServer.Close()
-	response, err := http.Get(httpServer.URL + "/api/v1/events/targets")
+	response, err := http.Get(httpServer.URL + "/api/v1/events")
 	if err != nil {
 		t.Fatal(err)
 	}

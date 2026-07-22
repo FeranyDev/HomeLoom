@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
@@ -9,9 +9,12 @@ const api = vi.hoisted(() => ({
   listTargets: vi.fn(), saveTarget: vi.fn(), deleteTarget: vi.fn(), regenerateTargetPairing: vi.fn(), clearTargetPairingIdentity: vi.fn(),
   listProviders: vi.fn(), saveProvider: vi.fn(), deleteProvider: vi.fn(), restartProvider: vi.fn(), testProviderConnection: vi.fn(),
   getDiagnostics: vi.fn(), getRuntimeSettings: vi.fn(), listAuditEvents: vi.fn(), listCommands: vi.fn(), saveRuntimeSettings: vi.fn(),
+  subscribeEvents: vi.fn(),
   getSystemVersion: vi.fn(),
   listModelContracts: vi.fn(), listCustomModelProperties: vi.fn(),
 }))
+
+const runtimeDiagnostics = { eventsReceived: 0, eventsProcessed: 0, eventsDropped: 0, eventQueuePending: 0, eventQueueCapacity: 1, targetEventsDropped: 0, stateEventsDropped: 0, statesMarkedStale: 0, commandsStarted: 0, commandsConfirmed: 0, commandsRejected: 0, commandsTimedOut: 0, commandsSuperseded: 0, commandsOutcomeUnknown: 0, homeKitPushes: 0, onlineDevices: 0, offlineDevices: 0, unknownDevices: 0, providersRunning: 0, providerRetries: 0, deviceSubscribers: 0, stateSubscribers: 0, commandAverageLatencyMs: 0, commandQueuePending: 0, commandQueueMaxPending: 0, eventAverageLatencyMs: 0, eventMaxLatencyMs: 0, slowEventHandlers: 0, databaseOperations: 0, databaseAverageLatencyMs: 0, databaseMaxLatencyMs: 0, providerClockSkewEvents: 0, providerMaxClockSkewMs: 0, goroutines: 1, heapAllocBytes: 0, heapObjects: 0 }
 
 vi.mock('./api/auth', () => ({ getAuthStatus: api.getAuthStatus, login: api.login, logout: api.logout, setupAdministrator: api.setupAdministrator }))
 vi.mock('./api/devices', () => ({
@@ -27,6 +30,7 @@ vi.mock('./api/diagnostics', () => ({
   getDiagnostics: api.getDiagnostics, getRuntimeSettings: api.getRuntimeSettings, listAuditEvents: api.listAuditEvents, listCommands: api.listCommands, saveRuntimeSettings: api.saveRuntimeSettings,
   subscribeAuditEvents: () => () => {}, subscribeCommands: () => () => {},
 }))
+vi.mock('./api/events', () => ({ subscribeEvents: api.subscribeEvents }))
 vi.mock('./api/system', () => ({ getSystemVersion: api.getSystemVersion }))
 vi.mock('./api/mapping', async (importOriginal) => {
   const original = await importOriginal<typeof import('./api/mapping')>()
@@ -46,10 +50,27 @@ beforeEach(() => {
   api.getRuntimeSettings.mockResolvedValue(null)
   api.listModelContracts.mockResolvedValue(Array.from({ length: 27 }, (_, index) => ({ deviceType: `model-${index + 1}`, name: `模型 ${index + 1}`, version: 1, builtIn: true, parameters: [], custom: { publisher: { level: 'custom', behavior: 'preserve-and-mark-custom' }, consumer: { level: 'custom', behavior: 'explicit-path-mapping-only' } } })))
   api.listCustomModelProperties.mockResolvedValue([])
+  api.subscribeEvents.mockReturnValue(() => {})
   api.logout.mockResolvedValue(undefined)
 })
 
 describe('App integration', () => {
+	it('uses one unified SSE connection and applies runtime deltas', async () => {
+		api.getAuthStatus.mockResolvedValue({ initialized: true, authenticated: true, username: 'admin' })
+		const intervalSpy = vi.spyOn(window, 'setInterval')
+		render(<App />)
+		await screen.findByRole('button', { name: '退出' })
+		await waitFor(() => expect(api.subscribeEvents).toHaveBeenCalledOnce())
+		expect(intervalSpy).toHaveBeenCalledWith(expect.any(Function), 5 * 60 * 1000)
+		expect(intervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 30 * 1000)
+		const handlers = api.subscribeEvents.mock.calls[0][0] as { onRuntime: (snapshot: { providers?: unknown[]; diagnostics?: typeof runtimeDiagnostics }) => void }
+		act(() => handlers.onRuntime({ providers: [], diagnostics: { ...runtimeDiagnostics, eventsProcessed: 42 } }))
+		await userEvent.click(screen.getByRole('button', { name: '系统' }))
+		expect(await screen.findByLabelText('42 已处理事件')).toBeInTheDocument()
+		expect(api.listDevices).toHaveBeenCalledOnce()
+		intervalSpy.mockRestore()
+	})
+
   it('initializes the sole administrator and loads the dashboard', async () => {
     api.getAuthStatus.mockResolvedValue({ initialized: false, authenticated: false })
     api.setupAdministrator.mockResolvedValue({ initialized: true, authenticated: true, username: 'owner' })

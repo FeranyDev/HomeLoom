@@ -18,7 +18,7 @@ export interface Diagnostics {
 	providerEventsIgnored?: number
 	providerMessagesReceived?: number; providerMessagesInvalid?: number; providerMessagesDropped?: number; providerCommandsPublished?: number
 	mappingApplied?: number; mappingErrors?: number
-	// Runtime metrics are sampled when diagnostics are requested.
+	// Runtime metrics are sampled for diagnostics responses and runtime SSE snapshots.
 	goroutines: number; heapAllocBytes: number; heapObjects: number
 }
 

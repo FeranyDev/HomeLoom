@@ -78,7 +78,9 @@ Web 管理面只有这一个管理员身份，不实现普通用户、角色或�
 - `PUT /api/v1/devices/{id}/enabled`：持久禁用或重新启用设备；
 - `GET /api/v1/commands`：命令生命周期历史。
 - `GET /api/v1/audit-events?limit=200`：按时间倒序读取持久化审计事件，`limit` 范围为 1–500；
-- `GET /api/v1/events/audit`：通过 SSE 实时接收 `audit` 事件。
+- `GET /api/v1/events`：唯一的 SSE 长连接；按变化发送 `device`、`device-event`、`state`、`command`、`audit`、`target` 和 `runtime` 事件，不在连接时重复发送全量快照。`runtime` 每 5 秒只比较内存中的 Provider 状态和诊断指标，并且仅在对应类别变化时发送；该采样不会读取设备或访问小米云。每 15 秒发送一次注释心跳。
+
+管理前端首次进入时通过 REST 获取全量数据，此后由统一 SSE 应用增量变化，并每 5 分钟重新获取一次全量数据以修复断线或慢客户端丢失的事件。手动刷新和完成配置写入后仍会立即获取全量数据。
 
 所有 `/api/v1` 下的 POST、PUT、PATCH 和 DELETE 都记录审计事件，包括失败的操作。审计表只保存 actor、方法、模板化路由、资源 ID、状态码、结果和 correlation ID，不保存请求体或配置值，避免 Provider 凭据和 HomeKit PIN 进入日志。记录保存在所选数据库的 `audit_events` 表中，当前自动保留最近 5000 条；写请求会在返回前同步尝试持久化，审计失败会写入结构化错误日志，但不会把已经完成的业务操作伪装成失败。SSE 订阅使用有界缓冲，慢客户端只会漏掉实时通知，不影响已经落库的历史。
 

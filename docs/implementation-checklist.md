@@ -266,7 +266,7 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 - [ ] 属性级 Provider 优先级；
 - [ ] 可解释的冲突结果；
 - [x] 状态变更订阅 API；
-- [x] WebSocket/SSE 实时推送；
+- [x] 单一 SSE `/api/v1/events` 按变化实时推送，前端每 5 分钟通过 REST 全量对账；
 - [ ] 可选低频 checkpoint；
 - [ ] checkpoint 恢复时强制标记 stale；
 - [x] 500 设备状态压力测试。

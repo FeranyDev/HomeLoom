@@ -1,5 +1,6 @@
 import type { Target, TargetInput } from '../types/target'
 import { requestData, requestJSON } from './client'
+import { subscribeEvents } from './events'
 
 export async function saveTarget(input: TargetInput, editing: boolean): Promise<Target> {
 	const path = editing ? `/api/v1/targets/${encodeURIComponent(input.id)}` : '/api/v1/targets'
@@ -30,7 +31,5 @@ export function pairingQRUrl(id: string): string {
 }
 
 export function subscribeTargets(onTarget: (target: Target) => void): () => void {
-  const source = new EventSource('/api/v1/events/targets')
-  source.addEventListener('target', (event) => { try { onTarget(JSON.parse(event.data) as Target) } catch { /* ignore malformed events */ } })
-  return () => source.close()
+	return subscribeEvents({ onTarget })
 }

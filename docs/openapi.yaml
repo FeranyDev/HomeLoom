@@ -287,19 +287,12 @@ paths:
                 properties: { data: { type: array, items: { $ref: "#/components/schemas/AuditEvent" } } }
         "400": { $ref: "#/components/responses/BadRequest" }
         "503": { $ref: "#/components/responses/Unavailable" }
-  /api/v1/events/audit:
+  /api/v1/events:
     get:
-      operationId: streamAuditEvents
+      operationId: streamChanges
       responses:
         "200":
-          description: Server-sent events named audit; heartbeat comments are emitted every 15 seconds
-          content: { text/event-stream: { schema: { type: string } } }
-  /api/v1/events/devices:
-    get:
-      operationId: streamDeviceEvents
-      responses:
-        "200":
-          description: Server-sent snapshots named `device` and transient Provider occurrences named `device-event`; heartbeat comments are emitted every 15 seconds. Transient occurrences do not update the state store.
+          description: The single server-sent event stream. Named device, device-event, state, command, audit, target and runtime events are emitted only after changes. Runtime data is sampled from memory every 5 seconds and contains only changed categories. No initial full snapshot is sent; clients reconcile full REST resources separately. Heartbeat comments are emitted every 15 seconds.
           content: { text/event-stream: { schema: { type: string } } }
   /api/v1/devices:
     get:

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { executeDeviceCommand, listDevices, setDeviceEnabled, setDevicePower, setDeviceProperty, simulateDevice, subscribeDevices } from './api/devices'
-import { clearTargetPairingIdentity, deleteTarget, listTargets, regenerateTargetPairing, saveTarget, subscribeTargets } from './api/targets'
+import { executeDeviceCommand, listDevices, setDeviceEnabled, setDevicePower, setDeviceProperty, simulateDevice } from './api/devices'
+import { clearTargetPairingIdentity, deleteTarget, listTargets, regenerateTargetPairing, saveTarget } from './api/targets'
 import { deleteProvider, listProviders, restartProvider, saveProvider, testProviderConnection } from './api/providers'
-import { getDiagnostics, getRuntimeSettings, listAuditEvents, listCommands, saveRuntimeSettings, subscribeAuditEvents, subscribeCommands } from './api/diagnostics'
+import { getDiagnostics, getRuntimeSettings, listAuditEvents, listCommands, saveRuntimeSettings } from './api/diagnostics'
+import { subscribeEvents } from './api/events'
 import { getSystemVersion } from './api/system'
 import { DeviceCard } from './components/DeviceCard'
 import { TargetCard } from './components/TargetCard'
@@ -112,21 +113,22 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
   }, [])
 
   useEffect(() => {
-    const controller = new AbortController()
-    void refresh(controller.signal)
-    const timer = window.setInterval(() => void refresh(), 30000)
-    const unsubscribe = subscribeDevices((updated) => setDevices((current) => { const exists = current.some((item) => item.id === updated.id); return exists ? current.map((item) => item.id === updated.id ? updated : item) : [...current, updated] }), setLive)
-	const unsubscribeCommands = subscribeCommands((updated) => setCommands((current) => { const exists = current.some((item) => item.id === updated.id); const next = exists ? current.map((item) => item.id === updated.id ? updated : item) : [updated, ...current]; return next.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()).slice(0, commandHistoryLimit.current) }))
-	const unsubscribeAudit = subscribeAuditEvents((updated) => setAuditEvents((current) => [updated, ...current.filter((item) => item.id !== updated.id)].slice(0, 200)))
-	const unsubscribeTargets = subscribeTargets((updated) => setTargets((current) => current.map((item) => item.id === updated.id ? updated : item)))
-    return () => {
-      controller.abort()
-      window.clearInterval(timer)
-      unsubscribe()
-	  unsubscribeCommands()
-	  unsubscribeAudit()
-	  unsubscribeTargets()
-    }
+	  const controller = new AbortController()
+	  void refresh(controller.signal)
+	  const reconcileTimer = window.setInterval(() => void refresh(), 5 * 60 * 1000)
+		const unsubscribe = subscribeEvents({
+			onConnection: setLive,
+			onDevice: (updated) => setDevices((current) => { const exists = current.some((item) => item.id === updated.id); return exists ? current.map((item) => item.id === updated.id ? updated : item) : [...current, updated] }),
+			onCommand: (updated) => setCommands((current) => { const exists = current.some((item) => item.id === updated.id); const next = exists ? current.map((item) => item.id === updated.id ? updated : item) : [updated, ...current]; return next.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()).slice(0, commandHistoryLimit.current) }),
+			onAudit: (updated) => setAuditEvents((current) => [updated, ...current.filter((item) => item.id !== updated.id)].slice(0, 200)),
+			onTarget: (updated) => setTargets((current) => { const exists = current.some((item) => item.id === updated.id); return exists ? current.map((item) => item.id === updated.id ? updated : item) : [...current, updated] }),
+			onRuntime: (delta) => { if (delta.providers) setProviders(delta.providers); if (delta.diagnostics) setDiagnostics(delta.diagnostics) },
+		})
+	  return () => {
+		controller.abort()
+		window.clearInterval(reconcileTimer)
+		unsubscribe()
+	  }
   }, [refresh])
 
 	useEffect(() => {

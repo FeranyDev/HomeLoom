@@ -1,5 +1,6 @@
 import type { Device, DeviceAvailability, Property, PropertyValue, StateValue } from '../types/device'
 import { requestData } from './client'
+import { subscribeEvents } from './events'
 
 export async function listDevices(signal?: AbortSignal): Promise<Device[]> {
   return requestData<Device[]>('/api/v1/devices', { signal })
@@ -18,9 +19,7 @@ export async function getDeviceProperty(id: string, endpointId: string, capabili
 }
 
 export function subscribeDeviceStates(id: string, onState: (state: StateValue) => void): () => void {
-  const source = new EventSource(`/api/v1/events/states?deviceId=${encodeURIComponent(id)}`)
-  source.addEventListener('state', (event) => { try { onState(JSON.parse(event.data) as StateValue) } catch { /* ignore malformed events */ } })
-  return () => source.close()
+	return subscribeEvents({ onState: (state) => { if (state.key.deviceId === id) onState(state) } })
 }
 
 export async function setDevicePower(id: string, value: boolean): Promise<Device> {
@@ -46,9 +45,5 @@ export async function simulateDevice(id: string, values: { availability?: Device
 }
 
 export function subscribeDevices(onDevice: (device: Device) => void, onConnection?: (connected: boolean) => void): () => void {
-  const source = new EventSource('/api/v1/events/devices')
-  source.addEventListener('ready', () => onConnection?.(true))
-  source.addEventListener('device', (event) => { try { onDevice(JSON.parse(event.data) as Device) } catch { /* ignore malformed stream events */ } })
-  source.onerror = () => onConnection?.(false)
-  return () => source.close()
+	return subscribeEvents({ onDevice, onConnection })
 }
