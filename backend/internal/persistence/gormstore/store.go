@@ -1,14 +1,17 @@
-package postgres
+package gormstore
 
 import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/ncruces/go-sqlite3/gormlite"
 	gormpostgres "gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -16,11 +19,19 @@ import (
 
 const currentSchemaVersion = 1
 
+type databaseKind string
+
+const (
+	databasePostgreSQL databaseKind = "postgres"
+	databaseSQLite     databaseKind = "sqlite"
+)
+
 type Store struct {
 	orm               *gorm.DB
 	database          *sql.DB
 	databaseURL       string
 	keyPath           string
+	databaseKind      databaseKind
 	secrets           *secretCodec
 	operationCount    atomic.Uint64
 	totalLatencyNanos atomic.Uint64
@@ -29,7 +40,7 @@ type Store struct {
 
 func Open(ctx context.Context, databaseURL, keyPath string) (*Store, error) {
 	if databaseURL == "" {
-		return nil, fmt.Errorf("PostgreSQL database URL is required")
+		return nil, fmt.Errorf("database URL is required")
 	}
 	if keyPath == "" {
 		return nil, fmt.Errorf("database master key path is required")
@@ -38,21 +49,21 @@ func Open(ctx context.Context, databaseURL, keyPath string) (*Store, error) {
 		return nil, fmt.Errorf("create master key directory: %w", err)
 	}
 
-	orm, err := openGORM(databaseURL)
+	orm, kind, err := openGORM(databaseURL)
 	if err != nil {
 		return nil, err
 	}
 	database, err := orm.DB()
 	if err != nil {
-		return nil, fmt.Errorf("access PostgreSQL connection pool: %w", err)
+		return nil, fmt.Errorf("access %s connection pool: %w", databaseLabel(kind), err)
 	}
-	configurePool(database)
+	configurePool(database, kind)
 	if err := database.PingContext(ctx); err != nil {
 		database.Close()
-		return nil, fmt.Errorf("connect PostgreSQL: %w", err)
+		return nil, fmt.Errorf("connect %s: %w", databaseLabel(kind), err)
 	}
 
-	store := &Store{orm: orm, database: database, databaseURL: databaseURL, keyPath: keyPath}
+	store := &Store{orm: orm, database: database, databaseURL: databaseURL, keyPath: keyPath, databaseKind: kind}
 	if err := store.initialize(ctx); err != nil {
 		database.Close()
 		return nil, err
@@ -64,21 +75,78 @@ func Open(ctx context.Context, databaseURL, keyPath string) (*Store, error) {
 	return store, nil
 }
 
-func openGORM(databaseURL string) (*gorm.DB, error) {
-	orm, err := gorm.Open(gormpostgres.New(gormpostgres.Config{
-		DSN:                  databaseURL,
-		PreferSimpleProtocol: true,
-	}), &gorm.Config{
+func openGORM(databaseURL string) (*gorm.DB, databaseKind, error) {
+	var (
+		dialector gorm.Dialector
+		kind      databaseKind
+	)
+	switch {
+	case strings.HasPrefix(databaseURL, "postgres://"), strings.HasPrefix(databaseURL, "postgresql://"):
+		dialector = gormpostgres.New(gormpostgres.Config{DSN: databaseURL, PreferSimpleProtocol: true})
+		kind = databasePostgreSQL
+	case strings.HasPrefix(databaseURL, "sqlite:"):
+		dsn, path, err := sqliteDSN(databaseURL)
+		if err != nil {
+			return nil, "", err
+		}
+		if path != "" {
+			if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+				return nil, "", fmt.Errorf("create SQLite database directory: %w", err)
+			}
+		}
+		dialector = gormlite.Open(dsn)
+		kind = databaseSQLite
+	default:
+		return nil, "", fmt.Errorf("unsupported database URL scheme")
+	}
+	orm, err := gorm.Open(dialector, &gorm.Config{
 		SkipDefaultTransaction: true,
 		Logger:                 logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("open PostgreSQL: %w", err)
+		return nil, "", fmt.Errorf("open %s: %w", databaseLabel(kind), err)
 	}
-	return orm, nil
+	return orm, kind, nil
 }
 
-func configurePool(database *sql.DB) {
+func sqliteDSN(databaseURL string) (dsn, path string, err error) {
+	raw := strings.TrimPrefix(databaseURL, "sqlite:")
+	if strings.HasPrefix(raw, "//") {
+		raw = strings.TrimPrefix(raw, "//")
+	}
+	if raw == "" {
+		return "", "", fmt.Errorf("SQLite database path is required")
+	}
+	if raw == ":memory:" {
+		raw = "file:homeloom-memory?mode=memory&cache=shared"
+	} else if !strings.HasPrefix(raw, "file:") {
+		path = strings.SplitN(raw, "?", 2)[0]
+		raw = "file:" + raw
+	} else if parsed, parseErr := url.Parse(raw); parseErr == nil && parsed.Query().Get("mode") != "memory" {
+		path = parsed.Path
+	}
+	parsed, parseErr := url.Parse(raw)
+	if parseErr != nil {
+		return "", "", fmt.Errorf("parse SQLite database URL: %w", parseErr)
+	}
+	query := parsed.Query()
+	query.Add("_pragma", "busy_timeout(5000)")
+	query.Add("_pragma", "foreign_keys(1)")
+	if query.Get("mode") != "memory" {
+		query.Add("_pragma", "journal_mode(WAL)")
+		query.Add("_pragma", "synchronous(NORMAL)")
+	}
+	query.Set("_txlock", "immediate")
+	parsed.RawQuery = query.Encode()
+	return parsed.String(), path, nil
+}
+
+func configurePool(database *sql.DB, kind databaseKind) {
+	if kind == databaseSQLite {
+		database.SetMaxOpenConns(4)
+		database.SetMaxIdleConns(4)
+		return
+	}
 	database.SetMaxOpenConns(25)
 	database.SetMaxIdleConns(10)
 	database.SetConnMaxIdleTime(5 * time.Minute)
@@ -88,20 +156,27 @@ func configurePool(database *sql.DB) {
 // OpenForBackup opens an existing HomeLoom database without synchronizing GORM
 // models. Logical snapshot reads therefore never alter the source schema.
 func OpenForBackup(ctx context.Context, databaseURL, keyPath string) (*Store, error) {
-	orm, err := openGORM(databaseURL)
+	orm, kind, err := openGORM(databaseURL)
 	if err != nil {
 		return nil, err
 	}
 	database, err := orm.DB()
 	if err != nil {
-		return nil, fmt.Errorf("access PostgreSQL backup connection pool: %w", err)
+		return nil, fmt.Errorf("access %s backup connection pool: %w", databaseLabel(kind), err)
 	}
-	configurePool(database)
+	configurePool(database, kind)
 	if err := database.PingContext(ctx); err != nil {
 		database.Close()
-		return nil, fmt.Errorf("connect PostgreSQL for backup: %w", err)
+		return nil, fmt.Errorf("connect %s for backup: %w", databaseLabel(kind), err)
 	}
-	return &Store{orm: orm, database: database, databaseURL: databaseURL, keyPath: keyPath}, nil
+	return &Store{orm: orm, database: database, databaseURL: databaseURL, keyPath: keyPath, databaseKind: kind}, nil
+}
+
+func databaseLabel(kind databaseKind) string {
+	if kind == databaseSQLite {
+		return "SQLite"
+	}
+	return "PostgreSQL"
 }
 
 func (s *Store) initialize(ctx context.Context) error {
@@ -116,7 +191,7 @@ func (s *Store) initialize(ctx context.Context) error {
 		}
 	}
 	if err := s.orm.WithContext(ctx).AutoMigrate(currentModels()...); err != nil {
-		return fmt.Errorf("synchronize PostgreSQL models: %w", err)
+		return fmt.Errorf("synchronize %s models: %w", databaseLabel(s.databaseKind), err)
 	}
 	return s.seedDefaults(ctx)
 }
@@ -127,7 +202,7 @@ func (s *Store) seedDefaults(ctx context.Context) error {
 		model any
 		value any
 	}{
-		{&providerRow{}, &providerRow{ID: "virtual-main", Type: "virtual", Name: "Virtual Provider", Enabled: true, ConfigJSON: "{}", CreatedAt: now, UpdatedAt: now}},
+		{&providerRow{}, &providerRow{ID: "virtual-main", Type: "virtual", Name: "Virtual Provider", Enabled: true, ConfigJSON: jsonDocument("{}"), CreatedAt: now, UpdatedAt: now}},
 		{&targetRow{}, &targetRow{ID: "apple-main", Type: "apple-hap", Name: "HomeLoom 主桥", Enabled: true, Address: ":51826", PIN: "00102003", SetupID: "HLM1", StorePath: "./data/hap/apple-main", CreatedAt: now, UpdatedAt: now}},
 	}
 	for _, item := range defaults {

@@ -37,7 +37,7 @@ Virtual / MQTT / Xiaomi / 其他平台
 - Virtual Provider；
 - MQTT Provider；
 - Apple HAP Target；
-- PostgreSQL 持久化；
+- PostgreSQL 主数据库与 SQLite 单机备选持久化；
 - YAML 配置；
 - Switch、Light、Temperature Sensor、Humidity Sensor；
 - 健康检查、结构化日志和基础指标；
@@ -108,8 +108,8 @@ Apple Home 写入后可以短暂显示乐观值，但必须等待 Provider 上�
 |---|---|
 | 主语言 | Go |
 | HTTP | `echo` |
-| 配置 | PostgreSQL；YAML 仅用于进程启动参数 |
-| 数据库 | PostgreSQL 17 + GORM AutoMigrate + pgx |
+| 配置 | PostgreSQL 或 SQLite；YAML 仅用于进程启动参数 |
+| 数据库 | GORM AutoMigrate；PostgreSQL 17 + pgx，或纯 Go SQLite gormlite |
 | MQTT | Eclipse Paho `autopaho`（客户端）+ Mochi MQTT（内嵌服务端） |
 | 日志 | `log/slog` |
 | 指标 | Prometheus Client |
@@ -297,14 +297,14 @@ custom_model_properties
 要求：
 
 - 当前 schema 由 GORM 模型和 `AutoMigrate` 管理，不维护旧版数据库的编号兼容迁移；
-- 业务 CRUD、关联查询、约束和显式事务统一通过 GORM；连接池健康查询及逻辑快照序列校准使用 PostgreSQL 原生命令；
+- 业务 CRUD、关联查询、约束和显式事务统一通过 GORM；方言层仅处理连接、JSON 类型、快照隔离级别和 PostgreSQL 序列校准；
 - 写操作使用明确事务边界；
 - 配置连接池上限、空闲回收和连接生命周期；
 - JSON 字段带 schema version；
 - 时间统一使用 UTC 和明确精度；
 - 外键和唯一约束必须开启；
 - pairing、Token 和私钥加密存储；
-- 备份在 `REPEATABLE READ` 只读事务中生成版本化逻辑快照，不复制 PostgreSQL 数据目录。
+- 备份生成版本化、数据库中立的逻辑快照；PostgreSQL 使用 `REPEATABLE READ` 只读事务，SQLite 使用只读快照事务，不复制数据库数据目录。
 
 ## 10. 配置与安全
 
@@ -319,7 +319,9 @@ storage:
   master_key: /data/homeloom.key
 ```
 
-Provider、Target、设备绑定、映射和运行时开关统一存入 PostgreSQL，由管理 API 修改。YAML 不得覆盖这些数据库配置。
+单机模式也可配置 `database_url: sqlite:///data/homeloom.db`。SQLite 使用纯 Go gormlite 驱动并启用 WAL、外键和忙等待，不影响无 CGO 的多平台单二进制构建。
+
+Provider、Target、设备绑定、映射和运行时开关统一存入所选数据库，由管理 API 修改。YAML 不得覆盖这些数据库配置。
 
 Web 只提供一个管理员身份，不建设普通用户或角色系统。日常家庭设备控制、成员共享和使用权限由 Apple Home 承担；HomeLoom Web 聚焦接入、桥接、映射、诊断与运维。
 

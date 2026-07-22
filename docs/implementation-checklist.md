@@ -320,6 +320,8 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 
 - [x] PostgreSQL；
 - [x] GORM 持久层、`gorm.io/driver/postgres` 与 pgx 驱动；
+- [x] SQLite 备选持久层、纯 Go `github.com/ncruces/go-sqlite3/gormlite`、WAL/外键/忙等待配置及无 CGO 多平台构建；
+- [x] PostgreSQL 与 SQLite 共用 GORM 模型、CRUD、加密和数据库中立逻辑备份；
 - [x] GORM `AutoMigrate` 当前模型同步；
 - [x] 移除编号 SQL migration 和旧 schema 自动升级兼容；
 - [x] foreign keys；

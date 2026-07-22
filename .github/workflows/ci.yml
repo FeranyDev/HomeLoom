@@ -11,6 +11,20 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: homeloom
+          POSTGRES_USER: homeloom
+          POSTGRES_PASSWORD: homeloom-ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U homeloom -d homeloom"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v6
@@ -25,6 +39,10 @@ jobs:
       - run: npm ci
         working-directory: frontend
       - run: ./scripts/check.sh --race
+      - name: Verify PostgreSQL persistence dialect
+        run: ./scripts/dev-env.sh sh -c 'cd backend && go test -count=1 ./internal/persistence/gormstore'
+        env:
+          HOMELOOM_TEST_DATABASE_URL: postgres://homeloom:homeloom-ci@127.0.0.1:5432/homeloom?sslmode=disable
       - run: ./scripts/build.sh 0.0.0-ci
       - run: ./scripts/smoke.sh
       - run: ./scripts/cross-build.sh 0.0.0-ci

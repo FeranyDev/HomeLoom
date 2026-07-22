@@ -8,13 +8,13 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	"github.com/feranydev/homeloom/backend/internal/mapping"
-	"github.com/feranydev/homeloom/backend/internal/persistence/postgres"
+	"github.com/feranydev/homeloom/backend/internal/persistence/gormstore"
 )
 
 func TestCustomUnifiedModelPersistsAndOwnsThreeLevelProperties(t *testing.T) {
 	ctx := context.Background()
 	databaseURL, keyPath := testStoreCredentials(t)
-	store, err := postgres.Open(ctx, databaseURL, keyPath)
+	store, err := gormstore.Open(ctx, databaseURL, keyPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestCustomUnifiedModelPersistsAndOwnsThreeLevelProperties(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store, err = postgres.Open(ctx, databaseURL, keyPath)
+	store, err = gormstore.Open(ctx, databaseURL, keyPath)
 	if err != nil {
 		t.Fatal(err)
 	}

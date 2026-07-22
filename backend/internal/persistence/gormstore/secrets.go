@@ -1,4 +1,4 @@
-package postgres
+package gormstore
 
 import (
 	"context"
@@ -59,7 +59,11 @@ func loadOrCreateMasterKey(ctx context.Context, store *Store) ([]byte, error) {
 		return nil, fmt.Errorf("inspect encrypted target secrets: %w", queryErr)
 	}
 	var encryptedProviders int64
-	if queryErr := store.orm.WithContext(ctx).Model(&providerRow{}).Where("config_json::text LIKE ?", "%"+encryptedPrefix+"%").Count(&encryptedProviders).Error; queryErr != nil {
+	providerSecretQuery := "config_json LIKE ?"
+	if store.databaseKind == databasePostgreSQL {
+		providerSecretQuery = "config_json::text LIKE ?"
+	}
+	if queryErr := store.orm.WithContext(ctx).Model(&providerRow{}).Where(providerSecretQuery, "%"+encryptedPrefix+"%").Count(&encryptedProviders).Error; queryErr != nil {
 		return nil, fmt.Errorf("inspect encrypted provider secrets: %w", queryErr)
 	}
 	if encryptedTargets > 0 || encryptedProviders > 0 {
@@ -170,7 +174,7 @@ func (s *Store) encryptPlaintextProviderConfigs(ctx context.Context) error {
 				return err
 			}
 			if changed {
-				if err := tx.Model(&providerRow{}).Where("id = ?", item.ID).Update("config_json", string(encrypted)).Error; err != nil {
+				if err := tx.Model(&providerRow{}).Where("id = ?", item.ID).Update("config_json", jsonDocument(encrypted)).Error; err != nil {
 					return fmt.Errorf("encrypt provider secret: %w", err)
 				}
 			}

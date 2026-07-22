@@ -67,8 +67,20 @@ func (c Config) Validate() error {
 		return errors.New("storage.database_url is required")
 	}
 	databaseURL, err := url.Parse(c.Storage.DatabaseURL)
-	if err != nil || (databaseURL.Scheme != "postgres" && databaseURL.Scheme != "postgresql") || databaseURL.Host == "" || strings.Trim(databaseURL.Path, "/") == "" {
-		return errors.New("storage.database_url must be a PostgreSQL URL with host and database name")
+	if err != nil {
+		return errors.New("storage.database_url must be a PostgreSQL or SQLite URL")
+	}
+	switch databaseURL.Scheme {
+	case "postgres", "postgresql":
+		if databaseURL.Host == "" || strings.Trim(databaseURL.Path, "/") == "" {
+			return errors.New("storage.database_url must be a PostgreSQL URL with host and database name")
+		}
+	case "sqlite":
+		if strings.TrimSpace(strings.TrimPrefix(c.Storage.DatabaseURL, "sqlite:")) == "" {
+			return errors.New("storage.database_url must include a SQLite database path")
+		}
+	default:
+		return errors.New("storage.database_url must use the postgres, postgresql, or sqlite scheme")
 	}
 	if strings.TrimSpace(c.Storage.MasterKey) == "" {
 		return errors.New("storage.master_key is required")

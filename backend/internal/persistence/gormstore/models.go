@@ -1,16 +1,51 @@
-package postgres
+package gormstore
 
-// Persistence models intentionally mirror the current PostgreSQL schema. Domain
+import (
+	"database/sql/driver"
+	"fmt"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/schema"
+)
+
+// Persistence models define the schema shared by PostgreSQL and SQLite. Domain
 // objects stay independent from GORM and are converted at the repository edge.
 
+type jsonDocument string
+
+func (jsonDocument) GormDataType() string { return "json" }
+
+func (jsonDocument) GormDBDataType(db *gorm.DB, _ *schema.Field) string {
+	if db.Dialector.Name() == "postgres" {
+		return "JSONB"
+	}
+	return "TEXT"
+}
+
+func (j jsonDocument) Value() (driver.Value, error) { return string(j), nil }
+
+func (j *jsonDocument) Scan(value any) error {
+	switch current := value.(type) {
+	case string:
+		*j = jsonDocument(current)
+	case []byte:
+		*j = jsonDocument(current)
+	case nil:
+		*j = ""
+	default:
+		return fmt.Errorf("scan JSON document from %T", value)
+	}
+	return nil
+}
+
 type providerRow struct {
-	ID         string `gorm:"column:id;primaryKey"`
-	Type       string `gorm:"column:type;not null"`
-	Name       string `gorm:"column:name;not null"`
-	Enabled    bool   `gorm:"column:enabled;not null;default:false"`
-	ConfigJSON string `gorm:"column:config_json;type:jsonb;not null;default:'{}'"`
-	CreatedAt  int64  `gorm:"column:created_at;not null"`
-	UpdatedAt  int64  `gorm:"column:updated_at;not null"`
+	ID         string       `gorm:"column:id;primaryKey"`
+	Type       string       `gorm:"column:type;not null"`
+	Name       string       `gorm:"column:name;not null"`
+	Enabled    bool         `gorm:"column:enabled;not null;default:false"`
+	ConfigJSON jsonDocument `gorm:"column:config_json;not null;default:'{}'"`
+	CreatedAt  int64        `gorm:"column:created_at;not null"`
+	UpdatedAt  int64        `gorm:"column:updated_at;not null"`
 }
 
 func (providerRow) TableName() string { return "providers" }
@@ -31,16 +66,16 @@ type targetRow struct {
 func (targetRow) TableName() string { return "targets" }
 
 type targetVirtualDeviceRow struct {
-	TargetID                     string    `gorm:"column:target_id;primaryKey"`
-	ID                           string    `gorm:"column:id;primaryKey"`
-	Name                         string    `gorm:"column:name;not null"`
-	Type                         string    `gorm:"column:type;not null;default:''"`
-	SourceDeviceID               string    `gorm:"column:source_device_id;not null"`
-	AuxiliarySourceDeviceIDsJSON string    `gorm:"column:auxiliary_source_device_ids;type:jsonb;not null;default:'[]'"`
-	Enabled                      bool      `gorm:"column:enabled;not null"`
-	CreatedAt                    int64     `gorm:"column:created_at;not null"`
-	UpdatedAt                    int64     `gorm:"column:updated_at;not null"`
-	Target                       targetRow `gorm:"foreignKey:TargetID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+	TargetID                     string       `gorm:"column:target_id;primaryKey"`
+	ID                           string       `gorm:"column:id;primaryKey"`
+	Name                         string       `gorm:"column:name;not null"`
+	Type                         string       `gorm:"column:type;not null;default:''"`
+	SourceDeviceID               string       `gorm:"column:source_device_id;not null"`
+	AuxiliarySourceDeviceIDsJSON jsonDocument `gorm:"column:auxiliary_source_device_ids;not null;default:'[]'"`
+	Enabled                      bool         `gorm:"column:enabled;not null"`
+	CreatedAt                    int64        `gorm:"column:created_at;not null"`
+	UpdatedAt                    int64        `gorm:"column:updated_at;not null"`
+	Target                       targetRow    `gorm:"foreignKey:TargetID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
 }
 
 func (targetVirtualDeviceRow) TableName() string { return "target_virtual_devices" }
@@ -99,12 +134,12 @@ type auditEventRow struct {
 func (auditEventRow) TableName() string { return "audit_events" }
 
 type mappingProfileRow struct {
-	ID           string `gorm:"column:id;primaryKey;index:mapping_profiles_kind_id_idx,priority:2"`
-	Kind         string `gorm:"column:kind;not null;index:mapping_profiles_kind_id_idx,priority:1;check:mapping_profiles_kind_check,kind IN ('provider','capability','target')"`
-	Version      int    `gorm:"column:version;not null;check:mapping_profiles_version_check,version > 0"`
-	DocumentJSON string `gorm:"column:document_json;type:jsonb;not null"`
-	CreatedAt    int64  `gorm:"column:created_at;not null"`
-	UpdatedAt    int64  `gorm:"column:updated_at;not null"`
+	ID           string       `gorm:"column:id;primaryKey;index:mapping_profiles_kind_id_idx,priority:2"`
+	Kind         string       `gorm:"column:kind;not null;index:mapping_profiles_kind_id_idx,priority:1;check:mapping_profiles_kind_check,kind IN ('provider','capability','target')"`
+	Version      int          `gorm:"column:version;not null;check:mapping_profiles_version_check,version > 0"`
+	DocumentJSON jsonDocument `gorm:"column:document_json;not null"`
+	CreatedAt    int64        `gorm:"column:created_at;not null"`
+	UpdatedAt    int64        `gorm:"column:updated_at;not null"`
 }
 
 func (mappingProfileRow) TableName() string { return "mapping_profiles" }
@@ -135,14 +170,14 @@ type mappingBindingRow struct {
 func (mappingBindingRow) TableName() string { return "mapping_bindings" }
 
 type customModelPropertyRow struct {
-	ID           string `gorm:"column:id;primaryKey"`
-	DeviceType   string `gorm:"column:device_type;not null;uniqueIndex:custom_model_property_path,priority:1;index:custom_model_properties_device_type_idx,priority:1"`
-	EndpointID   string `gorm:"column:endpoint_id;not null;uniqueIndex:custom_model_property_path,priority:2;index:custom_model_properties_device_type_idx,priority:2"`
-	CapabilityID string `gorm:"column:capability_id;not null;uniqueIndex:custom_model_property_path,priority:3;index:custom_model_properties_device_type_idx,priority:3"`
-	PropertyID   string `gorm:"column:property_id;not null;uniqueIndex:custom_model_property_path,priority:4;index:custom_model_properties_device_type_idx,priority:4"`
-	DocumentJSON string `gorm:"column:document_json;type:jsonb;not null"`
-	CreatedAt    int64  `gorm:"column:created_at;not null"`
-	UpdatedAt    int64  `gorm:"column:updated_at;not null"`
+	ID           string       `gorm:"column:id;primaryKey"`
+	DeviceType   string       `gorm:"column:device_type;not null;uniqueIndex:custom_model_property_path,priority:1;index:custom_model_properties_device_type_idx,priority:1"`
+	EndpointID   string       `gorm:"column:endpoint_id;not null;uniqueIndex:custom_model_property_path,priority:2;index:custom_model_properties_device_type_idx,priority:2"`
+	CapabilityID string       `gorm:"column:capability_id;not null;uniqueIndex:custom_model_property_path,priority:3;index:custom_model_properties_device_type_idx,priority:3"`
+	PropertyID   string       `gorm:"column:property_id;not null;uniqueIndex:custom_model_property_path,priority:4;index:custom_model_properties_device_type_idx,priority:4"`
+	DocumentJSON jsonDocument `gorm:"column:document_json;not null"`
+	CreatedAt    int64        `gorm:"column:created_at;not null"`
+	UpdatedAt    int64        `gorm:"column:updated_at;not null"`
 }
 
 func (customModelPropertyRow) TableName() string { return "custom_model_properties" }
@@ -172,19 +207,19 @@ func (adminSessionRow) TableName() string { return "admin_sessions" }
 type miotSpecCacheRow struct {
 	SpecType     string `gorm:"column:spec_type;primaryKey"`
 	Model        string `gorm:"column:model;not null;default:'';index:idx_miot_spec_cache_model"`
-	DocumentJSON []byte `gorm:"column:document_json;type:bytea;not null"`
+	DocumentJSON []byte `gorm:"column:document_json;not null"`
 	FetchedAt    int64  `gorm:"column:fetched_at;not null"`
 }
 
 func (miotSpecCacheRow) TableName() string { return "miot_spec_cache" }
 
 type customUnifiedModelRow struct {
-	DeviceType   string `gorm:"column:device_type;primaryKey"`
-	Name         string `gorm:"column:name;not null"`
-	Version      int    `gorm:"column:version;not null;check:custom_unified_models_version_check,version > 0"`
-	DocumentJSON string `gorm:"column:document_json;type:jsonb;not null"`
-	CreatedAt    int64  `gorm:"column:created_at;not null"`
-	UpdatedAt    int64  `gorm:"column:updated_at;not null"`
+	DeviceType   string       `gorm:"column:device_type;primaryKey"`
+	Name         string       `gorm:"column:name;not null"`
+	Version      int          `gorm:"column:version;not null;check:custom_unified_models_version_check,version > 0"`
+	DocumentJSON jsonDocument `gorm:"column:document_json;not null"`
+	CreatedAt    int64        `gorm:"column:created_at;not null"`
+	UpdatedAt    int64        `gorm:"column:updated_at;not null"`
 }
 
 func (customUnifiedModelRow) TableName() string { return "custom_unified_models" }

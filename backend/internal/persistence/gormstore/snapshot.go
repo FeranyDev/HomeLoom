@@ -1,4 +1,4 @@
-package postgres
+package gormstore
 
 import (
 	"context"
@@ -70,13 +70,13 @@ func (s *Store) Backup(ctx context.Context, destination string) error {
 	}
 	payload, err := json.Marshal(snapshot)
 	if err != nil {
-		return fmt.Errorf("encode PostgreSQL snapshot: %w", err)
+		return fmt.Errorf("encode database snapshot: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(destination), 0o750); err != nil {
 		return fmt.Errorf("create backup directory: %w", err)
 	}
 	if err := writePrivateFile(destination, payload); err != nil {
-		return fmt.Errorf("write PostgreSQL snapshot: %w", err)
+		return fmt.Errorf("write database snapshot: %w", err)
 	}
 	if err := copyPrivateFile(s.keyPath, destination+".key"); err != nil {
 		_ = os.Remove(destination)
@@ -87,7 +87,7 @@ func (s *Store) Backup(ctx context.Context, destination string) error {
 
 func (s *Store) readSnapshot(ctx context.Context) (databaseSnapshot, error) {
 	result := databaseSnapshot{FormatVersion: snapshotFormatVersion, SchemaVersion: currentSchemaVersion, CreatedAt: time.Now().UTC()}
-	err := s.orm.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	transaction := func(tx *gorm.DB) error {
 		queries := []struct {
 			label string
 			out   any
@@ -107,27 +107,33 @@ func (s *Store) readSnapshot(ctx context.Context) (databaseSnapshot, error) {
 			}
 		}
 		return nil
-	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	}
+	var err error
+	if s.databaseKind == databasePostgreSQL {
+		err = s.orm.WithContext(ctx).Transaction(transaction, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	} else {
+		err = s.orm.WithContext(ctx).Transaction(transaction, &sql.TxOptions{ReadOnly: true})
+	}
 	if err != nil {
-		return databaseSnapshot{}, fmt.Errorf("create consistent PostgreSQL snapshot: %w", err)
+		return databaseSnapshot{}, fmt.Errorf("create consistent database snapshot: %w", err)
 	}
 	return result, nil
 }
 
 func readSnapshot(path string) (databaseSnapshot, error) {
-	if err := requireRegularFile(path, "PostgreSQL snapshot"); err != nil {
+	if err := requireRegularFile(path, "database snapshot"); err != nil {
 		return databaseSnapshot{}, err
 	}
 	payload, err := os.ReadFile(path)
 	if err != nil {
-		return databaseSnapshot{}, fmt.Errorf("read PostgreSQL snapshot: %w", err)
+		return databaseSnapshot{}, fmt.Errorf("read database snapshot: %w", err)
 	}
 	var snapshot databaseSnapshot
 	if err := json.Unmarshal(payload, &snapshot); err != nil {
-		return databaseSnapshot{}, fmt.Errorf("decode PostgreSQL snapshot: %w", err)
+		return databaseSnapshot{}, fmt.Errorf("decode database snapshot: %w", err)
 	}
 	if snapshot.FormatVersion != snapshotFormatVersion || snapshot.SchemaVersion != currentSchemaVersion {
-		return databaseSnapshot{}, fmt.Errorf("unsupported PostgreSQL snapshot format %d schema %d", snapshot.FormatVersion, snapshot.SchemaVersion)
+		return databaseSnapshot{}, fmt.Errorf("unsupported database snapshot format %d schema %d", snapshot.FormatVersion, snapshot.SchemaVersion)
 	}
 	return snapshot, nil
 }
@@ -164,7 +170,7 @@ func ValidateRestoreCandidate(_ context.Context, path string) error {
 
 func Restore(ctx context.Context, source, databaseURL, keyPath string, replace bool) (string, error) {
 	if !replace {
-		return "", fmt.Errorf("explicit PostgreSQL replacement confirmation is required")
+		return "", fmt.Errorf("explicit database replacement confirmation is required")
 	}
 	if err := ValidateRestoreCandidate(ctx, source); err != nil {
 		return "", err
@@ -186,7 +192,7 @@ func Restore(ctx context.Context, source, databaseURL, keyPath string, replace b
 		return "", err
 	}
 	if err := store.Backup(ctx, recoveryPath); err != nil {
-		return "", fmt.Errorf("preserve current PostgreSQL data: %w", err)
+		return "", fmt.Errorf("preserve current database data: %w", err)
 	}
 	if err := store.applySnapshotFile(ctx, source); err != nil {
 		return recoveryPath, err
@@ -215,7 +221,7 @@ func (s *Store) applySnapshotFile(ctx context.Context, source string) error {
 	}
 	if err != nil {
 		if rollbackErr := s.replaceRows(ctx, current); rollbackErr != nil {
-			return fmt.Errorf("activate restored master key: %v; rollback PostgreSQL data: %w", err, rollbackErr)
+			return fmt.Errorf("activate restored master key: %v; rollback database data: %w", err, rollbackErr)
 		}
 		return fmt.Errorf("activate restored master key: %w", err)
 	}
@@ -233,7 +239,7 @@ func (s *Store) replaceRows(ctx context.Context, snapshot databaseSnapshot) erro
 		}
 		for _, model := range deleteOrder {
 			if err := unscoped.Delete(model).Error; err != nil {
-				return fmt.Errorf("clear PostgreSQL table %T: %w", model, err)
+				return fmt.Errorf("clear database table %T: %w", model, err)
 			}
 		}
 		insertOrder := []struct {
@@ -257,8 +263,10 @@ func (s *Store) replaceRows(ctx context.Context, snapshot databaseSnapshot) erro
 		if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&adminSessionRow{}).Error; err != nil {
 			return fmt.Errorf("invalidate restored administrator sessions: %w", err)
 		}
-		if err := tx.Exec(`SELECT setval(pg_get_serial_sequence('audit_events', 'id'), COALESCE((SELECT MAX(id) FROM audit_events), 1), EXISTS(SELECT 1 FROM audit_events))`).Error; err != nil {
-			return fmt.Errorf("reset audit event sequence: %w", err)
+		if s.databaseKind == databasePostgreSQL {
+			if err := tx.Exec(`SELECT setval(pg_get_serial_sequence('audit_events', 'id'), COALESCE((SELECT MAX(id) FROM audit_events), 1), EXISTS(SELECT 1 FROM audit_events))`).Error; err != nil {
+				return fmt.Errorf("reset audit event sequence: %w", err)
+			}
 		}
 		return nil
 	})
@@ -307,7 +315,7 @@ func ApplyPendingRestore(ctx context.Context, databaseURL, keyPath string) (reco
 	if err := json.Unmarshal(payload, &marker); err != nil || marker.FormatVersion != pendingRestoreFormatVersion {
 		return "", false, fmt.Errorf("invalid pending restore marker")
 	}
-	if err := requireRegularFile(stagedSnapshot, "pending PostgreSQL snapshot"); err != nil {
+	if err := requireRegularFile(stagedSnapshot, "pending database snapshot"); err != nil {
 		return "", false, err
 	}
 	if err := requireRegularFile(stagedKey, "pending restore master key"); err != nil {
@@ -315,7 +323,7 @@ func ApplyPendingRestore(ctx context.Context, databaseURL, keyPath string) (reco
 	}
 	recoveryPath, err = Restore(ctx, stagedSnapshot, databaseURL, keyPath, true)
 	if err != nil {
-		return "", false, fmt.Errorf("apply pending PostgreSQL restore: %w", err)
+		return "", false, fmt.Errorf("apply pending database restore: %w", err)
 	}
 	for _, path := range []string{markerPath, stagedSnapshot, stagedKey} {
 		if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {

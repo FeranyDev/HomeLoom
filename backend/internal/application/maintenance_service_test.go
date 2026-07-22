@@ -9,20 +9,20 @@ import (
 
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
-	"github.com/feranydev/homeloom/backend/internal/persistence/postgres"
+	"github.com/feranydev/homeloom/backend/internal/persistence/gormstore"
 )
 
 func TestMaintenanceServiceBacksUpStagesAndAppliesRestore(t *testing.T) {
 	ctx := context.Background()
 	databaseURL, keyPath := testStoreCredentials(t)
-	store, err := postgres.Open(ctx, databaseURL, keyPath)
+	store, err := gormstore.Open(ctx, databaseURL, keyPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := store.SaveProvider(ctx, providerconfig.Config{ID: "preserved", Type: "virtual", Name: "Preserved", Config: []byte(`{}`)}); err != nil {
 		t.Fatal(err)
 	}
-	service := application.NewMaintenanceService(store, keyPath, postgres.ValidateRestoreCandidate, postgres.PendingRestorePaths, postgres.WritePendingRestoreMarker)
+	service := application.NewMaintenanceService(store, keyPath, gormstore.ValidateRestoreCandidate, gormstore.PendingRestorePaths, gormstore.WritePendingRestoreMarker)
 	if _, err := service.Backup(ctx, "wrong"); err == nil {
 		t.Fatal("backup accepted missing confirmation")
 	}
@@ -41,7 +41,7 @@ func TestMaintenanceServiceBacksUpStagesAndAppliesRestore(t *testing.T) {
 	}
 	archive.Close()
 	sort.Strings(names)
-	if len(names) != 2 || names[0] != "homeloom-master.key" || names[1] != "homeloom-postgres.json" {
+	if len(names) != 2 || names[0] != "homeloom-database.json" || names[1] != "homeloom-master.key" {
 		t.Fatalf("archive entries = %#v", names)
 	}
 
@@ -60,11 +60,11 @@ func TestMaintenanceServiceBacksUpStagesAndAppliesRestore(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	recovery, applied, err := postgres.ApplyPendingRestore(ctx, databaseURL, keyPath)
+	recovery, applied, err := gormstore.ApplyPendingRestore(ctx, databaseURL, keyPath)
 	if err != nil || !applied || recovery == "" {
 		t.Fatalf("apply pending restore = %q, %v, %v", recovery, applied, err)
 	}
-	restored, err := postgres.Open(ctx, databaseURL, keyPath)
+	restored, err := gormstore.Open(ctx, databaseURL, keyPath)
 	if err != nil {
 		t.Fatal(err)
 	}

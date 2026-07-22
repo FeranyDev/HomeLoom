@@ -1,4 +1,4 @@
-package postgres
+package gormstore
 
 import (
 	"context"
@@ -48,7 +48,7 @@ func TestRestoreValidatesSecretsAndPreservesPreviousDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Restore(ctx, backup, databaseURL, keyPath, false); err == nil || !strings.Contains(err.Error(), "explicit PostgreSQL replacement") {
+	if _, err := Restore(ctx, backup, databaseURL, keyPath, false); err == nil || !strings.Contains(err.Error(), "explicit database replacement") {
 		t.Fatalf("error = %v", err)
 	}
 	recovery, err := Restore(ctx, backup, databaseURL, keyPath, true)
@@ -119,7 +119,7 @@ func TestRestoreRejectsMissingKeyAndInvalidSnapshot(t *testing.T) {
 	if err := os.WriteFile(invalid, []byte(`{"formatVersion":1`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Restore(ctx, invalid, databaseURL, keyPath, true); err == nil || !strings.Contains(err.Error(), "decode PostgreSQL snapshot") {
+	if _, err := Restore(ctx, invalid, databaseURL, keyPath, true); err == nil || !strings.Contains(err.Error(), "decode database snapshot") {
 		t.Fatalf("error = %v", err)
 	}
 }

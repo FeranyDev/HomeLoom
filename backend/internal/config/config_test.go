@@ -65,7 +65,7 @@ func TestDefaultOnlyListensOnLoopback(t *testing.T) {
 	}
 }
 
-func TestValidateRequiresPostgreSQLURLAndMasterKey(t *testing.T) {
+func TestValidateRequiresSupportedDatabaseURLAndMasterKey(t *testing.T) {
 	for _, test := range []struct {
 		name        string
 		databaseURL string
@@ -75,6 +75,8 @@ func TestValidateRequiresPostgreSQLURLAndMasterKey(t *testing.T) {
 		{name: "missing host", databaseURL: "postgres:///homeloom", masterKey: "./data/homeloom.key"},
 		{name: "missing database", databaseURL: "postgres://localhost", masterKey: "./data/homeloom.key"},
 		{name: "missing master key", databaseURL: "postgres://localhost/homeloom"},
+		{name: "missing sqlite path", databaseURL: "sqlite:", masterKey: "./data/homeloom.key"},
+		{name: "unsupported database", databaseURL: "mysql://localhost/homeloom", masterKey: "./data/homeloom.key"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			config := Default()
@@ -83,6 +85,25 @@ func TestValidateRequiresPostgreSQLURLAndMasterKey(t *testing.T) {
 				t.Fatalf("Validate() accepted %#v", config.Storage)
 			}
 		})
+	}
+}
+
+func TestValidateAcceptsSQLiteURL(t *testing.T) {
+	config := Default()
+	config.Storage.DatabaseURL = "sqlite://./data/homeloom.db"
+	if err := config.Validate(); err != nil {
+		t.Fatalf("Validate() = %v", err)
+	}
+}
+
+func TestEnvironmentCanSelectSQLite(t *testing.T) {
+	t.Setenv("HOMELOOM_DATABASE_URL", "sqlite://./data/alternative.db")
+	loaded, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Storage.DatabaseURL != "sqlite://./data/alternative.db" {
+		t.Fatalf("database URL = %q", loaded.Storage.DatabaseURL)
 	}
 }
 

@@ -15,7 +15,7 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/config"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	"github.com/feranydev/homeloom/backend/internal/domain/target"
-	"github.com/feranydev/homeloom/backend/internal/persistence/postgres"
+	"github.com/feranydev/homeloom/backend/internal/persistence/gormstore"
 	"github.com/feranydev/homeloom/backend/internal/platform/httpapi"
 	"github.com/feranydev/homeloom/backend/internal/platform/safelog"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
@@ -29,8 +29,8 @@ import (
 func main() {
 	configPath := flag.String("config", "", "path to a YAML configuration file")
 	showVersion := flag.Bool("version", false, "print build version and exit")
-	backupPath := flag.String("backup", "", "create a consistent PostgreSQL logical snapshot and exit")
-	restorePath := flag.String("restore", "", "restore a validated PostgreSQL logical snapshot and exit")
+	backupPath := flag.String("backup", "", "create a consistent database logical snapshot and exit")
+	restorePath := flag.String("restore", "", "restore a validated database logical snapshot and exit")
 	restoreReplace := flag.Bool("restore-replace", false, "explicitly allow restore to replace the configured database")
 	initializeVirtualModels := flag.Bool("init-all-virtual-models", false, "initialize one demo device for every supported Virtual Provider model")
 	flag.Parse()
@@ -57,12 +57,12 @@ func main() {
 		os.Exit(2)
 	}
 	if *restorePath != "" {
-		recoveryPath, restoreErr := postgres.Restore(ctx, *restorePath, settings.Storage.DatabaseURL, settings.Storage.MasterKey, *restoreReplace)
+		recoveryPath, restoreErr := gormstore.Restore(ctx, *restorePath, settings.Storage.DatabaseURL, settings.Storage.MasterKey, *restoreReplace)
 		if restoreErr != nil {
 			logger.Error("database restore failed", "source", *restorePath, "error", restoreErr)
 			os.Exit(1)
 		}
-		if discardErr := postgres.DiscardPendingRestore(settings.Storage.MasterKey); discardErr != nil {
+		if discardErr := gormstore.DiscardPendingRestore(settings.Storage.MasterKey); discardErr != nil {
 			logger.Error("database restored but stale pending restore cleanup failed", "error", discardErr)
 			os.Exit(1)
 		}
@@ -70,7 +70,7 @@ func main() {
 		return
 	}
 	if *backupPath != "" {
-		store, openErr := postgres.OpenForBackup(ctx, settings.Storage.DatabaseURL, settings.Storage.MasterKey)
+		store, openErr := gormstore.OpenForBackup(ctx, settings.Storage.DatabaseURL, settings.Storage.MasterKey)
 		if openErr != nil {
 			logger.Error("database backup source failed", "error", openErr)
 			os.Exit(1)
@@ -84,7 +84,7 @@ func main() {
 		logger.Info("database backup completed", "destination", *backupPath, "schema_version", version)
 		return
 	}
-	recoveryPath, pendingApplied, pendingErr := postgres.ApplyPendingRestore(ctx, settings.Storage.DatabaseURL, settings.Storage.MasterKey)
+	recoveryPath, pendingApplied, pendingErr := gormstore.ApplyPendingRestore(ctx, settings.Storage.DatabaseURL, settings.Storage.MasterKey)
 	if pendingErr != nil && !pendingApplied {
 		logger.Error("pending database restore failed", "error", pendingErr)
 		os.Exit(1)
@@ -95,7 +95,7 @@ func main() {
 	if pendingApplied {
 		logger.Info("pending database restore applied", "pre_restore_backup", recoveryPath)
 	}
-	store, err := postgres.Open(ctx, settings.Storage.DatabaseURL, settings.Storage.MasterKey)
+	store, err := gormstore.Open(ctx, settings.Storage.DatabaseURL, settings.Storage.MasterKey)
 	if err != nil {
 		logger.Error("database initialization failed", "error", err)
 		os.Exit(1)
@@ -222,7 +222,7 @@ func main() {
 		os.Exit(1)
 	}
 	server.SetAuthService(application.NewAuthService(store))
-	server.SetMaintenanceService(application.NewMaintenanceService(store, settings.Storage.MasterKey, postgres.ValidateRestoreCandidate, postgres.PendingRestorePaths, postgres.WritePendingRestoreMarker))
+	server.SetMaintenanceService(application.NewMaintenanceService(store, settings.Storage.MasterKey, gormstore.ValidateRestoreCandidate, gormstore.PendingRestorePaths, gormstore.WritePendingRestoreMarker))
 	server.SetSettingsService(settingsService)
 	auditService := application.NewAuditService(store)
 	server.SetAuditService(auditService)

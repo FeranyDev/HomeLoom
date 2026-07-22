@@ -1,4 +1,4 @@
-package postgres
+package gormstore
 
 import (
 	"context"
@@ -38,7 +38,7 @@ func (s *Store) SaveProvider(ctx context.Context, item providerconfig.Config) er
 	}
 	configJSON = encrypted
 	now := time.Now().UTC().UnixMilli()
-	row := providerRow{ID: item.ID, Type: item.Type, Name: item.Name, Enabled: item.Enabled, ConfigJSON: string(configJSON), CreatedAt: now, UpdatedAt: now}
+	row := providerRow{ID: item.ID, Type: item.Type, Name: item.Name, Enabled: item.Enabled, ConfigJSON: jsonDocument(configJSON), CreatedAt: now, UpdatedAt: now}
 	err = s.orm.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "id"}},
 		DoUpdates: clause.AssignmentColumns([]string{"type", "name", "enabled", "config_json", "updated_at"}),

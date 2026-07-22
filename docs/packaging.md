@@ -114,4 +114,4 @@ HOMELOOM_VERSION=0.1.0 docker compose up --build -d
 - 六个平台实际交叉编译；
 - 每个多平台制品的 SHA-256 校验值。
 
-`CGO_ENABLED=0` 用于避免运行环境依赖额外的 C 动态库。跨平台构建成功只证明编译和资源嵌入有效；HomeKit mDNS、网络接口和防火墙行为仍需在相应操作系统上做实机验收。
+`CGO_ENABLED=0` 用于避免运行环境依赖额外的 C 动态库。SQLite 备选后端通过纯 Go 的 `github.com/ncruces/go-sqlite3/gormlite` 一并编入这六个平台的可执行文件，不要求目标设备安装 SQLite 或 C 运行库。跨平台构建成功只证明编译和资源嵌入有效；HomeKit mDNS、网络接口和防火墙行为仍需在相应操作系统上做实机验收。

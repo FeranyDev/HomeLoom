@@ -3,4 +3,5 @@ server:
 
 storage:
   database_url: "postgres://homeloom:homeloom-dev@127.0.0.1:54329/homeloom?sslmode=disable"
+  # SQLite alternative: "sqlite://./data/homeloom.db"
   master_key: "./data/homeloom.key"

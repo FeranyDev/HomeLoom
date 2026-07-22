@@ -16,7 +16,7 @@ import (
 
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
-	"github.com/feranydev/homeloom/backend/internal/persistence/postgres"
+	"github.com/feranydev/homeloom/backend/internal/persistence/gormstore"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
 	"github.com/feranydev/homeloom/backend/internal/runtime/providermanager"
@@ -155,13 +155,13 @@ func TestManagementAuthenticationLifecycleAndCSRF(t *testing.T) {
 func TestDatabaseBackupAndRestoreStagingAPI(t *testing.T) {
 	ctx := context.Background()
 	databaseURL, keyPath := testStoreCredentials(t)
-	store, err := postgres.Open(ctx, databaseURL, keyPath)
+	store, err := gormstore.Open(ctx, databaseURL, keyPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 	server := newTestServer()
-	server.SetMaintenanceService(application.NewMaintenanceService(store, keyPath, postgres.ValidateRestoreCandidate, postgres.PendingRestorePaths, postgres.WritePendingRestoreMarker))
+	server.SetMaintenanceService(application.NewMaintenanceService(store, keyPath, gormstore.ValidateRestoreCandidate, gormstore.PendingRestorePaths, gormstore.WritePendingRestoreMarker))
 
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/system/backup", bytes.NewBufferString(`{"confirmation":"BACKUP"}`))
 	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)

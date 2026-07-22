@@ -16,18 +16,18 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-const defaultURL = "postgres://homeloom:homeloom-dev@127.0.0.1:54329/homeloom?sslmode=disable"
-
-// Credentials creates an isolated PostgreSQL schema and a private master-key
-// path for one test. Tests share the server, never tables or encryption keys.
+// Credentials creates an isolated SQLite database by default. When
+// HOMELOOM_TEST_DATABASE_URL is set to PostgreSQL, it creates an isolated
+// schema there instead. Every test receives separate tables and encryption key.
 func Credentials(t testing.TB) (databaseURL, keyPath string) {
 	t.Helper()
 	baseURL := os.Getenv("HOMELOOM_TEST_DATABASE_URL")
 	if baseURL == "" {
-		baseURL = defaultURL
+		directory := t.TempDir()
+		return "sqlite://" + filepath.ToSlash(filepath.Join(directory, "homeloom.db")), filepath.Join(directory, "homeloom.key")
 	}
 	parsed, err := url.Parse(baseURL)
-	if err != nil {
+	if err != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") {
 		t.Fatalf("parse test PostgreSQL URL: %v", err)
 	}
 	random := make([]byte, 8)
@@ -68,7 +68,10 @@ func quoteIdentifier(value string) string {
 func RedactedHost(databaseURL string) string {
 	parsed, err := url.Parse(databaseURL)
 	if err != nil {
-		return "PostgreSQL"
+		return "database"
+	}
+	if parsed.Scheme == "sqlite" {
+		return "SQLite"
 	}
 	return fmt.Sprintf("PostgreSQL %s/%s", parsed.Host, strings.Trim(parsed.Path, "/"))
 }

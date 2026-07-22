@@ -62,7 +62,7 @@ func (s *MaintenanceService) Backup(ctx context.Context, confirmation string) (M
 		return MaintenanceArtifact{}, fmt.Errorf("create backup workspace: %w", err)
 	}
 	cleanup := func() { _ = os.RemoveAll(directory) }
-	snapshot := filepath.Join(directory, "homeloom-postgres.json")
+	snapshot := filepath.Join(directory, "homeloom-database.json")
 	if err := s.store.Backup(ctx, snapshot); err != nil {
 		cleanup()
 		return MaintenanceArtifact{}, err
@@ -100,7 +100,7 @@ func (s *MaintenanceService) StageRestore(ctx context.Context, archive io.Reader
 	if err := copyLimitedFile(archivePath, archive, maxRestoreArchive); err != nil {
 		return PendingRestore{}, err
 	}
-	candidate := filepath.Join(directory, "homeloom-postgres.json")
+	candidate := filepath.Join(directory, "homeloom-database.json")
 	if err := extractBackupArchive(archivePath, candidate); err != nil {
 		return PendingRestore{}, err
 	}
@@ -133,7 +133,7 @@ func createBackupArchive(archivePath, snapshotPath string) error {
 		return fmt.Errorf("create backup archive: %w", err)
 	}
 	archive := zip.NewWriter(file)
-	for _, item := range []struct{ source, name string }{{snapshotPath, "homeloom-postgres.json"}, {snapshotPath + ".key", "homeloom-master.key"}} {
+	for _, item := range []struct{ source, name string }{{snapshotPath, "homeloom-database.json"}, {snapshotPath + ".key", "homeloom-master.key"}} {
 		if err := addArchiveFile(archive, item.source, item.name); err != nil {
 			archive.Close()
 			file.Close()
@@ -193,7 +193,7 @@ func extractBackupArchive(archivePath, candidate string) error {
 		return fmt.Errorf("open restore archive: %w", err)
 	}
 	defer archive.Close()
-	entries := map[string]string{"homeloom-postgres.json": candidate, "homeloom-master.key": candidate + ".key"}
+	entries := map[string]string{"homeloom-database.json": candidate, "homeloom-master.key": candidate + ".key"}
 	seen := make(map[string]bool)
 	var totalSize uint64
 	for _, entry := range archive.File {

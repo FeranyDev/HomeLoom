@@ -1,4 +1,4 @@
-package postgres
+package gormstore
 
 import (
 	"context"
@@ -41,7 +41,7 @@ func (s *Store) SaveMappingProfiles(ctx context.Context, items []mapping.Profile
 			if err != nil {
 				return fmt.Errorf("encode mapping profile %q: %w", item.ID, err)
 			}
-			row := mappingProfileRow{ID: item.ID, Kind: string(item.Kind), Version: item.Version, DocumentJSON: string(document), CreatedAt: now, UpdatedAt: now}
+			row := mappingProfileRow{ID: item.ID, Kind: string(item.Kind), Version: item.Version, DocumentJSON: jsonDocument(document), CreatedAt: now, UpdatedAt: now}
 			if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.AssignmentColumns([]string{"kind", "version", "document_json", "updated_at"})}).Create(&row).Error; err != nil {
 				return fmt.Errorf("save mapping profile %q: %w", item.ID, err)
 			}

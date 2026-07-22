@@ -21,7 +21,7 @@ const (
 
 // CloudConfig is the durable configuration for the Xiaomi cloud MIoT
 // provider. Password and session fields are encrypted by the provider config
-// secret codec before the JSON document is stored in PostgreSQL.
+// secret codec before the JSON document is stored in the configured database.
 type CloudConfig struct {
 	Region            string         `json:"region"`
 	Username          string         `json:"username,omitempty"`

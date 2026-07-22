@@ -1,4 +1,4 @@
-package postgres
+package gormstore
 
 import (
 	"context"
@@ -550,7 +550,7 @@ func TestGORMInitializationSeedsDefaultTarget(t *testing.T) {
 func TestGORMInitializationDoesNotAddDefaultsToPopulatedTables(t *testing.T) {
 	ctx := context.Background()
 	databaseURL, keyPath := testCredentials(t)
-	orm, err := openGORM(databaseURL)
+	orm, _, err := openGORM(databaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}

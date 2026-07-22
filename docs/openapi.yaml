@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: HomeLoom API
   version: 0.1.0
-  description: HomeLoom management API. Runtime device values are ephemeral; configuration is stored in PostgreSQL.
+  description: HomeLoom management API. Runtime device values are ephemeral; configuration is stored in PostgreSQL or SQLite through GORM.
 servers:
   - url: http://127.0.0.1:8090
 security:
@@ -150,10 +150,10 @@ paths:
   /api/v1/system/backup:
     post:
       operationId: downloadDatabaseBackup
-      description: Creates a consistent PostgreSQL logical snapshot plus its master key as a sensitive ZIP archive. Requires X-CSRF-Token and the exact BACKUP confirmation phrase.
+      description: Creates a consistent database-neutral logical snapshot plus its master key as a sensitive ZIP archive. Requires X-CSRF-Token and the exact BACKUP confirmation phrase.
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ConfirmationRequest" } } } }
       responses:
-        "200": { description: No-store ZIP attachment containing homeloom-postgres.json and homeloom-master.key, content: { application/zip: { schema: { type: string, format: binary } } } }
+        "200": { description: No-store ZIP attachment containing homeloom-database.json and homeloom-master.key, content: { application/zip: { schema: { type: string, format: binary } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
   /api/v1/system/restore:
     post:

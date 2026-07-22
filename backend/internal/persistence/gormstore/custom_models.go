@@ -1,4 +1,4 @@
-package postgres
+package gormstore
 
 import (
 	"context"
@@ -34,7 +34,7 @@ func (s *Store) SaveCustomModel(ctx context.Context, item mapping.CustomModel) e
 		return fmt.Errorf("encode custom unified model %q: %w", item.DeviceType, err)
 	}
 	now := time.Now().UTC().UnixMilli()
-	row := customUnifiedModelRow{DeviceType: string(item.DeviceType), Name: item.Name, Version: item.Version, DocumentJSON: string(document), CreatedAt: now, UpdatedAt: now}
+	row := customUnifiedModelRow{DeviceType: string(item.DeviceType), Name: item.Name, Version: item.Version, DocumentJSON: jsonDocument(document), CreatedAt: now, UpdatedAt: now}
 	err = s.orm.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "device_type"}}, DoUpdates: clause.AssignmentColumns([]string{"name", "version", "document_json", "updated_at"})}).Create(&row).Error
 	if err != nil {
 		return fmt.Errorf("save custom unified model %q: %w", item.DeviceType, err)

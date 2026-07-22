@@ -5,9 +5,9 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 BINARY=${HOMELOOM_BINARY:-$ROOT/backend/bin/homeloom}
 ADDRESS=${HOMELOOM_SMOKE_ADDRESS:-127.0.0.1:18090}
-DATABASE_URL=${HOMELOOM_SMOKE_DATABASE_URL:-}
 BASE_URL="http://$ADDRESS"
 TEMP=$(mktemp -d "${TMPDIR:-/tmp}/homeloom-smoke.XXXXXX")
+DATABASE_URL=${HOMELOOM_SMOKE_DATABASE_URL:-sqlite://$TEMP/homeloom.db}
 COOKIE_JAR="$TEMP/cookies.txt"
 PID=""
 HAP_PORT=$("$ROOT/scripts/dev-env.sh" node -e 'const server=require("net").createServer(); server.listen(0,"127.0.0.1",()=>{console.log(server.address().port);server.close()})')
@@ -47,11 +47,6 @@ if [ ! -x "$BINARY" ]; then
   echo "missing executable: $BINARY (run ./scripts/build.sh <version> first)" >&2
   exit 1
 fi
-if [ -z "$DATABASE_URL" ]; then
-  echo "HOMELOOM_SMOKE_DATABASE_URL must point to an empty, disposable PostgreSQL database or schema" >&2
-  exit 2
-fi
-
 cd "$TEMP"
 start_server
 

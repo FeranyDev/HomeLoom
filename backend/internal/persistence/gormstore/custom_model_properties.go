@@ -1,4 +1,4 @@
-package postgres
+package gormstore
 
 import (
 	"context"
@@ -34,7 +34,7 @@ func (s *Store) SaveCustomModelProperty(ctx context.Context, item mapping.Custom
 		return fmt.Errorf("encode custom model property %q: %w", item.ID, err)
 	}
 	now := time.Now().UTC().UnixMilli()
-	row := customModelPropertyRow{ID: item.ID, DeviceType: string(item.DeviceType), EndpointID: item.EndpointID, CapabilityID: item.CapabilityID, PropertyID: item.Definition.ID, DocumentJSON: string(document), CreatedAt: now, UpdatedAt: now}
+	row := customModelPropertyRow{ID: item.ID, DeviceType: string(item.DeviceType), EndpointID: item.EndpointID, CapabilityID: item.CapabilityID, PropertyID: item.Definition.ID, DocumentJSON: jsonDocument(document), CreatedAt: now, UpdatedAt: now}
 	err = s.orm.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.AssignmentColumns([]string{"device_type", "endpoint_id", "capability_id", "property_id", "document_json", "updated_at"})}).Create(&row).Error
 	if err != nil {
 		return fmt.Errorf("save custom model property %q: %w", item.ID, err)

@@ -1,4 +1,4 @@
-package postgres
+package gormstore
 
 import (
 	"context"
@@ -39,7 +39,7 @@ func (s *Store) SaveTarget(ctx context.Context, item target.Config) error {
 			if err != nil {
 				return fmt.Errorf("encode target virtual device %q auxiliary sources: %w", current.ID, err)
 			}
-			rows = append(rows, targetVirtualDeviceRow{TargetID: item.ID, ID: current.ID, Name: current.Name, Type: string(current.Type), SourceDeviceID: current.SourceDeviceID, AuxiliarySourceDeviceIDsJSON: string(auxiliaryJSON), Enabled: current.Enabled, CreatedAt: now, UpdatedAt: now})
+			rows = append(rows, targetVirtualDeviceRow{TargetID: item.ID, ID: current.ID, Name: current.Name, Type: string(current.Type), SourceDeviceID: current.SourceDeviceID, AuxiliarySourceDeviceIDsJSON: jsonDocument(auxiliaryJSON), Enabled: current.Enabled, CreatedAt: now, UpdatedAt: now})
 		}
 		if len(rows) > 0 {
 			if err := tx.Create(&rows).Error; err != nil {
