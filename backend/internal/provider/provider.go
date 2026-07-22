@@ -127,6 +127,25 @@ type SourceCataloger interface {
 	SourceCatalog(context.Context) ([]SourceCatalogDevice, error)
 }
 
+// PropertyInterest identifies a Provider-native property that is actively
+// consumed by the mapping graph. Providers may use this hint to avoid polling
+// every field in a complete source catalog merely to keep its mapping UI
+// populated. An empty ProviderID is only meaningful inside a concrete
+// Provider; aggregators use it to route interests to the owning instance.
+type PropertyInterest struct {
+	ProviderID   string
+	DeviceID     string
+	EndpointID   string
+	CapabilityID string
+	PropertyID   string
+}
+
+// PropertyInterestSetter receives the complete current interest set. Calls
+// replace previous interests and must not restart Provider transports.
+type PropertyInterestSetter interface {
+	SetPropertyInterests([]PropertyInterest)
+}
+
 type PropertyReadRequest struct {
 	DeviceID     string
 	EndpointID   string

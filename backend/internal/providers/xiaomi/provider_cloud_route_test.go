@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
+	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 )
 
 type routeHub struct {
@@ -194,6 +195,32 @@ func TestConnectedCloudMIPSOnlyCompensatesNonNotifiableProperties(t *testing.T) 
 	configured.Properties[0].Notifiable = &notifiable
 	if got := provider.calibrationMappings(configured, false); len(got) != 1 {
 		t.Fatalf("non-notifiable mappings must be compensated: %#v", got)
+	}
+}
+
+func TestPeriodicCalibrationSkipsUnmappedSourceCatalogProperties(t *testing.T) {
+	provider, configured := routeTestProvider(t, connectionModeAuto, &routeHub{}, &routeCloud{}, deviceRoute{local: true, cloud: true, push: true})
+	provider.cloudMIPS = &fakeCloudMIPS{}
+	readable, notifiable := true, false
+	raw := PropertyMapping{EndpointID: "miot-3", CapabilityID: "service-3", PropertyID: "property-7", ValueType: device.ValueTypeInt, SIID: 3, PIID: 7, Readable: &readable, Notifiable: &notifiable}
+	provider.rawProperties[sourcePropertyKey(configured.ID, raw.EndpointID, raw.CapabilityID, raw.PropertyID)] = raw
+
+	if got := provider.calibrationMappings(configured, false); len(got) != 0 {
+		t.Fatalf("unmapped source catalog property was periodically calibrated: %#v", got)
+	}
+	if got := provider.calibrationMappings(configured, true); len(got) != 2 {
+		t.Fatalf("initial read must still include configured and complete source properties: %#v", got)
+	}
+
+	provider.SetPropertyInterests([]providersdk.PropertyInterest{{ProviderID: provider.id, DeviceID: configured.ID, EndpointID: raw.EndpointID, CapabilityID: raw.CapabilityID, PropertyID: raw.PropertyID}})
+	got := provider.calibrationMappings(configured, false)
+	if len(got) != 1 || got[0].SIID != raw.SIID || got[0].PIID != raw.PIID {
+		t.Fatalf("explicitly mapped raw property must be periodically calibrated: %#v", got)
+	}
+
+	provider.SetPropertyInterests(nil)
+	if got := provider.calibrationMappings(configured, false); len(got) != 0 {
+		t.Fatalf("removed mapping interest remained active: %#v", got)
 	}
 }
 

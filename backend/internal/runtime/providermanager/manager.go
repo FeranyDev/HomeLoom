@@ -31,6 +31,7 @@ type Manager struct {
 	routes            map[string]string
 	listeners         map[uint64]func(device.Device)
 	eventListeners    map[uint64]func(providersdk.DeviceEvent)
+	propertyInterests map[string][]providersdk.PropertyInterest
 	nextListener      uint64
 	nextEventListener uint64
 	initialized       bool
@@ -42,7 +43,7 @@ type Manager struct {
 }
 
 func New(items ...providersdk.Provider) (*Manager, error) {
-	m := &Manager{providers: make(map[string]*managedProvider), routes: make(map[string]string), listeners: make(map[uint64]func(device.Device)), eventListeners: make(map[uint64]func(providersdk.DeviceEvent))}
+	m := &Manager{providers: make(map[string]*managedProvider), routes: make(map[string]string), listeners: make(map[uint64]func(device.Device)), eventListeners: make(map[uint64]func(providersdk.DeviceEvent)), propertyInterests: make(map[string][]providersdk.PropertyInterest)}
 	for _, item := range items {
 		id := item.Manifest().ID
 		if id == "" {
@@ -76,6 +77,33 @@ func (m *Manager) Provider(id string) (providersdk.Provider, bool) {
 	provider := current.provider
 	m.mu.RUnlock()
 	return provider, true
+}
+
+// SetPropertyInterests routes the complete active mapping set to each concrete
+// Provider and remembers it for later Provider replacement. Updating mapping
+// interests never reconnects Provider transports.
+func (m *Manager) SetPropertyInterests(interests []providersdk.PropertyInterest) {
+	grouped := make(map[string][]providersdk.PropertyInterest)
+	for _, interest := range interests {
+		if interest.ProviderID == "" {
+			continue
+		}
+		grouped[interest.ProviderID] = append(grouped[interest.ProviderID], interest)
+	}
+	m.mu.Lock()
+	m.propertyInterests = grouped
+	providers := make(map[string]providersdk.Provider, len(m.providers))
+	for id, current := range m.providers {
+		if current != nil {
+			providers[id] = current.provider
+		}
+	}
+	m.mu.Unlock()
+	for id, provider := range providers {
+		if setter, ok := provider.(providersdk.PropertyInterestSetter); ok {
+			setter.SetPropertyInterests(append([]providersdk.PropertyInterest(nil), grouped[id]...))
+		}
+	}
 }
 
 func (m *Manager) Initialize(ctx context.Context) error {
@@ -277,6 +305,12 @@ func (m *Manager) Apply(ctx context.Context, item providersdk.Provider) error {
 			m.startRetryWorker()
 			return fmt.Errorf("close provider %q before replacement: %w", id, err)
 		}
+	}
+	m.mu.RLock()
+	interests := append([]providersdk.PropertyInterest(nil), m.propertyInterests[id]...)
+	m.mu.RUnlock()
+	if setter, ok := item.(providersdk.PropertyInterestSetter); ok {
+		setter.SetPropertyInterests(interests)
 	}
 	if err := item.Initialize(ctx); err != nil {
 		return m.restoreAfterFailedReplacement(ctx, id, current, fmt.Errorf("initialize provider %q: %w", id, err))

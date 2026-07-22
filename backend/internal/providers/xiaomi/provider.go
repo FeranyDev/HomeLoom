@@ -72,6 +72,7 @@ type Provider struct {
 	directory                []HubDevice
 	rawProperties            map[string]PropertyMapping
 	rawActions               map[string]ActionMapping
+	propertyInterests        map[string]struct{}
 	catalog                  map[string]providersdk.SourceCatalogMetadata
 	valueStatus              map[string]providersdk.SourceValueStatus
 	observations             map[string]propertyObservation
@@ -154,7 +155,7 @@ func newProvider(id, name string, config Config, factory clientFactory) (*Provid
 }
 
 func newProviderWithResolver(id, name string, config Config, factory clientFactory, resolver *SpecResolver) (*Provider, error) {
-	provider := &Provider{id: id, name: name, config: config, factory: factory, resolver: resolver, devices: make(map[string]device.Device), sourceDevices: make(map[string]device.Device), byDID: make(map[string]string), routes: make(map[string]deviceRoute), rawProperties: make(map[string]PropertyMapping), rawActions: make(map[string]ActionMapping), catalog: make(map[string]providersdk.SourceCatalogMetadata), valueStatus: make(map[string]providersdk.SourceValueStatus), observations: make(map[string]propertyObservation), propertyFailures: make(map[string]propertyReadFailure), listeners: make(map[uint64]func(device.Device)), eventListeners: make(map[uint64]func(providersdk.DeviceEvent)), cloudDisconnectGrace: defaultCloudDisconnectGrace, cloudDirectoryInterval: defaultCloudDirectoryReconcile, directoryRefreshDebounce: 500 * time.Millisecond}
+	provider := &Provider{id: id, name: name, config: config, factory: factory, resolver: resolver, devices: make(map[string]device.Device), sourceDevices: make(map[string]device.Device), byDID: make(map[string]string), routes: make(map[string]deviceRoute), rawProperties: make(map[string]PropertyMapping), rawActions: make(map[string]ActionMapping), propertyInterests: make(map[string]struct{}), catalog: make(map[string]providersdk.SourceCatalogMetadata), valueStatus: make(map[string]providersdk.SourceValueStatus), observations: make(map[string]propertyObservation), propertyFailures: make(map[string]propertyReadFailure), listeners: make(map[uint64]func(device.Device)), eventListeners: make(map[uint64]func(providersdk.DeviceEvent)), cloudDisconnectGrace: defaultCloudDisconnectGrace, cloudDirectoryInterval: defaultCloudDirectoryReconcile, directoryRefreshDebounce: 500 * time.Millisecond}
 	for _, configured := range config.Devices {
 		item := buildDevice(id, configured)
 		applyCentralStalePolicy(&item, config.pollInterval())
@@ -495,6 +496,26 @@ func (p *Provider) DiscoverDevices(context.Context) ([]device.Device, error) {
 	p.mu.RUnlock()
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result, nil
+}
+
+// SetPropertyInterests hot-applies the Provider-native fields used by explicit
+// Provider -> unified-model bindings. Complete MIoT source catalogs remain
+// available to the UI, but their otherwise unused non-notifiable properties no
+// longer participate in the frequent state-compensation loop.
+func (p *Provider) SetPropertyInterests(interests []providersdk.PropertyInterest) {
+	next := make(map[string]struct{})
+	for _, interest := range interests {
+		if interest.ProviderID != "" && interest.ProviderID != p.id {
+			continue
+		}
+		if interest.DeviceID == "" || interest.EndpointID == "" || interest.CapabilityID == "" || interest.PropertyID == "" {
+			continue
+		}
+		next[sourcePropertyKey(interest.DeviceID, interest.EndpointID, interest.CapabilityID, interest.PropertyID)] = struct{}{}
+	}
+	p.mu.Lock()
+	p.propertyInterests = next
+	p.mu.Unlock()
 }
 
 // MatchesGateway reports whether a directory request can safely reuse this
@@ -1412,6 +1433,9 @@ func (p *Provider) calibrationMappings(configured DeviceConfig, initial bool) []
 			result = append(result, mapping)
 			continue
 		}
+		if !p.isPeriodicallyMapped(configured, mapping) {
+			continue
+		}
 		key := sourcePropertyKey(configured.ID, mapping.EndpointID, mapping.CapabilityID, mapping.PropertyID)
 		p.mu.RLock()
 		failure := p.propertyFailures[key]
@@ -1427,6 +1451,18 @@ func (p *Provider) calibrationMappings(configured DeviceConfig, initial bool) []
 		}
 	}
 	return result
+}
+
+func (p *Provider) isPeriodicallyMapped(configured DeviceConfig, mapping PropertyMapping) bool {
+	for _, candidate := range configured.Properties {
+		if candidate.EndpointID == mapping.EndpointID && candidate.CapabilityID == mapping.CapabilityID && candidate.PropertyID == mapping.PropertyID {
+			return true
+		}
+	}
+	p.mu.RLock()
+	_, interested := p.propertyInterests[sourcePropertyKey(configured.ID, mapping.EndpointID, mapping.CapabilityID, mapping.PropertyID)]
+	p.mu.RUnlock()
+	return interested
 }
 
 func (p *Provider) readableMappings(configured DeviceConfig) []PropertyMapping {

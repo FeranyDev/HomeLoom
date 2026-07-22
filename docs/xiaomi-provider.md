@@ -146,7 +146,8 @@ miot-{SIID} / service-{SIID} / property-{PIID}
 - 中枢地址、Client ID、TLS/OAuth 或轮询参数变化时才执行连接级替换；
 - `connectionMode=auto` 时先通过中枢 MQTT 读取、写入或执行 Action，传输失败、协议错误或中枢标记不可控时使用同一 OAuth 会话转官方云端；`local` 禁止回退，`cloud` 跳过中枢；
 - 属性通知实时更新内存快照，并将设备实际 `runtimeMode` 标记为 `local`；官方云端成功则标记为 `cloud`；
-- 本地且具备推送能力的设备完成初始读取后不再周期轮询；云端、无本地推送或尚未判定路径的设备才执行定时校准；
+- 完整来源属性在初始化时读取一次，之后由中枢/官方云 MQTT 推送或用户主动读取更新；周期补偿只覆盖统一模型默认映射和已启用的手工 Provider → 统一模型绑定，不为映射页面持续轮询未使用的 MIoT 属性；
+- 本地且具备推送能力的已映射属性完成初始读取后不再周期轮询；云端、无本地推送、属性不支持 `notify` 或尚未判定路径的已映射属性才执行定时校准；
 - 云端 HTTP 客户端由 Provider 共享，OAuth Token 热更新不重建 MQTT 或 HTTP 客户端；
 - MQTT 断线由连接管理器自动重连和恢复订阅；
 - Provider 失败不会停止 API、HomeKit 或其他 Provider。

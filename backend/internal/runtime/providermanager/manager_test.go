@@ -15,6 +15,21 @@ import (
 
 type failingProvider struct{ id string }
 
+type interestedProvider struct {
+	id        string
+	interests []providersdk.PropertyInterest
+}
+
+func (p *interestedProvider) Manifest() providersdk.Manifest {
+	return providersdk.Manifest{ID: p.id, Type: "interest-test", Name: p.id}
+}
+func (*interestedProvider) Capabilities() providersdk.Capabilities { return providersdk.Capabilities{} }
+func (*interestedProvider) Initialize(context.Context) error       { return nil }
+func (*interestedProvider) Close(context.Context) error            { return nil }
+func (p *interestedProvider) SetPropertyInterests(interests []providersdk.PropertyInterest) {
+	p.interests = append([]providersdk.PropertyInterest(nil), interests...)
+}
+
 type transientProvider struct {
 	inner   *virtual.Provider
 	handler func(providersdk.DeviceEvent)
@@ -46,6 +61,37 @@ func (p failingProvider) Manifest() providersdk.Manifest {
 func (failingProvider) Capabilities() providersdk.Capabilities { return providersdk.Capabilities{} }
 func (failingProvider) Initialize(context.Context) error       { return errors.New("connection refused") }
 func (failingProvider) Close(context.Context) error            { return nil }
+
+func TestManagerRoutesAndRetainsPropertyInterestsAcrossReplacement(t *testing.T) {
+	ctx := context.Background()
+	first := &interestedProvider{id: "source-main"}
+	manager, err := providermanager.New(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close(ctx)
+	interest := providersdk.PropertyInterest{ProviderID: "source-main", DeviceID: "device-1", EndpointID: "raw", CapabilityID: "service", PropertyID: "value"}
+	manager.SetPropertyInterests([]providersdk.PropertyInterest{interest, {ProviderID: "other", DeviceID: "ignored", EndpointID: "raw", CapabilityID: "service", PropertyID: "value"}})
+	if len(first.interests) != 1 || first.interests[0] != interest {
+		t.Fatalf("first interests=%#v", first.interests)
+	}
+
+	replacement := &interestedProvider{id: "source-main"}
+	if err := manager.Apply(ctx, replacement); err != nil {
+		t.Fatal(err)
+	}
+	if len(replacement.interests) != 1 || replacement.interests[0] != interest {
+		t.Fatalf("replacement interests=%#v", replacement.interests)
+	}
+
+	manager.SetPropertyInterests(nil)
+	if len(replacement.interests) != 0 {
+		t.Fatalf("cleared interests=%#v", replacement.interests)
+	}
+}
 
 type flakyProvider struct{ attempts atomic.Int32 }
 

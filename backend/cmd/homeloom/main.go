@@ -15,6 +15,7 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/config"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	"github.com/feranydev/homeloom/backend/internal/domain/target"
+	"github.com/feranydev/homeloom/backend/internal/mapping"
 	"github.com/feranydev/homeloom/backend/internal/persistence/gormstore"
 	"github.com/feranydev/homeloom/backend/internal/platform/httpapi"
 	"github.com/feranydev/homeloom/backend/internal/platform/safelog"
@@ -168,6 +169,18 @@ func main() {
 		logger.Error("mapping profile load failed", "error", err)
 		os.Exit(1)
 	}
+	syncProviderPropertyInterests := func() {
+		bindings := profileService.ListBindings()
+		interests := make([]providersdk.PropertyInterest, 0, len(bindings))
+		for _, binding := range bindings {
+			if !binding.Enabled || binding.EffectiveStage() != mapping.StageProvider {
+				continue
+			}
+			interests = append(interests, providersdk.PropertyInterest{ProviderID: binding.ProviderID, DeviceID: binding.DeviceID, EndpointID: binding.EndpointID, CapabilityID: binding.CapabilityID, PropertyID: binding.PropertyID})
+		}
+		providerManager.SetPropertyInterests(interests)
+	}
+	syncProviderPropertyInterests()
 	service := application.NewDeviceService(providerManager, store, profileService)
 	defer service.Close()
 	if err := service.LoadDevicePreferences(ctx); err != nil {
@@ -206,6 +219,7 @@ func main() {
 	targetService.SetRuntime(manager)
 	manager.SetStatusHandler(targetService.SetStatus)
 	profileService.SetChangeHandler(func(changeCtx context.Context) {
+		syncProviderPropertyInterests()
 		refreshCtx, cancelRefresh := context.WithTimeout(context.WithoutCancel(changeCtx), 15*time.Second)
 		defer cancelRefresh()
 		if refreshErr := service.RefreshDevices(refreshCtx); refreshErr != nil {
