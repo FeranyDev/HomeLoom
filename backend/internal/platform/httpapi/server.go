@@ -916,6 +916,7 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 			return echo.NewHTTPError(http.StatusInternalServerError, "streaming is unsupported")
 		}
 		events := make(chan device.Device, 16)
+		deviceEvents := make(chan providersdk.DeviceEvent, 16)
 		unsubscribe := devices.Subscribe(func(item device.Device) {
 			select {
 			case events <- item:
@@ -923,6 +924,13 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 			}
 		})
 		defer unsubscribe()
+		unsubscribeDeviceEvents := devices.SubscribeDeviceEvents(func(event providersdk.DeviceEvent) {
+			select {
+			case deviceEvents <- event:
+			default:
+			}
+		})
+		defer unsubscribeDeviceEvents()
 		if _, err := response.Write([]byte("event: ready\ndata: {}\n\n")); err != nil {
 			return nil
 		}
@@ -937,6 +945,15 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 					continue
 				}
 				if _, err := fmt.Fprintf(response, "event: device\ndata: %s\n\n", payload); err != nil {
+					return nil
+				}
+				flusher.Flush()
+			case event := <-deviceEvents:
+				payload, err := json.Marshal(event)
+				if err != nil {
+					continue
+				}
+				if _, err := fmt.Fprintf(response, "event: device-event\ndata: %s\n\n", payload); err != nil {
 					return nil
 				}
 				flusher.Flush()

@@ -294,6 +294,13 @@ paths:
         "200":
           description: Server-sent events named audit; heartbeat comments are emitted every 15 seconds
           content: { text/event-stream: { schema: { type: string } } }
+  /api/v1/events/devices:
+    get:
+      operationId: streamDeviceEvents
+      responses:
+        "200":
+          description: Server-sent snapshots named `device` and transient Provider occurrences named `device-event`; heartbeat comments are emitted every 15 seconds. Transient occurrences do not update the state store.
+          content: { text/event-stream: { schema: { type: string } } }
   /api/v1/devices:
     get:
       operationId: listDevices
@@ -929,6 +936,19 @@ components:
         stateTransport: { type: string, enum: [pending, local-mqtt, cloud-mqtt, cloud-http], description: Precise state acquisition path; the Xiaomi central Provider distinguishes gateway push, official cloud push, and official cloud HTTP calibration. }
         endpoints: { type: array, items: { type: object, additionalProperties: true } }
         lastUpdateAt: { type: string, format: date-time }
+    DeviceEvent:
+      type: object
+      required: [providerId, deviceId, endpointId, capabilityId, eventId, payload, observedAt, sequence]
+      properties:
+        providerId: { type: string }
+        deviceId: { type: string }
+        endpointId: { type: string }
+        capabilityId: { type: string }
+        eventId: { type: string }
+        name: { type: string }
+        payload: { description: Provider-native event arguments preserved as JSON. }
+        observedAt: { type: string, format: date-time }
+        sequence: { type: integer, minimum: 1 }
     DeviceCommandResponse:
       type: object
       required: [data, command]

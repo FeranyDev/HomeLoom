@@ -26,6 +26,7 @@ export interface Provider extends ProviderConfig {
   nextRetryAt?: string
   transitionedAt?: string
 	metrics?: Record<string, number>
+	diagnostics?: Record<string, string>
 	credentials?: ProviderCredentialStatus
 	credentialError?: string
 	credentialRetryAt?: string

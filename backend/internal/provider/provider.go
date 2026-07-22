@@ -167,6 +167,24 @@ type EventSubscriber interface {
 	Subscribe(func(device.Device)) func()
 }
 
+// DeviceEvent is a transient Provider occurrence. Unlike a Device snapshot it
+// has no durable current value and must not be projected into the state store.
+type DeviceEvent struct {
+	ProviderID   string          `json:"providerId"`
+	DeviceID     string          `json:"deviceId"`
+	EndpointID   string          `json:"endpointId"`
+	CapabilityID string          `json:"capabilityId"`
+	EventID      string          `json:"eventId"`
+	Name         string          `json:"name,omitempty"`
+	Payload      json.RawMessage `json:"payload"`
+	ObservedAt   time.Time       `json:"observedAt"`
+	Sequence     uint64          `json:"sequence"`
+}
+
+type DeviceEventSubscriber interface {
+	SubscribeDeviceEvents(func(DeviceEvent)) func()
+}
+
 // SimulationRequest changes ephemeral provider state. It is intended for
 // development providers and is never persisted as desired configuration.
 type SimulationRequest struct {
@@ -191,6 +209,7 @@ type RuntimeInfo struct {
 	NextRetryAt    *time.Time        `json:"nextRetryAt,omitempty"`
 	TransitionedAt time.Time         `json:"transitionedAt"`
 	Metrics        map[string]uint64 `json:"metrics,omitempty"`
+	Diagnostics    map[string]string `json:"diagnostics,omitempty"`
 }
 
 type Inspector interface {
@@ -199,4 +218,11 @@ type Inspector interface {
 
 type MetricsReporter interface {
 	ProviderMetrics() map[string]uint64
+}
+
+// DiagnosticsReporter exposes sanitized runtime details that cannot be
+// represented as counters. Implementations must never include credentials,
+// broker passwords, subscription payloads, or other secrets.
+type DiagnosticsReporter interface {
+	ProviderDiagnostics() map[string]string
 }

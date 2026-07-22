@@ -15,6 +15,31 @@ import (
 
 type failingProvider struct{ id string }
 
+type transientProvider struct {
+	inner   *virtual.Provider
+	handler func(providersdk.DeviceEvent)
+}
+
+func (p *transientProvider) Manifest() providersdk.Manifest         { return p.inner.Manifest() }
+func (p *transientProvider) Capabilities() providersdk.Capabilities { return p.inner.Capabilities() }
+func (p *transientProvider) Initialize(ctx context.Context) error   { return p.inner.Initialize(ctx) }
+func (p *transientProvider) Close(ctx context.Context) error        { return p.inner.Close(ctx) }
+func (p *transientProvider) DiscoverDevices(ctx context.Context) ([]device.Device, error) {
+	return p.inner.DiscoverDevices(ctx)
+}
+func (p *transientProvider) SubscribeDeviceEvents(handler func(providersdk.DeviceEvent)) func() {
+	p.handler = handler
+	return func() { p.handler = nil }
+}
+func (*transientProvider) ProviderDiagnostics() map[string]string {
+	return map[string]string{"cloudMqttState": "connected"}
+}
+func (p *transientProvider) emit(event providersdk.DeviceEvent) {
+	if p.handler != nil {
+		p.handler(event)
+	}
+}
+
 func (p failingProvider) Manifest() providersdk.Manifest {
 	return providersdk.Manifest{ID: p.id, Type: "test", Name: "Failing"}
 }
@@ -184,6 +209,43 @@ func TestManagerDiscoversRoutesEventsAndWrites(t *testing.T) {
 	}
 	if manager.ProviderInfos()[0].Status != "stopped" {
 		t.Fatal("provider was not marked stopped")
+	}
+}
+
+func TestManagerRoutesTransientEventsOnlyForOwnedDevices(t *testing.T) {
+	provider := &transientProvider{inner: virtual.NewProvider()}
+	manager, err := providermanager.New(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := manager.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close(ctx)
+	if _, err := manager.DiscoverDevices(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if infos := manager.ProviderInfos(); len(infos) != 1 || infos[0].Diagnostics["cloudMqttState"] != "connected" {
+		t.Fatalf("runtime diagnostics=%#v", infos)
+	}
+	events := make(chan providersdk.DeviceEvent, 1)
+	unsubscribe := manager.SubscribeDeviceEvents(func(event providersdk.DeviceEvent) { events <- event })
+	defer unsubscribe()
+	provider.emit(providersdk.DeviceEvent{DeviceID: "virtual-switch-1", EndpointID: "main", CapabilityID: "switch", EventID: "pressed", Payload: []byte(`{"value":true}`), ObservedAt: time.Now().UTC(), Sequence: 1})
+	select {
+	case event := <-events:
+		if event.ProviderID != "virtual-main" || event.DeviceID != "virtual-switch-1" {
+			t.Fatalf("event=%#v", event)
+		}
+	default:
+		t.Fatal("owned transient event was not forwarded")
+	}
+	provider.emit(providersdk.DeviceEvent{DeviceID: "unknown", EndpointID: "main", CapabilityID: "switch", EventID: "pressed", Payload: []byte(`{}`), ObservedAt: time.Now().UTC(), Sequence: 2})
+	select {
+	case event := <-events:
+		t.Fatalf("unknown device event was forwarded: %#v", event)
+	default:
 	}
 }
 

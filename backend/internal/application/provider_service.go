@@ -40,6 +40,7 @@ type ProviderInfo struct {
 	NextRetryAt       *time.Time                    `json:"nextRetryAt,omitempty"`
 	TransitionedAt    time.Time                     `json:"transitionedAt,omitempty"`
 	Metrics           map[string]uint64             `json:"metrics,omitempty"`
+	Diagnostics       map[string]string             `json:"diagnostics,omitempty"`
 	Credentials       *providersdk.CredentialStatus `json:"credentials,omitempty"`
 	CredentialError   string                        `json:"credentialError,omitempty"`
 	CredentialRetryAt *time.Time                    `json:"credentialRetryAt,omitempty"`
@@ -126,7 +127,7 @@ func (s *ProviderService) List() []ProviderInfo {
 		if live, ok := runtimes[item.ID]; ok {
 			manifest := live.Manifest
 			info.Manifest, info.Capabilities, info.Status, info.Error = &manifest, live.Capabilities, live.Status, live.Error
-			info.RetryCount, info.NextRetryAt, info.TransitionedAt, info.Metrics = live.RetryCount, live.NextRetryAt, live.TransitionedAt, live.Metrics
+			info.RetryCount, info.NextRetryAt, info.TransitionedAt, info.Metrics, info.Diagnostics = live.RetryCount, live.NextRetryAt, live.TransitionedAt, live.Metrics, live.Diagnostics
 		}
 		s.mu.RLock()
 		raw := s.configs[item.ID]

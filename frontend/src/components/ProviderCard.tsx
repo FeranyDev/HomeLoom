@@ -48,6 +48,11 @@ export function ProviderCard({ provider, devices, onEdit, onDelete, onRestart, o
 	const connectionLabel = provider.type === 'xiaomi' ? (certificateReady ? '证书就绪' : '待申请证书') : provider.type === 'xiaomi-miot-cloud' ? (connectionReady ? '云会话可用' : provider.status) : provider.type === 'mqtt' ? (connectionReady ? (mqttMode === 'server' ? '服务端监听中' : 'Broker 已连接') : provider.status) : connectionReady ? '已连接' : provider.status
 	const connectionDetail = provider.type === 'xiaomi' ? `${String(config.host || '未选择中枢')}:${Number(config.port || 8883)} · MQTT 本地优先 / OAuth 官方云回退` : provider.type === 'xiaomi-miot-cloud' ? `轮询 ${Number(config.pollIntervalSeconds || 30)} 秒 · 非官方兼容接口` : provider.type === 'mqtt' ? mqttMode === 'server' ? '外部设备主动连接 · 内嵌 Broker' : `${String(config.clientId || `homeloom-${provider.id}`)} · MQTT 客户端会话` : '进程内异步事件源'
 	const cloudMqttLabel = provider.metrics?.cloudMqttConnected ? '已连接' : provider.metrics?.cloudMqttConfigured ? '重连中' : '未配置'
+	const cloudMqttDetail = provider.metrics?.cloudMqttConnected
+		? `最近连接 ${dateTime(provider.diagnostics?.cloudMqttLastConnectedAt)}`
+		: provider.diagnostics?.cloudMqttLastError
+			? `${provider.diagnostics.cloudMqttLastError}${provider.diagnostics.cloudMqttNextRetryAt ? ` · ${dateTime(provider.diagnostics.cloudMqttNextRetryAt)} 重试` : ''}`
+			: provider.metrics?.cloudMqttConfigured ? '等待自动重连' : '完成 OAuth 后自动启用'
 	const managedDeviceSource = provider.type === 'mqtt' || provider.type === 'xiaomi' || provider.type === 'xiaomi-miot-cloud'
 	const [drafts, setDrafts] = useState<Record<string, string>>({})
 	const [busy, setBusy] = useState<'test' | 'restart' | null>(null)
@@ -71,6 +76,7 @@ export function ProviderCard({ provider, devices, onEdit, onDelete, onRestart, o
 		<div className="provider-status-grid">
 			<div><span>{provider.type === 'xiaomi' || provider.type === 'xiaomi-miot-cloud' ? '账号与凭据' : provider.type === 'mqtt' ? (mqttMode === 'server' ? '服务端配置' : 'Broker 配置') : '设备配置'}</span><strong className={setupReady ? 'is-ready' : ''}>{setupLabel}</strong><small>{setupDetail}</small></div>
 			<div><span>运行连接</span><strong className={connectionReady ? 'is-ready' : ''}>{connectionLabel}</strong><small>{connectionDetail}</small></div>
+			{provider.type === 'xiaomi' && <div><span>官方云 MQTT</span><strong className={provider.metrics?.cloudMqttConnected ? 'is-ready' : ''}>{cloudMqttLabel}</strong><small>{cloudMqttDetail}</small></div>}
 			<div><span>期望设备</span><strong>{configuredDevices.length}</strong><small>{provider.type === 'mqtt' ? '数据库设备路由 · 严格白名单' : '数据库配置'}</small></div>
 			<div><span>实时发布</span><strong>{onlineDevices} / {devices.length}</strong><small>当前内存快照</small></div>
 		</div>

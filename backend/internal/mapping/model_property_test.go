@@ -20,3 +20,10 @@ func TestCustomModelParameterPreservesCompleteValueConstraints(t *testing.T) {
 		t.Fatalf("constraints were not preserved: %#v", parameter)
 	}
 }
+
+func TestValidateCustomModelPropertyRejectsNegativeStaleTTL(t *testing.T) {
+	item := CustomModelProperty{ID: "air-quality-index", DeviceType: device.TypeAirQualitySensor, EndpointID: "main", EndpointName: "Main", EndpointType: "sensor", CapabilityID: "air-quality", CapabilityType: "air-quality", Definition: device.PropertyDefinition{ID: "index", Name: "Index", Type: device.ValueTypeNumber, Readable: true, Notifiable: true, StaleAfterSeconds: -1}}
+	if err := ValidateCustomModelProperty(item); err == nil {
+		t.Fatal("negative staleAfterSeconds was accepted")
+	}
+}

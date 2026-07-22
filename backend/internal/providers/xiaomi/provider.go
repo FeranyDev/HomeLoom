@@ -43,6 +43,17 @@ type propertyObservation struct {
 	Value      string
 }
 
+type propertyReadFailure struct {
+	Count       uint
+	NextRetryAt time.Time
+}
+
+const (
+	defaultCloudDisconnectGrace      = 30 * time.Second
+	defaultCloudDirectoryReconcile   = 30 * time.Minute
+	maximumPropertyReadRetryInterval = 15 * time.Minute
+)
+
 type Provider struct {
 	id       string
 	name     string
@@ -50,32 +61,40 @@ type Provider struct {
 	factory  clientFactory
 	resolver *SpecResolver
 
-	mu                  sync.RWMutex
-	client              hubClient
-	cloud               homeCloudClient
-	cloudMIPS           cloudMIPSClient
-	devices             map[string]device.Device
-	sourceDevices       map[string]device.Device
-	byDID               map[string]string
-	routes              map[string]deviceRoute
-	directory           []HubDevice
-	rawProperties       map[string]PropertyMapping
-	rawActions          map[string]ActionMapping
-	catalog             map[string]providersdk.SourceCatalogMetadata
-	valueStatus         map[string]providersdk.SourceValueStatus
-	observations        map[string]propertyObservation
-	listeners           map[uint64]func(device.Device)
-	next                uint64
-	sequence            uint64
-	cancel              context.CancelFunc
-	lifecycle           context.Context
-	done                chan struct{}
-	cloudEvents         chan cloudMIPSMessage
-	cloudConnections    chan cloudMIPSConnectionEvent
-	directoryChanges    chan struct{}
-	pollIntervalChanges chan time.Duration
-	cloudDone           chan struct{}
-	backgroundWG        sync.WaitGroup
+	mu                       sync.RWMutex
+	client                   hubClient
+	cloud                    homeCloudClient
+	cloudMIPS                cloudMIPSClient
+	devices                  map[string]device.Device
+	sourceDevices            map[string]device.Device
+	byDID                    map[string]string
+	routes                   map[string]deviceRoute
+	directory                []HubDevice
+	rawProperties            map[string]PropertyMapping
+	rawActions               map[string]ActionMapping
+	catalog                  map[string]providersdk.SourceCatalogMetadata
+	valueStatus              map[string]providersdk.SourceValueStatus
+	observations             map[string]propertyObservation
+	propertyFailures         map[string]propertyReadFailure
+	listeners                map[uint64]func(device.Device)
+	eventListeners           map[uint64]func(providersdk.DeviceEvent)
+	next                     uint64
+	nextEventListener        uint64
+	sequence                 uint64
+	eventSequence            uint64
+	cancel                   context.CancelFunc
+	lifecycle                context.Context
+	done                     chan struct{}
+	cloudEvents              chan cloudMIPSMessage
+	cloudConnections         chan cloudMIPSConnectionEvent
+	directoryChanges         chan struct{}
+	pollIntervalChanges      chan time.Duration
+	cloudDone                chan struct{}
+	backgroundWG             sync.WaitGroup
+	cloudDisconnectGrace     time.Duration
+	cloudDirectoryInterval   time.Duration
+	directoryRefreshDebounce time.Duration
+	cloudConnectionEpoch     atomic.Uint64
 
 	requests                 atomic.Uint64
 	events                   atomic.Uint64
@@ -93,14 +112,17 @@ type Provider struct {
 	directoryRefreshing      atomic.Bool
 	directoryRefreshes       atomic.Uint64
 	directoryRefreshFailures atomic.Uint64
+	propertyReadBackoffs     atomic.Uint64
+	cloudDisconnectExpiries  atomic.Uint64
 }
 
 var (
-	_ providersdk.Provider             = (*Provider)(nil)
-	_ providersdk.LiveReconfigurer     = (*Provider)(nil)
-	_ providersdk.CredentialMaintainer = (*Provider)(nil)
-	_ providersdk.Discoverer           = (*Provider)(nil)
-	_ providersdk.SourceCataloger      = (*Provider)(nil)
+	_ providersdk.Provider              = (*Provider)(nil)
+	_ providersdk.LiveReconfigurer      = (*Provider)(nil)
+	_ providersdk.CredentialMaintainer  = (*Provider)(nil)
+	_ providersdk.Discoverer            = (*Provider)(nil)
+	_ providersdk.SourceCataloger       = (*Provider)(nil)
+	_ providersdk.DeviceEventSubscriber = (*Provider)(nil)
 )
 
 func NewProviderFromConfig(item providerconfig.Config) (*Provider, error) {
@@ -132,7 +154,7 @@ func newProvider(id, name string, config Config, factory clientFactory) (*Provid
 }
 
 func newProviderWithResolver(id, name string, config Config, factory clientFactory, resolver *SpecResolver) (*Provider, error) {
-	provider := &Provider{id: id, name: name, config: config, factory: factory, resolver: resolver, devices: make(map[string]device.Device), sourceDevices: make(map[string]device.Device), byDID: make(map[string]string), routes: make(map[string]deviceRoute), rawProperties: make(map[string]PropertyMapping), rawActions: make(map[string]ActionMapping), catalog: make(map[string]providersdk.SourceCatalogMetadata), valueStatus: make(map[string]providersdk.SourceValueStatus), observations: make(map[string]propertyObservation), listeners: make(map[uint64]func(device.Device))}
+	provider := &Provider{id: id, name: name, config: config, factory: factory, resolver: resolver, devices: make(map[string]device.Device), sourceDevices: make(map[string]device.Device), byDID: make(map[string]string), routes: make(map[string]deviceRoute), rawProperties: make(map[string]PropertyMapping), rawActions: make(map[string]ActionMapping), catalog: make(map[string]providersdk.SourceCatalogMetadata), valueStatus: make(map[string]providersdk.SourceValueStatus), observations: make(map[string]propertyObservation), propertyFailures: make(map[string]propertyReadFailure), listeners: make(map[uint64]func(device.Device)), eventListeners: make(map[uint64]func(providersdk.DeviceEvent)), cloudDisconnectGrace: defaultCloudDisconnectGrace, cloudDirectoryInterval: defaultCloudDirectoryReconcile, directoryRefreshDebounce: 500 * time.Millisecond}
 	for _, configured := range config.Devices {
 		item := buildDevice(id, configured)
 		applyCentralStalePolicy(&item, config.pollInterval())
@@ -280,6 +302,7 @@ func (p *Provider) refreshDirectory(ctx context.Context) ([]HubDevice, error) {
 }
 
 func (p *Provider) Close(ctx context.Context) error {
+	p.cloudConnectionEpoch.Add(1)
 	p.mu.Lock()
 	client, cloudMIPS, cancel, done, cloudDone := p.client, p.cloudMIPS, p.cancel, p.done, p.cloudDone
 	p.client, p.cancel, p.lifecycle = nil, nil, nil
@@ -792,6 +815,22 @@ func (p *Provider) Subscribe(handler func(device.Device)) func() {
 	}
 }
 
+func (p *Provider) SubscribeDeviceEvents(handler func(providersdk.DeviceEvent)) func() {
+	p.mu.Lock()
+	p.nextEventListener++
+	id := p.nextEventListener
+	p.eventListeners[id] = handler
+	p.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			p.mu.Lock()
+			delete(p.eventListeners, id)
+			p.mu.Unlock()
+		})
+	}
+}
+
 func (p *Provider) ProviderMetrics() map[string]uint64 {
 	result := map[string]uint64{
 		"requests": p.requests.Load(), "events": p.events.Load(), "errors": p.errors.Load(),
@@ -800,6 +839,7 @@ func (p *Provider) ProviderMetrics() map[string]uint64 {
 		"cloudMqttMessagesDropped": p.cloudDropped.Load(), "cloudMqttDuplicateMessages": p.cloudDuplicates.Load(),
 		"cloudHttpInitialReads": p.cloudHTTPInitialReads.Load(), "cloudHttpReconcileReads": p.cloudHTTPReconcileReads.Load(), "cloudHttpReadFailures": p.cloudHTTPReadFailures.Load(),
 		"directoryRefreshes": p.directoryRefreshes.Load(), "directoryRefreshFailures": p.directoryRefreshFailures.Load(),
+		"propertyReadBackoffs": p.propertyReadBackoffs.Load(), "cloudDisconnectExpiries": p.cloudDisconnectExpiries.Load(),
 	}
 	p.mu.RLock()
 	client := p.cloudMIPS
@@ -814,6 +854,45 @@ func (p *Provider) ProviderMetrics() map[string]uint64 {
 		result["cloudMqttMessagesInvalid"] = stats.MessagesInvalid
 		result["cloudMqttReconnects"] = stats.Reconnects
 		result["cloudMqttSubscriptionFailures"] = stats.SubscriptionFailures
+		if !stats.LastConnectedAt.IsZero() {
+			result["cloudMqttLastConnectedAt"] = uint64(stats.LastConnectedAt.Unix())
+		}
+		if !stats.LastDisconnectedAt.IsZero() {
+			result["cloudMqttLastDisconnectedAt"] = uint64(stats.LastDisconnectedAt.Unix())
+		}
+		if !stats.LastConnectErrorAt.IsZero() {
+			result["cloudMqttLastConnectErrorAt"] = uint64(stats.LastConnectErrorAt.Unix())
+		}
+		if !stats.NextRetryAt.IsZero() {
+			result["cloudMqttNextRetryAt"] = uint64(stats.NextRetryAt.Unix())
+		}
+	}
+	return result
+}
+
+func (p *Provider) ProviderDiagnostics() map[string]string {
+	p.mu.RLock()
+	client := p.cloudMIPS
+	p.mu.RUnlock()
+	if client == nil {
+		return nil
+	}
+	stats := client.Stats()
+	result := map[string]string{"cloudMqttState": "reconnecting"}
+	if stats.Connected {
+		result["cloudMqttState"] = "connected"
+	}
+	if stats.LastConnectError != "" {
+		result["cloudMqttLastError"] = stats.LastConnectError
+	}
+	if !stats.LastConnectedAt.IsZero() {
+		result["cloudMqttLastConnectedAt"] = stats.LastConnectedAt.Format(time.RFC3339)
+	}
+	if !stats.LastDisconnectedAt.IsZero() {
+		result["cloudMqttLastDisconnectedAt"] = stats.LastDisconnectedAt.Format(time.RFC3339)
+	}
+	if !stats.NextRetryAt.IsZero() {
+		result["cloudMqttNextRetryAt"] = stats.NextRetryAt.Format(time.RFC3339)
 	}
 	return result
 }
@@ -878,6 +957,16 @@ func (p *Provider) cloudEventLoop(ctx context.Context) {
 			close(done)
 		}
 	}()
+	p.mu.RLock()
+	directoryInterval, cloud := p.cloudDirectoryInterval, p.cloud
+	p.mu.RUnlock()
+	var directoryTicker *time.Ticker
+	var directoryTicks <-chan time.Time
+	if cloud != nil && directoryInterval > 0 {
+		directoryTicker = time.NewTicker(directoryInterval)
+		directoryTicks = directoryTicker.C
+		defer directoryTicker.Stop()
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -885,10 +974,17 @@ func (p *Provider) cloudEventLoop(ctx context.Context) {
 		case message := <-p.cloudEvents:
 			p.applyCloudMIPS(message)
 		case connection := <-p.cloudConnections:
-			if connection.Connected && connection.Reconnected {
-				p.scheduleCloudReconciliation(ctx)
+			epoch := p.cloudConnectionEpoch.Add(1)
+			if connection.Connected {
+				if connection.Reconnected {
+					p.scheduleCloudReconciliation(ctx)
+				}
+			} else {
+				p.scheduleCloudDisconnectExpiry(ctx, epoch)
 			}
 		case <-p.directoryChanges:
+			p.scheduleDirectoryRefresh(ctx)
+		case <-directoryTicks:
 			p.scheduleDirectoryRefresh(ctx)
 		}
 	}
@@ -902,7 +998,13 @@ func (p *Provider) scheduleDirectoryRefresh(ctx context.Context) {
 	go func() {
 		defer p.backgroundWG.Done()
 		defer p.directoryRefreshing.Store(false)
-		timer := time.NewTimer(500 * time.Millisecond)
+		p.mu.RLock()
+		debounce := p.directoryRefreshDebounce
+		p.mu.RUnlock()
+		if debounce < 0 {
+			debounce = 0
+		}
+		timer := time.NewTimer(debounce)
 		defer timer.Stop()
 		select {
 		case <-ctx.Done():
@@ -924,6 +1026,74 @@ func (p *Provider) scheduleDirectoryRefresh(ctx context.Context) {
 		p.loadSourceSpecs(specCtx, directory)
 		specCancel()
 	}()
+}
+
+func (p *Provider) scheduleCloudDisconnectExpiry(ctx context.Context, epoch uint64) {
+	p.mu.RLock()
+	grace := p.cloudDisconnectGrace
+	p.mu.RUnlock()
+	if grace < 0 {
+		grace = 0
+	}
+	p.backgroundWG.Add(1)
+	go func() {
+		defer p.backgroundWG.Done()
+		timer := time.NewTimer(grace)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		if p.cloudConnectionEpoch.Load() != epoch {
+			return
+		}
+		p.expireCloudAvailability()
+	}()
+}
+
+func (p *Provider) expireCloudAvailability() {
+	now := time.Now().UTC()
+	snapshots := make([]device.Device, 0)
+	p.mu.Lock()
+	for _, configured := range p.config.Devices {
+		mode := strings.ToLower(strings.TrimSpace(configured.ConnectionMode))
+		if mode == "" {
+			mode = connectionModeAuto
+		}
+		if mode == connectionModeLocal {
+			continue
+		}
+		item, exists := p.devices[configured.ID]
+		if !exists {
+			continue
+		}
+		route := p.routes[configured.DID]
+		if mode == connectionModeAuto && route.local && item.RuntimeMode == device.RuntimeModeLocal {
+			continue
+		}
+		if item.EffectiveAvailability() == device.AvailabilityUnknown && item.StateTransport == device.StateTransportPending {
+			continue
+		}
+		item.SetAvailability(device.AvailabilityUnknown)
+		item.StateTransport = device.StateTransportPending
+		p.sequence++
+		item.Sequence, item.LastUpdateAt = p.sequence, now
+		p.devices[configured.ID] = item
+		if source, ok := p.sourceDevices[configured.ID]; ok {
+			source.SetAvailability(device.AvailabilityUnknown)
+			source.StateTransport, source.Sequence, source.LastUpdateAt = device.StateTransportPending, item.Sequence, now
+			p.sourceDevices[configured.ID] = source
+		}
+		snapshots = append(snapshots, item.Clone())
+	}
+	p.mu.Unlock()
+	if len(snapshots) > 0 {
+		p.cloudDisconnectExpiries.Add(uint64(len(snapshots)))
+	}
+	for _, snapshot := range snapshots {
+		p.broadcast(snapshot)
+	}
 }
 
 func (p *Provider) scheduleCloudReconciliation(ctx context.Context) {
@@ -984,10 +1154,24 @@ func (p *Provider) applyCloudMIPS(message cloudMIPSMessage) {
 		p.events.Add(1)
 		p.broadcast(updated)
 	case cloudMIPSEvent:
-		// The provider SDK currently distributes device snapshots rather than a
-		// separate transient-event envelope. Keep events distinct from properties
-		// and count them until that event channel is introduced.
+		payload, err := json.Marshal(message.Arguments)
+		if err != nil {
+			p.errors.Add(1)
+			return
+		}
+		endpointID := "miot-" + strconv.Itoa(message.SIID)
+		capabilityID := "service-" + strconv.Itoa(message.SIID)
+		eventID := "event-" + strconv.Itoa(message.EIID)
+		observedAt := message.ObservedAt
+		if observedAt.IsZero() {
+			observedAt = time.Now().UTC()
+		}
+		p.mu.Lock()
+		p.eventSequence++
+		occurrence := providersdk.DeviceEvent{ProviderID: p.id, DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID, EventID: eventID, Name: p.eventNameLocked(deviceID, endpointID, capabilityID, eventID), Payload: payload, ObservedAt: observedAt, Sequence: p.eventSequence}
+		p.mu.Unlock()
 		p.events.Add(1)
+		p.broadcastDeviceEvent(occurrence)
 	case cloudMIPSState:
 		if message.Online == nil {
 			return
@@ -997,6 +1181,29 @@ func (p *Provider) applyCloudMIPS(message cloudMIPSMessage) {
 			p.broadcast(updated)
 		}
 	}
+}
+
+func (p *Provider) eventNameLocked(deviceID, endpointID, capabilityID, eventID string) string {
+	item, exists := p.sourceDevices[deviceID]
+	if !exists {
+		return eventID
+	}
+	for _, endpoint := range item.Endpoints {
+		if endpoint.ID != endpointID {
+			continue
+		}
+		for _, capability := range endpoint.Capabilities {
+			if capability.ID != capabilityID {
+				continue
+			}
+			for _, definition := range capability.Events {
+				if definition.ID == eventID {
+					return definition.Name
+				}
+			}
+		}
+	}
+	return eventID
 }
 
 func (p *Provider) configuredDevice(id string) (DeviceConfig, bool) {
@@ -1196,12 +1403,21 @@ func (p *Provider) calibrationMappings(configured DeviceConfig, initial bool) []
 		cloudPushConnected = cloudMIPS.Stats().Connected
 	}
 	mode, route, _, _ := p.routeFor(configured)
+	now := time.Now().UTC()
 	for _, mapping := range mappings {
 		if mapping.Readable != nil && !*mapping.Readable {
 			continue
 		}
 		if initial {
 			result = append(result, mapping)
+			continue
+		}
+		key := sourcePropertyKey(configured.ID, mapping.EndpointID, mapping.CapabilityID, mapping.PropertyID)
+		p.mu.RLock()
+		failure := p.propertyFailures[key]
+		p.mu.RUnlock()
+		if failure.NextRetryAt.After(now) {
+			p.propertyReadBackoffs.Add(1)
 			continue
 		}
 		notifiable := mapping.Notifiable == nil || *mapping.Notifiable
@@ -1302,6 +1518,8 @@ func (p *Provider) applyObservedProperty(id string, mapping PropertyMapping, val
 				previousObservation.Source = observationSource
 			}
 			p.observations[key] = previousObservation
+			p.valueStatus[key] = providersdk.SourceValueStatus{Known: true, Available: true, ObservedAt: now}
+			delete(p.propertyFailures, key)
 			item := p.devices[id].Clone()
 			p.mu.Unlock()
 			return item, false
@@ -1332,6 +1550,7 @@ func (p *Provider) applyObservedProperty(id string, mapping PropertyMapping, val
 	setObservedProperty(&source, mapping.EndpointID, mapping.CapabilityID, mapping.PropertyID, value)
 	setPropertyStateTransport(&source, mapping.EndpointID, mapping.CapabilityID, mapping.PropertyID, item.StateTransport)
 	p.valueStatus[key] = providersdk.SourceValueStatus{Known: true, Available: true, ObservedAt: now}
+	delete(p.propertyFailures, key)
 	p.observations[key] = propertyObservation{Source: observationSource, ObservedAt: observedAt, ReceivedAt: now, Value: valueDigest}
 	p.sequence++
 	item.Sequence = p.sequence
@@ -1352,7 +1571,33 @@ func (p *Provider) markValueError(id string, mapping PropertyMapping, cause erro
 	status := p.valueStatus[key]
 	status.Available, status.Error = false, cause.Error()
 	p.valueStatus[key] = status
+	failure := p.propertyFailures[key]
+	failure.Count++
+	failure.NextRetryAt = time.Now().UTC().Add(propertyReadRetryDelay(failure.Count, p.config.pollInterval()))
+	p.propertyFailures[key] = failure
 	p.mu.Unlock()
+}
+
+func propertyReadRetryDelay(count uint, pollInterval time.Duration) time.Duration {
+	base := pollInterval
+	if base <= 0 || base > 30*time.Second {
+		base = 30 * time.Second
+	}
+	if base < time.Second {
+		base = time.Second
+	}
+	shift := uint(0)
+	if count > 1 {
+		shift = count - 1
+	}
+	if shift > 8 {
+		shift = 8
+	}
+	delay := base * time.Duration(1<<shift)
+	if delay > maximumPropertyReadRetryInterval {
+		return maximumPropertyReadRetryInterval
+	}
+	return delay
 }
 
 func (p *Provider) broadcast(item device.Device) {
@@ -1364,6 +1609,20 @@ func (p *Provider) broadcast(item device.Device) {
 	p.mu.RUnlock()
 	for _, handler := range handlers {
 		handler(item.Clone())
+	}
+}
+
+func (p *Provider) broadcastDeviceEvent(event providersdk.DeviceEvent) {
+	p.mu.RLock()
+	handlers := make([]func(providersdk.DeviceEvent), 0, len(p.eventListeners))
+	for _, handler := range p.eventListeners {
+		handlers = append(handlers, handler)
+	}
+	p.mu.RUnlock()
+	for _, handler := range handlers {
+		copy := event
+		copy.Payload = append(json.RawMessage(nil), event.Payload...)
+		handler(copy)
 	}
 }
 

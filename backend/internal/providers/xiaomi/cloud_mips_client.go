@@ -22,8 +22,9 @@ import (
 )
 
 const (
-	cloudMIPSPort       = 8883
-	cloudMIPSEventQueue = 512
+	cloudMIPSPort           = 8883
+	cloudMIPSEventQueue     = 512
+	cloudMIPSReconnectDelay = 10 * time.Second
 )
 
 type cloudMIPSMessageKind string
@@ -52,11 +53,18 @@ type cloudMIPSStats struct {
 	MessagesInvalid      uint64
 	Reconnects           uint64
 	SubscriptionFailures uint64
+	LastConnectedAt      time.Time
+	LastDisconnectedAt   time.Time
+	LastConnectErrorAt   time.Time
+	LastConnectError     string
+	NextRetryAt          time.Time
 }
 
 type cloudMIPSConnectionEvent struct {
 	Connected   bool
 	Reconnected bool
+	At          time.Time
+	Cause       string
 }
 
 type cloudMIPSClient interface {
@@ -76,19 +84,24 @@ type mqttCloudMIPSClient struct {
 	username  string
 	timeout   time.Duration
 
-	accessToken atomic.Value
-	connected   atomic.Bool
-	received    atomic.Uint64
-	invalid     atomic.Uint64
-	reconnects  atomic.Uint64
-	subFailures atomic.Uint64
-	connections atomic.Uint64
+	accessToken        atomic.Value
+	connected          atomic.Bool
+	received           atomic.Uint64
+	invalid            atomic.Uint64
+	reconnects         atomic.Uint64
+	subFailures        atomic.Uint64
+	connections        atomic.Uint64
+	lastConnectedAt    atomic.Int64
+	lastDisconnectedAt atomic.Int64
+	lastConnectErrorAt atomic.Int64
+	nextRetryAt        atomic.Int64
 
 	mu                sync.RWMutex
 	manager           *autopaho.ConnectionManager
 	dids              map[string]struct{}
 	handler           func(cloudMIPSMessage)
 	connectionHandler func(cloudMIPSConnectionEvent)
+	lastConnectError  string
 }
 
 func newCloudMIPSClient(oauth OAuthConfig, timeout time.Duration) (*mqttCloudMIPSClient, error) {
@@ -158,6 +171,7 @@ func (c *mqttCloudMIPSClient) Connect(lifecycle, initial context.Context) error 
 		SessionExpiryInterval:         0,
 		ConnectTimeout:                c.timeout,
 		Queue:                         memory.New(),
+		ReconnectBackoff:              autopaho.NewConstantBackoff(cloudMIPSReconnectDelay),
 		ConnectUsername:               c.username,
 		ConnectPassword:               []byte(c.currentAccessToken()),
 		ClientConfig: paho.ClientConfig{
@@ -181,29 +195,45 @@ func (c *mqttCloudMIPSClient) Connect(lifecycle, initial context.Context) error 
 		return packet, nil
 	}
 	config.OnConnectionUp = func(manager *autopaho.ConnectionManager, _ *paho.Connack) {
+		now := time.Now().UTC()
 		connection := c.connections.Add(1)
 		if connection > 1 {
 			c.reconnects.Add(1)
 		}
 		c.connected.Store(true)
+		c.lastConnectedAt.Store(now.Unix())
+		c.nextRetryAt.Store(0)
+		c.mu.Lock()
+		c.lastConnectError = ""
+		c.mu.Unlock()
 		go func() {
 			err := c.subscribeAll(manager)
 			if err != nil {
 				c.subFailures.Add(1)
 			}
 			if err == nil {
-				c.notifyConnection(cloudMIPSConnectionEvent{Connected: true, Reconnected: connection > 1})
+				c.notifyConnection(cloudMIPSConnectionEvent{Connected: true, Reconnected: connection > 1, At: now})
 			}
 			initialResult.Do(func() { ready <- err })
 		}()
 	}
 	config.OnConnectionDown = func() bool {
+		now := time.Now().UTC()
 		c.connected.Store(false)
-		c.notifyConnection(cloudMIPSConnectionEvent{Connected: false})
+		c.lastDisconnectedAt.Store(now.Unix())
+		c.nextRetryAt.Store(now.Add(cloudMIPSReconnectDelay).Unix())
+		c.notifyConnection(cloudMIPSConnectionEvent{Connected: false, At: now})
 		return true
 	}
 	config.OnConnectError = func(err error) {
+		now := time.Now().UTC()
 		c.connected.Store(false)
+		c.lastConnectErrorAt.Store(now.Unix())
+		c.nextRetryAt.Store(now.Add(cloudMIPSReconnectDelay).Unix())
+		c.mu.Lock()
+		c.lastConnectError = sanitizeCloudConnectError(err)
+		c.mu.Unlock()
+		c.notifyConnection(cloudMIPSConnectionEvent{Connected: false, At: now, Cause: sanitizeCloudConnectError(err)})
 		initialResult.Do(func() { ready <- err })
 	}
 	manager, err := autopaho.NewConnection(lifecycle, config)
@@ -284,13 +314,39 @@ func (c *mqttCloudMIPSClient) ReplaceDevices(ctx context.Context, dids []string)
 }
 
 func (c *mqttCloudMIPSClient) Stats() cloudMIPSStats {
+	c.mu.RLock()
+	lastError := c.lastConnectError
+	c.mu.RUnlock()
 	return cloudMIPSStats{
 		Connected:            c.connected.Load(),
 		MessagesReceived:     c.received.Load(),
 		MessagesInvalid:      c.invalid.Load(),
 		Reconnects:           c.reconnects.Load(),
 		SubscriptionFailures: c.subFailures.Load(),
+		LastConnectedAt:      unixTime(c.lastConnectedAt.Load()),
+		LastDisconnectedAt:   unixTime(c.lastDisconnectedAt.Load()),
+		LastConnectErrorAt:   unixTime(c.lastConnectErrorAt.Load()),
+		LastConnectError:     lastError,
+		NextRetryAt:          unixTime(c.nextRetryAt.Load()),
 	}
+}
+
+func unixTime(value int64) time.Time {
+	if value <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(value, 0).UTC()
+}
+
+func sanitizeCloudConnectError(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := strings.TrimSpace(err.Error())
+	if len(message) > 240 {
+		message = message[:240]
+	}
+	return message
 }
 
 func (c *mqttCloudMIPSClient) currentAccessToken() string {

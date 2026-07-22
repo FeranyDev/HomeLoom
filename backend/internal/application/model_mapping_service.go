@@ -138,6 +138,9 @@ func (s *ProfileService) ResolveModelDefinition(deviceType device.Type, path dev
 	if parameter.Step != nil {
 		result.Step = parameter.Step
 	}
+	if parameter.StaleAfterSeconds > 0 {
+		result.StaleAfterSeconds = parameter.StaleAfterSeconds
+	}
 	result.Readable, result.Writable, result.Notifiable = parameter.Readable, parameter.Writable, parameter.Notifiable
 	result.Enum = append([]string(nil), parameter.Enum...)
 	return result, true

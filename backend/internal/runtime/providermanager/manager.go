@@ -12,34 +12,37 @@ import (
 )
 
 type managedProvider struct {
-	lifecycle      sync.Mutex
-	provider       providersdk.Provider
-	status         string
-	err            string
-	unsubscribe    func()
-	deviceIDs      map[string]struct{}
-	retryCount     int
-	nextRetryAt    time.Time
-	transitionedAt time.Time
+	lifecycle         sync.Mutex
+	provider          providersdk.Provider
+	status            string
+	err               string
+	unsubscribe       func()
+	unsubscribeEvents func()
+	deviceIDs         map[string]struct{}
+	retryCount        int
+	nextRetryAt       time.Time
+	transitionedAt    time.Time
 }
 
 type Manager struct {
-	mu              sync.RWMutex
-	providers       map[string]*managedProvider
-	order           []string
-	routes          map[string]string
-	listeners       map[uint64]func(device.Device)
-	nextListener    uint64
-	initialized     bool
-	lifecycleCtx    context.Context
-	lifecycleCancel context.CancelFunc
-	retryRunning    bool
-	retryDone       chan struct{}
-	closed          bool
+	mu                sync.RWMutex
+	providers         map[string]*managedProvider
+	order             []string
+	routes            map[string]string
+	listeners         map[uint64]func(device.Device)
+	eventListeners    map[uint64]func(providersdk.DeviceEvent)
+	nextListener      uint64
+	nextEventListener uint64
+	initialized       bool
+	lifecycleCtx      context.Context
+	lifecycleCancel   context.CancelFunc
+	retryRunning      bool
+	retryDone         chan struct{}
+	closed            bool
 }
 
 func New(items ...providersdk.Provider) (*Manager, error) {
-	m := &Manager{providers: make(map[string]*managedProvider), routes: make(map[string]string), listeners: make(map[uint64]func(device.Device))}
+	m := &Manager{providers: make(map[string]*managedProvider), routes: make(map[string]string), listeners: make(map[uint64]func(device.Device)), eventListeners: make(map[uint64]func(providersdk.DeviceEvent))}
 	for _, item := range items {
 		id := item.Manifest().ID
 		if id == "" {
@@ -256,11 +259,14 @@ func (m *Manager) Apply(ctx context.Context, item providersdk.Provider) error {
 		}
 		m.mu.Lock()
 		current.status, current.err, current.nextRetryAt, current.transitionedAt = "reconfiguring", "", time.Time{}, time.Now().UTC()
-		unsubscribe := current.unsubscribe
-		current.unsubscribe = nil
+		unsubscribe, unsubscribeEvents := current.unsubscribe, current.unsubscribeEvents
+		current.unsubscribe, current.unsubscribeEvents = nil, nil
 		m.mu.Unlock()
 		if unsubscribe != nil {
 			unsubscribe()
+		}
+		if unsubscribeEvents != nil {
+			unsubscribeEvents()
 		}
 		if err := current.provider.Close(ctx); err != nil {
 			m.mu.Lock()
@@ -440,6 +446,9 @@ func (m *Manager) Remove(ctx context.Context, id string) error {
 	if current.unsubscribe != nil {
 		current.unsubscribe()
 	}
+	if current.unsubscribeEvents != nil {
+		current.unsubscribeEvents()
+	}
 	if discoverer, ok := current.provider.(providersdk.Discoverer); ok {
 		if items, err := discoverer.DiscoverDevices(ctx); err == nil {
 			for _, item := range items {
@@ -457,6 +466,11 @@ func (m *Manager) Remove(ctx context.Context, id string) error {
 }
 
 func (m *Manager) attach(id string, current *managedProvider) {
+	m.attachSnapshots(id, current)
+	m.attachDeviceEvents(id, current)
+}
+
+func (m *Manager) attachSnapshots(id string, current *managedProvider) {
 	subscriber, ok := current.provider.(providersdk.EventSubscriber)
 	if !ok {
 		return
@@ -495,6 +509,33 @@ func (m *Manager) attach(id string, current *managedProvider) {
 	unsubscribe()
 }
 
+func (m *Manager) attachDeviceEvents(id string, current *managedProvider) {
+	subscriber, ok := current.provider.(providersdk.DeviceEventSubscriber)
+	if !ok {
+		return
+	}
+	unsubscribe := subscriber.SubscribeDeviceEvents(func(event providersdk.DeviceEvent) {
+		event.ProviderID = id
+		if event.DeviceID == "" || event.EndpointID == "" || event.CapabilityID == "" || event.EventID == "" || event.Sequence == 0 || event.ObservedAt.IsZero() {
+			return
+		}
+		m.mu.RLock()
+		owner, exists := m.routes[event.DeviceID]
+		m.mu.RUnlock()
+		if exists && owner == id {
+			m.broadcastDeviceEvent(event)
+		}
+	})
+	m.mu.Lock()
+	if m.providers[id] == current && current.unsubscribeEvents == nil {
+		current.unsubscribeEvents = unsubscribe
+		m.mu.Unlock()
+		return
+	}
+	m.mu.Unlock()
+	unsubscribe()
+}
+
 func (m *Manager) broadcast(item device.Device) {
 	m.mu.RLock()
 	handlers := make([]func(device.Device), 0, len(m.listeners))
@@ -504,6 +545,20 @@ func (m *Manager) broadcast(item device.Device) {
 	m.mu.RUnlock()
 	for _, h := range handlers {
 		h(item.Clone())
+	}
+}
+
+func (m *Manager) broadcastDeviceEvent(event providersdk.DeviceEvent) {
+	m.mu.RLock()
+	handlers := make([]func(providersdk.DeviceEvent), 0, len(m.eventListeners))
+	for _, handler := range m.eventListeners {
+		handlers = append(handlers, handler)
+	}
+	m.mu.RUnlock()
+	for _, handler := range handlers {
+		copy := event
+		copy.Payload = append([]byte(nil), event.Payload...)
+		handler(copy)
 	}
 }
 
@@ -602,6 +657,16 @@ func (m *Manager) Subscribe(handler func(device.Device)) func() {
 	m.mu.Unlock()
 	var once sync.Once
 	return func() { once.Do(func() { m.mu.Lock(); delete(m.listeners, id); m.mu.Unlock() }) }
+}
+
+func (m *Manager) SubscribeDeviceEvents(handler func(providersdk.DeviceEvent)) func() {
+	m.mu.Lock()
+	m.nextEventListener++
+	id := m.nextEventListener
+	m.eventListeners[id] = handler
+	m.mu.Unlock()
+	var once sync.Once
+	return func() { once.Do(func() { m.mu.Lock(); delete(m.eventListeners, id); m.mu.Unlock() }) }
 }
 
 func (m *Manager) markFailureLocked(current *managedProvider, err error) {
@@ -776,6 +841,9 @@ func (m *Manager) ProviderInfos() []providersdk.RuntimeInfo {
 		if reporter, ok := current.provider.(providersdk.MetricsReporter); ok {
 			info.Metrics = reporter.ProviderMetrics()
 		}
+		if reporter, ok := current.provider.(providersdk.DiagnosticsReporter); ok {
+			info.Diagnostics = reporter.ProviderDiagnostics()
+		}
 		result = append(result, info)
 	}
 	return result
@@ -808,12 +876,15 @@ func (m *Manager) Close(ctx context.Context) error {
 		if current.unsubscribe != nil {
 			current.unsubscribe()
 		}
+		if current.unsubscribeEvents != nil {
+			current.unsubscribeEvents()
+		}
 		if err := current.provider.Close(ctx); err != nil && first == nil {
 			first = fmt.Errorf("close provider %q: %w", ids[i], err)
 		}
 		m.mu.Lock()
 		current.status, current.transitionedAt = "stopped", time.Now().UTC()
-		current.unsubscribe = nil
+		current.unsubscribe, current.unsubscribeEvents = nil, nil
 		m.mu.Unlock()
 		current.lifecycle.Unlock()
 	}

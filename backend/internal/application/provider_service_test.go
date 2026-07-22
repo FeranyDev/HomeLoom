@@ -28,6 +28,14 @@ type renewalRuntime struct {
 	failFirst  atomic.Bool
 }
 
+type diagnosticRuntime struct{}
+
+func (*diagnosticRuntime) Apply(context.Context, providersdk.Provider) error { return nil }
+func (*diagnosticRuntime) Remove(context.Context, string) error              { return nil }
+func (*diagnosticRuntime) ProviderInfos() []providersdk.RuntimeInfo {
+	return []providersdk.RuntimeInfo{{Manifest: providersdk.Manifest{ID: "virtual-main", Type: "virtual", Name: "Virtual"}, Status: "running", Diagnostics: map[string]string{"cloudMqttState": "connected"}}}
+}
+
 func (r *renewalRuntime) Apply(context.Context, providersdk.Provider) error {
 	r.applyCalls.Add(1)
 	if r.failFirst.CompareAndSwap(true, false) {
@@ -98,6 +106,15 @@ func TestProviderServiceRedactsAndRestoresSecrets(t *testing.T) {
 	}
 	if _, err := service.Save(ctx, providerconfig.Config{ID: "new", Type: "virtual", Config: []byte(`{"password":"********"}`)}); err == nil {
 		t.Fatal("new provider accepted a redacted secret placeholder")
+	}
+}
+
+func TestProviderServiceExposesSanitizedRuntimeDiagnostics(t *testing.T) {
+	config := providerconfig.Config{ID: "virtual-main", Type: "virtual", Name: "Virtual", Enabled: true, Config: json.RawMessage(`{"devices":[]}`)}
+	service := application.NewProviderService([]providerconfig.Config{config}, &providerStore{items: map[string]providerconfig.Config{config.ID: config}}, providersdk.NewFactory(), &diagnosticRuntime{})
+	items := service.List()
+	if len(items) != 1 || items[0].Diagnostics["cloudMqttState"] != "connected" {
+		t.Fatalf("provider diagnostics=%#v", items)
 	}
 }
 

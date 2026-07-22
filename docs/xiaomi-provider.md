@@ -2,7 +2,7 @@
 
 HomeLoom 将三种小米接入方式视为不同 Provider 类型，不共享名称或运行连接：
 
-> 官方云 MQTT/MIPS 已进入实现阶段：`xiaomi` 现已建立云 MQTT 长连接，接收属性、事件和在线状态，并以批量 HTTP 完成初始化/补偿。目录刷新、事件向消费者投递、动态 TTL 与实机验收仍在继续；详见 [小米官方云 MQTT/MIPS 实时状态改造方案](./xiaomi-cloud-mips-plan.md)。
+> 官方云 MQTT/MIPS 的代码主链已完成：`xiaomi` 已建立云 MQTT 长连接，接收属性、瞬时事件和在线状态，并以批量 HTTP 完成初始化/补偿；同时具备断线宽限、属性失败退避、低频目录校准和脱敏连接诊断。剩余工作是进程内 Fake Broker 与实体设备持续运行验收；详见 [小米官方云 MQTT/MIPS 实时状态改造方案](./xiaomi-cloud-mips-plan.md)。
 
 | Provider 类型 | 页面名称 | 运行方式 | 定位 |
 | --- | --- | --- | --- |

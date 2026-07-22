@@ -53,9 +53,16 @@ describe('ProviderCard simulation', () => {
 		expect(screen.getByText(/^本地/)).toHaveTextContent('12')
 		expect(screen.getByText(/^转云/)).toHaveTextContent('2')
 		expect(screen.getByText(/^云请求/)).toHaveTextContent('4')
-		expect(screen.getByText(/^官方云 MQTT/)).toHaveTextContent('已连接')
+		expect(screen.getAllByText(/^官方云 MQTT/).some((item) => item.textContent?.includes('已连接'))).toBe(true)
 		expect(screen.getByText(/^云推送/)).toHaveTextContent('9')
 		expect(screen.getByText('官方云实时')).toHaveClass('device-runtime-mode', 'is-cloud')
+	})
+
+	it('shows sanitized official cloud MQTT reconnect diagnostics', () => {
+		const central: Provider = { ...provider, id: 'xiaomi-main', type: 'xiaomi', name: '家庭中枢', config: { oauth: { clientId: '1', oauthUuid: 'uuid', virtualDid: '2' }, devices: [] }, metrics: { cloudMqttConfigured: 1 }, diagnostics: { cloudMqttState: 'reconnecting', cloudMqttLastError: 'connection refused', cloudMqttNextRetryAt: '2026-07-22T10:00:00Z' } }
+		render(<ProviderCard provider={central} devices={[]} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} />)
+		expect(screen.getAllByText(/^官方云 MQTT/).some((item) => item.textContent?.includes('重连中'))).toBe(true)
+		expect(screen.getByText(/connection refused/)).toHaveTextContent('重试')
 	})
 
   it('sends ephemeral availability and temperature changes', async () => {

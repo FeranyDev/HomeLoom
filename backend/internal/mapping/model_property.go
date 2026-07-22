@@ -66,6 +66,9 @@ func ValidateCustomModelProperty(item CustomModelProperty) error {
 }
 
 func validateCustomDefinition(definition device.PropertyDefinition) error {
+	if definition.StaleAfterSeconds < 0 {
+		return fmt.Errorf("staleAfterSeconds cannot be negative")
+	}
 	var value device.PropertyValue
 	switch definition.Type {
 	case device.ValueTypeBool:

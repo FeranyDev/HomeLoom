@@ -18,6 +18,32 @@ import (
 
 type silentProvider struct{ inner *virtual.Provider }
 
+type transientApplicationProvider struct {
+	inner   *virtual.Provider
+	handler func(providersdk.DeviceEvent)
+}
+
+func (p *transientApplicationProvider) Manifest() providersdk.Manifest { return p.inner.Manifest() }
+func (p *transientApplicationProvider) Capabilities() providersdk.Capabilities {
+	return p.inner.Capabilities()
+}
+func (p *transientApplicationProvider) Initialize(ctx context.Context) error {
+	return p.inner.Initialize(ctx)
+}
+func (p *transientApplicationProvider) Close(ctx context.Context) error { return p.inner.Close(ctx) }
+func (p *transientApplicationProvider) DiscoverDevices(ctx context.Context) ([]device.Device, error) {
+	return p.inner.DiscoverDevices(ctx)
+}
+func (p *transientApplicationProvider) SubscribeDeviceEvents(handler func(providersdk.DeviceEvent)) func() {
+	p.handler = handler
+	return func() { p.handler = nil }
+}
+func (p *transientApplicationProvider) emit(event providersdk.DeviceEvent) {
+	if p.handler != nil {
+		p.handler(event)
+	}
+}
+
 type blockingWriteProvider struct {
 	inner   *virtual.Provider
 	entered chan string
@@ -193,6 +219,27 @@ func TestDeviceServiceRoutesProviderEvents(t *testing.T) {
 	states := service.States("virtual-switch-1")
 	if len(states) != 1 || states[0].Version != 2 {
 		t.Fatalf("States() = %#v", states)
+	}
+}
+
+func TestDeviceServiceDeliversTransientEventsOutsideStateStore(t *testing.T) {
+	provider := &transientApplicationProvider{inner: virtual.NewProvider()}
+	service := application.NewDeviceService(provider)
+	defer service.Close()
+	events := make(chan providersdk.DeviceEvent, 1)
+	unsubscribe := service.SubscribeDeviceEvents(func(event providersdk.DeviceEvent) { events <- event })
+	defer unsubscribe()
+	provider.emit(providersdk.DeviceEvent{ProviderID: "virtual-main", DeviceID: "virtual-switch-1", EndpointID: "main", CapabilityID: "switch", EventID: "pressed", Payload: []byte(`{"value":true}`), ObservedAt: time.Now().UTC(), Sequence: 1})
+	select {
+	case event := <-events:
+		if event.EventID != "pressed" || event.DeviceID != "virtual-switch-1" {
+			t.Fatalf("event=%#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("transient event was not delivered")
+	}
+	if metrics := service.Metrics(); metrics.DeviceEventsReceived != 1 || metrics.DeviceEventsDropped != 0 {
+		t.Fatalf("metrics=%#v", metrics)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
+	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 )
 
 func TestCloudMIPSConnectionConfigUsesOfficialBrokerAndStrictTLS(t *testing.T) {
@@ -90,6 +91,7 @@ type fakeCloudMIPS struct {
 	dids              []string
 	token             string
 	closed            bool
+	stats             cloudMIPSStats
 }
 
 func (f *fakeCloudMIPS) Connect(context.Context, context.Context) error {
@@ -125,7 +127,14 @@ func (f *fakeCloudMIPS) SetConnectionHandler(handler func(cloudMIPSConnectionEve
 	f.connectionHandler = handler
 	f.mu.Unlock()
 }
-func (f *fakeCloudMIPS) Stats() cloudMIPSStats { return cloudMIPSStats{Connected: true} }
+func (f *fakeCloudMIPS) Stats() cloudMIPSStats {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.stats == (cloudMIPSStats{}) {
+		return cloudMIPSStats{Connected: true}
+	}
+	return f.stats
+}
 func (f *fakeCloudMIPS) publish(message cloudMIPSMessage) {
 	f.mu.Lock()
 	handler := f.handler
@@ -182,6 +191,34 @@ func TestProviderCloudMIPSUpdatesStateAndDeduplicatesPush(t *testing.T) {
 	}
 	if provider.ProviderMetrics()["cloudMqttDuplicateMessages"] != 1 {
 		t.Fatalf("metrics=%#v", provider.ProviderMetrics())
+	}
+}
+
+func TestProviderCloudMIPSDeliversTransientEventWithoutSnapshot(t *testing.T) {
+	provider, err := newProvider("xiaomi-main", "米家", testConfig(), func() hubClient { return &fakeHub{} })
+	if err != nil {
+		t.Fatal(err)
+	}
+	occurrences := make(chan providersdk.DeviceEvent, 1)
+	snapshots := make(chan device.Device, 1)
+	unsubscribeEvent := provider.SubscribeDeviceEvents(func(event providersdk.DeviceEvent) { occurrences <- event })
+	unsubscribeSnapshot := provider.Subscribe(func(item device.Device) { snapshots <- item })
+	defer unsubscribeEvent()
+	defer unsubscribeSnapshot()
+	observedAt := time.Now().UTC()
+	provider.applyCloudMIPS(cloudMIPSMessage{Kind: cloudMIPSEvent, DID: "123", SIID: 3, EIID: 1, Arguments: []any{map[string]any{"piid": 2, "value": true}}, ObservedAt: observedAt})
+	select {
+	case event := <-occurrences:
+		if event.ProviderID != "xiaomi-main" || event.DeviceID != "xiaomi-switch" || event.EndpointID != "miot-3" || event.CapabilityID != "service-3" || event.EventID != "event-1" || event.Sequence != 1 || !event.ObservedAt.Equal(observedAt) || !json.Valid(event.Payload) {
+			t.Fatalf("event=%#v", event)
+		}
+	default:
+		t.Fatal("transient event was not delivered")
+	}
+	select {
+	case snapshot := <-snapshots:
+		t.Fatalf("transient event was disguised as snapshot: %#v", snapshot)
+	default:
 	}
 }
 
@@ -290,6 +327,159 @@ func TestProviderReconcilesCloudPropertiesAfterMIPSReconnect(t *testing.T) {
 	}
 	if cloud.calls.Load() != before+1 || provider.ProviderMetrics()["cloudHttpReconcileReads"] != 1 {
 		t.Fatalf("calls=%d metrics=%#v", cloud.calls.Load(), provider.ProviderMetrics())
+	}
+}
+
+func TestProviderCloudDisconnectGraceMarksOnlyCloudRouteUnknown(t *testing.T) {
+	config := testConfig()
+	config.Devices[0].ConnectionMode = connectionModeCloud
+	provider, err := newProvider("xiaomi-main", "米家", config, func() hubClient { return &fakeHub{value: false} })
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.cloudDisconnectGrace = 10 * time.Millisecond
+	provider.cloudDirectoryInterval = 0
+	mips, cloud := &fakeCloudMIPS{}, &reconcileCloud{}
+	provider.cloudMIPS, provider.cloud = mips, cloud
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := provider.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close(ctx)
+
+	events := make(chan device.Device, 1)
+	unsubscribe := provider.Subscribe(func(item device.Device) { events <- item })
+	defer unsubscribe()
+	mips.connection(cloudMIPSConnectionEvent{Connected: false, At: time.Now().UTC()})
+	select {
+	case item := <-events:
+		if item.EffectiveAvailability() != device.AvailabilityUnknown || item.StateTransport != device.StateTransportPending {
+			t.Fatalf("disconnect snapshot=%#v", item)
+		}
+	case <-ctx.Done():
+		t.Fatal("cloud disconnect grace did not expire")
+	}
+	if provider.ProviderMetrics()["cloudDisconnectExpiries"] != 1 {
+		t.Fatalf("metrics=%#v", provider.ProviderMetrics())
+	}
+}
+
+func TestProviderCloudReconnectCancelsDisconnectGrace(t *testing.T) {
+	config := testConfig()
+	config.Devices[0].ConnectionMode = connectionModeCloud
+	provider, err := newProvider("xiaomi-main", "米家", config, func() hubClient { return &fakeHub{value: false} })
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.cloudDisconnectGrace = 20 * time.Millisecond
+	provider.cloudDirectoryInterval = 0
+	mips, cloud := &fakeCloudMIPS{}, &reconcileCloud{}
+	provider.cloudMIPS, provider.cloud = mips, cloud
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := provider.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close(ctx)
+	mips.connection(cloudMIPSConnectionEvent{Connected: false, At: time.Now().UTC()})
+	mips.connection(cloudMIPSConnectionEvent{Connected: true, At: time.Now().UTC()})
+	time.Sleep(40 * time.Millisecond)
+	item, _ := provider.snapshot(config.Devices[0].ID)
+	if !item.IsOnline() || provider.ProviderMetrics()["cloudDisconnectExpiries"] != 0 {
+		t.Fatalf("snapshot=%#v metrics=%#v", item, provider.ProviderMetrics())
+	}
+}
+
+func TestPropertyReadFailuresBackOffAndSuccessfulDuplicateClearsFailure(t *testing.T) {
+	config := testConfig()
+	provider, err := newProvider("xiaomi-main", "米家", config, func() hubClient { return &fakeHub{} })
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapping := config.Devices[0].Properties[0]
+	provider.applyObservedProperty(config.Devices[0].ID, mapping, device.BoolValue(false), observationCloudHTTP, time.Now().UTC().Add(-time.Minute), device.RuntimeModeCloud)
+	provider.markValueError(config.Devices[0].ID, mapping, context.DeadlineExceeded)
+	key := sourcePropertyKey(config.Devices[0].ID, mapping.EndpointID, mapping.CapabilityID, mapping.PropertyID)
+	provider.mu.RLock()
+	first := provider.propertyFailures[key]
+	provider.mu.RUnlock()
+	provider.markValueError(config.Devices[0].ID, mapping, context.DeadlineExceeded)
+	provider.mu.RLock()
+	second := provider.propertyFailures[key]
+	provider.mu.RUnlock()
+	if first.Count != 1 || second.Count != 2 || !second.NextRetryAt.After(first.NextRetryAt) {
+		t.Fatalf("failure backoff first=%#v second=%#v", first, second)
+	}
+	if got := provider.calibrationMappings(config.Devices[0], false); len(got) != 0 {
+		t.Fatalf("backed-off mappings=%#v", got)
+	}
+	provider.applyObservedProperty(config.Devices[0].ID, mapping, device.BoolValue(false), observationCloudHTTP, time.Now().UTC(), device.RuntimeModeCloud)
+	provider.mu.RLock()
+	_, failed := provider.propertyFailures[key]
+	status := provider.valueStatus[key]
+	provider.mu.RUnlock()
+	if failed || !status.Available {
+		t.Fatalf("failure was not cleared: failed=%v status=%#v", failed, status)
+	}
+}
+
+type directoryCountingCloud struct{ calls atomic.Uint64 }
+
+func (c *directoryCountingCloud) DeviceList(context.Context) ([]HubDevice, error) {
+	c.calls.Add(1)
+	return []HubDevice{{DID: "123", CloudAvailable: true}}, nil
+}
+func (*directoryCountingCloud) GetProperties(_ context.Context, input []cloudProperty) ([]cloudProperty, error) {
+	result := append([]cloudProperty(nil), input...)
+	for index := range result {
+		result[index].Value = false
+	}
+	return result, nil
+}
+func (*directoryCountingCloud) SetProperties(context.Context, []cloudProperty) ([]cloudProperty, error) {
+	return nil, nil
+}
+func (*directoryCountingCloud) Action(context.Context, cloudAction) error { return nil }
+func (*directoryCountingCloud) UpdateOAuth(OAuthConfig)                   {}
+
+func TestProviderPeriodicallyReconcilesOfficialCloudDirectory(t *testing.T) {
+	provider, err := newProvider("xiaomi-main", "米家", testConfig(), func() hubClient { return &fakeHub{value: false} })
+	if err != nil {
+		t.Fatal(err)
+	}
+	cloud := &directoryCountingCloud{}
+	provider.cloud = cloud
+	provider.cloudDirectoryInterval = 10 * time.Millisecond
+	provider.directoryRefreshDebounce = 0
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := provider.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close(ctx)
+	for cloud.calls.Load() < 2 && ctx.Err() == nil {
+		time.Sleep(time.Millisecond)
+	}
+	if cloud.calls.Load() < 2 || provider.ProviderMetrics()["directoryRefreshes"] == 0 {
+		t.Fatalf("directory calls=%d metrics=%#v", cloud.calls.Load(), provider.ProviderMetrics())
+	}
+}
+
+func TestProviderExposesSanitizedCloudMQTTDiagnostics(t *testing.T) {
+	provider, err := newProvider("xiaomi-main", "米家", testConfig(), func() hubClient { return &fakeHub{} })
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	provider.cloudMIPS = &fakeCloudMIPS{stats: cloudMIPSStats{LastConnectedAt: now.Add(-time.Minute), LastConnectErrorAt: now, LastConnectError: "connection refused", NextRetryAt: now.Add(10 * time.Second)}}
+	diagnostics := provider.ProviderDiagnostics()
+	metrics := provider.ProviderMetrics()
+	if diagnostics["cloudMqttState"] != "reconnecting" || diagnostics["cloudMqttLastError"] != "connection refused" || diagnostics["cloudMqttNextRetryAt"] == "" {
+		t.Fatalf("diagnostics=%#v", diagnostics)
+	}
+	if metrics["cloudMqttLastConnectedAt"] != uint64(now.Add(-time.Minute).Unix()) || metrics["cloudMqttNextRetryAt"] != uint64(now.Add(10*time.Second).Unix()) {
+		t.Fatalf("metrics=%#v", metrics)
 	}
 }
 

@@ -29,36 +29,39 @@ var (
 )
 
 type DeviceService struct {
-	provider       providersdk.Provider
-	discoverer     providersdk.Discoverer
-	cataloger      providersdk.SourceCataloger
-	reader         providersdk.PropertyReader
-	writer         providersdk.PropertyWriter
-	executor       providersdk.CommandExecutor
-	registry       *registry.DeviceRegistry
-	dispatcher     *eventbus.Dispatcher
-	states         *statestore.Store
-	commands       *commandtracker.Tracker
-	commandQueue   *commandCoordinator
-	unsubscribe    func()
-	mu             sync.RWMutex
-	nextID         uint64
-	listeners      map[uint64]*deviceSubscription
-	nextStateID    uint64
-	stateListeners map[uint64]*stateSubscription
-	snapshotMu     sync.Mutex
-	snapshotSeq    map[string]uint64
-	refreshMu      sync.Mutex
-	staleCancel    context.CancelFunc
-	staleDone      chan struct{}
-	metrics        deviceMetrics
-	storageMetrics DatabaseMetricsProvider
-	preferences    DevicePreferenceStore
-	disabledMu     sync.RWMutex
-	disabled       map[string]struct{}
-	propertyMu     sync.Mutex
-	propertyOps    map[domainstate.Key]*propertyOperation
-	propertyMapper PropertyMapper
+	provider                providersdk.Provider
+	discoverer              providersdk.Discoverer
+	cataloger               providersdk.SourceCataloger
+	reader                  providersdk.PropertyReader
+	writer                  providersdk.PropertyWriter
+	executor                providersdk.CommandExecutor
+	registry                *registry.DeviceRegistry
+	dispatcher              *eventbus.Dispatcher
+	states                  *statestore.Store
+	commands                *commandtracker.Tracker
+	commandQueue            *commandCoordinator
+	unsubscribe             func()
+	unsubscribeDeviceEvents func()
+	mu                      sync.RWMutex
+	nextID                  uint64
+	listeners               map[uint64]*deviceSubscription
+	nextStateID             uint64
+	stateListeners          map[uint64]*stateSubscription
+	nextDeviceEventID       uint64
+	deviceEventListeners    map[uint64]*deviceEventSubscription
+	snapshotMu              sync.Mutex
+	snapshotSeq             map[string]uint64
+	refreshMu               sync.Mutex
+	staleCancel             context.CancelFunc
+	staleDone               chan struct{}
+	metrics                 deviceMetrics
+	storageMetrics          DatabaseMetricsProvider
+	preferences             DevicePreferenceStore
+	disabledMu              sync.RWMutex
+	disabled                map[string]struct{}
+	propertyMu              sync.Mutex
+	propertyOps             map[domainstate.Key]*propertyOperation
+	propertyMapper          PropertyMapper
 }
 
 type propertyOperation struct {
@@ -140,12 +143,19 @@ type stateSubscription struct {
 	done  chan struct{}
 }
 
+type deviceEventSubscription struct {
+	queue chan providersdk.DeviceEvent
+	done  chan struct{}
+}
+
 type deviceMetrics struct {
 	eventsReceived        atomic.Uint64
 	eventsProcessed       atomic.Uint64
 	eventsDropped         atomic.Uint64
 	targetEventsDropped   atomic.Uint64
 	stateEventsDropped    atomic.Uint64
+	deviceEventsReceived  atomic.Uint64
+	deviceEventsDropped   atomic.Uint64
 	statesMarkedStale     atomic.Uint64
 	commandsStarted       atomic.Uint64
 	commandsConfirmed     atomic.Uint64
@@ -169,6 +179,8 @@ type DeviceMetrics struct {
 	EventQueueCapacity        int     `json:"eventQueueCapacity"`
 	TargetEventsDropped       uint64  `json:"targetEventsDropped"`
 	StateEventsDropped        uint64  `json:"stateEventsDropped"`
+	DeviceEventsReceived      uint64  `json:"deviceEventsReceived"`
+	DeviceEventsDropped       uint64  `json:"deviceEventsDropped"`
 	StatesMarkedStale         uint64  `json:"statesMarkedStale"`
 	CommandsStarted           uint64  `json:"commandsStarted"`
 	CommandsConfirmed         uint64  `json:"commandsConfirmed"`
@@ -238,7 +250,7 @@ func NewDeviceService(provider providersdk.Provider, dependencies ...any) *Devic
 		provider: provider, discoverer: discoverer, cataloger: cataloger, reader: reader, writer: writer, executor: executor,
 		registry: registry.NewDeviceRegistry(nil),
 		states:   statestore.NewStore(), commands: commandtracker.NewTracker(5 * time.Second), commandQueue: newCommandCoordinator(),
-		listeners: make(map[uint64]*deviceSubscription), stateListeners: make(map[uint64]*stateSubscription), snapshotSeq: make(map[string]uint64), disabled: make(map[string]struct{}), propertyOps: make(map[domainstate.Key]*propertyOperation),
+		listeners: make(map[uint64]*deviceSubscription), stateListeners: make(map[uint64]*stateSubscription), deviceEventListeners: make(map[uint64]*deviceEventSubscription), snapshotSeq: make(map[string]uint64), disabled: make(map[string]struct{}), propertyOps: make(map[domainstate.Key]*propertyOperation),
 	}
 	for _, dependency := range dependencies {
 		if metrics, ok := dependency.(DatabaseMetricsProvider); ok && service.storageMetrics == nil {
@@ -298,6 +310,11 @@ func NewDeviceService(provider providersdk.Provider, dependencies ...any) *Devic
 		})
 	} else {
 		service.unsubscribe = func() {}
+	}
+	if subscriber, ok := provider.(providersdk.DeviceEventSubscriber); ok {
+		service.unsubscribeDeviceEvents = subscriber.SubscribeDeviceEvents(service.publishDeviceEvent)
+	} else {
+		service.unsubscribeDeviceEvents = func() {}
 	}
 	return service
 }
@@ -522,7 +539,7 @@ func (s *DeviceService) Metrics() DeviceMetrics {
 	return DeviceMetrics{
 		EventsReceived: s.metrics.eventsReceived.Load(), EventsProcessed: s.metrics.eventsProcessed.Load(),
 		EventsDropped: s.metrics.eventsDropped.Load(), EventQueuePending: s.dispatcher.Pending(), EventQueueCapacity: s.dispatcher.Capacity(),
-		TargetEventsDropped: s.metrics.targetEventsDropped.Load(), StateEventsDropped: s.metrics.stateEventsDropped.Load(), StatesMarkedStale: s.metrics.statesMarkedStale.Load(),
+		TargetEventsDropped: s.metrics.targetEventsDropped.Load(), StateEventsDropped: s.metrics.stateEventsDropped.Load(), DeviceEventsReceived: s.metrics.deviceEventsReceived.Load(), DeviceEventsDropped: s.metrics.deviceEventsDropped.Load(), StatesMarkedStale: s.metrics.statesMarkedStale.Load(),
 		CommandsStarted: s.metrics.commandsStarted.Load(), CommandsConfirmed: s.metrics.commandsConfirmed.Load(),
 		CommandsRejected: s.metrics.commandsRejected.Load(), CommandsTimedOut: s.metrics.commandsTimedOut.Load(), CommandsSuperseded: s.metrics.commandsSuperseded.Load(), CommandsCoalesced: s.metrics.commandsCoalesced.Load(),
 		CommandsOutcomeUnknown: s.metrics.commandsTimedOut.Load() + s.metrics.commandsSuperseded.Load(),
@@ -1204,8 +1221,26 @@ func (s *DeviceService) SubscribeStates(handler func(domainstate.StateValue)) fu
 	return func() { once.Do(func() { s.removeStateSubscription(id) }) }
 }
 
+func (s *DeviceService) SubscribeDeviceEvents(handler func(providersdk.DeviceEvent)) func() {
+	s.mu.Lock()
+	s.nextDeviceEventID++
+	id := s.nextDeviceEventID
+	subscription := &deviceEventSubscription{queue: make(chan providersdk.DeviceEvent, 64), done: make(chan struct{})}
+	s.deviceEventListeners[id] = subscription
+	s.mu.Unlock()
+	go func() {
+		defer close(subscription.done)
+		for event := range subscription.queue {
+			handler(event)
+		}
+	}()
+	var once sync.Once
+	return func() { once.Do(func() { s.removeDeviceEventSubscription(id) }) }
+}
+
 func (s *DeviceService) Close() error {
 	s.unsubscribe()
+	s.unsubscribeDeviceEvents()
 	s.closeSubscriptions()
 	s.staleCancel()
 	<-s.staleDone
@@ -1704,6 +1739,37 @@ func (s *DeviceService) removeStateSubscription(id uint64) {
 	}
 }
 
+func (s *DeviceService) removeDeviceEventSubscription(id uint64) {
+	s.mu.Lock()
+	subscription, ok := s.deviceEventListeners[id]
+	if ok {
+		delete(s.deviceEventListeners, id)
+		close(subscription.queue)
+	}
+	s.mu.Unlock()
+	if ok {
+		<-subscription.done
+	}
+}
+
+func (s *DeviceService) publishDeviceEvent(event providersdk.DeviceEvent) {
+	s.metrics.deviceEventsReceived.Add(1)
+	if _, exists := s.registry.Get(event.DeviceID); !exists || s.isDeviceDisabled(event.DeviceID) {
+		return
+	}
+	s.mu.RLock()
+	for _, subscription := range s.deviceEventListeners {
+		copy := event
+		copy.Payload = append([]byte(nil), event.Payload...)
+		select {
+		case subscription.queue <- copy:
+		default:
+			s.metrics.deviceEventsDropped.Add(1)
+		}
+	}
+	s.mu.RUnlock()
+}
+
 func (s *DeviceService) publishState(value domainstate.StateValue) {
 	s.mu.RLock()
 	for _, subscription := range s.stateListeners {
@@ -1730,11 +1796,20 @@ func (s *DeviceService) closeSubscriptions() {
 		close(subscription.queue)
 		stateSubscriptions = append(stateSubscriptions, subscription)
 	}
+	deviceEventSubscriptions := make([]*deviceEventSubscription, 0, len(s.deviceEventListeners))
+	for id, subscription := range s.deviceEventListeners {
+		delete(s.deviceEventListeners, id)
+		close(subscription.queue)
+		deviceEventSubscriptions = append(deviceEventSubscriptions, subscription)
+	}
 	s.mu.Unlock()
 	for _, subscription := range subscriptions {
 		<-subscription.done
 	}
 	for _, subscription := range stateSubscriptions {
+		<-subscription.done
+	}
+	for _, subscription := range deviceEventSubscriptions {
 		<-subscription.done
 	}
 }
