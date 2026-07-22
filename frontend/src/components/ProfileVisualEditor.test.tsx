@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { MappingProfile } from '../types/mapping'
@@ -78,5 +78,35 @@ describe('ProfileVisualEditor', () => {
 
     await userEvent.click(screen.getByRole('button', { name: '保存并热更新' }))
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ inputType: 'int', outputType: 'enum', transforms: [expect.objectContaining({ type: 'range-enum' })] }))
+  })
+
+  it('groups paired conversions together and supports enum to number', async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined)
+    render(<ProfileVisualEditor initialProfile={{ ...identityProfile, inputType: 'enum', outputType: 'enum' }} editing={false} saving={false} onClose={vi.fn()} onSave={onSave} runPreview={vi.fn()} />)
+
+    const numberEnumGroup = screen.getByText('数值 ⇄ 枚举').closest('section')!
+    expect(within(numberEnumGroup).getByRole('button', { name: /数值分段转枚举/ })).toBeDisabled()
+    expect(within(numberEnumGroup).getByRole('button', { name: /枚举转数值/ })).toBeEnabled()
+
+    const boolEnumGroup = screen.getByText('布尔 ⇄ 枚举').closest('section')!
+    expect(within(boolEnumGroup).getByRole('button', { name: /布尔转枚举/ })).toBeDisabled()
+    expect(within(boolEnumGroup).getByRole('button', { name: /枚举转布尔/ })).toBeEnabled()
+
+    await userEvent.click(within(numberEnumGroup).getByRole('button', { name: /枚举转数值/ }))
+    expect(screen.getAllByText('枚举转数值（enum-number）').length).toBeGreaterThan(1)
+    expect(screen.getAllByText('数值（number）').length).toBeGreaterThan(0)
+    await userEvent.click(screen.getByRole('button', { name: '保存并热更新' }))
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ inputType: 'enum', outputType: 'number', transforms: [expect.objectContaining({ type: 'enum-number' })] }))
+  })
+
+  it('supports the missing bool to number direction', async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined)
+    render(<ProfileVisualEditor initialProfile={{ ...identityProfile, inputType: 'bool', outputType: 'bool' }} editing={false} saving={false} onClose={vi.fn()} onSave={onSave} runPreview={vi.fn()} />)
+
+    const numberBoolGroup = screen.getByText('数值 ⇄ 布尔').closest('section')!
+    expect(within(numberBoolGroup).getByRole('button', { name: /数值阈值转布尔/ })).toBeDisabled()
+    await userEvent.click(within(numberBoolGroup).getByRole('button', { name: /布尔转数值/ }))
+    await userEvent.click(screen.getByRole('button', { name: '保存并热更新' }))
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ inputType: 'bool', outputType: 'number', transforms: [expect.objectContaining({ type: 'bool-number' })] }))
   })
 })

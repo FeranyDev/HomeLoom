@@ -641,7 +641,7 @@ components:
       type: object
       required: [type]
       properties:
-        type: { type: string, enum: [invert, scale, clamp, enum, unit, range-enum, threshold, bool-enum, enum-bool, map-range, round, parse-number, number-string] }
+        type: { type: string, enum: [invert, scale, clamp, enum, unit, range-enum, enum-number, threshold, bool-number, bool-enum, enum-bool, map-range, round, parse-number, number-string] }
         factor: { type: number }
         offset: { type: number }
         min: { type: number }
@@ -669,7 +669,7 @@ components:
       properties:
         max: { type: number, description: Inclusive upper bound. Omit only on the final catch-all band. }
         value: { type: string }
-        reverse: { type: number, description: Canonical Provider value used for reverse writes. }
+        reverse: { type: number, description: Canonical numeric representation used when converting the enum value to a number. }
     MappingProfile:
       type: object
       required: [schemaVersion, id, version, kind, inputType, outputType, transforms]

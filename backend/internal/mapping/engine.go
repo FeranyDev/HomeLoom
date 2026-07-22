@@ -109,8 +109,20 @@ func applyForward(transform Transform, value device.PropertyValue) (device.Prope
 			}
 		}
 		return device.PropertyValue{}, fmt.Errorf("numeric value %v has no range band", number)
+	case TransformEnumNumber:
+		for _, band := range transform.Bands {
+			if band.Value == *value.String {
+				return finiteNumber(band.Reverse)
+			}
+		}
+		return device.PropertyValue{}, fmt.Errorf("enum value %q has no numeric mapping", *value.String)
 	case TransformThreshold:
 		return device.BoolValue(thresholdMatches(numericValue(value), *transform.Threshold, transform.Operator)), nil
+	case TransformBoolNumber:
+		if *value.Bool {
+			return finiteNumber(*transform.TrueNumber)
+		}
+		return finiteNumber(*transform.FalseNumber)
 	case TransformBoolEnum:
 		if *value.Bool {
 			return device.EnumValue(transform.TrueValue), nil
@@ -180,11 +192,21 @@ func applyReverse(transform Transform, value device.PropertyValue, expected devi
 			}
 		}
 		return device.PropertyValue{}, fmt.Errorf("enum value %q has no reverse range", *value.String)
+	case TransformEnumNumber:
+		number := numericValue(value)
+		for _, band := range transform.Bands {
+			if band.Max == nil || number <= *band.Max {
+				return stringValueForType(band.Value, expected), nil
+			}
+		}
+		return device.PropertyValue{}, fmt.Errorf("numeric value %v has no reverse range", number)
 	case TransformThreshold:
 		if *value.Bool {
 			return finiteNumber(*transform.TrueNumber)
 		}
 		return finiteNumber(*transform.FalseNumber)
+	case TransformBoolNumber:
+		return device.BoolValue(thresholdMatches(numericValue(value), *transform.Threshold, transform.Operator)), nil
 	case TransformBoolEnum:
 		switch *value.String {
 		case transform.TrueValue:

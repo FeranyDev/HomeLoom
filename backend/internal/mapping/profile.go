@@ -26,7 +26,9 @@ const (
 	TransformEnum         TransformType = "enum"
 	TransformUnit         TransformType = "unit"
 	TransformRangeEnum    TransformType = "range-enum"
+	TransformEnumNumber   TransformType = "enum-number"
 	TransformThreshold    TransformType = "threshold"
+	TransformBoolNumber   TransformType = "bool-number"
 	TransformBoolEnum     TransformType = "bool-enum"
 	TransformEnumBool     TransformType = "enum-bool"
 	TransformMapRange     TransformType = "map-range"
@@ -73,8 +75,8 @@ type Transform struct {
 }
 
 // RangeBand is an ordered numeric band. Max is inclusive; a nil Max is the
-// final catch-all band. Reverse is the canonical numeric value used when a
-// Consumer writes the enum value back to a Provider.
+// final catch-all band. Reverse is the canonical numeric representation of
+// Value when converting from enum to number.
 type RangeBand struct {
 	Max     *float64 `json:"max,omitempty"`
 	Value   string   `json:"value"`
@@ -213,31 +215,24 @@ func Validate(profile Profile) error {
 			}
 			validateRangeBands(fields, path, transform.Bands)
 			current = device.ValueTypeEnum
+		case TransformEnumNumber:
+			if current != device.ValueTypeEnum && current != device.ValueTypeString {
+				fields[path] = "enum-number requires enum or string input"
+			}
+			validateRangeBands(fields, path, transform.Bands)
+			current = device.ValueTypeNumber
 		case TransformThreshold:
 			if !numericType(current) {
 				fields[path] = "threshold requires int or number input"
 			}
-			if transform.Threshold == nil || !finite(*transform.Threshold) {
-				fields[path+".threshold"] = "must be a finite number"
-			}
-			if transform.Operator != "gte" && transform.Operator != "gt" && transform.Operator != "lte" && transform.Operator != "lt" {
-				fields[path+".operator"] = "must be gte, gt, lte, or lt"
-			}
-			if transform.TrueNumber == nil || !finitePointer(transform.TrueNumber) {
-				fields[path+".trueNumber"] = "must be a finite reverse value"
-			}
-			if transform.FalseNumber == nil || !finitePointer(transform.FalseNumber) {
-				fields[path+".falseNumber"] = "must be a finite reverse value"
-			}
-			if transform.Threshold != nil && transform.TrueNumber != nil && transform.FalseNumber != nil && finite(*transform.Threshold) && finite(*transform.TrueNumber) && finite(*transform.FalseNumber) {
-				if !thresholdMatches(*transform.TrueNumber, *transform.Threshold, transform.Operator) {
-					fields[path+".trueNumber"] = "reverse value must evaluate to true"
-				}
-				if thresholdMatches(*transform.FalseNumber, *transform.Threshold, transform.Operator) {
-					fields[path+".falseNumber"] = "reverse value must evaluate to false"
-				}
-			}
+			validateThreshold(fields, path, transform)
 			current = device.ValueTypeBool
+		case TransformBoolNumber:
+			if current != device.ValueTypeBool {
+				fields[path] = "bool-number requires bool input"
+			}
+			validateThreshold(fields, path, transform)
+			current = device.ValueTypeNumber
 		case TransformBoolEnum:
 			if current != device.ValueTypeBool {
 				fields[path] = "bool-enum requires bool input"
@@ -371,6 +366,29 @@ func validateRangeBands(fields map[string]string, path string, bands []RangeBand
 	}
 }
 
+func validateThreshold(fields map[string]string, path string, transform Transform) {
+	if transform.Threshold == nil || !finite(*transform.Threshold) {
+		fields[path+".threshold"] = "must be a finite number"
+	}
+	if transform.Operator != "gte" && transform.Operator != "gt" && transform.Operator != "lte" && transform.Operator != "lt" {
+		fields[path+".operator"] = "must be gte, gt, lte, or lt"
+	}
+	if transform.TrueNumber == nil || !finitePointer(transform.TrueNumber) {
+		fields[path+".trueNumber"] = "must be a finite reverse value"
+	}
+	if transform.FalseNumber == nil || !finitePointer(transform.FalseNumber) {
+		fields[path+".falseNumber"] = "must be a finite reverse value"
+	}
+	if transform.Threshold != nil && transform.TrueNumber != nil && transform.FalseNumber != nil && finite(*transform.Threshold) && finite(*transform.TrueNumber) && finite(*transform.FalseNumber) {
+		if !thresholdMatches(*transform.TrueNumber, *transform.Threshold, transform.Operator) {
+			fields[path+".trueNumber"] = "reverse value must evaluate to true"
+		}
+		if thresholdMatches(*transform.FalseNumber, *transform.Threshold, transform.Operator) {
+			fields[path+".falseNumber"] = "reverse value must evaluate to false"
+		}
+	}
+}
+
 func thresholdMatches(value, threshold float64, operator string) bool {
 	switch operator {
 	case "gte":
@@ -388,7 +406,7 @@ func thresholdMatches(value, threshold float64, operator string) bool {
 
 func transformOutputType(input device.ValueType, transform Transform) device.ValueType {
 	switch transform.Type {
-	case TransformScale, TransformClamp, TransformUnit, TransformMapRange, TransformParseNumber:
+	case TransformScale, TransformClamp, TransformUnit, TransformMapRange, TransformParseNumber, TransformEnumNumber, TransformBoolNumber:
 		return device.ValueTypeNumber
 	case TransformRangeEnum, TransformBoolEnum:
 		return device.ValueTypeEnum

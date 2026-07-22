@@ -132,8 +132,8 @@ Core 会根据 Capability 中的 `CommandDefinition` 校验必填参数、未声
 - `clamp`：范围裁剪，因为信息丢失而明确拒绝反向执行；
 - `enum`：一对一枚举映射，重复目标值会在校验阶段拒绝；
 - `unit`：摄氏、华氏、开尔文以及比例、百分比转换。
-- `range-enum`：按有序数值上限生成枚举，并为每个枚举配置反向写入代表值；
-- `threshold`：用 `gte/gt/lte/lt` 阈值将数值转换为布尔，并配置 true/false 反向代表值；
+- `range-enum` / `enum-number`：按有序数值上限在数值与枚举间双向转换，并为每个枚举配置代表值；
+- `threshold` / `bool-number`：用 `gte/gt/lte/lt` 阈值在数值与布尔间双向转换，并配置 true/false 代表值；
 - `bool-enum` / `enum-bool`：布尔与双值枚举或文本双向转换；
 - `map-range`：把一个数值区间线性映射到另一个区间；
 - `round`：四舍五入、向下或向上取整为 `int`；

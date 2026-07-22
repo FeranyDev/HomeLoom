@@ -21,7 +21,7 @@ const parameterLevels: Record<ParameterLevel, string> = { required: '必需', op
 const targetTypes: Record<TargetType, string> = { 'apple-hap': 'Apple 家庭桥', matter: 'Matter 桥' }
 const transformTypes: Record<MappingTransformType, string> = {
 	invert: '布尔反转', scale: '数值缩放', clamp: '范围裁剪', enum: '枚举映射', unit: '单位转换',
-	'range-enum': '数值分段转枚举', threshold: '数值阈值转布尔', 'bool-enum': '布尔转枚举', 'enum-bool': '枚举转布尔',
+	'range-enum': '数值分段转枚举', 'enum-number': '枚举转数值', threshold: '数值阈值转布尔', 'bool-number': '布尔转数值', 'bool-enum': '布尔转枚举', 'enum-bool': '枚举转布尔',
 	'map-range': '区间线性映射', round: '数值取整', 'parse-number': '文本解析为数值', 'number-string': '数值格式化为文本',
 }
 const unitNames: Record<string, string> = {

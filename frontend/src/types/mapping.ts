@@ -1,7 +1,7 @@
 import type { Device, DeviceType, ParameterLevel, PropertyDefinition, PropertyValue, ValueType } from './device'
 
 export type MappingDirection = 'forward' | 'reverse'
-export type MappingTransformType = 'invert' | 'scale' | 'clamp' | 'enum' | 'unit' | 'range-enum' | 'threshold' | 'bool-enum' | 'enum-bool' | 'map-range' | 'round' | 'parse-number' | 'number-string'
+export type MappingTransformType = 'invert' | 'scale' | 'clamp' | 'enum' | 'unit' | 'range-enum' | 'enum-number' | 'threshold' | 'bool-number' | 'bool-enum' | 'enum-bool' | 'map-range' | 'round' | 'parse-number' | 'number-string'
 
 export interface MappingRangeBand { max?: number; value: string; reverse: number }
 

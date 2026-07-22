@@ -94,8 +94,12 @@ func TestExpandedTransformsForwardAndReverse(t *testing.T) {
 	}{
 		{"range enum forward", profile(device.ValueTypeNumber, device.ValueTypeEnum, Transform{Type: TransformRangeEnum, Bands: bands}), DirectionForward, device.NumberValue(25), device.EnumValue("comfortable")},
 		{"range enum reverse", profile(device.ValueTypeNumber, device.ValueTypeEnum, Transform{Type: TransformRangeEnum, Bands: bands}), DirectionReverse, device.EnumValue("hot"), device.NumberValue(32)},
+		{"enum number forward", profile(device.ValueTypeEnum, device.ValueTypeNumber, Transform{Type: TransformEnumNumber, Bands: bands}), DirectionForward, device.EnumValue("hot"), device.NumberValue(32)},
+		{"enum number reverse", profile(device.ValueTypeEnum, device.ValueTypeNumber, Transform{Type: TransformEnumNumber, Bands: bands}), DirectionReverse, device.NumberValue(25), device.EnumValue("comfortable")},
 		{"threshold forward", profile(device.ValueTypeNumber, device.ValueTypeBool, Transform{Type: TransformThreshold, Threshold: numberPointer(20), Operator: "gte", TrueNumber: numberPointer(25), FalseNumber: numberPointer(10)}), DirectionForward, device.NumberValue(22), device.BoolValue(true)},
 		{"threshold reverse", profile(device.ValueTypeNumber, device.ValueTypeBool, Transform{Type: TransformThreshold, Threshold: numberPointer(20), Operator: "gte", TrueNumber: numberPointer(25), FalseNumber: numberPointer(10)}), DirectionReverse, device.BoolValue(false), device.NumberValue(10)},
+		{"bool number forward", profile(device.ValueTypeBool, device.ValueTypeNumber, Transform{Type: TransformBoolNumber, Threshold: numberPointer(20), Operator: "gte", TrueNumber: numberPointer(25), FalseNumber: numberPointer(10)}), DirectionForward, device.BoolValue(false), device.NumberValue(10)},
+		{"bool number reverse", profile(device.ValueTypeBool, device.ValueTypeNumber, Transform{Type: TransformBoolNumber, Threshold: numberPointer(20), Operator: "gte", TrueNumber: numberPointer(25), FalseNumber: numberPointer(10)}), DirectionReverse, device.NumberValue(22), device.BoolValue(true)},
 		{"bool enum forward", profile(device.ValueTypeBool, device.ValueTypeEnum, Transform{Type: TransformBoolEnum, TrueValue: "active", FalseValue: "inactive"}), DirectionForward, device.BoolValue(true), device.EnumValue("active")},
 		{"bool enum reverse", profile(device.ValueTypeBool, device.ValueTypeEnum, Transform{Type: TransformBoolEnum, TrueValue: "active", FalseValue: "inactive"}), DirectionReverse, device.EnumValue("inactive"), device.BoolValue(false)},
 		{"enum bool forward", profile(device.ValueTypeEnum, device.ValueTypeBool, Transform{Type: TransformEnumBool, TrueValue: "open", FalseValue: "closed"}), DirectionForward, device.EnumValue("closed"), device.BoolValue(false)},
@@ -125,7 +129,9 @@ func TestExpandedTransformsForwardAndReverse(t *testing.T) {
 func TestExpandedTransformValidation(t *testing.T) {
 	tests := []Profile{
 		profile(device.ValueTypeNumber, device.ValueTypeEnum, Transform{Type: TransformRangeEnum, Bands: []RangeBand{{Max: numberPointer(10), Value: "low", Reverse: 5}}}),
+		profile(device.ValueTypeEnum, device.ValueTypeNumber, Transform{Type: TransformEnumNumber, Bands: []RangeBand{{Max: numberPointer(10), Value: "low", Reverse: 5}}}),
 		profile(device.ValueTypeNumber, device.ValueTypeBool, Transform{Type: TransformThreshold, Threshold: numberPointer(10), Operator: "gte", TrueNumber: numberPointer(5), FalseNumber: numberPointer(0)}),
+		profile(device.ValueTypeBool, device.ValueTypeNumber, Transform{Type: TransformBoolNumber, Threshold: numberPointer(10), Operator: "gte", TrueNumber: numberPointer(5), FalseNumber: numberPointer(0)}),
 		profile(device.ValueTypeBool, device.ValueTypeEnum, Transform{Type: TransformBoolEnum, TrueValue: "same", FalseValue: "same"}),
 		profile(device.ValueTypeNumber, device.ValueTypeNumber, Transform{Type: TransformMapRange, InputMin: numberPointer(0), InputMax: numberPointer(0), OutputMin: numberPointer(0), OutputMax: numberPointer(1)}),
 		profile(device.ValueTypeString, device.ValueTypeInt, Transform{Type: TransformRound, Mode: "nearest"}),
