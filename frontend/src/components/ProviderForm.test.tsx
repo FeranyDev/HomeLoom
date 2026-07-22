@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ProviderForm } from './ProviderForm'
 import { ApiError } from '../api/client'
+import type { Provider } from '../types/provider'
 
 const xiaomiAPI = vi.hoisted(() => ({
 	startXiaomiOAuth: vi.fn(),
@@ -101,8 +102,21 @@ describe('ProviderForm', () => {
 		expect(screen.getByLabelText('小米 OAuth Redirect URL')).toHaveValue('http://homeassistant.local:8123')
 		expect(screen.getByLabelText('小米 OAuth Redirect URL')).toHaveAttribute('readonly')
 		expect(screen.getByLabelText('小米中枢网关地址')).toBeDisabled()
+		expect(screen.getByRole('button', { name: '发现小米中枢网关' })).toBeDisabled()
 		expect(screen.queryByLabelText('小米设备映射')).not.toBeInTheDocument()
 		expect(screen.getByText(/独立的“管理子设备”页面/)).toBeInTheDocument()
+	})
+
+	it('discovers and selects a gateway only inside the Xiaomi central hub configuration', async () => {
+		xiaomiAPI.discoverXiaomiGateways.mockResolvedValue([{ instance: 'central-hub', hostName: 'hub.local', addresses: ['192.168.1.50'], port: 8883, did: 'hub-did', role: 1, mqttEnabled: true }])
+		const provider: Provider = { id: 'xiaomi-main', type: 'xiaomi', name: '家庭中枢', enabled: true, status: 'running', retryCount: 0, capabilities: { discovery: true, propertyRead: true, propertyWrite: true, events: true }, config: { host: '', port: 8883, clientId: '987654321', caCertificate: 'ca', clientCertificate: 'certificate', privateKey: 'private-key', oauth: { clientId: '1234567890', region: 'cn', redirectUrl: 'http://homeassistant.local:8123', oauthUuid: '0123456789abcdef0123456789abcdef', virtualDid: '987654321' }, devices: [] } }
+		render(<ProviderForm provider={provider} onCancel={() => {}} onSave={vi.fn()} />)
+		await userEvent.click(screen.getByRole('button', { name: '发现小米中枢网关' }))
+		await waitFor(() => expect(xiaomiAPI.discoverXiaomiGateways).toHaveBeenCalledOnce())
+		const candidate = await screen.findByRole('button', { name: /central-hub.*192\.168\.1\.50/ })
+		await userEvent.click(candidate)
+		expect(screen.getByLabelText('小米中枢网关地址')).toHaveValue('192.168.1.50')
+		expect(screen.getByLabelText('小米中枢网关端口')).toHaveValue(8883)
 	})
 
 	it('builds a distinctly labelled third-party MIoT cloud provider', async () => {

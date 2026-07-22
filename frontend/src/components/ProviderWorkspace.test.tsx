@@ -1,11 +1,8 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { Provider } from '../types/provider'
 import { ProviderWorkspace } from './ProviderWorkspace'
-
-const api = vi.hoisted(() => ({ discoverXiaomiGateways: vi.fn() }))
-vi.mock('../api/xiaomi', () => ({ discoverXiaomiGateways: api.discoverXiaomiGateways }))
 
 const base = { enabled: true, status: 'running', retryCount: 0, capabilities: { discovery: true, propertyRead: true, propertyWrite: true, events: true } }
 const providers: Provider[] = [
@@ -16,8 +13,6 @@ const providers: Provider[] = [
 ]
 
 describe('ProviderWorkspace', () => {
-	beforeEach(() => vi.clearAllMocks())
-
 	it('uses one lifecycle and full provider list for every type', () => {
 		render(<ProviderWorkspace providers={providers} devices={[]} onEdit={() => {}} onManageDevices={() => {}} onDelete={() => {}} onRestart={vi.fn()} onTest={vi.fn()} onSimulate={vi.fn()} />)
 		expect(screen.getByLabelText('Provider 运行流程')).toBeInTheDocument()
@@ -28,12 +23,10 @@ describe('ProviderWorkspace', () => {
 		expect(screen.getByText('小米 MIoT 云 · 第三方兼容 · xiaomi-miot-cloud-main')).toBeInTheDocument()
 	})
 
-	it('keeps Xiaomi gateway discovery and device management in Provider page', async () => {
-		api.discoverXiaomiGateways.mockResolvedValue([{ instance: 'central-hub', hostName: 'hub.local', addresses: ['192.168.1.50'], port: 8883, did: 'hub-did', role: 1, mqttEnabled: true }])
+	it('keeps gateway discovery out of the provider overview and opens Xiaomi device management', async () => {
 		const onManageDevices = vi.fn()
 		render(<ProviderWorkspace providers={[providers[2]]} devices={[]} onEdit={() => {}} onManageDevices={onManageDevices} onDelete={() => {}} onRestart={vi.fn()} onTest={vi.fn()} onSimulate={vi.fn()} />)
-		await userEvent.click(screen.getByRole('button', { name: '发现小米中枢网关' }))
-		expect(await screen.findByText('central-hub')).toBeInTheDocument()
+		expect(screen.queryByRole('button', { name: '发现小米中枢网关' })).not.toBeInTheDocument()
 		await userEvent.click(screen.getByRole('button', { name: '管理设备' }))
 		expect(onManageDevices).toHaveBeenCalledWith(providers[2])
 	})
