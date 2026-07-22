@@ -24,7 +24,7 @@ export function TargetCard({ target, onEdit, onDelete, onRegeneratePairing, onCl
 	const [showQR, setShowQR] = useState(false)
   const descriptor = targetDescriptor(target.type)
   const consumerId = target.consumerId ?? descriptor.consumerId
-  const canPair = descriptor.supportsHomeKitPairing && target.enabled && Boolean(target.setupUri)
+  const canPair = descriptor.supportsHomeKitPairing && !target.paired && target.enabled && Boolean(target.setupUri)
 
   return (
     <article className="target-card">
@@ -39,19 +39,21 @@ export function TargetCard({ target, onEdit, onDelete, onRegeneratePairing, onCl
         <dl className="target-details">
           <div><dt>消费适配器</dt><dd>{descriptor.consumerName}（{consumerId}）</dd></div>
           <div><dt>消费端设备</dt><dd>{target.devices?.length ?? target.deviceIds.length} 台</dd></div>
-          {descriptor.supportsHomeKitPairing && <><div><dt>HAP 监听地址</dt><dd>{target.address || '—'}</dd></div><div><dt>HomeKit 配对码</dt><dd className="pairing-code">{target.pairingCode || '—'}</dd></div></>}
+          {descriptor.supportsHomeKitPairing && <><div><dt>HAP 监听地址</dt><dd>{target.address || '—'}</dd></div><div><dt>HomeKit 状态</dt><dd>{target.paired ? '已配对至 Apple Home' : '等待配对'}</dd></div></>}
         </dl>
 		<div className="target-actions">
 		  <button onClick={() => onEdit(target)}>编辑配置</button>
 		  <button onClick={() => onManageDevices(target)}>配置消费端设备</button>
-		  {descriptor.supportsHomeKitPairing && <button onClick={() => onRegeneratePairing(target)}>重新生成 HomeKit 配对参数</button>}
-		  {descriptor.supportsHomeKitPairing && <button className="is-danger" onClick={() => onClearPairingIdentity(target)}>清除 HomeKit 配对身份</button>}
+		  {descriptor.supportsHomeKitPairing && !target.paired && <button onClick={() => onRegeneratePairing(target)}>重新生成 HomeKit 配对参数</button>}
+		  {descriptor.supportsHomeKitPairing && target.paired && <button className="is-danger" onClick={() => onClearPairingIdentity(target)}>清除 HomeKit 配对身份</button>}
 		  <button className="is-danger" onClick={() => onDelete(target)}>删除</button>
 		</div>
       </div>
 
-	  {descriptor.supportsHomeKitPairing ? <div className={`pairing-panel ${canPair ? '' : 'is-unavailable'}`}>
-		{canPair && showQR ? (
+	  {descriptor.supportsHomeKitPairing ? <div className={`pairing-panel ${canPair || target.paired ? '' : 'is-unavailable'} ${target.paired ? 'is-paired' : ''}`}>
+		{target.paired ? (
+		  <><div className="paired-mark" aria-hidden="true">✓</div><strong>已连接 Apple Home</strong><span>配对完成后，PIN、Setup ID 和二维码不再参与日常运行。</span></>
+		) : canPair && showQR ? (
           <>
             <img src={pairingQRUrl(target.id)} alt={`${target.name} HomeKit 配对二维码`} />
             <strong>使用“家庭”App 扫描</strong>

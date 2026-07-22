@@ -92,7 +92,7 @@ Web 管理面只有这一个管理员身份，不实现普通用户、角色或�
 
 命令确认超时由 `system_settings.command_timeout_seconds` 保存，允许范围为 1–300 秒，默认 5 秒；历史上限由 `command_history_limit` 保存，允许 100–10000 条，默认 1000 条。两项设置通过同一事务保存并实时应用。新超时只用于之后创建的命令；降低历史上限会立即清理最旧的终态记录，但不删除执行中的命令。
 
-HomeKit 桥提供两个独立高风险入口：`POST /api/v1/targets/{id}/pairing/regenerate` 要求 `REGENERATE {id}`，只更换 PIN 与 Setup ID 并保留既有控制器身份；`DELETE /api/v1/targets/{id}/pairing-identity` 要求 `CLEAR {id}`，会先停止对应桥、拒绝符号链接或越界身份路径、清除 HAP 密钥及控制器配对文件，再按原配置重建桥。删除普通 Target 配置仍默认保留身份目录。
+HomeKit 桥返回 `paired` 表示 HAP 身份目录中是否已有控制器配对。已配对后，列表响应不再返回仅用于首次配对的 PIN、Setup ID 和 Setup URI，二维码入口也不再可用；普通编辑会在服务端保留这些原始参数。HomeKit 桥提供两个独立高风险入口：未配对时，`POST /api/v1/targets/{id}/pairing/regenerate` 要求 `REGENERATE {id}` 并更换 PIN 与 Setup ID；已配对时该操作会被拒绝。`DELETE /api/v1/targets/{id}/pairing-identity` 要求 `CLEAR {id}`，会先停止对应桥、拒绝符号链接或越界身份路径、清除 HAP 密钥及控制器配对文件，再按原配置重建桥。删除普通 Target 配置仍默认保留身份目录。
 
 Provider 上报时间与接收时间相差超过 5 分钟时，Core 会记录时钟漂移指标，并将 State Store 的 `observedAt` 钳制为接收时间，避免错误的未来时间戳长期阻止正常状态合并。原始设备快照时间仍保留用于排查。
 

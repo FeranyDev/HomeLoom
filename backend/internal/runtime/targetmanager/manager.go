@@ -19,11 +19,13 @@ type runningTarget struct {
 	cancel  context.CancelFunc
 	done    chan error
 	address string
+	target  managedTarget
 }
 
 type managedTarget interface {
 	Start(context.Context) error
 	PairingInfo() homekit.PairingInfo
+	IsPaired() bool
 }
 
 type targetFactory func(context.Context, homekit.Config, *application.DeviceService, *slog.Logger) (managedTarget, error)
@@ -65,7 +67,9 @@ func (m *Manager) Apply(ctx context.Context, config target.Config) (application.
 		if err := m.stop(ctx, config.ID); err != nil {
 			return application.TargetRegistration{}, err
 		}
-		return application.TargetRegistration{Info: infoFromConfig(config, "disabled")}, nil
+		info := infoFromConfig(config, "disabled")
+		info.Paired = m.IsPaired(config)
+		return application.TargetRegistration{Info: info}, nil
 	}
 	if config.Type != "apple-hap" {
 		return application.TargetRegistration{}, fmt.Errorf("target type %q is not implemented", config.Type)
@@ -94,7 +98,7 @@ func (m *Manager) Apply(ctx context.Context, config target.Config) (application.
 	runCtx, cancel := context.WithCancel(m.root)
 	done := make(chan error, 1)
 	m.mu.Lock()
-	m.running[config.ID] = runningTarget{cancel: cancel, done: done, address: config.Address}
+	m.running[config.ID] = runningTarget{cancel: cancel, done: done, address: config.Address, target: next}
 	m.mu.Unlock()
 	go func() {
 		err := next.Start(runCtx)
@@ -120,8 +124,30 @@ func (m *Manager) Apply(ctx context.Context, config target.Config) (application.
 
 	pairing := next.PairingInfo()
 	info := infoFromConfig(config, "running")
-	info.PairingCode, info.SetupURI = pairing.Code, pairing.SetupURI
+	info.Paired = next.IsPaired()
+	if !info.Paired {
+		info.PairingCode, info.SetupURI = pairing.Code, pairing.SetupURI
+	}
 	return application.TargetRegistration{Info: info, QR: pairing.QR}, nil
+}
+
+func (m *Manager) IsPaired(config target.Config) bool {
+	descriptor, _ := target.DescriptorForType(config.Type)
+	if !descriptor.SupportsHomeKitPairing || config.StorePath == "" {
+		return false
+	}
+	m.mu.Lock()
+	running, exists := m.running[config.ID]
+	m.mu.Unlock()
+	if exists {
+		return running.target.IsPaired()
+	}
+	paired, err := homekit.HasPairings(config.StorePath)
+	if err != nil {
+		m.logger.Warn("inspect HomeKit pairing state failed", "target_id", config.ID, "error", err)
+		return false
+	}
+	return paired
 }
 
 func (m *Manager) Remove(ctx context.Context, id string) error { return m.stop(ctx, id) }

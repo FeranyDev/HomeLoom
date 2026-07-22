@@ -61,6 +61,25 @@ func TestSecureFSStoreEnforcesPrivatePermissionsAndRejectsSymlinks(t *testing.T)
 	}
 }
 
+func TestHasPairingsReadsPersistedControllerIdentity(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "identity")
+	paired, err := HasPairings(directory)
+	if err != nil || paired {
+		t.Fatalf("empty HasPairings() = %v, %v", paired, err)
+	}
+	store, err := newSecureFSStore(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Set("controller.pairing", []byte(`{"name":"controller"}`)); err != nil {
+		t.Fatal(err)
+	}
+	paired, err = HasPairings(directory)
+	if err != nil || !paired {
+		t.Fatalf("persisted HasPairings() = %v, %v", paired, err)
+	}
+}
+
 func TestHomeKitAddressPreflightDetectsOccupiedPort(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

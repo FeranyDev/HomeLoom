@@ -484,6 +484,7 @@ paths:
   /api/v1/targets:
     get:
       operationId: listTargets
+      description: HomeKit targets include a paired boolean. Once paired, one-time PIN, Setup ID and Setup URI values are omitted and the pairing QR endpoint is unavailable.
       responses: { "200": { description: Target configurations and status, content: { application/json: { schema: { $ref: "#/components/schemas/ObjectResponse" } } } } }
     post:
       operationId: createTarget
@@ -502,7 +503,7 @@ paths:
     parameters: [{ name: targetId, in: path, required: true, schema: { type: string } }]
     post:
       operationId: regenerateTargetPairing
-      description: Generates a new HomeKit PIN and Setup ID while preserving the existing HAP controller identity. Confirmation must equal REGENERATE followed by the target ID.
+      description: Generates a new HomeKit PIN and Setup ID only while the target is unpaired. Paired targets must clear their pairing identity instead. Confirmation must equal REGENERATE followed by the target ID.
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ConfirmationRequest" } } } }
       responses: { "200": { description: Updated Target }, "400": { $ref: "#/components/responses/BadRequest" }, "404": { $ref: "#/components/responses/NotFound" } }
   /api/v1/targets/{targetId}/pairing-identity:

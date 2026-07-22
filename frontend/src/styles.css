@@ -915,6 +915,8 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .pairing-panel strong { margin-top: 12px; font-size: 14px; }
 .pairing-panel span { max-width: 220px; margin-top: 7px; color: #858980; font-size: 11px; line-height: 1.5; }
 .pairing-panel.is-unavailable { color: #989b94; }
+.pairing-panel.is-paired { background: linear-gradient(145deg, #e7ece1, #f0eee7); }
+.paired-mark { display: grid; width: 62px; height: 62px; place-items: center; border: 1px solid #71856a; border-radius: 50%; color: #526c4c; font-size: 30px; }
 .qr-placeholder { display: grid; width: 150px; height: 150px; place-items: center; border: 1px dashed #afb2aa; font-size: 30px; letter-spacing: .1em; }
 .show-qr, .hide-qr { margin-top: 16px; background: #f3f1e9; }
 .modal-backdrop { position: fixed; z-index: 10; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(31, 34, 29, .58); overflow: auto; }

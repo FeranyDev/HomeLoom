@@ -21,6 +21,7 @@ export interface Target {
 	setupId?: string
   pairingCode?: string
   setupUri?: string
+	paired?: boolean
   deviceIds: string[]
 	devices: TargetVirtualDevice[]
 }

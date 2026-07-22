@@ -1158,6 +1158,8 @@ func (t *Target) ID() string { return t.id }
 
 func (t *Target) PairingInfo() PairingInfo { return t.pairing }
 
+func (t *Target) IsPaired() bool { return t.server.IsPaired() }
+
 func (t *Target) Start(ctx context.Context) error {
 	t.logger.Info("HomeKit target started", "address", t.server.Addr, "pairing_pin", formatPin(t.pin))
 	err := t.server.ListenAndServe(ctx)

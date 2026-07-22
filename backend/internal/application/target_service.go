@@ -31,6 +31,7 @@ type TargetInfo struct {
 	SetupID     string                       `json:"setupId,omitempty"`
 	PairingCode string                       `json:"pairingCode,omitempty"`
 	SetupURI    string                       `json:"setupUri,omitempty"`
+	Paired      bool                         `json:"paired"`
 	DeviceIDs   []string                     `json:"deviceIds"`
 	Devices     []domaintarget.VirtualDevice `json:"devices"`
 	Error       string                       `json:"error,omitempty"`
@@ -66,6 +67,7 @@ type TargetRuntime interface {
 	Apply(context.Context, domaintarget.Config) (TargetRegistration, error)
 	Remove(context.Context, string) error
 	ResetPairing(context.Context, domaintarget.Config) (TargetRegistration, error)
+	IsPaired(domaintarget.Config) bool
 }
 
 func NewTargetService(registrations []TargetRegistration, store TargetStore, configs ...domaintarget.Config) *TargetService {
@@ -104,6 +106,11 @@ func (s *TargetService) Refresh(ctx context.Context) error {
 			return fmt.Errorf("refresh target %q: %w", item.ID, err)
 		}
 		registration.Info.ConsumerID = targetConsumerID(item.Type)
+		descriptor, _ := domaintarget.DescriptorForType(item.Type)
+		if descriptor.SupportsHomeKitPairing {
+			registration.Info.Paired = runtime.IsPaired(item)
+			registration.Info = pairingSafeInfo(registration.Info)
+		}
 		s.mu.Lock()
 		s.targets[item.ID] = registration
 		s.mu.Unlock()
@@ -114,6 +121,25 @@ func (s *TargetService) Refresh(ctx context.Context) error {
 
 func (s *TargetService) Save(ctx context.Context, item domaintarget.Config) (TargetInfo, error) {
 	s.mu.RLock()
+	existing, editing := s.configs[item.ID]
+	runtime := s.runtime
+	if editing && item.Type != existing.Type {
+		s.mu.RUnlock()
+		return TargetInfo{}, NewValidationError("invalid target configuration", map[string]string{"type": "cannot be changed after the target is created"})
+	}
+	wasPaired := editing && s.targets[item.ID].Info.Paired
+	descriptor, _ := domaintarget.DescriptorForType(existing.Type)
+	if editing && descriptor.SupportsHomeKitPairing && runtime != nil {
+		wasPaired = runtime.IsPaired(existing)
+	}
+	if editing {
+		if item.Pin == "" || wasPaired {
+			item.Pin = existing.Pin
+		}
+		if item.SetupID == "" || wasPaired {
+			item.SetupID = existing.SetupID
+		}
+	}
 	item, err := s.withDefaults(item)
 	s.mu.RUnlock()
 	if err != nil {
@@ -159,6 +185,11 @@ func (s *TargetService) Save(ctx context.Context, item domaintarget.Config) (Tar
 		registration.Info.PairingCode = homekitqr.FormatPairingCode(item.Pin)
 		registration.Info.SetupURI = uri
 		registration.QR = qr
+	}
+	descriptor, _ = domaintarget.DescriptorForType(item.Type)
+	if descriptor.SupportsHomeKitPairing && runtime != nil {
+		registration.Info.Paired = runtime.IsPaired(item)
+		registration.Info = pairingSafeInfo(registration.Info)
 	}
 	s.mu.Lock()
 	if _, exists := s.targets[item.ID]; !exists {
@@ -299,6 +330,8 @@ func (s *TargetService) Delete(ctx context.Context, id string) error {
 func (s *TargetService) RegeneratePairing(ctx context.Context, id string) (TargetInfo, error) {
 	s.mu.RLock()
 	config, ok := s.configs[id]
+	runtime := s.runtime
+	paired := ok && s.targets[id].Info.Paired
 	s.mu.RUnlock()
 	if !ok {
 		return TargetInfo{}, fmt.Errorf("%w: %s", ErrTargetNotFound, id)
@@ -306,6 +339,12 @@ func (s *TargetService) RegeneratePairing(ctx context.Context, id string) (Targe
 	descriptor, _ := domaintarget.DescriptorForType(config.Type)
 	if !descriptor.SupportsHomeKitPairing {
 		return TargetInfo{}, fmt.Errorf("target %q does not support HomeKit pairing", id)
+	}
+	if runtime != nil {
+		paired = runtime.IsPaired(config)
+	}
+	if paired {
+		return TargetInfo{}, errors.New("HomeKit target is already paired; clear the pairing identity before generating new setup parameters")
 	}
 	pin, err := randomString("0123456789", 8)
 	if err != nil {
@@ -430,22 +469,44 @@ func targetConsumerID(targetType string) string {
 
 func (s *TargetService) List() []TargetInfo {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 	result := make([]TargetInfo, 0, len(s.order))
 	for _, id := range s.order {
-		result = append(result, s.targets[id].Info)
+		info := s.targets[id].Info
+		if config, exists := s.configs[id]; exists && s.runtime != nil {
+			descriptor, _ := domaintarget.DescriptorForType(config.Type)
+			if descriptor.SupportsHomeKitPairing {
+				info.Paired = s.runtime.IsPaired(config)
+			}
+		}
+		result = append(result, pairingSafeInfo(info))
 	}
+	s.mu.RUnlock()
 	return result
 }
 
 func (s *TargetService) QR(id string) ([]byte, error) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 	registration, ok := s.targets[id]
-	if !ok || len(registration.QR) == 0 {
+	config, hasConfig := s.configs[id]
+	runtime := s.runtime
+	paired := ok && registration.Info.Paired
+	s.mu.RUnlock()
+	if hasConfig && runtime != nil {
+		paired = runtime.IsPaired(config)
+	}
+	if !ok || paired || len(registration.QR) == 0 {
 		return nil, errors.New("pairing QR code not found")
 	}
 	return append([]byte(nil), registration.QR...), nil
+}
+
+func pairingSafeInfo(info TargetInfo) TargetInfo {
+	if info.Paired {
+		info.SetupID = ""
+		info.PairingCode = ""
+		info.SetupURI = ""
+	}
+	return info
 }
 
 func (s *TargetService) SetStatus(id, status string) {

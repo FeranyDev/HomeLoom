@@ -746,7 +746,7 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [ ] 崩溃重启；
 - [ ] 日志转发；
 - [ ] 资源限制；
-- [ ] Matter Target；
+- [ ] Matter Target（详细方案见 [`matter-target-plan.md`](matter-target-plan.md)）；
 - [ ] Zigbee2MQTT/Tuya/ESPHome 评估。
 
 ## 16. 推荐执行顺序

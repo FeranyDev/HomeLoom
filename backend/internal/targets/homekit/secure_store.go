@@ -9,6 +9,18 @@ import (
 
 type secureFSStore struct{ path string }
 
+// HasPairings reports whether the persisted HAP identity has at least one
+// controller pairing. It is also used while a bridge is disabled, when no HAP
+// server exists to answer Server.IsPaired().
+func HasPairings(path string) (bool, error) {
+	store, err := newSecureFSStore(path)
+	if err != nil {
+		return false, err
+	}
+	keys, err := store.KeysWithSuffix(".pairing")
+	return len(keys) > 0, err
+}
+
 func newSecureFSStore(path string) (*secureFSStore, error) {
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		return nil, fmt.Errorf("create HomeKit identity directory: %w", err)

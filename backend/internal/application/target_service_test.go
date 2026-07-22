@@ -21,6 +21,7 @@ type targetStoreStub struct {
 type targetRuntimeStub struct {
 	applied []target.Config
 	reset   []target.Config
+	paired  map[string]bool
 }
 
 func (s *targetRuntimeStub) Apply(_ context.Context, item target.Config) (TargetRegistration, error) {
@@ -32,6 +33,7 @@ func (s *targetRuntimeStub) ResetPairing(_ context.Context, item target.Config) 
 	s.reset = append(s.reset, item)
 	return TargetRegistration{Info: TargetInfo{ID: item.ID, Type: item.Type, Name: item.Name, Enabled: item.Enabled, Status: "running", Address: item.Address, SetupID: item.SetupID, PairingCode: item.Pin, DeviceIDs: item.DeviceIDs, Devices: item.Devices}, QR: []byte("new-qr")}, nil
 }
+func (s *targetRuntimeStub) IsPaired(item target.Config) bool { return s.paired[item.ID] }
 
 func (s *targetStoreStub) SaveTarget(_ context.Context, item target.Config) error {
 	if s.saveErr != nil {
@@ -239,6 +241,48 @@ func TestTargetPairingMaintenancePreservesConfiguration(t *testing.T) {
 	}
 	if _, err := service.RegeneratePairing(ctx, "missing"); !errors.Is(err, ErrTargetNotFound) {
 		t.Fatalf("missing target error = %v", err)
+	}
+}
+
+func TestPairedTargetHidesAndLocksOneTimeSetupParameters(t *testing.T) {
+	ctx := context.Background()
+	config := target.Config{ID: "apple-main", Type: "apple-hap", Name: "Main", Enabled: true, Address: ":51826", Pin: "12345678", SetupID: "LOCK", StorePath: "data/hap/apple-main"}
+	store := &targetStoreStub{}
+	runtime := &targetRuntimeStub{paired: map[string]bool{config.ID: true}}
+	service := NewTargetService([]TargetRegistration{{Info: TargetInfo{
+		ID: config.ID, Type: config.Type, Name: config.Name, Enabled: true, Status: "running",
+		Address: config.Address, SetupID: config.SetupID, PairingCode: "123-45-678", SetupURI: "X-HM://secret",
+	}, QR: []byte("qr")}}, store, config)
+	service.SetRuntime(runtime)
+
+	items := service.List()
+	if len(items) != 1 || !items[0].Paired || items[0].SetupID != "" || items[0].PairingCode != "" || items[0].SetupURI != "" {
+		t.Fatalf("paired target info = %#v", items)
+	}
+	if _, err := service.QR(config.ID); err == nil {
+		t.Fatal("paired target exposed its setup QR")
+	}
+	if _, err := service.RegeneratePairing(ctx, config.ID); err == nil {
+		t.Fatal("paired target regenerated one-time setup parameters")
+	}
+
+	updated := config
+	updated.Name = "Renamed"
+	updated.Pin = "87654321"
+	updated.SetupID = "NEW1"
+	savedInfo, err := service.Save(ctx, updated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !savedInfo.Paired || savedInfo.SetupID != "" || savedInfo.PairingCode != "" {
+		t.Fatalf("paired Save() response = %#v", savedInfo)
+	}
+	if len(store.saved) != 1 || store.saved[0].Pin != config.Pin || store.saved[0].SetupID != config.SetupID || store.saved[0].Name != updated.Name {
+		t.Fatalf("saved paired target = %#v", store.saved)
+	}
+	updated.Type = "matter"
+	if _, err := service.Save(ctx, updated); err == nil {
+		t.Fatal("paired target changed its adapter type")
 	}
 }
 

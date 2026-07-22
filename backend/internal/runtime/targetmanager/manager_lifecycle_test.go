@@ -17,6 +17,7 @@ import (
 
 type lifecycleTarget struct {
 	pairing homekit.PairingInfo
+	paired  bool
 	started chan struct{}
 	stopped chan struct{}
 	exit    chan error
@@ -31,6 +32,7 @@ func newLifecycleTarget(id string) *lifecycleTarget {
 }
 
 func (t *lifecycleTarget) PairingInfo() homekit.PairingInfo { return t.pairing }
+func (t *lifecycleTarget) IsPaired() bool                   { return t.paired }
 
 func (t *lifecycleTarget) Start(ctx context.Context) error {
 	close(t.started)
@@ -138,6 +140,22 @@ func TestTargetConfigurationRemainsStableAcrossThreeReloads(t *testing.T) {
 		if current.SetupID != config.SetupID || current.StorePath != config.StorePath || current.Pin != config.Pin || len(current.DeviceIDs) != 1 || current.DeviceIDs[0] != "switch-1" {
 			t.Fatalf("configuration drifted across reloads: %#v", current)
 		}
+	}
+}
+
+func TestManagerReportsLivePairingState(t *testing.T) {
+	manager, factory := newLifecycleManager(t)
+	config := target.Config{ID: "paired", Type: "apple-hap", Name: "Paired", Enabled: true, Address: "127.0.0.1:0", Pin: "12345678", SetupID: "PAIR", StorePath: "data/hap/paired"}
+	registration, err := manager.Apply(context.Background(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if registration.Info.Paired || manager.IsPaired(config) {
+		t.Fatal("new target unexpectedly reported as paired")
+	}
+	factory.target(config.ID, 0).paired = true
+	if !manager.IsPaired(config) {
+		t.Fatal("manager did not observe the live HAP pairing state")
 	}
 }
 
