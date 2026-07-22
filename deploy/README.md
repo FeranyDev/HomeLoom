@@ -1,12 +1,12 @@
 # 容器部署
 
-`compose.yaml` 面向 Linux 主机，前后端保持独立镜像，但共享 host network：
+`compose.yaml` 面向 Linux 主机。React 管理界面已经嵌入 Go 二进制，只构建一个 HomeLoom 应用镜像：
 
 ```bash
-docker compose up --build -d
+HOMELOOM_VERSION=0.1.0 docker compose up --build -d
 ```
 
-管理界面位于 `http://主机地址:5173`，后端 API 位于 `8090`。PostgreSQL 17 数据保存在 `postgres-data` 卷；HomeKit HAP 身份和 HomeLoom 主密钥保存在 `homeloom-data` 卷。
+管理界面和后端 API 均由 `http://主机地址:8090` 提供。PostgreSQL 17 数据保存在 `postgres-data` 卷；HomeKit HAP 身份和 HomeLoom 主密钥保存在 `homeloom-data` 卷。
 
 ## 为什么使用 host network
 
@@ -33,7 +33,7 @@ docker compose exec backend homeloom -backup /data/backups/homeloom.json
 
 恢复数据库前应备份两个数据卷并停止 backend，然后运行 `docker compose run --rm backend -restore /data/backups/homeloom.json -restore-replace`。恢复会先验证 snapshot schema 和主密钥，再以事务替换表数据并保留恢复前逻辑快照。
 
-管理 API 使用单管理员数据库 Session 和 CSRF 防护，Compose 中的后端仅信任来自 `127.0.0.1/32`、`::1/128` 的前端 Nginx 转发头。Nginx 会覆盖 `X-Forwarded-For` 和 `X-Forwarded-Proto`；直接访问 8090 的局域网客户端不能伪造来源来绕过登录限速。
+管理 API 使用单管理员数据库 Session 和 CSRF 防护。内嵌管理页面与 API 同源，不再需要内部 Nginx 转发。只有外部 HTTPS 反向代理的精确地址应该配置到 `HOMELOOM_TRUSTED_PROXIES`；直接访问 8090 的局域网客户端不能通过伪造转发头绕过登录限速。
 
 生产 HTTPS 代理应同时代理静态前端和 `/api`，覆盖而不是透传客户端提交的转发头，并将代理自身的精确 IP/CIDR 写入 `HOMELOOM_TRUSTED_PROXIES`。未配置可信代理时，HomeLoom 只使用 TCP 直连地址，且不会依据 `X-Forwarded-Proto` 设置 Secure Cookie。不要为了省事信任整个局域网网段。
 
@@ -54,7 +54,7 @@ proxy_set_header X-Forwarded-Proto $scheme;
 
 ## 架构与 NAS
 
-CI 会分别构建 `linux/amd64` 和 `linux/arm64` 的后端、前端镜像，并执行 Go 交叉编译。原生 Linux x86_64 与 ARM64 NAS 可以使用同一份 Compose；必须确认系统支持 host network、mDNS multicast 和 HAP 监听端口。Synology/QNAP 等 NAS 若通过自带反向代理提供管理页，HomeKit 后端仍需要 host network，不能只映射 8090。
+CI 会分别构建 `linux/amd64` 和 `linux/arm64` 的统一镜像，并实际交叉编译 Linux、macOS、Windows 的 amd64/arm64 单二进制。原生 Linux x86_64 与 ARM64 NAS 可以使用同一份 Compose；必须确认系统支持 host network、mDNS multicast 和 HAP 监听端口。Synology/QNAP 等 NAS 若通过自带反向代理提供管理页，HomeKit 服务仍需要 host network，不能只映射 8090。
 
 OpenWrt 的存储寿命、内存、Go 二进制体积和 mDNS 防火墙差异较大，目前只视为可行性评估目标，不列为受支持部署环境。
 

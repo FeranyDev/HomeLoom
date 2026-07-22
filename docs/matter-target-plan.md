@@ -14,6 +14,8 @@ HomeLoom 当前只有 `matter` Target 类型占位：运行时会明确拒绝启
 
 相比通过 Cgo 直接嵌入 ConnectedHomeIP，独立运行时可以隔离协议栈崩溃、降低 Go 构建复杂度，并允许 Matter SDK 独立升级。matter.js 的依赖版本必须固定到稳定版，不使用 nightly。
 
+> 打包边界：当前单二进制仅包含 Go 主服务和 React 管理界面。matter.js 是持续运行的 Node.js 协议栈，直接采用 sidecar 会打破“最终设备只运行一个二进制”的约束。进入 Matter Runtime 实现前必须先完成发布形态决策：验证 Node SEA 独立制品，或改用 ConnectedHomeIP 原生实现；如果最终要求严格的单进程单二进制，则不能直接沿用 Node.js sidecar 方案。
+
 参考资料：
 
 - [matter.js](https://github.com/matter-js/matter.js)
@@ -23,6 +25,7 @@ HomeLoom 当前只有 `matter` Target 类型占位：运行时会明确拒绝启
 ## 2. 技术验证
 
 - [ ] 建立独立的 `matter-runtime/` TypeScript 工程；
+- [ ] 明确 Matter Runtime 是否允许第二个自包含制品；若不允许，先切换为原生协议栈路线；
 - [ ] 固定稳定版 `@matter/main` 和 Node.js 最低版本；
 - [ ] 验证同一局域网内 on-network commissioning；
 - [ ] 验证 Apple Home、matter.js Controller 和 `chip-tool` 三种控制端；

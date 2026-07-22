@@ -1,6 +1,6 @@
 # HomeLoom
 
-HomeLoom 是一个前后端分离的智能设备聚合桥。当前 Demo 提供虚拟设备、REST API 和管理界面，用来验证设备模型与状态更新链路。
+HomeLoom 是一个源码层前后端分离、发布时合并为单二进制的智能设备聚合桥。当前 Demo 提供虚拟设备、REST API 和管理界面，用来验证设备模型与状态更新链路。
 
 ## 目录
 
@@ -56,7 +56,7 @@ Web 端只有这个管理员账户，用于接入、桥接、映射、诊断和�
 
 设备绑定为空时发布全部设备；指定设备后，该桥只发布选中的设备。YAML 不再接受 Target 配置，避免数据库和文件出现两个事实来源。
 
-前端“桥接中心”会显示所有 Target 的类型、状态、设备范围、配对码和二维码。二维码来自后端生成的标准 HomeKit Setup URI，并与桥的 Setup ID 保持一致。
+前端“桥接中心”会显示所有 Target 的类型、状态、设备范围和按需加载的二维码。二维码来自后端生成的标准 HomeKit Setup URI；桥完成配对后，一次性 PIN、Setup ID 和二维码会被隐藏。
 
 后端支持 `-config configs/config.example.yaml`。YAML 只包含进程启动所需的 HTTP 地址、可信代理范围、PostgreSQL URL 和主密钥路径，也可以使用以下环境变量覆盖：
 
@@ -75,18 +75,20 @@ Web 端只有这个管理员账户，用于接入、桥接、映射、诊断和�
 ./scripts/check.sh --race
 ```
 
-构建带版本信息的后端二进制和前端产物：
+将前端静态资源嵌入 Go，并构建带版本信息的本机单二进制：
 
 ```bash
-./scripts/build.sh
-./scripts/cross-build.sh # 校验 linux/amd64 与 linux/arm64 后端构建
+./scripts/build.sh 0.1.0
+./scripts/cross-build.sh 0.1.0
 ```
 
-默认版本由 Git tag/commit 生成，可使用 `HOMELOOM_VERSION`、`HOMELOOM_COMMIT` 和 `HOMELOOM_BUILD_TIME` 覆盖。运行时可通过 `GET /api/v1/system/version` 查看实际后端版本。
+版本号是必填位置参数；commit 和构建时间默认由 Git 与当前 UTC 时间生成，可使用 `HOMELOOM_COMMIT` 和 `HOMELOOM_BUILD_TIME` 覆盖。多平台脚本生成 Linux、macOS、Windows 的 amd64/arm64 单二进制及 `SHA256SUMS`。运行时可通过 `GET /api/v1/system/version` 查看实际版本。
 
 ```bash
 backend/bin/homeloom -version
 ```
+
+发布二进制直接在后端管理端口提供 Web UI，不需要 Node.js、Nginx 或独立前端目录。详细说明见 [`docs/packaging.md`](docs/packaging.md)。
 
 对实际二进制执行启动、HTTP 和优雅停止烟雾测试：
 

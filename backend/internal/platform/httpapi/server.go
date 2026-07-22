@@ -25,6 +25,7 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/mapping"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	"github.com/feranydev/homeloom/backend/internal/providers/xiaomi"
+	"github.com/feranydev/homeloom/backend/internal/webui"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 )
@@ -1549,6 +1550,20 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		}
 		return c.JSON(http.StatusOK, map[string]any{"data": command})
 	})
+	if assets := webui.Assets(); assets != nil {
+		ui := webui.NewHandler(assets)
+		serveUI := func(c echo.Context) error {
+			if !webui.IsApplicationPath(c.Request().URL.Path) {
+				return echo.ErrNotFound
+			}
+			ui.ServeHTTP(c.Response(), c.Request())
+			return nil
+		}
+		e.GET("/", serveUI)
+		e.HEAD("/", serveUI)
+		e.GET("/*", serveUI)
+		e.HEAD("/*", serveUI)
+	}
 
 	return server
 }

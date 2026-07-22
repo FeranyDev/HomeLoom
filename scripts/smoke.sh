@@ -44,7 +44,7 @@ stop_server() {
 }
 
 if [ ! -x "$BINARY" ]; then
-  echo "missing executable: $BINARY (run ./scripts/build.sh first)" >&2
+  echo "missing executable: $BINARY (run ./scripts/build.sh <version> first)" >&2
   exit 1
 fi
 if [ -z "$DATABASE_URL" ]; then

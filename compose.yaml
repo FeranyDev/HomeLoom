@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: deploy/backend.Dockerfile
       args:
-        VERSION: ${HOMELOOM_VERSION:-compose}
+        VERSION: ${HOMELOOM_VERSION:?HOMELOOM_VERSION must be set}
         COMMIT: ${HOMELOOM_COMMIT:-unknown}
         BUILD_TIME: ${HOMELOOM_BUILD_TIME:-unknown}
     network_mode: host
@@ -12,7 +12,6 @@ services:
       HOMELOOM_HTTP_ADDRESS: 0.0.0.0:8090
       HOMELOOM_DATABASE_URL: postgres://homeloom:${HOMELOOM_POSTGRES_PASSWORD:-homeloom-dev}@127.0.0.1:5432/homeloom?sslmode=disable
       HOMELOOM_MASTER_KEY: /data/homeloom.key
-      HOMELOOM_TRUSTED_PROXIES: 127.0.0.1/32,::1/128
       TZ: ${TZ:-Asia/Shanghai}
     volumes:
       - homeloom-data:/data
@@ -38,16 +37,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-    restart: unless-stopped
-
-  frontend:
-    build:
-      context: .
-      dockerfile: deploy/frontend.Dockerfile
-    network_mode: host
-    depends_on:
-      backend:
-        condition: service_healthy
     restart: unless-stopped
 
   mosquitto:

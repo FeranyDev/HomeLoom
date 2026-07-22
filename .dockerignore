@@ -2,11 +2,15 @@
 .github
 .cache
 backend/bin
+backend/.cache
+backend/internal/webui/dist
 backend/data
 backend/coverage.out
 frontend/node_modules
+frontend/coverage
 frontend/dist
+dist
 frontend/.npm-cache
 frontend/*.tsbuildinfo
+xiaomi-central-hub-client-oauth-tls-fix-source
 .DS_Store
-

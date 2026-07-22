@@ -1,6 +1,6 @@
 # HomeLoom 详细实施清单
 
-更新时间：2026-07-21
+更新时间：2026-07-22
 
 状态说明：
 
@@ -24,6 +24,9 @@
 - [x] 配置 CI 自动执行上述检查；
 - [x] 添加提交前快速检查脚本；
 - [x] 确定版本号注入方式。
+- [x] 版本号作为打包命令必填参数并通过 linker flags 注入；
+- [x] 前端静态资源嵌入 Go，发布为单二进制；
+- [x] Linux、macOS、Windows 的 amd64/arm64 多平台打包脚本；
 
 基线验收命令：
 
@@ -660,14 +663,13 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 ## 14. 部署
 
 - [x] 多阶段 Dockerfile；
-- [x] 前端静态文件镜像；
-- [x] 后端镜像；
+- [x] 前后端单二进制统一镜像；
 - [x] Compose 示例；
 - [x] 数据卷；
 - [x] host network HomeKit 示例；
 - [x] bridge network 限制说明；
-- [x] CI 构建 amd64 镜像；
-- [x] CI + Go 交叉构建 arm64 镜像/二进制；
+- [x] CI 构建 amd64/arm64 统一镜像；
+- [x] Go 交叉构建 Linux、macOS、Windows 的 amd64/arm64 单二进制；
 - [ ] Linux ARM64 实机；
 - [~] NAS 部署说明已补充，真实 Synology/QNAP 验收待完成；
 - [ ] OpenWrt 可行性验证；

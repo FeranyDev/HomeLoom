@@ -11,7 +11,7 @@ DESTINATION_DIR=${1:-$ROOT/backups}
 STAMP=$(date -u '+%Y%m%dT%H%M%SZ')
 DESTINATION="$DESTINATION_DIR/homeloom-$STAMP.json"
 
-if [ ! -x "$BINARY" ]; then echo "missing executable: $BINARY (run ./scripts/build.sh first)" >&2; exit 1; fi
+if [ ! -x "$BINARY" ]; then echo "missing executable: $BINARY (run ./scripts/build.sh <version> first)" >&2; exit 1; fi
 mkdir -p "$DESTINATION_DIR"
 HOMELOOM_DATABASE_URL="$DATABASE_URL" HOMELOOM_MASTER_KEY="$MASTER_KEY" "$BINARY" -backup "$DESTINATION"
 printf '%s\n' "$DESTINATION"

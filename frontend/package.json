@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:embed": "tsc -b && vite build --outDir ../backend/internal/webui/dist --emptyOutDir",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "lint": "eslint .",

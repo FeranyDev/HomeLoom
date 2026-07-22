@@ -16,4 +16,5 @@ cd "$ROOT"
 if [ "$RACE" = true ]; then
   ./scripts/dev-env.sh sh -c 'cd backend && go test -race -timeout 90s ./internal/provider ./internal/providers/mqtt ./internal/providers/virtual ./internal/providers/xiaomi ./internal/runtime/providermanager ./internal/runtime/targetmanager ./internal/application ./internal/platform/httpapi ./internal/targets/homekit'
 fi
-./scripts/dev-env.sh sh -c 'cd frontend && npm run test:coverage && npm run lint && npm run build'
+./scripts/dev-env.sh sh -c 'cd frontend && npm run test:coverage && npm run lint && npm run build:embed'
+./scripts/dev-env.sh sh -c 'cd backend && go test -tags embed_webui ./internal/webui ./internal/platform/httpapi'

@@ -12,7 +12,7 @@ REPLACE=${2:-}
 
 if [ -z "$SOURCE" ]; then echo "usage: $0 BACKUP_JSON [--replace]" >&2; exit 2; fi
 if [ "$REPLACE" != "" ] && [ "$REPLACE" != "--replace" ]; then echo "usage: $0 BACKUP_JSON [--replace]" >&2; exit 2; fi
-if [ ! -x "$BINARY" ]; then echo "missing executable: $BINARY (run ./scripts/build.sh first)" >&2; exit 1; fi
+if [ ! -x "$BINARY" ]; then echo "missing executable: $BINARY (run ./scripts/build.sh <version> first)" >&2; exit 1; fi
 if [ ! -f "$SOURCE" ]; then echo "backup not found: $SOURCE" >&2; exit 1; fi
 
 if [ "$REPLACE" = "--replace" ]; then

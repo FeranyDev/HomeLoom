@@ -3,6 +3,7 @@
 .vscode/
 
 backend/bin/
+backend/internal/webui/dist/
 backend/data/
 backend/coverage.out
 backups/
@@ -20,3 +21,4 @@ frontend/.npm-cache/
 frontend/*.tsbuildinfo
 frontend/vite.config.js
 frontend/vite.config.d.ts
+dist/
