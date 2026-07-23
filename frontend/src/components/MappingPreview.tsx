@@ -20,6 +20,32 @@ function defaultsFor(type: MappingTransformType): string {
   return '20'
 }
 
+function transformInputType(type: MappingTransformType): ValueType {
+  if (type === 'invert') return 'bool'
+  if (type === 'enum') return 'enum'
+  return 'number'
+}
+
+function enumOptions(profile: MappingProfileInfo, direction: MappingDirection): string[] {
+  const values = profile.transforms.flatMap((transform) => {
+    if (transform.type === 'enum') {
+      const entries = Object.entries(transform.values ?? {})
+      return direction === 'forward' ? entries.map(([source]) => source) : entries.map(([, target]) => String(target))
+    }
+    if (transform.type === 'range-enum' || transform.type === 'enum-number') return transform.bands?.map((band) => band.value) ?? []
+    if (transform.type === 'bool-enum' || transform.type === 'enum-bool') return [transform.trueValue, transform.falseValue].filter((item): item is string => Boolean(item))
+    return []
+  })
+  return [...new Set(values)]
+}
+
+function defaultInput(type: ValueType, options: string[] = []): string {
+  if (type === 'bool') return 'true'
+  if (type === 'string') return '示例文本'
+  if (type === 'enum') return options[0] ?? 'off'
+  return '20'
+}
+
 function inputValue(type: ValueType, raw: string): PropertyValue {
   if (type === 'bool') return { type, bool: raw === 'true' }
   if (type === 'int') return { type, int: Number(raw) }
@@ -42,8 +68,23 @@ export function MappingPreview({ runPreview = previewMapping, loadProfiles = lis
 	const [profileID, setProfileID] = useState('')
 	useEffect(() => { let active = true; void loadProfiles().then((items) => { if (active) setProfiles(items) }).catch(() => undefined); return () => { active = false } }, [loadProfiles, profileRevision])
 	const selectedProfile = profiles.find((item) => item.id === profileID)
+  const activeInputType = selectedProfile ? (direction === 'forward' ? selectedProfile.inputType : selectedProfile.outputType) : transformInputType(transformType)
+  const activeEnumOptions = selectedProfile && activeInputType === 'enum' ? enumOptions(selectedProfile, direction) : []
 
   const changeTransform = (next: MappingTransformType) => { setTransformType(next); setRawValue(defaultsFor(next)); setResult(null); setError(null) }
+  const changeProfile = (id: string) => {
+    const item = profiles.find((profile) => profile.id === id)
+    const type = item ? (direction === 'forward' ? item.inputType : item.outputType) : transformInputType(transformType)
+    setProfileID(id)
+    setRawValue(defaultInput(type, item && type === 'enum' ? enumOptions(item, direction) : []))
+    setResult(null); setError(null)
+  }
+  const changeDirection = (next: MappingDirection) => {
+    const type = selectedProfile ? (next === 'forward' ? selectedProfile.inputType : selectedProfile.outputType) : transformInputType(transformType)
+    setDirection(next)
+    setRawValue(defaultInput(type, selectedProfile && type === 'enum' ? enumOptions(selectedProfile, next) : []))
+    setResult(null); setError(null)
+  }
   const submit = async () => {
 		if (selectedProfile) {
 			const type = direction === 'forward' ? selectedProfile.inputType : selectedProfile.outputType
@@ -76,10 +117,18 @@ export function MappingPreview({ runPreview = previewMapping, loadProfiles = lis
     <div className="config-note"><span>执行方式</span><strong>无状态预览</strong><p>输入不会保存到数据库，也不会写入设备。正向（forward）模拟提供端（Provider）→ 能力 / 目标端（Capability / Target）；反向（reverse）模拟设备控制写回提供端（Provider）。</p></div>
     <div className="mapping-workbench">
       <form className="mapping-form" onSubmit={(event) => { event.preventDefault(); void submit() }}>
-		<label>转换配置（Profile）<select aria-label="预览 Profile" value={profileID} onChange={(event) => { const id = event.target.value; setProfileID(id); const item = profiles.find((profile) => profile.id === id); setRawValue(item && (item.inputType === 'bool' || item.outputType === 'bool') ? 'true' : '20'); setResult(null) }}><option value="">临时配置（Profile）</option>{profiles.map((item) => <option key={item.id} value={item.id}>{item.id} · 版本（v）{item.version}</option>)}</select></label>
+		<label>转换配置（Profile）<select aria-label="预览 Profile" value={profileID} onChange={(event) => changeProfile(event.target.value)}><option value="">临时配置（Profile）</option>{profiles.map((item) => <option key={item.id} value={item.id}>{item.id} · 版本（v）{item.version}</option>)}</select></label>
         {!selectedProfile && <label>转换类型（transform）<select aria-label="转换类型" value={transformType} onChange={(event) => changeTransform(event.target.value as MappingTransformType)}>{(['scale', 'invert', 'unit', 'enum', 'clamp'] as MappingTransformType[]).map((type) => <option key={type} value={type}>{transformTypeLabel(type)}</option>)}</select></label>}
-        <label>方向（direction）<select aria-label="映射方向" value={direction} onChange={(event) => { setDirection(event.target.value as MappingDirection); setResult(null) }}><option value="forward">正向（forward）</option><option value="reverse">反向写入（reverse）</option></select></label>
-		{selectedProfile ? ((direction === 'forward' ? selectedProfile.inputType : selectedProfile.outputType) === 'bool' ? <label>输入值<select aria-label="预览输入值" value={rawValue} onChange={(event) => setRawValue(event.target.value)}><option value="true">true</option><option value="false">false</option></select></label> : <label>输入值<input aria-label="预览输入值" value={rawValue} onChange={(event) => setRawValue(event.target.value)} /></label>) : transformType === 'invert' ? <label>输入值<select aria-label="预览输入值" value={rawValue} onChange={(event) => setRawValue(event.target.value)}><option value="true">true</option><option value="false">false</option></select></label> : transformType === 'enum' ? <label>输入值<input aria-label="预览输入值" value={rawValue} onChange={(event) => setRawValue(event.target.value)} placeholder={direction === 'forward' ? 'off / on' : 'inactive / active'} /></label> : <label>输入数值<input aria-label="预览输入值" required type="number" step="any" value={rawValue} onChange={(event) => setRawValue(event.target.value)} /></label>}
+        <label>方向（direction）<select aria-label="映射方向" value={direction} onChange={(event) => changeDirection(event.target.value as MappingDirection)}><option value="forward">正向（forward）</option><option value="reverse">反向写入（reverse）</option></select></label>
+        <label>输入值 · {valueTypeLabel(activeInputType)}
+          {activeInputType === 'bool'
+            ? <select aria-label="预览输入值" value={rawValue} onChange={(event) => setRawValue(event.target.value)}><option value="true">true</option><option value="false">false</option></select>
+            : activeInputType === 'enum' && activeEnumOptions.length > 0
+              ? <select aria-label="预览输入值" value={rawValue} onChange={(event) => setRawValue(event.target.value)}>{activeEnumOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select>
+              : activeInputType === 'int' || activeInputType === 'number'
+                ? <input aria-label="预览输入值" required type="number" step={activeInputType === 'int' ? '1' : 'any'} value={rawValue} onChange={(event) => setRawValue(event.target.value)} />
+                : <input aria-label="预览输入值" required value={rawValue} onChange={(event) => setRawValue(event.target.value)} placeholder={activeInputType === 'enum' ? '输入枚举值' : '输入文本'} />}
+        </label>
         {!selectedProfile && transformType === 'scale' && <><label>缩放系数<input aria-label="缩放系数" required type="number" step="any" value={factor} onChange={(event) => setFactor(Number(event.target.value))} /></label><label>偏移量<input aria-label="偏移量" required type="number" step="any" value={offset} onChange={(event) => setOffset(Number(event.target.value))} /></label></>}
         {!selectedProfile && transformType === 'clamp' && <><label>最小值<input aria-label="裁剪最小值" required type="number" step="any" value={minimum} onChange={(event) => setMinimum(Number(event.target.value))} /></label><label>最大值<input aria-label="裁剪最大值" required type="number" step="any" value={maximum} onChange={(event) => setMaximum(Number(event.target.value))} /></label></>}
         <button className="add-button" disabled={loading} type="submit">{loading ? '计算中…' : '运行预览'}</button>

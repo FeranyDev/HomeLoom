@@ -48,7 +48,8 @@ describe('ProviderCard simulation', () => {
 	it('shows central gateway local/cloud route metrics and device runtime mode', () => {
 		const central: Provider = { ...provider, id: 'xiaomi-main', type: 'xiaomi', name: '家庭中枢', config: { host: '192.168.1.50', port: 8883, oauth: { clientId: '1', oauthUuid: 'uuid', virtualDid: '2' }, clientId: '2', clientCertificate: '********', privateKey: '********', devices: [] }, metrics: { requests: 18, errors: 0, localRequests: 12, localFailures: 2, cloudFallbacks: 2, cloudRequests: 6, cloudMqttConfigured: 1, cloudMqttConnected: 1, cloudMqttMessagesReceived: 9 } }
 		const devices = [{ schemaVersion: 1, id: 'cloud-ac', providerId: central.id, name: 'Wi-Fi 空调', type: 'air-conditioner' as const, availability: 'online' as const, online: true, runtimeMode: 'cloud' as const, stateTransport: 'cloud-mqtt' as const, endpoints: [], lastUpdateAt: '' }]
-		render(<ProviderCard provider={central} devices={devices} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} />)
+		const { container } = render(<ProviderCard provider={central} devices={devices} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} />)
+		expect(container.querySelector('.provider-status-grid')?.children).toHaveLength(5)
 		expect(screen.getByText(/MQTT 本地优先 \/ OAuth 官方云回退/)).toBeInTheDocument()
 		expect(screen.getByText(/^累计请求/)).toHaveTextContent('18')
 		expect(screen.getByText(/^最终失败/)).toHaveTextContent('0')

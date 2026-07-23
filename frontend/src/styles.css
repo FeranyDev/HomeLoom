@@ -321,27 +321,37 @@ button:not(:disabled):active { transform: translateY(1px); }
   .target-form, .device-details { max-height: 100vh; min-height: 100vh; border-radius: 0; }
 }
 
-.profile-flow-guide {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr auto 1fr;
-  align-items: center;
-  padding: 18px 24px;
-  border: 1px solid var(--line);
-  background: rgba(253, 251, 246, .62);
-}
-.profile-flow-guide > div { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; align-items: center; }
-.profile-flow-guide > div > span { grid-row: 1 / 3; color: var(--moss); font: 28px Georgia, serif; }
-.profile-flow-guide strong { font-size: 13px; }
-.profile-flow-guide small { color: var(--muted); line-height: 1.45; }
-.profile-flow-guide > i { padding: 0 18px; color: var(--line-strong); font-style: normal; }
+.profile-tools-hero { display: grid; grid-template-columns: minmax(0, 1.12fr) minmax(360px, .88fr); overflow: hidden; border: 1px solid #343c33; background: #30372e; color: #f7f5ee; }
+.profile-tools-intro { padding: 34px 38px; }
+.profile-tools-intro .eyebrow { color: #aebcac; }
+.profile-tools-intro h2 { max-width: 650px; margin: 7px 0 12px; font: 500 clamp(28px, 3.2vw, 42px)/1.16 Georgia, 'Songti SC', serif; }
+.profile-tools-intro > p:not(.eyebrow) { max-width: 660px; margin: 0; color: #c3cbc0; font-size: 13px; line-height: 1.75; }
+.profile-tools-badges { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 22px; }
+.profile-tools-badges span { padding: 6px 9px; border: 1px solid #596457; color: #d7ded4; font-size: 9px; letter-spacing: .04em; }
+.profile-tools-journey { display: grid; align-content: center; gap: 0; margin: 0; padding: 22px 28px; border-left: 1px solid #50594e; background: rgba(255,255,255,.025); list-style: none; }
+.profile-tools-journey li { display: grid; position: relative; grid-template-columns: 38px 1fr; gap: 13px; align-items: center; min-height: 66px; }
+.profile-tools-journey li:not(:last-child)::after { content: ''; position: absolute; top: 52px; bottom: -14px; left: 18px; width: 1px; background: #5b6659; }
+.profile-tools-journey li > span { display: grid; z-index: 1; width: 36px; height: 36px; place-items: center; border: 1px solid #71806f; border-radius: 50%; background: #30372e; color: #dce5d8; font: 10px ui-monospace, monospace; }
+.profile-tools-journey li > div { display: grid; gap: 3px; }
+.profile-tools-journey strong { font-size: 13px; }
+.profile-tools-journey small { color: #aeb8ab; font-size: 10px; }
+.profile-tools-boundary { display: grid; grid-template-columns: minmax(0, 1fr) minmax(190px, .42fr) minmax(190px, .42fr); border: 1px solid var(--line); background: rgba(250, 249, 245, .72); }
+.profile-tools-boundary-copy { display: grid; align-content: center; gap: 4px; padding: 20px 24px; }
+.profile-tools-boundary-copy > span, .profile-tools-entry > span { color: var(--faint); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+.profile-tools-boundary-copy > strong { font-size: 13px; }
+.profile-tools-boundary-copy > p { margin: 2px 0 0; color: var(--muted); font-size: 11px; }
+.profile-tools-entry { display: grid; align-content: center; gap: 4px; padding: 17px 20px; border-left: 1px solid var(--line); background: rgba(236, 239, 232, .58); }
+.profile-tools-entry strong { color: var(--moss-deep); font-size: 14px; }
+.profile-tools-entry small { color: var(--muted); font-size: 10px; line-height: 1.45; }
 
 .profile-heading .add-button { color: #fff; border-color: var(--moss-deep); background: var(--moss); }
-.profile-visual-editor { gap: 0; padding: 0; overflow: hidden; border: 1px solid #8d9988; background: rgba(248, 247, 241, .96); }
-.profile-visual-editor > * { box-sizing: border-box; }
+.profile-visual-editor { grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 0; padding: 0; overflow: hidden; border: 1px solid #8d9988; background: rgba(248, 247, 241, .96); }
+.profile-visual-editor > * { min-width: 0; max-width: 100%; box-sizing: border-box; }
 .profile-editor-heading { display: flex; align-items: center; justify-content: space-between; padding: 24px 28px; border-bottom: 1px solid var(--line); background: #edefe9; }
+.profile-editor-heading > div { min-width: 0; }
 .profile-editor-heading h3 { margin: 2px 0 0; font-size: 24px; }
 .profile-editor-heading .eyebrow { margin: 0; }
-.profile-editor-heading > button { width: 38px; height: 38px; border: 1px solid var(--line); background: rgba(255,255,255,.5); color: var(--muted); font-size: 22px; cursor: pointer; }
+.profile-editor-heading > button { flex: 0 0 38px; width: 38px; height: 38px; border: 1px solid var(--line); background: rgba(255,255,255,.5); color: var(--muted); font-size: 22px; cursor: pointer; }
 .profile-editor-progress { display: grid; grid-template-columns: repeat(3, 1fr); margin: 0; padding: 0 28px; border-bottom: 1px solid var(--line); list-style: none; }
 .profile-editor-progress li { position: relative; display: flex; gap: 11px; align-items: center; padding: 18px 0; color: var(--faint); }
 .profile-editor-progress li:not(:last-child)::after { content: ''; position: absolute; right: 20px; width: calc(100% - 190px); height: 1px; background: var(--line); }
@@ -359,7 +369,7 @@ button:not(:disabled):active { transform: translateY(1px); }
 .profile-definition-card, .profile-pipeline-builder, .profile-preview-card { margin: 18px 28px 0; border: 1px solid var(--line); background: rgba(255,255,255,.42); }
 .profile-definition-card > header, .profile-pipeline-builder > header, .profile-preview-card > header { display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: center; padding: 17px 20px; border-bottom: 1px solid var(--line); }
 .profile-definition-card > header > span, .profile-pipeline-builder > header > span, .profile-preview-card > header > span { color: var(--moss); font: 22px Georgia, serif; }
-.profile-definition-card > header > div, .profile-pipeline-builder > header > div, .profile-preview-card > header > div { display: grid; gap: 3px; }
+.profile-definition-card > header > div, .profile-pipeline-builder > header > div, .profile-preview-card > header > div { display: grid; min-width: 0; gap: 3px; }
 .profile-definition-card header small, .profile-pipeline-builder header small, .profile-preview-card header small { color: var(--muted); }
 .profile-definition-grid { display: grid; grid-template-columns: 1.5fr 1fr .6fr 1fr 1fr; gap: 14px; padding: 20px; }
 .profile-definition-grid label, .profile-transform-fields label, .profile-unit-route, .profile-preview-layout form > label { display: grid; gap: 7px; color: var(--muted); font-size: 11px; }
@@ -439,13 +449,39 @@ button:not(:disabled):active { transform: translateY(1px); }
 .profile-json-editor textarea { width: 100%; box-sizing: border-box; padding: 15px; border: 1px solid var(--line-strong); background: #272c26; color: #e5e9e1; font: 12px/1.6 ui-monospace, monospace; resize: vertical; }
 .profile-json-editor p { margin: 0; color: var(--muted); font-size: 11px; }
 .profile-importer { padding: 24px; }
-.saved-profile-preview { display: grid; gap: 14px; padding-top: 18px; border-top: 1px solid var(--line); }
-.saved-profile-preview > header h3 { margin: 4px 0; font-size: 22px; }
-.saved-profile-preview > header > span { color: var(--muted); font-size: 11px; }
+.mapping-profile-tools > .profile-manager { gap: 0; border: 1px solid var(--line); background: rgba(250, 249, 245, .5); }
+.mapping-profile-tools > .profile-manager > .profile-heading { position: relative; padding-left: 86px; border: 0; border-bottom: 1px solid var(--line); background: #eeefe9; }
+.mapping-profile-tools > .profile-manager > .profile-heading::before { content: '01'; position: absolute; top: 24px; left: 26px; color: var(--moss); font: 28px Georgia, serif; }
+.mapping-profile-tools > .profile-manager > .profile-list { padding: 12px 18px 18px; }
+.mapping-profile-tools > .profile-manager > .profile-list article { gap: 6px; padding: 17px 18px; }
+.mapping-profile-tools > .profile-manager > .profile-list article > div { min-height: 28px; }
+.mapping-profile-tools > .profile-manager > .profile-editor { margin: 18px 18px 0; }
+.saved-profile-preview { display: grid; gap: 0; border: 1px solid var(--line); background: rgba(250, 249, 245, .52); }
+.saved-profile-preview > header { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 18px; align-items: start; padding: 23px 26px; border-bottom: 1px solid var(--line); background: #eeefe9; }
+.saved-profile-preview .profile-section-number { color: var(--moss); font: 28px Georgia, serif; }
+.saved-profile-preview > header > div { display: grid; gap: 3px; }
+.saved-profile-preview > header h3 { margin: 0; font-size: 22px; }
+.saved-profile-preview > header p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.saved-profile-preview > header > i { padding: 5px 8px; border: 1px solid #bfc8bb; color: var(--moss-deep); font-size: 9px; font-style: normal; }
+.saved-profile-preview > .mapping-preview { padding: 18px; }
+.saved-profile-preview .mapping-result { min-height: 280px; }
+.saved-profile-preview .mapping-result > .empty-state { display: grid; min-height: 100%; margin: 0; place-items: center; padding: 24px; border: 1px dashed var(--line-strong); background: transparent; color: var(--muted); line-height: 1.65; text-align: center; }
+
+@media (min-width: 901px) {
+  .saved-profile-preview .mapping-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .saved-profile-preview .mapping-form > label:first-child,
+  .saved-profile-preview .mapping-form > .field-error { grid-column: 1 / -1; }
+}
 
 @media (max-width: 900px) {
-  .profile-flow-guide { grid-template-columns: 1fr; gap: 10px; }
-  .profile-flow-guide > i { display: none; }
+  .profile-tools-hero { grid-template-columns: 1fr; }
+  .profile-tools-journey { grid-template-columns: repeat(3, 1fr); border-top: 1px solid #50594e; border-left: 0; }
+  .profile-tools-journey li { grid-template-columns: 38px 1fr; }
+  .profile-tools-journey li:not(:last-child)::after { top: 33px; right: -6px; bottom: auto; left: 45px; width: calc(100% - 32px); }
+  .profile-tools-boundary { grid-template-columns: 1fr 1fr; }
+  .profile-tools-boundary-copy { grid-column: 1 / -1; }
+  .profile-tools-entry { border-top: 1px solid var(--line); }
+  .profile-tools-entry:nth-child(2) { border-left: 0; }
   .profile-definition-grid { grid-template-columns: 1fr 1fr; }
   .profile-derived-output { grid-column: 1 / -1; }
   .profile-preview-layout { grid-template-columns: 1fr; }
@@ -453,6 +489,19 @@ button:not(:disabled):active { transform: translateY(1px); }
 }
 
 @media (max-width: 600px) {
+  .profile-tools-intro { padding: 26px 22px; }
+  .profile-tools-journey { grid-template-columns: 1fr; padding: 14px 22px; }
+  .profile-tools-journey li:not(:last-child)::after { top: 50px; right: auto; bottom: -16px; left: 18px; width: 1px; }
+  .profile-tools-boundary { grid-template-columns: 1fr; }
+  .profile-tools-boundary-copy { grid-column: auto; }
+  .profile-tools-entry { border-top: 1px solid var(--line); border-left: 0; }
+  .mapping-profile-tools > .profile-manager > .profile-heading { padding-left: 22px; padding-top: 70px; }
+  .mapping-profile-tools > .profile-manager > .profile-heading::before { top: 22px; left: 22px; }
+  .mapping-profile-tools > .profile-manager > .profile-list { padding: 12px; }
+  .mapping-profile-tools > .profile-manager > .profile-editor { margin: 0 12px 12px; }
+  .saved-profile-preview > header { grid-template-columns: auto 1fr; padding: 20px 22px; }
+  .saved-profile-preview > header > i { grid-column: 2; justify-self: start; }
+  .saved-profile-preview > .mapping-preview { padding: 12px; }
   .profile-editor-heading, .profile-editor-actions { padding-left: 18px; padding-right: 18px; }
   .profile-editor-progress { grid-template-columns: 1fr; padding: 10px 18px; }
   .profile-editor-progress li { padding: 7px 0; }
@@ -628,10 +677,10 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .provider-error p { margin: 0 0 5px; }
 .provider-error small { color: #8b6a5f; font-size: 10px; }
 .system-dashboard { display: grid; gap: 18px; }
-.metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
-.metric-grid article { display: grid; gap: 20px; min-height: 128px; padding: 19px; border: 1px solid #d2d0c7; background: rgba(250, 249, 245, .72); }
+.metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.metric-grid article { display: grid; gap: 12px; min-height: 96px; padding: 15px 17px; border: 1px solid #d2d0c7; background: rgba(250, 249, 245, .72); }
 .metric-grid span { color: #858981; font-size: 11px; }
-.metric-grid strong { align-self: end; font-size: 34px; font-weight: 500; }
+.metric-grid strong { align-self: end; font-size: 28px; font-weight: 500; }
 .queue-card { display: grid; gap: 13px; padding: 24px; border: 1px solid #d2d0c7; background: rgba(250, 249, 245, .72); }
 .queue-card > div:first-child { display: flex; justify-content: space-between; }
 .queue-card small, .command-heading span { color: #898d85; font-size: 11px; }
@@ -846,6 +895,9 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .profile-heading p:not(.eyebrow) { max-width: 620px; margin-bottom: 0; color: #777b73; }
 .profile-heading > div:last-child { display: flex; align-items: start; flex-wrap: wrap; justify-content: end; gap: 8px; }
 .profile-heading button, .profile-heading a, .profile-list button { padding: 8px 11px; border: 1px solid #c5c6be; background: transparent; color: #4f544c; font: inherit; text-decoration: none; cursor: pointer; }
+.profile-list-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; padding: 18px 20px 0; }
+.profile-list-heading strong { font-size: 14px; }
+.profile-list-heading span { color: #898d85; font-size: 10px; }
 .profile-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
 .profile-list article { display: grid; gap: 8px; padding: 20px; border: 1px solid #d2d0c7; background: rgba(250, 249, 245, .72); }
 .profile-list article > span, .profile-list article > small { color: #898d85; font-size: 11px; }
@@ -1013,7 +1065,7 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .provider-card__actions button { padding: 8px 11px; border: 1px solid #c1c2ba; background: transparent; color: #555a51; cursor: pointer; }
 .provider-card__actions button:disabled { opacity: .5; cursor: wait; }
 .provider-card__actions .is-danger { color: #945a4b; }
-.provider-status-grid { display: grid; grid-template-columns: repeat(4, 1fr); }
+.provider-status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
 .provider-status-grid > div { display: grid; gap: 7px; min-height: 128px; padding: 22px 24px; border-right: 1px solid #dedcd4; }
 .provider-status-grid > div:last-child { border-right: 0; }
 .provider-status-grid span { color: #8c9088; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
@@ -1057,11 +1109,11 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .xiaomi-hub-device-list article select { min-width: 145px; }
 .xiaomi-hub-device-list button.is-danger { border-color: #b98b80; color: #945a4b; }
 .xiaomi-mapped-summary { display: grid; gap: 4px; padding-top: 3px; }
-.xiaomi-mapped-summary__devices { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px; margin-top: 7px; }
-.xiaomi-mapped-summary__devices button { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; padding: 10px 12px; border: 1px solid #d8d6cf; background: rgba(255,255,255,.58); text-align: left; }
+.xiaomi-mapped-summary__devices { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 8px; margin-top: 7px; }
+.xiaomi-mapped-summary__devices button { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; padding: 12px 14px; border: 1px solid #d8d6cf; background: rgba(255,255,255,.58); text-align: left; }
 .xiaomi-mapped-summary__devices button span { font-weight: 600; }
-.xiaomi-mapped-summary__devices button code { grid-column: 1; overflow: hidden; color: #6c7169; text-overflow: ellipsis; }
-.xiaomi-mapped-summary__devices button small { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+.xiaomi-mapped-summary__devices button code, .xiaomi-mapped-summary__devices button small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.xiaomi-mapped-summary__devices button code { color: #6c7169; }
 .xiaomi-connection-flow { display: grid; gap: 16px; }
 .xiaomi-connection-step { display: grid; gap: 18px; padding: 20px; border: 1px solid #cbc9c0; background: rgba(247,246,240,.82); }
 .xiaomi-connection-step.is-locked { opacity: .62; }

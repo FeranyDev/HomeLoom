@@ -19,6 +19,27 @@ describe('ProfileManager', () => {
     expect(api.update).toHaveBeenCalledWith('custom-map', expect.objectContaining({ id: 'custom-map', version: 2 }))
   })
 
+  it('places editable profiles first and opens the editor before the saved list', async () => {
+    const targetCustom = { ...custom, id: 'target-custom', kind: 'target' as const }
+    const providerCustom = { ...custom, id: 'provider-custom', kind: 'provider' as const }
+    const api = { list: vi.fn().mockResolvedValue([builtIn, targetCustom, providerCustom, custom]), create: vi.fn(), update: vi.fn(), remove: vi.fn(), importMany: vi.fn() }
+    const { container } = render(<ProfileManager api={api} />)
+    await screen.findByText('builtin-active-low')
+
+    expect([...container.querySelectorAll<HTMLElement>('.profile-list article > strong')].map((item) => item.textContent)).toEqual([
+      'provider-custom',
+      'custom-map',
+      'target-custom',
+      'builtin-active-low',
+    ])
+
+    await userEvent.click(screen.getByRole('button', { name: '＋ 新建转换配置' }))
+    const manager = container.querySelector('.profile-manager')!
+    const editor = screen.getByLabelText('新建 Profile')
+    const listHeading = screen.getByText('已保存配置').closest('.profile-list-heading')!
+    expect([...manager.children].indexOf(editor)).toBeLessThan([...manager.children].indexOf(listHeading))
+  })
+
   it('keeps raw JSON available as an advanced editing mode', async () => {
     const api = { list: vi.fn().mockResolvedValue([custom]), create: vi.fn(), update: vi.fn().mockResolvedValue({ ...custom, version: 2 }), remove: vi.fn(), importMany: vi.fn() }
     render(<ProfileManager api={api} />)

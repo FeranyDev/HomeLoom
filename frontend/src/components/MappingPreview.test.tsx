@@ -32,4 +32,38 @@ describe('MappingPreview', () => {
 		expect(runPreview).toHaveBeenCalledWith({ profileId: 'saved-map', direction: 'forward', value: { type: 'bool', bool: true } })
 		expect(screen.getByText(/最终输出.*bool/).parentElement).toHaveTextContent('false')
 	})
+
+	it('changes the saved-profile input control with the active direction type', async () => {
+		const runPreview = vi.fn().mockResolvedValue({ profileId: 'threshold-map', profileVersion: 2, direction: 'forward', value: { type: 'bool', bool: true }, steps: [] })
+		render(<MappingPreview runPreview={runPreview} loadProfiles={async () => [{ schemaVersion: 1, id: 'threshold-map', version: 2, kind: 'capability', inputType: 'number', outputType: 'bool', transforms: [{ type: 'threshold', threshold: 50 }], builtIn: false }]} />)
+		await userEvent.selectOptions(await screen.findByLabelText('预览 Profile'), 'threshold-map')
+
+		expect(screen.getByText(/输入值.*数值（number）/)).toBeInTheDocument()
+		expect(screen.getByLabelText('预览输入值')).toHaveAttribute('type', 'number')
+		expect(screen.getByLabelText('预览输入值')).toHaveValue(20)
+		await userEvent.click(screen.getByRole('button', { name: '运行预览' }))
+		expect(runPreview).toHaveBeenLastCalledWith({ profileId: 'threshold-map', direction: 'forward', value: { type: 'number', number: 20 } })
+
+		await userEvent.selectOptions(screen.getByLabelText('映射方向'), 'reverse')
+		expect(screen.getByText(/输入值.*布尔值（bool）/)).toBeInTheDocument()
+		expect(screen.getByLabelText('预览输入值').tagName).toBe('SELECT')
+		expect(screen.getByLabelText('预览输入值')).toHaveValue('true')
+	})
+
+	it('offers known enum values for the selected saved profile', async () => {
+		render(<MappingPreview runPreview={vi.fn()} loadProfiles={async () => [{ schemaVersion: 1, id: 'mode-map', version: 1, kind: 'provider', inputType: 'enum', outputType: 'enum', transforms: [{ type: 'enum', values: { off: 'inactive', on: 'active' } }], builtIn: false }]} />)
+		await userEvent.selectOptions(await screen.findByLabelText('预览 Profile'), 'mode-map')
+		expect(screen.getByRole('option', { name: 'off' })).toBeInTheDocument()
+		expect(screen.getByRole('option', { name: 'on' })).toBeInTheDocument()
+		await userEvent.selectOptions(screen.getByLabelText('映射方向'), 'reverse')
+		expect(screen.getByRole('option', { name: 'inactive' })).toBeInTheDocument()
+		expect(screen.getByRole('option', { name: 'active' })).toBeInTheDocument()
+	})
+
+	it('uses enum-number bands as selectable incoming enum values', async () => {
+		render(<MappingPreview runPreview={vi.fn()} loadProfiles={async () => [{ schemaVersion: 1, id: 'fan-map', version: 1, kind: 'target', inputType: 'enum', outputType: 'number', transforms: [{ type: 'enum-number', bands: [{ value: 'low', reverse: 25 }, { value: 'high', reverse: 100 }] }], builtIn: false }]} />)
+		await userEvent.selectOptions(await screen.findByLabelText('预览 Profile'), 'fan-map')
+		expect(screen.getByRole('option', { name: 'low' })).toBeInTheDocument()
+		expect(screen.getByRole('option', { name: 'high' })).toBeInTheDocument()
+	})
 })

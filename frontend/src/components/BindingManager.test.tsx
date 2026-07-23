@@ -44,6 +44,39 @@ describe('BindingManager', () => {
     })))
   })
 
+  it('puts required capabilities and their required properties first in the mapping editor', async () => {
+    const baseModel = (await catalog()).models[0]
+    const optionalStatus = {
+      ...baseModel.parameters[0],
+      path: { endpointId: 'main', capabilityId: 'status', propertyId: 'fault' },
+      name: '故障',
+      level: 'optional' as const,
+      publisher: { level: 'optional' as const, behavior: 'publish-if-supported' },
+      consumer: { level: 'optional' as const, behavior: 'map-if-supported' },
+    }
+    const optionalLock = {
+      ...optionalStatus,
+      path: { endpointId: 'main', capabilityId: 'switch', propertyId: 'lock' },
+      name: '物理锁',
+    }
+    const requiredPower = baseModel.parameters[0]
+    const api = {
+      listBindings: vi.fn(async () => []), listProfiles: vi.fn(async () => []),
+      create: vi.fn(), update: vi.fn(), remove: vi.fn(),
+      catalog: vi.fn(async () => ({ ...(await catalog()), models: [{ ...baseModel, parameters: [optionalStatus, optionalLock, requiredPower] }] })),
+    }
+
+    const { container } = render(<BindingManager device={device} api={api} providerOnly />)
+    await screen.findByText('Virtual Switch · 来源属性映射')
+    await waitFor(() => expect(container.querySelectorAll('.mapping-lane.is-model .mapping-node-list button')).toHaveLength(3))
+
+    expect([...container.querySelectorAll<HTMLElement>('.mapping-lane.is-model .mapping-node-list button')].map((item) => item.textContent)).toEqual([
+      expect.stringContaining('power'),
+      expect.stringContaining('lock'),
+      expect.stringContaining('fault'),
+    ])
+  })
+
   it('loads an existing database override back into the visual editor', async () => {
     const current: MappingBinding = { id: 'current-route', stage: 'provider', providerId: device.providerId, deviceId: device.id, deviceType: 'switch', endpointId: 'main', capabilityId: 'switch', propertyId: 'power', modelEndpointId: 'main', modelCapabilityId: 'switch', modelPropertyId: 'power', enabled: true }
     const update = vi.fn(async (_id, input) => input)

@@ -38,6 +38,17 @@ const pathKey = (path: { endpointId: string; capabilityId: string; propertyId: s
 const routeError = (cause: unknown) => cause instanceof Error ? cause.message : '映射路由操作失败'
 const canonicalEnumToken = (value: string) => value.trim().toLowerCase().replace(/[\s_]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
 
+function orderModelParameters(parameters: MappingCatalog['models'][number]['parameters']) {
+  const capabilities = new Map<string, typeof parameters>()
+  for (const parameter of parameters) {
+    const key = `${parameter.path.endpointId}/${parameter.path.capabilityId}`
+    capabilities.set(key, [...(capabilities.get(key) ?? []), parameter])
+  }
+  return [...capabilities.values()]
+    .sort((left, right) => Number(right.some((item) => item.level === 'required')) - Number(left.some((item) => item.level === 'required')))
+    .flatMap((items) => [...items].sort((left, right) => Number(right.level === 'required') - Number(left.level === 'required')))
+}
+
 function compareEnumDomains(sourceDefinition?: PropertyDefinition, modelParameter?: MappingCatalog['models'][number]['parameters'][number]): EnumCompatibility {
   const source = sourceDefinition?.type === 'enum' ? sourceDefinition.enum ?? [] : []
   const target = modelParameter?.type === 'enum' ? modelParameter.enum ?? [] : []
@@ -120,7 +131,7 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
   const effectiveType = stage === 'provider' ? source?.deviceType ?? device.type : consumerDevice.type
   const targetConsumerType = consumerDeviceType ?? consumerDevice.type
   const model = catalog.models.find((item) => item.deviceType === effectiveType)
-  const parameters = useMemo(() => model?.parameters ?? [], [model])
+  const parameters = useMemo(() => orderModelParameters(model?.parameters ?? []), [model])
   const modelParameter = parameters.find((item) => pathKey(item.path) === modelKey)
   const consumerCatalogs = consumerId ? catalog.consumers.filter((item) => item.id === consumerId) : catalog.consumers
   const consumers = consumerCatalogs.flatMap((item) => item.properties.map((property) => ({ consumer: item, property }))).filter((item) => item.property.deviceType === targetConsumerType)
