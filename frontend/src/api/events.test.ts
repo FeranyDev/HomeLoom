@@ -66,4 +66,25 @@ describe('unified event stream', () => {
 		expect(handler).toHaveBeenCalledWith({ key: { deviceId: 'wanted' }, quality: 'reported' })
 		unsubscribe()
 	})
+
+	it('normalizes flat Matter target events before dispatching them', () => {
+		const handler = vi.fn()
+		const unsubscribe = subscribeEvents({ onTarget: handler })
+		const source = FakeEventSource.instances[0]
+
+		source.emit('target', {
+			id: 'matter-auto', type: 'matter', name: 'Matter', enabled: true, status: 'starting',
+			commissioningState: 'uncommissioned', commissioningWindowOpen: false,
+			networkInterface: 'en0', udpPort: 5540, fabricCount: 0, endpointCount: 0,
+		})
+
+		expect(handler).toHaveBeenCalledWith(expect.objectContaining({
+			id: 'matter-auto',
+			type: 'matter',
+			config: expect.objectContaining({ networkInterface: 'en0', udpPort: 5540 }),
+			commissioning: { state: 'uncommissioned', windowOpen: false, windowExpiresAt: undefined, manualPairingCode: undefined, setupPayload: undefined },
+		}))
+		expect(handler.mock.calls[0][0]).not.toHaveProperty('pairing')
+		unsubscribe()
+	})
 })

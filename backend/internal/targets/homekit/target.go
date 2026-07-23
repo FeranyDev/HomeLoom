@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"time"
 
@@ -164,13 +165,17 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 				a.Lightbulb.AddC(current.C)
 				bindings.brightness[item.ID] = current
 			}
-			if _, found := item.Property("main", "light", "color-temperature"); found {
+			if property, found := item.Property("main", "light", "color-temperature"); found {
 				current := characteristic.NewColorTemperature()
-				current.OnSetRemoteValue(func(value int) error {
-					return writeHomeKitProperty(devices, logger, deviceID, route, "light", "color-temperature", device.IntValue(int64(value)))
-				})
-				a.Lightbulb.AddC(current.C)
-				bindings.colorTemps[item.ID] = current
+				if !configureColorTemperatureRange(current, property.Definition) {
+					logger.Warn("device color temperature range does not overlap HomeKit", "device_id", item.ID, "min", property.Definition.Min, "max", property.Definition.Max)
+				} else {
+					current.OnSetRemoteValue(func(value int) error {
+						return writeHomeKitProperty(devices, logger, deviceID, route, "light", "color-temperature", device.IntValue(int64(value)))
+					})
+					a.Lightbulb.AddC(current.C)
+					bindings.colorTemps[item.ID] = current
+				}
 			}
 			if _, found := item.Property("main", "light", "hue"); found {
 				current := characteristic.NewHue()
@@ -499,6 +504,7 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 				bindings.batteryLevels[item.ID] = battery.BatteryLevel
 				bindings.lowBatteries[item.ID] = battery.StatusLowBattery
 			}
+			configureAccessoryNumericRanges(created, item, logger)
 			bindings.byDevice[item.ID] = created
 			bindings.update(item)
 		}
@@ -562,8 +568,11 @@ func (b *accessoryBindings) update(item device.Device) uint64 {
 	}
 	if current, ok := b.colorTemps[item.ID]; ok {
 		if property, found := item.Property("main", "light", "color-temperature"); found && property.Value.Int != nil {
-			_ = current.SetValue(int(*property.Value.Int))
-			pushes++
+			value := int(*property.Value.Int)
+			value = max(current.MinValue(), min(current.MaxValue(), value))
+			if current.SetValue(value) == nil {
+				pushes++
+			}
 		}
 	}
 	if current, ok := b.temperatures[item.ID]; ok {
@@ -799,6 +808,23 @@ func (b *accessoryBindings) update(item device.Device) uint64 {
 	}
 	pushes += b.updateExtended(item)
 	return pushes
+}
+
+func configureColorTemperatureRange(current *characteristic.ColorTemperature, definition device.PropertyDefinition) bool {
+	minimum, maximum := current.MinValue(), current.MaxValue()
+	if definition.Min != nil {
+		minimum = max(minimum, int(math.Ceil(*definition.Min)))
+	}
+	if definition.Max != nil {
+		maximum = min(maximum, int(math.Floor(*definition.Max)))
+	}
+	if minimum > maximum {
+		return false
+	}
+	current.SetMinValue(minimum)
+	current.SetMaxValue(maximum)
+	_ = current.SetValue(minimum)
+	return true
 }
 
 func writeHomeKitProperty(devices *application.DeviceService, logger *slog.Logger, deviceID string, route accessoryRoute, capabilityID, propertyID string, value device.PropertyValue) error {

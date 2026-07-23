@@ -85,6 +85,9 @@ type Target struct {
 
 	mu            sync.RWMutex
 	client        *Client
+	clientChanged chan struct{}
+	initialReady  chan struct{}
+	readyOnce     sync.Once
 	status        CommissioningState
 	setupURI      string
 	manualCode    string
@@ -127,8 +130,15 @@ func New(config Config, devices *application.DeviceService, storage Storage, log
 		config: config, devices: devices, storage: storage, logger: logger,
 		status:        CommissioningState{State: "uncommissioned"},
 		syncRequested: make(chan struct{}, 1),
+		clientChanged: make(chan struct{}),
+		initialReady:  make(chan struct{}),
 	}, nil
 }
+
+// Ready closes after the first runtime handshake, state replay, and status
+// refresh have completed. A socket connection alone is not sufficient because
+// commissioning RPCs require an authenticated and replayed session.
+func (t *Target) Ready() <-chan struct{} { return t.initialReady }
 
 func (t *Target) Start(ctx context.Context) error {
 	if err := os.MkdirAll(filepath.Dir(t.config.SocketPath), 0o700); err != nil {
@@ -175,7 +185,6 @@ func (t *Target) runOnce(ctx context.Context) (bool, error) {
 		<-processDone
 		return false, err
 	}
-	t.setClient(client)
 	defer func() {
 		t.clearClient(client)
 		_ = client.Close()
@@ -184,6 +193,11 @@ func (t *Target) runOnce(ctx context.Context) (bool, error) {
 		cancel()
 		<-processDone
 		return false, err
+	}
+	t.setClient(client)
+	t.readyOnce.Do(func() { close(t.initialReady) })
+	if t.config.OnStatus != nil {
+		t.config.OnStatus()
 	}
 	select {
 	case <-ctx.Done():
@@ -762,61 +776,69 @@ func (t *Target) virtualDevice(id string) (domaintarget.VirtualDevice, bool) {
 }
 
 func (t *Target) OpenCommissioningWindow(ctx context.Context, durationSeconds uint32) error {
-	client := t.currentClient()
-	if client == nil {
-		return ErrClosed
-	}
-	if err := client.Call(ctx, "commissioning.open", map[string]uint32{"durationSeconds": durationSeconds}, nil); err != nil {
+	ctx, cancel := t.runtimeOperationContext(ctx)
+	defer cancel()
+	if err := t.callRuntime(ctx, "commissioning.open", map[string]uint32{"durationSeconds": durationSeconds}, nil, true); err != nil {
 		return err
 	}
-	return t.refreshStatus(ctx, client)
+	return t.refreshCurrentStatus(ctx)
 }
 
 func (t *Target) CloseCommissioningWindow(ctx context.Context) error {
-	client := t.currentClient()
-	if client == nil {
-		return ErrClosed
-	}
-	if err := client.Call(ctx, "commissioning.close", map[string]any{}, nil); err != nil {
+	ctx, cancel := t.runtimeOperationContext(ctx)
+	defer cancel()
+	if err := t.callRuntime(ctx, "commissioning.close", map[string]any{}, nil, true); err != nil {
 		return err
 	}
-	return t.refreshStatus(ctx, client)
+	return t.refreshCurrentStatus(ctx)
 }
 
 func (t *Target) RemoveFabric(ctx context.Context, fabricID string) error {
-	client := t.currentClient()
-	if client == nil {
-		return ErrClosed
-	}
-	if err := client.Call(ctx, "fabric.remove", map[string]string{"fabricId": fabricID}, nil); err != nil {
+	ctx, cancel := t.runtimeOperationContext(ctx)
+	defer cancel()
+	if err := t.callRuntime(ctx, "fabric.remove", map[string]string{"fabricId": fabricID}, nil, false); err != nil {
 		return err
 	}
-	return t.refreshStatus(ctx, client)
+	return t.refreshCurrentStatus(ctx)
 }
 
 func (t *Target) FactoryReset(ctx context.Context) error {
-	client := t.currentClient()
-	if client == nil {
-		return ErrClosed
-	}
-	if err := client.Call(ctx, "identity.factoryReset", map[string]any{}, nil); err != nil {
+	ctx, cancel := t.runtimeOperationContext(ctx)
+	defer cancel()
+	if err := t.callRuntime(ctx, "identity.factoryReset", map[string]any{}, nil, false); err != nil {
 		return err
 	}
-	return t.refreshStatus(ctx, client)
+	return t.refreshCurrentStatus(ctx)
+}
+
+type runtimeStatus struct {
+	FabricCount             int             `json:"fabricCount"`
+	Fabrics                 []FabricSummary `json:"fabrics"`
+	CommissioningWindowOpen bool            `json:"commissioningWindowOpen"`
+	CommissioningExpiresAt  string          `json:"commissioningWindowExpiresAt"`
+	ManualPairingCode       string          `json:"manualPairingCode"`
+	QRPairingCode           string          `json:"qrPairingCode"`
 }
 
 func (t *Target) refreshStatus(ctx context.Context, client *Client) error {
-	var status struct {
-		FabricCount             int             `json:"fabricCount"`
-		Fabrics                 []FabricSummary `json:"fabrics"`
-		CommissioningWindowOpen bool            `json:"commissioningWindowOpen"`
-		CommissioningExpiresAt  string          `json:"commissioningWindowExpiresAt"`
-		ManualPairingCode       string          `json:"manualPairingCode"`
-		QRPairingCode           string          `json:"qrPairingCode"`
-	}
+	var status runtimeStatus
 	if err := client.Call(ctx, "runtime.status", map[string]any{}, &status); err != nil {
 		return err
 	}
+	t.applyRuntimeStatus(status)
+	return nil
+}
+
+func (t *Target) refreshCurrentStatus(ctx context.Context) error {
+	var status runtimeStatus
+	if err := t.callRuntime(ctx, "runtime.status", map[string]any{}, &status, true); err != nil {
+		return err
+	}
+	t.applyRuntimeStatus(status)
+	return nil
+}
+
+func (t *Target) applyRuntimeStatus(status runtimeStatus) {
 	t.mu.Lock()
 	t.status.FabricCount = status.FabricCount
 	t.status.Fabrics = append([]FabricSummary(nil), status.Fabrics...)
@@ -835,7 +857,6 @@ func (t *Target) refreshStatus(ctx context.Context, client *Client) error {
 		t.status.ManualPairingCode, t.status.SetupPayload = "", ""
 	}
 	t.mu.Unlock()
-	return nil
 }
 
 func (t *Target) Status() CommissioningState {
@@ -873,6 +894,8 @@ func removeFabric(fabrics []FabricSummary, id string) []FabricSummary {
 func (t *Target) setClient(client *Client) {
 	t.mu.Lock()
 	t.client = client
+	close(t.clientChanged)
+	t.clientChanged = make(chan struct{})
 	t.mu.Unlock()
 }
 
@@ -880,6 +903,8 @@ func (t *Target) clearClient(client *Client) {
 	t.mu.Lock()
 	if t.client == client {
 		t.client = nil
+		close(t.clientChanged)
+		t.clientChanged = make(chan struct{})
 	}
 	t.mu.Unlock()
 }
@@ -888,6 +913,56 @@ func (t *Target) currentClient() *Client {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.client
+}
+
+func (t *Target) runtimeOperationContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, hasDeadline := ctx.Deadline(); hasDeadline {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, t.config.StartWait)
+}
+
+func (t *Target) waitForClient(ctx context.Context) (*Client, error) {
+	for {
+		t.mu.RLock()
+		client, changed := t.client, t.clientChanged
+		t.mu.RUnlock()
+		if client != nil {
+			select {
+			case <-client.Done():
+				// clearClient rotates changed as runOnce unwinds.
+			default:
+				return client, nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("Matter Runtime is not ready: %w", ctx.Err())
+		case <-changed:
+		}
+	}
+}
+
+func (t *Target) callRuntime(ctx context.Context, method string, params, result any, retryOnDisconnect bool) error {
+	for {
+		client, err := t.waitForClient(ctx)
+		if err != nil {
+			return err
+		}
+		err = client.Call(ctx, method, params, result)
+		if err == nil {
+			return nil
+		}
+		if !retryOnDisconnect || ctx.Err() != nil {
+			return err
+		}
+		select {
+		case <-client.Done():
+			continue
+		default:
+			return err
+		}
+	}
 }
 
 func propertyValueJSON(value device.PropertyValue) any {
@@ -978,5 +1053,24 @@ func runtimeScriptPath() string {
 	if configured := strings.TrimSpace(os.Getenv("HOMELOOM_MATTER_RUNTIME")); configured != "" {
 		return configured
 	}
-	return filepath.Join("matter-runtime", "dist", "src", "cli.js")
+	relative := filepath.Join("matter-runtime", "dist", "src", "cli.js")
+	candidates := []string{relative, filepath.Join("..", relative)}
+	if executable, err := os.Executable(); err == nil {
+		directory := filepath.Dir(executable)
+		candidates = append(candidates,
+			filepath.Join(directory, relative),
+			filepath.Join(directory, "..", relative),
+			filepath.Join(directory, "..", "..", relative),
+		)
+	}
+	for _, candidate := range candidates {
+		absolute, err := filepath.Abs(candidate)
+		if err != nil {
+			continue
+		}
+		if info, err := os.Stat(absolute); err == nil && info.Mode().IsRegular() {
+			return absolute
+		}
+	}
+	return relative
 }

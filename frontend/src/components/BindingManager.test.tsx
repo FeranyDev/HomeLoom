@@ -18,6 +18,36 @@ describe('BindingManager', () => {
     consumers: [{ id: 'homekit', name: 'Apple Home / HomeKit', properties: [{ id: 'Switch.On', name: 'Switch.On', deviceType: 'switch' as const, defaultModelPath: { endpointId: 'main', capabilityId: 'switch', propertyId: 'power' }, level: 'required' as const, type: 'bool' as const, readable: true, writable: true, notifiable: true }] }],
   }))
 
+  it('shows source, transformed, consumer, and effective numeric ranges while configuring', async () => {
+    const light: Device = {
+      ...device, id: 'monitor-light', name: '显示器挂灯', type: 'lightbulb',
+      endpoints: [{ id: 'main', name: 'Main', type: 'main', capabilities: [{ id: 'light', type: 'light', properties: [{
+        definition: { id: 'color-temperature', name: '色温', type: 'int', unit: 'mired', readable: true, writable: true, notifiable: true, min: 154, max: 370, step: 1 },
+        value: { type: 'int', int: 250 },
+      }] }] }],
+    }
+    const api = {
+      listBindings: vi.fn(async () => []), listProfiles: vi.fn(async () => []), create: vi.fn(), update: vi.fn(), remove: vi.fn(),
+      catalog: vi.fn(async () => ({
+        providers: [{ ...light, catalog: { complete: true, source: 'device-snapshot' } }],
+        models: [{ deviceType: 'lightbulb' as const, version: 1, builtIn: true, custom: { publisher: { level: 'custom' as const, behavior: 'preserve' }, consumer: { level: 'custom' as const, behavior: 'explicit' } }, parameters: [{
+          path: { endpointId: 'main', capabilityId: 'light', propertyId: 'color-temperature' }, name: '色温', level: 'optional' as const, type: 'int' as const, unit: 'mired', min: 50, max: 1000, step: 1,
+          readable: true, writable: true, notifiable: true, publisher: { level: 'optional' as const, behavior: 'publish-if-supported' }, consumer: { level: 'optional' as const, behavior: 'map-if-supported' },
+        }] }],
+        consumers: [{ id: 'homekit', name: 'Apple Home / HomeKit', properties: [{
+          id: 'Lightbulb.ColorTemperature', name: 'Lightbulb.ColorTemperature', deviceType: 'lightbulb' as const,
+          defaultModelPath: { endpointId: 'main', capabilityId: 'light', propertyId: 'color-temperature' }, level: 'optional' as const, type: 'int' as const, unit: 'mired', min: 140, max: 500, step: 1,
+          readable: true, writable: true, notifiable: true,
+        }] }],
+      })),
+    }
+    render(<BindingManager device={light} api={api} initialStage="consumer" consumerOnly consumerId="homekit" />)
+    expect(await screen.findByText('数值范围（NUMERIC RANGE）')).toBeInTheDocument()
+    expect(screen.getAllByText('50 ～ 1000，步长 1 mired')).toHaveLength(2)
+    expect(screen.getAllByText('140 ～ 500，步长 1 mired')).toHaveLength(2)
+    expect(screen.getByText('140 ～ 500，步长 1 mired', { selector: '.is-effective code' })).toBeInTheDocument()
+  })
+
   it('shows an effective identity default and saves a device-specific override', async () => {
     const create = vi.fn(async (input) => ({ ...input, id: 'default-override' }))
     const api = {

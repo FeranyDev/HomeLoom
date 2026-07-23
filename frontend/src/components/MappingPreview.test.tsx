@@ -13,6 +13,38 @@ describe('MappingPreview', () => {
     expect(screen.getByText('20 → 68')).toBeInTheDocument()
   })
 
+  it('builds a reciprocal preview without extra parameters', async () => {
+    const runPreview = vi.fn().mockResolvedValue({ profileId: 'console-preview', profileVersion: 1, direction: 'forward', value: { type: 'number', number: 0.25 }, steps: [{ index: 0, transform: 'reciprocal', input: { type: 'number', number: 4 }, output: { type: 'number', number: 0.25 } }] })
+    render(<MappingPreview runPreview={runPreview} loadProfiles={async () => []} />)
+    await userEvent.selectOptions(screen.getByLabelText('转换类型'), 'reciprocal')
+    await userEvent.clear(screen.getByLabelText('预览输入值'))
+    await userEvent.type(screen.getByLabelText('预览输入值'), '4')
+    await userEvent.click(screen.getByRole('button', { name: '运行预览' }))
+
+    expect(runPreview).toHaveBeenCalledWith(expect.objectContaining({ value: { type: 'number', number: 4 }, profile: expect.objectContaining({ inputType: 'number', outputType: 'number', transforms: [{ type: 'reciprocal' }] }) }))
+    expect(await screen.findByText('4 → 0.25')).toBeInTheDocument()
+  })
+
+  it('builds int-number previews with direction-specific input types', async () => {
+    const runPreview = vi.fn()
+      .mockResolvedValueOnce({ profileId: 'console-preview', profileVersion: 1, direction: 'forward', value: { type: 'number', number: 20 }, steps: [] })
+      .mockResolvedValueOnce({ profileId: 'console-preview', profileVersion: 1, direction: 'reverse', value: { type: 'int', int: 20 }, steps: [] })
+    render(<MappingPreview runPreview={runPreview} loadProfiles={async () => []} />)
+
+    await userEvent.selectOptions(screen.getByLabelText('转换类型'), 'int-number')
+    expect(screen.getByText(/输入值.*整数（int）/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '运行预览' }))
+    expect(runPreview).toHaveBeenLastCalledWith(expect.objectContaining({
+      direction: 'forward', value: { type: 'int', int: 20 },
+      profile: expect.objectContaining({ inputType: 'int', outputType: 'number', transforms: [{ type: 'int-number' }] }),
+    }))
+
+    await userEvent.selectOptions(screen.getByLabelText('映射方向'), 'reverse')
+    expect(screen.getByText(/输入值.*数值（number）/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '运行预览' }))
+    expect(runPreview).toHaveBeenLastCalledWith(expect.objectContaining({ direction: 'reverse', value: { type: 'number', number: 20 } }))
+  })
+
   it('builds reverse enum previews', async () => {
     const runPreview = vi.fn().mockResolvedValue({ profileId: 'console-preview', profileVersion: 1, direction: 'reverse', value: { type: 'enum', string: 'on' }, steps: [] })
     render(<MappingPreview runPreview={runPreview} loadProfiles={async () => []} />)

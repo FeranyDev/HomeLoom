@@ -14,7 +14,7 @@ Matter 模式采用 Go 主服务加 Node.js 20+ sidecar。每个 Matter Target �
 ./scripts/dev-env.sh sh -c 'cd backend && go test ./...'
 ```
 
-Go 默认查找 `matter-runtime/dist/src/cli.js`。部署目录不同必须设置 `HOMELOOM_MATTER_RUNTIME` 为绝对路径。`HOMELOOM_MATTER_ADAPTER=fake` 只允许 IPC 自动测试；真实部署必须使用 `matter-js`，且 driver 不可用时应 fail closed。
+Go 默认从当前目录、当前目录的上一级，以及可执行文件目录附近查找 `matter-runtime/dist/src/cli.js`，因此从仓库根目录、`backend/` 或默认的 `backend/bin/` 启动均可发现 sidecar。其他部署布局必须设置 `HOMELOOM_MATTER_RUNTIME` 为绝对路径。`HOMELOOM_MATTER_ADAPTER=fake` 只允许 IPC 自动测试；真实部署必须使用 `matter-js`，且 driver 不可用时应 fail closed。
 
 `@matter/main` 0.17.6 的在线 factory reset 会在进程内重建 `ServerNode`，但该版本可能保留旧一代 shared mDNS 引用。sidecar 在 reset RPC 成功返回后会主动正常退出，由 Go Target supervisor 启动全新进程并执行握手与全量重放；这是身份轮换的一部分，不应被监控系统当作整套 HomeLoom 服务故障。
 

@@ -85,9 +85,76 @@ func consumerCatalog(id, name string, contracts []device.ConsumerModelContract) 
 				Enum:     append([]string(nil), parameter.Enum...),
 				Readable: parameter.Readable, Writable: parameter.Writable, Notifiable: parameter.Notifiable,
 			})
+			if id == "homekit" {
+				applyHomeKitNumericConstraints(&properties[len(properties)-1])
+			}
 		}
 	}
 	return ConsumerCatalog{ID: id, Name: name, Properties: properties}
+}
+
+type numericConstraints struct {
+	min  float64
+	max  float64
+	step float64
+}
+
+var homeKitNumericConstraints = map[string]numericConstraints{
+	"Lightbulb.Brightness":                           {0, 100, 1},
+	"Lightbulb.ColorTemperature":                     {140, 500, 1},
+	"Lightbulb.Hue":                                  {0, 360, 1},
+	"Lightbulb.Saturation":                           {0, 100, 1},
+	"TemperatureSensor.CurrentTemperature":           {0, 100, 0.1},
+	"HumiditySensor.CurrentRelativeHumidity":         {0, 100, 1},
+	"BatteryService.BatteryLevel":                    {0, 100, 1},
+	"FanV2.RotationSpeed":                            {0, 100, 1},
+	"AirPurifier.RotationSpeed":                      {0, 100, 1},
+	"AirQualitySensor.PM2.5Density":                  {0, 1000, 1},
+	"AirQualitySensor.PM10Density":                   {0, 1000, 1},
+	"AirQualitySensor.VOCDensity":                    {0, 1000, 1},
+	"AirQualitySensor.CarbonDioxideLevel":            {0, 100000, 1},
+	"AirQualitySensor.NitrogenDioxideDensity":        {0, 1000, 1},
+	"AirQualitySensor.OzoneDensity":                  {0, 1000, 1},
+	"FilterMaintenance.FilterLifeLevel":              {0, 100, 1},
+	"WindowCovering.CurrentPosition":                 {0, 100, 1},
+	"WindowCovering.TargetPosition":                  {0, 100, 1},
+	"LightSensor.CurrentAmbientLightLevel":           {0.0001, 100000, 0},
+	"CarbonMonoxideSensor.CarbonMonoxideLevel":       {0, 100, 0},
+	"CarbonMonoxideSensor.CarbonMonoxidePeakLevel":   {0, 100, 0},
+	"CarbonDioxideSensor.CarbonDioxideLevel":         {0, 100000, 0},
+	"CarbonDioxideSensor.CarbonDioxidePeakLevel":     {0, 100000, 0},
+	"Thermostat.CurrentTemperature":                  {0, 100, 0.1},
+	"Thermostat.TargetTemperature":                   {10, 38, 0.1},
+	"Thermostat.HeatingThresholdTemperature":         {0, 25, 0.1},
+	"Thermostat.CoolingThresholdTemperature":         {10, 35, 0.1},
+	"Thermostat.CurrentRelativeHumidity":             {0, 100, 1},
+	"HeaterCooler.CurrentTemperature":                {0, 100, 0.1},
+	"HeaterCooler.TargetTemperature":                 {0, 35, 0.1},
+	"HeaterCooler.HeatingThresholdTemperature":       {0, 25, 0.1},
+	"HeaterCooler.CoolingThresholdTemperature":       {10, 35, 0.1},
+	"HeaterCooler.RotationSpeed":                     {0, 100, 1},
+	"HumidifierDehumidifier.CurrentRelativeHumidity": {0, 100, 1},
+	"HumidifierDehumidifier.TargetHumidity":          {0, 100, 1},
+	"HumidifierDehumidifier.WaterLevel":              {0, 100, 1},
+	"Valve.SetDuration":                              {0, 3600, 1},
+	"Valve.RemainingDuration":                        {0, 3600, 1},
+	"Speaker.Volume":                                 {0, 100, 1},
+}
+
+func applyHomeKitNumericConstraints(property *ConsumerProperty) {
+	constraints, found := homeKitNumericConstraints[property.ID]
+	if !found {
+		return
+	}
+	property.Min, property.Max = consumerFloatPointer(constraints.min), consumerFloatPointer(constraints.max)
+	property.Step = nil
+	if constraints.step > 0 {
+		property.Step = consumerFloatPointer(constraints.step)
+	}
+}
+
+func consumerFloatPointer(value float64) *float64 {
+	return &value
 }
 
 func splitConsumerPath(value string) (string, string) {

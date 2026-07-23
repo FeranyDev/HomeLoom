@@ -67,8 +67,33 @@ func Preview(request PreviewRequest) (PreviewResult, error) {
 	if request.Direction == DirectionReverse {
 		finalType = request.Profile.InputType
 	}
-	if finalType == device.ValueTypeInt && current.Type == device.ValueTypeNumber && current.Number != nil && math.Trunc(*current.Number) == *current.Number {
-		current = device.IntValue(int64(*current.Number))
+	if finalType == device.ValueTypeInt && current.Type == device.ValueTypeNumber && current.Number != nil {
+		number := *current.Number
+		if math.Trunc(number) == number {
+			if number < math.MinInt64 || number > math.MaxInt64 {
+				return PreviewResult{}, &ValidationError{Fields: map[string]string{"value": "pipeline output is outside int64 range"}}
+			}
+			current = device.IntValue(int64(number))
+		} else if request.Direction == DirectionReverse {
+			for _, transform := range request.Profile.Transforms {
+				if transform.Type != TransformRound {
+					continue
+				}
+				switch transform.Mode {
+				case "floor":
+					number = math.Floor(number)
+				case "ceil":
+					number = math.Ceil(number)
+				default:
+					number = math.Round(number)
+				}
+				if number < math.MinInt64 || number > math.MaxInt64 {
+					return PreviewResult{}, &ValidationError{Fields: map[string]string{"value": "pipeline output is outside int64 range"}}
+				}
+				current = device.IntValue(int64(number))
+				break
+			}
+		}
 	}
 	if err := validateValue(current, finalType); err != nil {
 		return PreviewResult{}, &ValidationError{Fields: map[string]string{"value": "pipeline output: " + err.Error()}}
@@ -80,6 +105,13 @@ func applyForward(transform Transform, value device.PropertyValue) (device.Prope
 	switch transform.Type {
 	case TransformInvert:
 		return device.BoolValue(!*value.Bool), nil
+	case TransformReciprocal:
+		return reciprocalValue(value)
+	case TransformIntNumber:
+		if *value.Int < -maxSafeInteger || *value.Int > maxSafeInteger {
+			return device.PropertyValue{}, fmt.Errorf("int %d cannot be represented exactly as number", *value.Int)
+		}
+		return finiteNumber(float64(*value.Int))
 	case TransformScale:
 		number := numericValue(value)
 		return finiteNumber(number*float64Value(transform.Factor, 1) + float64Value(transform.Offset, 0))
@@ -99,8 +131,7 @@ func applyForward(transform Transform, value device.PropertyValue) (device.Prope
 		}
 		return stringValueForType(mapped, value.Type), nil
 	case TransformUnit:
-		factor, offset, _ := unitFormula(transform.FromUnit, transform.ToUnit)
-		return finiteNumber(numericValue(value)*factor + offset)
+		return convertUnitValue(transform.FromUnit, transform.ToUnit, numericValue(value))
 	case TransformRangeEnum:
 		number := numericValue(value)
 		for _, band := range transform.Bands {
@@ -171,6 +202,14 @@ func applyReverse(transform Transform, value device.PropertyValue, expected devi
 	switch transform.Type {
 	case TransformInvert:
 		return device.BoolValue(!*value.Bool), nil
+	case TransformReciprocal:
+		return reciprocalValue(value)
+	case TransformIntNumber:
+		number := numericValue(value)
+		if math.Trunc(number) != number || number < -float64(maxSafeInteger) || number > float64(maxSafeInteger) {
+			return device.PropertyValue{}, fmt.Errorf("number %v is not an exactly representable int", number)
+		}
+		return device.IntValue(int64(number)), nil
 	case TransformScale:
 		return finiteNumber((numericValue(value) - float64Value(transform.Offset, 0)) / float64Value(transform.Factor, 1))
 	case TransformClamp:
@@ -183,8 +222,7 @@ func applyReverse(transform Transform, value device.PropertyValue, expected devi
 		}
 		return device.PropertyValue{}, fmt.Errorf("enum value %q has no reverse mapping", *value.String)
 	case TransformUnit:
-		factor, offset, _ := unitFormula(transform.FromUnit, transform.ToUnit)
-		return finiteNumber((numericValue(value) - offset) / factor)
+		return convertUnitValue(transform.ToUnit, transform.FromUnit, numericValue(value))
 	case TransformRangeEnum:
 		for _, band := range transform.Bands {
 			if band.Value == *value.String {
@@ -244,6 +282,16 @@ func applyReverse(transform Transform, value device.PropertyValue, expected devi
 		return device.PropertyValue{}, fmt.Errorf("unsupported transform %q", transform.Type)
 	}
 }
+
+func reciprocalValue(value device.PropertyValue) (device.PropertyValue, error) {
+	number := numericValue(value)
+	if number == 0 {
+		return device.PropertyValue{}, fmt.Errorf("reciprocal is undefined for zero")
+	}
+	return finiteNumber(1 / number)
+}
+
+const maxSafeInteger int64 = 1<<53 - 1
 
 func validateValue(value device.PropertyValue, expected device.ValueType) error {
 	if value.Type != expected {
@@ -359,4 +407,29 @@ func unitFormula(from, to string) (factor, offset float64, ok bool) {
 	default:
 		return 0, 0, false
 	}
+}
+
+func unitConversionSupported(from, to string) bool {
+	if _, _, ok := unitFormula(from, to); ok {
+		return true
+	}
+	return nonlinearUnitConversion(from, to)
+}
+
+func nonlinearUnitConversion(from, to string) bool {
+	return (from == "kelvin" && to == "mired") || (from == "mired" && to == "kelvin")
+}
+
+func convertUnitValue(from, to string, value float64) (device.PropertyValue, error) {
+	if nonlinearUnitConversion(from, to) {
+		if value <= 0 {
+			return device.PropertyValue{}, fmt.Errorf("%s value must be greater than zero", from)
+		}
+		return finiteNumber(1_000_000 / value)
+	}
+	factor, offset, ok := unitFormula(from, to)
+	if !ok {
+		return device.PropertyValue{}, fmt.Errorf("unsupported unit conversion %q to %q", from, to)
+	}
+	return finiteNumber(value*factor + offset)
 }

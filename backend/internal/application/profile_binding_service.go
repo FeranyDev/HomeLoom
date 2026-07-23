@@ -230,7 +230,7 @@ func transformProviderPropertyDefinition(binding mapping.Binding, profile mappin
 			minimum, maximum = maximum, minimum
 		}
 		result.Min, result.Max = minimum, maximum
-		if definition.Step != nil {
+		if definition.Step != nil && !hasNonlinearNumericTransform(profile) {
 			zero, zeroErr := mapNumber(0)
 			stepped, stepErr := mapNumber(*definition.Step)
 			if zeroErr != nil || stepErr != nil {
@@ -246,6 +246,11 @@ func transformProviderPropertyDefinition(binding mapping.Binding, profile mappin
 				integerStep := 1.0
 				result.Step = &integerStep
 			}
+		} else if definition.Step != nil {
+			// Reciprocal conversions do not have a constant output increment.
+			// Sampling f(step)-f(0) is both misleading and undefined for
+			// Kelvin/mired, so let the unified-model definition supply its step.
+			result.Step = nil
 		}
 	}
 	if profile.InputType == device.ValueTypeEnum && profile.OutputType == device.ValueTypeEnum && len(definition.Enum) > 0 {
@@ -291,6 +296,20 @@ func transformProviderPropertyDefinition(binding mapping.Binding, profile mappin
 		}
 	}
 	return result, nil
+}
+
+func hasNonlinearNumericTransform(profile mapping.Profile) bool {
+	for _, transform := range profile.Transforms {
+		if transform.Type == mapping.TransformReciprocal {
+			return true
+		}
+		if transform.Type == mapping.TransformUnit &&
+			((transform.FromUnit == "kelvin" && transform.ToUnit == "mired") ||
+				(transform.FromUnit == "mired" && transform.ToUnit == "kelvin")) {
+			return true
+		}
+	}
+	return false
 }
 
 // ProjectProviderProperty returns the implicit identity route plus every

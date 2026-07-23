@@ -21,6 +21,8 @@ const (
 	KindTarget     ProfileKind = "target"
 
 	TransformInvert       TransformType = "invert"
+	TransformReciprocal   TransformType = "reciprocal"
+	TransformIntNumber    TransformType = "int-number"
 	TransformScale        TransformType = "scale"
 	TransformClamp        TransformType = "clamp"
 	TransformEnum         TransformType = "enum"
@@ -155,6 +157,16 @@ func Validate(profile Profile) error {
 			if current != device.ValueTypeBool {
 				fields[path] = "invert requires bool input"
 			}
+		case TransformReciprocal:
+			if !numericType(current) {
+				fields[path] = "reciprocal requires int or number input"
+			}
+			current = device.ValueTypeNumber
+		case TransformIntNumber:
+			if current != device.ValueTypeInt {
+				fields[path] = "int-number requires int input"
+			}
+			current = device.ValueTypeNumber
 		case TransformScale:
 			if !numericType(current) {
 				fields[path] = "scale requires int or number input"
@@ -205,7 +217,7 @@ func Validate(profile Profile) error {
 			if !numericType(current) {
 				fields[path] = "unit conversion requires int or number input"
 			}
-			if _, _, ok := unitFormula(transform.FromUnit, transform.ToUnit); !ok {
+			if !unitConversionSupported(transform.FromUnit, transform.ToUnit) {
 				fields[path] = "unsupported unit conversion"
 			}
 			current = device.ValueTypeNumber
@@ -406,7 +418,7 @@ func thresholdMatches(value, threshold float64, operator string) bool {
 
 func transformOutputType(input device.ValueType, transform Transform) device.ValueType {
 	switch transform.Type {
-	case TransformScale, TransformClamp, TransformUnit, TransformMapRange, TransformParseNumber, TransformEnumNumber, TransformBoolNumber:
+	case TransformReciprocal, TransformIntNumber, TransformScale, TransformClamp, TransformUnit, TransformMapRange, TransformParseNumber, TransformEnumNumber, TransformBoolNumber:
 		return device.ValueTypeNumber
 	case TransformRangeEnum, TransformBoolEnum:
 		return device.ValueTypeEnum

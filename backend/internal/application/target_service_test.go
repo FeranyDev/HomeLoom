@@ -21,6 +21,7 @@ type targetStoreStub struct {
 
 type targetRuntimeStub struct {
 	applied         []target.Config
+	removed         []string
 	reset           []target.Config
 	paired          map[string]bool
 	matterOperation string
@@ -30,6 +31,7 @@ type targetRuntimeStub struct {
 	endpointID      string
 	endpointType    device.Type
 	applyErr        error
+	removeErr       error
 }
 
 func (s *targetRuntimeStub) Apply(_ context.Context, item target.Config) (TargetRegistration, error) {
@@ -39,7 +41,10 @@ func (s *targetRuntimeStub) Apply(_ context.Context, item target.Config) (Target
 	}
 	return TargetRegistration{Info: TargetInfo{ID: item.ID, Type: item.Type, Name: item.Name, Enabled: item.Enabled, Status: "running", Address: item.Address, SetupID: item.SetupID, PairingCode: item.Pin, DeviceIDs: item.DeviceIDs, Devices: item.Devices}, QR: []byte("qr")}, nil
 }
-func (s *targetRuntimeStub) Remove(context.Context, string) error { return nil }
+func (s *targetRuntimeStub) Remove(_ context.Context, id string) error {
+	s.removed = append(s.removed, id)
+	return s.removeErr
+}
 func (s *targetRuntimeStub) ResetPairing(_ context.Context, item target.Config) (TargetRegistration, error) {
 	s.reset = append(s.reset, item)
 	return TargetRegistration{Info: TargetInfo{ID: item.ID, Type: item.Type, Name: item.Name, Enabled: item.Enabled, Status: "running", Address: item.Address, SetupID: item.SetupID, PairingCode: item.Pin, DeviceIDs: item.DeviceIDs, Devices: item.Devices}, QR: []byte("new-qr")}, nil
@@ -208,6 +213,41 @@ func TestTargetServiceListQRStatusAndDelete(t *testing.T) {
 	}
 	if len(service.List()) != 0 || len(store.deleted) != 1 {
 		t.Fatal("target was not deleted")
+	}
+}
+
+func TestTargetServiceDeleteRemovesProjectionAndPublishesTombstoneWhenRuntimeStopFails(t *testing.T) {
+	store := &targetStoreStub{}
+	runtime := &targetRuntimeStub{removeErr: errors.New("runtime stop timeout")}
+	service := NewTargetService(
+		[]TargetRegistration{{Info: TargetInfo{ID: "matter-main", Type: "matter", Name: "Matter", Status: "running"}}},
+		store,
+		target.Config{ID: "matter-main", Type: "matter", Name: "Matter"},
+	)
+	service.SetRuntime(runtime)
+	events := make(chan TargetInfo, 1)
+	unsubscribe := service.Subscribe(func(info TargetInfo) { events <- info })
+	defer unsubscribe()
+
+	if err := service.Delete(context.Background(), "matter-main"); err != nil {
+		t.Fatalf("Delete() = %v", err)
+	}
+	if len(service.List()) != 0 {
+		t.Fatalf("deleted target remains visible: %#v", service.List())
+	}
+	if len(store.deleted) != 1 || store.deleted[0] != "matter-main" {
+		t.Fatalf("store deletions = %#v", store.deleted)
+	}
+	if len(runtime.removed) != 1 || runtime.removed[0] != "matter-main" {
+		t.Fatalf("runtime removals = %#v", runtime.removed)
+	}
+	select {
+	case event := <-events:
+		if event.ID != "matter-main" || !event.Removed {
+			t.Fatalf("deletion event = %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("target deletion tombstone was not published")
 	}
 }
 

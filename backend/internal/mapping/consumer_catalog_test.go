@@ -30,6 +30,31 @@ func TestMeasurementSensorsKeepExplicitHomeKitSemantics(t *testing.T) {
 	}
 }
 
+func TestHomeKitCatalogPublishesProtocolNumericConstraints(t *testing.T) {
+	tests := []struct {
+		deviceType device.Type
+		propertyID string
+		min        float64
+		max        float64
+		step       float64
+	}{
+		{device.TypeLightbulb, "Lightbulb.ColorTemperature", 140, 500, 1},
+		{device.TypeTemperatureSensor, "TemperatureSensor.CurrentTemperature", 0, 100, 0.1},
+		{device.TypeAirQualitySensor, "AirQualitySensor.PM2.5Density", 0, 1000, 1},
+		{device.TypeThermostat, "Thermostat.HeatingThresholdTemperature", 0, 25, 0.1},
+		{device.TypeValve, "Valve.SetDuration", 0, 3600, 1},
+	}
+	for _, test := range tests {
+		property, found := FindConsumerProperty("homekit", test.deviceType, test.propertyID)
+		if !found || property.Min == nil || property.Max == nil || property.Step == nil {
+			t.Fatalf("HomeKit property %q constraints = %#v, found=%v", test.propertyID, property, found)
+		}
+		if *property.Min != test.min || *property.Max != test.max || *property.Step != test.step {
+			t.Errorf("HomeKit property %q range = %v..%v step %v; want %v..%v step %v", test.propertyID, *property.Min, *property.Max, *property.Step, test.min, test.max, test.step)
+		}
+	}
+}
+
 func TestConsumerContractRegistryDoesNotFallBackToHomeKit(t *testing.T) {
 	matter, found := ConsumerContract("matter", device.TypeSwitch)
 	if !found || matter.ConsumerID != "matter" || len(matter.Parameters) != 1 || matter.Parameters[0].Target != "OnOff.OnOff" {

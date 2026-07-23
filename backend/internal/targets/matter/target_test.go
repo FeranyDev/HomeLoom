@@ -280,6 +280,106 @@ func TestFactoryResetLeavesIdentityCleanupToRuntime(t *testing.T) {
 	}
 }
 
+func TestOpenCommissioningWaitsForRuntimeReconnect(t *testing.T) {
+	target, _ := newTestTarget(t, nil)
+	closedClientConn, closedRuntimeConn := net.Pipe()
+	closedClient := NewClient(closedClientConn, ClientOptions{DefaultTimeout: time.Second})
+	_ = closedClient.Close()
+	_ = closedRuntimeConn.Close()
+	target.setClient(closedClient)
+	t.Cleanup(func() {
+		target.clearClient(closedClient)
+		_ = closedClient.Close()
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { result <- target.OpenCommissioningWindow(ctx, 600) }()
+	select {
+	case err := <-result:
+		t.Fatalf("OpenCommissioningWindow() returned before reconnect: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	target.clearClient(closedClient)
+	clientConn, runtimeConn := net.Pipe()
+	client := NewClient(clientConn, ClientOptions{DefaultTimeout: time.Second})
+	target.setClient(client)
+	t.Cleanup(func() {
+		target.clearClient(client)
+		_ = client.Close()
+		_ = runtimeConn.Close()
+	})
+	go func() {
+		reader := bufio.NewReader(runtimeConn)
+		for _, expectedMethod := range []string{"commissioning.open", "runtime.status"} {
+			line, err := reader.ReadBytes('\n')
+			if err != nil {
+				return
+			}
+			var request rpcMessage
+			if json.Unmarshal(line, &request) != nil || request.Method != expectedMethod {
+				return
+			}
+			responseResult := json.RawMessage(`{}`)
+			if expectedMethod == "runtime.status" {
+				responseResult = json.RawMessage(`{"fabricCount":0,"commissioningWindowOpen":true,"manualPairingCode":"349701123","qrPairingCode":"MT:TEST"}`)
+			}
+			response, _ := json.Marshal(rpcMessage{JSONRPC: "2.0", ID: request.ID, Result: responseResult})
+			_, _ = runtimeConn.Write(append(response, '\n'))
+		}
+	}()
+
+	if err := <-result; err != nil {
+		t.Fatalf("OpenCommissioningWindow() after reconnect = %v", err)
+	}
+	if status := target.Status(); !status.WindowOpen || status.ManualPairingCode != "349701123" {
+		t.Fatalf("commissioning status = %#v", status)
+	}
+}
+
+func TestRuntimeScriptPathFindsRepositorySiblingFromBackendDirectory(t *testing.T) {
+	root := t.TempDir()
+	backendDirectory := filepath.Join(root, "backend")
+	runtimePath := filepath.Join(root, "matter-runtime", "dist", "src", "cli.js")
+	if err := os.MkdirAll(filepath.Dir(runtimePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(runtimePath, []byte("export {}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(backendDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	previousDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousOverride, hadOverride := os.LookupEnv("HOMELOOM_MATTER_RUNTIME")
+	if err := os.Unsetenv("HOMELOOM_MATTER_RUNTIME"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(backendDirectory); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(previousDirectory)
+		if hadOverride {
+			_ = os.Setenv("HOMELOOM_MATTER_RUNTIME", previousOverride)
+		} else {
+			_ = os.Unsetenv("HOMELOOM_MATTER_RUNTIME")
+		}
+	})
+
+	got := runtimeScriptPath()
+	gotInfo, gotErr := os.Stat(got)
+	wantInfo, wantErr := os.Stat(runtimePath)
+	if gotErr != nil || wantErr != nil || !os.SameFile(gotInfo, wantInfo) {
+		t.Fatalf("runtimeScriptPath() = %q, want file %q", got, runtimePath)
+	}
+}
+
 func TestFabricNotificationsMaintainSafeSummaries(t *testing.T) {
 	target, _ := newTestTarget(t, nil)
 	target.handleNotification("fabric.changed", json.RawMessage(`{"change":"added","fabricId":"1234","label":"Apple Home","fabricCount":1}`))

@@ -128,6 +128,8 @@ Core 会根据 Capability 中的 `CommandDefinition` 校验必填参数、未声
 `POST /api/v1/mapping/preview` 接受带 `schemaVersion`、稳定 ID、版本、Profile kind、输入/输出 typed value 类型和转换流水线的临时 Profile。预览是无状态操作，不保存 Profile，也不写设备。当前转换包括：
 
 - `invert`：布尔反转；
+- `reciprocal`：计算数值倒数 `1 / x`，正反向使用同一公式，输入 0 时拒绝转换；
+- `int-number`：把安全整数范围内的 `int` 无损转换为 `number`，反向仅接受整数；
 - `scale`：数值缩放和偏移，反向按逆公式执行；
 - `clamp`：范围裁剪，因为信息丢失而明确拒绝反向执行；
 - `enum`：一对一枚举映射，重复目标值会在校验阶段拒绝；
@@ -146,6 +148,8 @@ Profile 管理入口为 `GET/POST /api/v1/mapping/profiles` 和 `GET/PUT/DELETE 
 HomeLoom 随程序提供 provider、capability 和 target 三类内置示例 Profile。内置 ID 只读且不能被用户配置覆盖。`POST /api/v1/mapping/profiles/import` 会先验证完整批次，再使用所选数据库的单个事务写入，任何一项错误都不会产生部分导入。`GET /api/v1/mapping/profiles/export` 只导出用户 Profile，生成的文件可以直接重新导入；全局脱敏配置导出和诊断包则包含内置与用户 Profile，便于还原排障上下文。
 
 运行时属性绑定入口为 `GET/POST /api/v1/mapping/bindings` 和 `GET/PUT/DELETE /api/v1/mapping/bindings/{id}`。绑定存储于所选数据库的 `mapping_bindings`，精确指定 Provider、设备、Endpoint、Capability 和 Property 路径；ID 可以省略并由后端生成。启用后，Provider 快照和读取结果执行 `forward` 转换，属性控制执行 `reverse` 转换。保存、启停或删除会同步重新发现并处理当前 Provider 快照，不重启 Provider 或 Target。运行时绑定允许输入和输出类型不同，但每一步必须能够生成合法的反向写入值；因此仅正向的 `clamp` 不能绑定到真实读写链路。分段枚举和阈值转换通过显式 `reverse`/`trueNumber`/`falseNumber` 保存反向代表值。正在被绑定引用的用户 Profile 不能删除，也不能更新为不兼容流水线。
+
+`GET /api/v1/mapping/catalog` 中的数值型 Consumer 属性返回协议真实的 `unit`、`min`、`max` 和 `step`。配置界面展示来源范围、转换后范围、目标协议范围及其最终交集。HomeKit 运行时使用同一交集发布 Characteristic 的数值元数据；状态推送与控制写入受该范围约束，完全无交集的数值 Characteristic 不会发布。
 
 诊断响应的 `mappingApplied` 和 `mappingErrors` 分别统计运行时转换命中与失败。转换失败的 Provider 事件不会覆盖内存中的上一份有效设备状态；错误配置仍保存在数据库中，便于管理员修正而不会触发服务重启循环。全局脱敏配置导出和数据库逻辑备份均包含属性绑定。
 

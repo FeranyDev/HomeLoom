@@ -129,21 +129,53 @@ func (s *ProfileService) ResolveModelDefinition(deviceType device.Type, path dev
 	if parameter.Unit != "" {
 		result.Unit = parameter.Unit
 	}
-	if parameter.Min != nil {
-		result.Min = parameter.Min
-	}
-	if parameter.Max != nil {
-		result.Max = parameter.Max
-	}
-	if parameter.Step != nil {
-		result.Step = parameter.Step
-	}
+	result.Min = intersectMinimum(result.Min, parameter.Min)
+	result.Max = intersectMaximum(result.Max, parameter.Max)
+	result.Step = stricterStep(result.Step, parameter.Step)
 	if parameter.StaleAfterSeconds > 0 {
 		result.StaleAfterSeconds = parameter.StaleAfterSeconds
 	}
 	result.Readable, result.Writable, result.Notifiable = parameter.Readable, parameter.Writable, parameter.Notifiable
 	result.Enum = append([]string(nil), parameter.Enum...)
 	return result, true
+}
+
+func intersectMinimum(source, contract *float64) *float64 {
+	if source == nil {
+		return cloneFloat(contract)
+	}
+	if contract == nil || *source >= *contract {
+		return cloneFloat(source)
+	}
+	return cloneFloat(contract)
+}
+
+func intersectMaximum(source, contract *float64) *float64 {
+	if source == nil {
+		return cloneFloat(contract)
+	}
+	if contract == nil || *source <= *contract {
+		return cloneFloat(source)
+	}
+	return cloneFloat(contract)
+}
+
+func stricterStep(source, contract *float64) *float64 {
+	if source == nil {
+		return cloneFloat(contract)
+	}
+	if contract == nil || *source >= *contract {
+		return cloneFloat(source)
+	}
+	return cloneFloat(contract)
+}
+
+func cloneFloat(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	result := *value
+	return &result
 }
 
 func (s *ProfileService) ListCustomModelProperties() []mapping.CustomModelProperty {

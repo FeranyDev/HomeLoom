@@ -28,6 +28,13 @@ type lifecycleTarget struct {
 
 type lifecycleMatterStore struct{}
 
+type readyLifecycleTarget struct {
+	*lifecycleTarget
+	ready chan struct{}
+}
+
+func (t *readyLifecycleTarget) Ready() <-chan struct{} { return t.ready }
+
 func (lifecycleMatterStore) PutMatterRuntimeValue(context.Context, string, string, []byte) error {
 	return nil
 }
@@ -213,6 +220,9 @@ func TestRuntimeFailureAfterStartupPublishesErrorStatus(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("runtime failure status was not published")
 	}
+	if info := manager.RuntimeInfo(config); info.Status != "error" {
+		t.Fatalf("failed runtime remains registered as running: %#v", info)
+	}
 }
 
 func TestMatterTargetUsesIndependentRuntimeFactory(t *testing.T) {
@@ -243,6 +253,47 @@ func TestMatterTargetUsesIndependentRuntimeFactory(t *testing.T) {
 	}
 	if registration.Info.Type != "matter" || registration.Info.ConsumerID != "matter" || registration.Info.ProtocolVersion != "1.4.1" {
 		t.Fatalf("Matter registration = %#v", registration.Info)
+	}
+	if err := manager.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMatterApplyWaitsForAuthenticatedRuntimeReadiness(t *testing.T) {
+	devices := application.NewDeviceService(virtual.NewProvider())
+	defer devices.Close()
+	manager := New(context.Background(), devices, slog.New(slog.NewTextHandler(io.Discard, nil)), lifecycleMatterStore{})
+	created := &readyLifecycleTarget{lifecycleTarget: newLifecycleTarget("matter-ready"), ready: make(chan struct{})}
+	manager.matterFactory = func(_ context.Context, _ mattertarget.Config, _ *application.DeviceService, _ mattertarget.Storage, _ *slog.Logger) (managedTarget, error) {
+		return created, nil
+	}
+	manager.startGrace = time.Millisecond
+	discriminator := uint16(1234)
+	config := target.Config{
+		ID: "matter-ready", Type: "matter", Name: "Matter Ready", Enabled: true,
+		MatterConfig: &target.MatterConfig{
+			Discriminator: &discriminator, Passcode: "20202021", VendorID: 0xfff1, ProductID: 0x8000,
+			ProductName: "HomeLoom", SerialNumber: "matter-ready", CommissioningWindowSeconds: 900,
+		},
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := manager.Apply(context.Background(), config)
+		result <- err
+	}()
+	select {
+	case <-created.started:
+	case <-time.After(time.Second):
+		t.Fatal("Matter runtime did not start")
+	}
+	select {
+	case err := <-result:
+		t.Fatalf("Apply() returned before runtime readiness: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(created.ready)
+	if err := <-result; err != nil {
+		t.Fatalf("Apply() after readiness = %v", err)
 	}
 	if err := manager.Close(context.Background()); err != nil {
 		t.Fatal(err)

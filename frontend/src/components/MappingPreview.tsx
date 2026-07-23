@@ -23,6 +23,7 @@ function defaultsFor(type: MappingTransformType): string {
 function transformInputType(type: MappingTransformType): ValueType {
   if (type === 'invert') return 'bool'
   if (type === 'enum') return 'enum'
+  if (type === 'int-number') return 'int'
   return 'number'
 }
 
@@ -68,7 +69,7 @@ export function MappingPreview({ runPreview = previewMapping, loadProfiles = lis
 	const [profileID, setProfileID] = useState('')
 	useEffect(() => { let active = true; void loadProfiles().then((items) => { if (active) setProfiles(items) }).catch(() => undefined); return () => { active = false } }, [loadProfiles, profileRevision])
 	const selectedProfile = profiles.find((item) => item.id === profileID)
-  const activeInputType = selectedProfile ? (direction === 'forward' ? selectedProfile.inputType : selectedProfile.outputType) : transformInputType(transformType)
+  const activeInputType = selectedProfile ? (direction === 'forward' ? selectedProfile.inputType : selectedProfile.outputType) : (transformType === 'int-number' && direction === 'reverse' ? 'number' : transformInputType(transformType))
   const activeEnumOptions = selectedProfile && activeInputType === 'enum' ? enumOptions(selectedProfile, direction) : []
 
   const changeTransform = (next: MappingTransformType) => { setTransformType(next); setRawValue(defaultsFor(next)); setResult(null); setError(null) }
@@ -80,7 +81,7 @@ export function MappingPreview({ runPreview = previewMapping, loadProfiles = lis
     setResult(null); setError(null)
   }
   const changeDirection = (next: MappingDirection) => {
-    const type = selectedProfile ? (next === 'forward' ? selectedProfile.inputType : selectedProfile.outputType) : transformInputType(transformType)
+    const type = selectedProfile ? (next === 'forward' ? selectedProfile.inputType : selectedProfile.outputType) : (transformType === 'int-number' && next === 'reverse' ? 'number' : transformInputType(transformType))
     setDirection(next)
     setRawValue(defaultInput(type, selectedProfile && type === 'enum' ? enumOptions(selectedProfile, next) : []))
     setResult(null); setError(null)
@@ -99,6 +100,12 @@ export function MappingPreview({ runPreview = previewMapping, loadProfiles = lis
     let transform: MappingTransform = { type: transformType }
     if (transformType === 'invert') {
       inputType = outputType = 'bool'; value = { type: 'bool', bool: rawValue === 'true' }
+    } else if (transformType === 'reciprocal' || transformType === 'int-number') {
+      transform = { type: transformType }
+      if (transformType === 'int-number') {
+        inputType = 'int'; outputType = 'number'
+        value = direction === 'forward' ? { type: 'int', int: Number(rawValue) } : { type: 'number', number: Number(rawValue) }
+      }
     } else if (transformType === 'scale') {
       transform = { type: 'scale', factor, offset }
     } else if (transformType === 'clamp') {
@@ -118,7 +125,7 @@ export function MappingPreview({ runPreview = previewMapping, loadProfiles = lis
     <div className="mapping-workbench">
       <form className="mapping-form" onSubmit={(event) => { event.preventDefault(); void submit() }}>
 		<label>转换配置（Profile）<select aria-label="预览 Profile" value={profileID} onChange={(event) => changeProfile(event.target.value)}><option value="">临时配置（Profile）</option>{profiles.map((item) => <option key={item.id} value={item.id}>{item.id} · 版本（v）{item.version}</option>)}</select></label>
-        {!selectedProfile && <label>转换类型（transform）<select aria-label="转换类型" value={transformType} onChange={(event) => changeTransform(event.target.value as MappingTransformType)}>{(['scale', 'invert', 'unit', 'enum', 'clamp'] as MappingTransformType[]).map((type) => <option key={type} value={type}>{transformTypeLabel(type)}</option>)}</select></label>}
+        {!selectedProfile && <label>转换类型（transform）<select aria-label="转换类型" value={transformType} onChange={(event) => changeTransform(event.target.value as MappingTransformType)}>{(['scale', 'reciprocal', 'int-number', 'invert', 'unit', 'enum', 'clamp'] as MappingTransformType[]).map((type) => <option key={type} value={type}>{transformTypeLabel(type)}</option>)}</select></label>}
         <label>方向（direction）<select aria-label="映射方向" value={direction} onChange={(event) => changeDirection(event.target.value as MappingDirection)}><option value="forward">正向（forward）</option><option value="reverse">反向写入（reverse）</option></select></label>
         <label>输入值 · {valueTypeLabel(activeInputType)}
           {activeInputType === 'bool'

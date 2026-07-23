@@ -21,7 +21,11 @@ func TestPreviewTable(t *testing.T) {
 	}{
 		{name: "scale forward", profile: profile(device.ValueTypeNumber, device.ValueTypeNumber, Transform{Type: TransformScale, Factor: numberPointer(1.8), Offset: numberPointer(32)}), direction: DirectionForward, value: valuePointer(device.NumberValue(20)), wantNumber: 68},
 		{name: "scale reverse", profile: profile(device.ValueTypeNumber, device.ValueTypeNumber, Transform{Type: TransformScale, Factor: numberPointer(1.8), Offset: numberPointer(32)}), direction: DirectionReverse, value: valuePointer(device.NumberValue(68)), wantNumber: 20},
+		{name: "reciprocal forward", profile: profile(device.ValueTypeNumber, device.ValueTypeNumber, Transform{Type: TransformReciprocal}), direction: DirectionForward, value: valuePointer(device.NumberValue(4)), wantNumber: 0.25},
+		{name: "reciprocal reverse", profile: profile(device.ValueTypeNumber, device.ValueTypeNumber, Transform{Type: TransformReciprocal}), direction: DirectionReverse, value: valuePointer(device.NumberValue(0.25)), wantNumber: 4},
 		{name: "unit", profile: profile(device.ValueTypeNumber, device.ValueTypeNumber, Transform{Type: TransformUnit, FromUnit: "celsius", ToUnit: "kelvin"}), direction: DirectionForward, value: valuePointer(device.NumberValue(20)), wantNumber: 293.15},
+		{name: "kelvin to mired", profile: profile(device.ValueTypeNumber, device.ValueTypeNumber, Transform{Type: TransformUnit, FromUnit: "kelvin", ToUnit: "mired"}), direction: DirectionForward, value: valuePointer(device.NumberValue(4000)), wantNumber: 250},
+		{name: "mired to kelvin", profile: profile(device.ValueTypeNumber, device.ValueTypeNumber, Transform{Type: TransformUnit, FromUnit: "kelvin", ToUnit: "mired"}), direction: DirectionReverse, value: valuePointer(device.NumberValue(250)), wantNumber: 4000},
 		{name: "enum reverse", profile: profile(device.ValueTypeEnum, device.ValueTypeEnum, Transform{Type: TransformEnum, Values: map[string]string{"off": "inactive", "on": "active"}}), direction: DirectionReverse, value: valuePointer(device.EnumValue("active")), wantString: "on"},
 	}
 	falseValue := false
@@ -68,6 +72,34 @@ func TestPreviewDefaultClampAndErrors(t *testing.T) {
 	if _, err := Preview(PreviewRequest{Profile: item, Direction: DirectionReverse, Value: valuePointer(device.NumberValue(10))}); err == nil {
 		t.Fatal("reverse clamp accepted")
 	}
+	reciprocal := profile(device.ValueTypeNumber, device.ValueTypeNumber, Transform{Type: TransformReciprocal})
+	if _, err := Preview(PreviewRequest{Profile: reciprocal, Direction: DirectionForward, Value: valuePointer(device.NumberValue(0))}); err == nil {
+		t.Fatal("zero reciprocal accepted")
+	}
+	kelvinMired := profile(device.ValueTypeNumber, device.ValueTypeNumber, Transform{Type: TransformUnit, FromUnit: "kelvin", ToUnit: "mired"})
+	if _, err := Preview(PreviewRequest{Profile: kelvinMired, Direction: DirectionForward, Value: valuePointer(device.NumberValue(0))}); err == nil {
+		t.Fatal("zero kelvin accepted")
+	}
+
+	roundedColorTemperature := profile(device.ValueTypeInt, device.ValueTypeInt,
+		Transform{Type: TransformUnit, FromUnit: "kelvin", ToUnit: "mired"},
+		Transform{Type: TransformRound, Mode: "nearest"},
+	)
+	forward, err := Preview(PreviewRequest{Profile: roundedColorTemperature, Direction: DirectionForward, Value: valuePointer(device.IntValue(4000))})
+	if err != nil || forward.Value.Int == nil || *forward.Value.Int != 250 {
+		t.Fatalf("kelvin/mired forward = %#v, error = %v", forward.Value, err)
+	}
+	reverse, err := Preview(PreviewRequest{Profile: roundedColorTemperature, Direction: DirectionReverse, Value: valuePointer(device.IntValue(333))})
+	if err != nil || reverse.Value.Int == nil || *reverse.Value.Int != 3003 {
+		t.Fatalf("kelvin/mired reverse = %#v, error = %v", reverse.Value, err)
+	}
+	overflowingColorTemperature := profile(device.ValueTypeNumber, device.ValueTypeInt,
+		Transform{Type: TransformUnit, FromUnit: "kelvin", ToUnit: "mired"},
+		Transform{Type: TransformRound, Mode: "nearest"},
+	)
+	if _, err := Preview(PreviewRequest{Profile: overflowingColorTemperature, Direction: DirectionForward, Value: valuePointer(device.NumberValue(1e-20))}); err == nil {
+		t.Fatal("Kelvin/mired integer overflow accepted")
+	}
 
 	invalid := profile(device.ValueTypeNumber, device.ValueTypeNumber, Transform{Type: TransformScale, Factor: numberPointer(0)})
 	if err := Validate(invalid); err == nil {
@@ -108,6 +140,8 @@ func TestExpandedTransformsForwardAndReverse(t *testing.T) {
 		{"map range reverse", profile(device.ValueTypeNumber, device.ValueTypeNumber, Transform{Type: TransformMapRange, InputMin: numberPointer(0), InputMax: numberPointer(100), OutputMin: numberPointer(0), OutputMax: numberPointer(1)}), DirectionReverse, device.NumberValue(0.75), device.NumberValue(75)},
 		{"round forward", profile(device.ValueTypeNumber, device.ValueTypeInt, Transform{Type: TransformRound, Mode: "nearest"}), DirectionForward, device.NumberValue(2.6), device.IntValue(3)},
 		{"round reverse", profile(device.ValueTypeNumber, device.ValueTypeInt, Transform{Type: TransformRound, Mode: "nearest"}), DirectionReverse, device.IntValue(4), device.NumberValue(4)},
+		{"int number forward", profile(device.ValueTypeInt, device.ValueTypeNumber, Transform{Type: TransformIntNumber}), DirectionForward, device.IntValue(42), device.NumberValue(42)},
+		{"int number reverse", profile(device.ValueTypeInt, device.ValueTypeNumber, Transform{Type: TransformIntNumber}), DirectionReverse, device.NumberValue(42), device.IntValue(42)},
 		{"parse number forward", profile(device.ValueTypeString, device.ValueTypeNumber, Transform{Type: TransformParseNumber}), DirectionForward, device.StringValue("23.5"), device.NumberValue(23.5)},
 		{"parse number reverse", profile(device.ValueTypeString, device.ValueTypeNumber, Transform{Type: TransformParseNumber}), DirectionReverse, device.NumberValue(23.5), device.StringValue("23.5")},
 		{"number string forward", profile(device.ValueTypeNumber, device.ValueTypeString, Transform{Type: TransformNumberString}), DirectionForward, device.NumberValue(42.25), device.StringValue("42.25")},
@@ -135,11 +169,26 @@ func TestExpandedTransformValidation(t *testing.T) {
 		profile(device.ValueTypeBool, device.ValueTypeEnum, Transform{Type: TransformBoolEnum, TrueValue: "same", FalseValue: "same"}),
 		profile(device.ValueTypeNumber, device.ValueTypeNumber, Transform{Type: TransformMapRange, InputMin: numberPointer(0), InputMax: numberPointer(0), OutputMin: numberPointer(0), OutputMax: numberPointer(1)}),
 		profile(device.ValueTypeString, device.ValueTypeInt, Transform{Type: TransformRound, Mode: "nearest"}),
+		profile(device.ValueTypeString, device.ValueTypeNumber, Transform{Type: TransformReciprocal}),
+		profile(device.ValueTypeNumber, device.ValueTypeNumber, Transform{Type: TransformIntNumber}),
 	}
 	for index, item := range tests {
 		if err := Validate(item); err == nil {
 			t.Errorf("invalid expanded transform %d was accepted", index)
 		}
+	}
+}
+
+func TestIntNumberRejectsLossyConversions(t *testing.T) {
+	item := profile(device.ValueTypeInt, device.ValueTypeNumber, Transform{Type: TransformIntNumber})
+	if _, err := Preview(PreviewRequest{Profile: item, Direction: DirectionForward, Value: valuePointer(device.IntValue(maxSafeInteger + 1))}); err == nil {
+		t.Fatal("unsafe int was converted to number")
+	}
+	if _, err := Preview(PreviewRequest{Profile: item, Direction: DirectionReverse, Value: valuePointer(device.NumberValue(42.5))}); err == nil {
+		t.Fatal("fractional number was converted to int")
+	}
+	if _, err := Preview(PreviewRequest{Profile: item, Direction: DirectionReverse, Value: valuePointer(device.NumberValue(float64(maxSafeInteger + 1)))}); err == nil {
+		t.Fatal("unsafe number was converted to int")
 	}
 }
 

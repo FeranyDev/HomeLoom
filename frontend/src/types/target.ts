@@ -23,6 +23,8 @@ export interface TargetBase {
 	deviceIds: string[]
 	devices: TargetVirtualDevice[]
 	error?: string
+	/** Present on the SSE tombstone emitted after a target is deleted. */
+	removed?: boolean
 }
 
 export interface AppleHAPConfig {

@@ -121,7 +121,11 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
 			onDevice: (updated) => setDevices((current) => { if (updated.removed) return current.filter((item) => item.id !== updated.id); const exists = current.some((item) => item.id === updated.id); return exists ? current.map((item) => item.id === updated.id ? updated : item) : [...current, updated] }),
 			onCommand: (updated) => setCommands((current) => { const exists = current.some((item) => item.id === updated.id); const next = exists ? current.map((item) => item.id === updated.id ? updated : item) : [updated, ...current]; return next.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()).slice(0, commandHistoryLimit.current) }),
 			onAudit: (updated) => setAuditEvents((current) => [updated, ...current.filter((item) => item.id !== updated.id)].slice(0, 200)),
-			onTarget: (updated) => setTargets((current) => { const exists = current.some((item) => item.id === updated.id); return exists ? current.map((item) => item.id === updated.id ? updated : item) : [...current, updated] }),
+			onTarget: (updated) => setTargets((current) => {
+				if (updated.removed) return current.filter((item) => item.id !== updated.id)
+				const exists = current.some((item) => item.id === updated.id)
+				return exists ? current.map((item) => item.id === updated.id ? updated : item) : [...current, updated]
+			}),
 			onRuntime: (delta) => { if (delta.providers) setProviders(delta.providers); if (delta.diagnostics) setDiagnostics(delta.diagnostics) },
 		})
 	  return () => {
@@ -174,7 +178,13 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
 
 	async function handleTargetDelete(target: Target) {
 		if (!confirmTargetDeletion(target.name)) return
-		try { await deleteTarget(target.id); await refresh(); notify('success', `目标“${target.name}”已删除`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '删除目标失败') }
+		try {
+			await deleteTarget(target.id)
+			setTargets((current) => current.filter((item) => item.id !== target.id))
+			setTargetDeviceID((current) => current === target.id ? null : current)
+			await refresh()
+			notify('success', `目标“${target.name}”已删除`)
+		} catch (cause) { notify('error', cause instanceof Error ? cause.message : '删除目标失败') }
 	}
 	async function handleTargetPairingRegenerate(target: Target) {
 		const confirmation = confirmExactPhrase('这会更换新设备加入 Apple Home 时使用的 PIN 和 Setup ID；已有配对身份会保留。', `REGENERATE ${target.id}`)

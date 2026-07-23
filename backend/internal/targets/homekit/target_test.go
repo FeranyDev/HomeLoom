@@ -284,6 +284,62 @@ func TestAccessoryBindingsMapSupportedDeviceTypes(t *testing.T) {
 	}
 }
 
+func TestColorTemperaturePublishesDeviceRangeAndClampsUpdates(t *testing.T) {
+	provider, err := virtual.NewProviderFromConfig(providerconfig.Config{
+		ID: "room", Name: "Room",
+		Config: []byte(`{"devices":[{"id":"lamp","type":"lightbulb","power":true}]}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := application.NewDeviceService(provider)
+	defer service.Close()
+	items, err := service.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lamp *device.Device
+	for index := range items {
+		if items[index].ID == "lamp" {
+			lamp = &items[index]
+			break
+		}
+	}
+	if lamp == nil {
+		t.Fatal("virtual lightbulb not found")
+	}
+	minimum, maximum := 154.0, 370.0
+	for endpointIndex := range lamp.Endpoints {
+		for capabilityIndex := range lamp.Endpoints[endpointIndex].Capabilities {
+			for propertyIndex := range lamp.Endpoints[endpointIndex].Capabilities[capabilityIndex].Properties {
+				property := &lamp.Endpoints[endpointIndex].Capabilities[capabilityIndex].Properties[propertyIndex]
+				if property.Definition.ID == "color-temperature" {
+					property.Definition.Min, property.Definition.Max = &minimum, &maximum
+					property.Value = device.IntValue(250)
+				}
+			}
+		}
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	bindings := newAccessoryBindings([]device.Device{*lamp}, map[string]bool{}, nil, service, logger)
+	current := bindings.colorTemps[lamp.ID]
+	if current == nil {
+		t.Fatal("color temperature characteristic was not published")
+	}
+	if current.MinValue() != 154 || current.MaxValue() != 370 || current.Value() != 250 {
+		t.Fatalf("color temperature range/value = %d..%d value %d", current.MinValue(), current.MaxValue(), current.Value())
+	}
+
+	lamp.SetProperty("main", "light", "color-temperature", device.IntValue(800))
+	if pushes := bindings.update(*lamp); pushes == 0 || current.Value() != 370 {
+		t.Fatalf("high update was not clamped: pushes=%d value=%d", pushes, current.Value())
+	}
+	lamp.SetProperty("main", "light", "color-temperature", device.IntValue(100))
+	if pushes := bindings.update(*lamp); pushes == 0 || current.Value() != 154 {
+		t.Fatalf("low update was not clamped: pushes=%d value=%d", pushes, current.Value())
+	}
+}
+
 func TestAccessoryBindingsMapAndWriteAdvancedDeviceTypes(t *testing.T) {
 	provider, err := virtual.NewProviderFromConfig(providerconfig.Config{ID: "advanced", Config: []byte(`{"devices":[{"id":"fan","type":"fan","speed":20},{"id":"purifier","type":"air-purifier","active":true,"speed":60,"mode":"auto","filterLife":5},{"id":"shade","type":"window-covering","position":30}]}`)})
 	if err != nil {

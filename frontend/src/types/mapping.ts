@@ -1,7 +1,7 @@
 import type { Device, DeviceType, ParameterLevel, PropertyDefinition, PropertyValue, ValueType } from './device'
 
 export type MappingDirection = 'forward' | 'reverse'
-export type MappingTransformType = 'invert' | 'scale' | 'clamp' | 'enum' | 'unit' | 'range-enum' | 'enum-number' | 'threshold' | 'bool-number' | 'bool-enum' | 'enum-bool' | 'map-range' | 'round' | 'parse-number' | 'number-string'
+export type MappingTransformType = 'invert' | 'reciprocal' | 'int-number' | 'scale' | 'clamp' | 'enum' | 'unit' | 'range-enum' | 'enum-number' | 'threshold' | 'bool-number' | 'bool-enum' | 'enum-bool' | 'map-range' | 'round' | 'parse-number' | 'number-string'
 
 export interface MappingRangeBand { max?: number; value: string; reverse: number }
 
@@ -61,6 +61,7 @@ export interface ModelContract { deviceType: DeviceType; name?: string; version:
 export interface CustomModel { deviceType: DeviceType; name: string; version: number }
 export interface ConsumerProperty {
   id: string; name: string; deviceType: DeviceType; defaultModelPath: ModelPath; level: ParameterLevel; type: ValueType
+  unit?: string; min?: number; max?: number; step?: number; enum?: string[]
   readable: boolean; writable: boolean; notifiable: boolean
 	/** Matter catalog entries identify the protocol member without overloading a HomeKit service path. */
 	originalName?: string

@@ -1,6 +1,5 @@
 import type { AppleHAPTarget, MatterCommissioning, MatterTarget, MatterTargetConfig, Target, TargetInput, TargetStatus, TargetVirtualDevice } from '../types/target'
 import { requestData, requestJSON } from './client'
-import { subscribeEvents } from './events'
 
 type RecordValue = Record<string, unknown>
 
@@ -22,7 +21,7 @@ export function normalizeTarget(value: unknown): Target {
 	const type = raw.type === 'matter' ? 'matter' : 'apple-hap'
 	const common = {
 		id: string(raw.id) ?? '', type, consumerId: string(raw.consumerId), name: string(raw.name) ?? '', enabled: boolean(raw.enabled) ?? false,
-		status: status(raw.status), deviceIds: ids(raw.deviceIds), devices: targetDevices(raw.devices), error: string(raw.error),
+		status: status(raw.status), deviceIds: ids(raw.deviceIds), devices: targetDevices(raw.devices), error: string(raw.error), removed: boolean(raw.removed) ?? false,
 	}
 	const config = record(raw.config)
 	if (type === 'apple-hap') {
@@ -138,8 +137,4 @@ export function pairingQRUrl(id: string): string {
 
 export function matterQRUrl(id: string): string {
 	return `/api/v1/targets/${encodeURIComponent(id)}/commissioning-qr`
-}
-
-export function subscribeTargets(onTarget: (target: Target) => void): () => void {
-	return subscribeEvents({ onTarget: (target) => onTarget(normalizeTarget(target)) })
 }

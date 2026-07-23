@@ -136,6 +136,59 @@ func TestPropertyBindingTransformsNumericDefinition(t *testing.T) {
 	}
 }
 
+func TestPropertyBindingTransformsKelvinDefinitionToMired(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, _ := application.NewProfileService(ctx, store)
+	profile := mapping.Profile{
+		SchemaVersion: 1, ID: "kelvin-mired", Version: 1, Kind: mapping.KindProvider,
+		InputType: device.ValueTypeInt, OutputType: device.ValueTypeInt,
+		Transforms: []mapping.Transform{
+			{Type: mapping.TransformUnit, FromUnit: "kelvin", ToUnit: "mired"},
+			{Type: mapping.TransformRound, Mode: "nearest"},
+		},
+	}
+	if _, err := profiles.Create(ctx, profile); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := profiles.CreateBinding(ctx, mapping.Binding{
+		ID: "color-temperature-binding", ProfileID: profile.ID,
+		ProviderID: "xiaomi-main", DeviceID: "monitor-light",
+		EndpointID: "miot-2", CapabilityID: "service-2", PropertyID: "property-3",
+		ModelEndpointID: "main", ModelCapabilityID: "light", ModelPropertyID: "color-temperature",
+		Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	minimum, maximum, step := 2700.0, 6500.0, 100.0
+	definition := device.PropertyDefinition{
+		ID: "property-3", Name: "Color temperature", Type: device.ValueTypeInt,
+		Unit: "kelvin", Min: &minimum, Max: &maximum, Step: &step,
+		Readable: true, Writable: true, Notifiable: true,
+	}
+	mapped, bindingID, applied, err := profiles.TransformPropertyDefinition(
+		"xiaomi-main", "monitor-light", "miot-2", "service-2", "property-3", definition,
+	)
+	if err != nil || !applied || bindingID != "color-temperature-binding" {
+		t.Fatalf("transform = %#v, %q, %v, %v", mapped, bindingID, applied, err)
+	}
+	if mapped.Unit != "mired" || mapped.Min == nil || *mapped.Min != 154 || mapped.Max == nil || *mapped.Max != 370 || mapped.Step != nil {
+		t.Fatalf("mapped definition = %#v", mapped)
+	}
+	resolved, found := profiles.ResolveModelDefinition(
+		device.TypeLightbulb,
+		device.ParameterPath{EndpointID: "main", CapabilityID: "light", PropertyID: "color-temperature"},
+		mapped,
+	)
+	if !found || resolved.Min == nil || *resolved.Min != 154 || resolved.Max == nil || *resolved.Max != 370 || resolved.Step == nil || *resolved.Step != 1 {
+		t.Fatalf("resolved model definition = %#v, found = %v", resolved, found)
+	}
+}
+
 func TestPropertyBindingTransformsNumericDefinitionToEnumBands(t *testing.T) {
 	ctx := context.Background()
 	store, err := openTestStore(t, ctx)

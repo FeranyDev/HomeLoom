@@ -56,6 +56,7 @@ type TargetInfo struct {
 	EndpointCount                int                          `json:"endpointCount,omitempty"`
 	ProtocolVersion              string                       `json:"protocolVersion,omitempty"`
 	Certification                string                       `json:"certification,omitempty"`
+	Removed                      bool                         `json:"removed,omitempty"`
 }
 
 type MatterFabric struct {
@@ -492,11 +493,14 @@ func (s *TargetService) Delete(ctx context.Context, id string) error {
 		return err
 	}
 	if s.runtime != nil {
-		if err := s.runtime.Remove(ctx, id); err != nil {
-			return err
-		}
+		// Persistence is the source of truth for deletion. Runtime shutdown is
+		// best-effort here: Manager.Remove detaches and cancels the runtime
+		// before it can return a timeout, so a slow sidecar must not leave the
+		// already-deleted target visible in the in-memory projection.
+		_ = s.runtime.Remove(ctx, id)
 	}
 	s.mu.Lock()
+	registration := s.targets[id]
 	delete(s.targets, id)
 	delete(s.configs, id)
 	for index, current := range s.order {
@@ -506,6 +510,9 @@ func (s *TargetService) Delete(ctx context.Context, id string) error {
 		}
 	}
 	s.mu.Unlock()
+	registration.Info.ID = id
+	registration.Info.Removed = true
+	s.notify(registration.Info)
 	return nil
 }
 

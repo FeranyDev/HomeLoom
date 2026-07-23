@@ -41,6 +41,40 @@ describe('ProfileVisualEditor', () => {
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ outputType: 'number', transforms: [{ type: 'scale', factor: 0.1, offset: 0 }] }))
   })
 
+  it('adds a reversible reciprocal step for numeric inputs', async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined)
+    render(<ProfileVisualEditor initialProfile={identityProfile} editing={false} saving={false} onClose={vi.fn()} onSave={onSave} runPreview={vi.fn()} />)
+
+    await userEvent.click(screen.getByRole('button', { name: /数值倒数/ }))
+    expect(screen.getByText('计算 1 ÷ 输入值；再次执行即可还原，输入值不能为 0。')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '反向（reverse）' })).toBeEnabled()
+    await userEvent.click(screen.getByRole('button', { name: '保存并热更新' }))
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ inputType: 'int', outputType: 'number', transforms: [{ type: 'reciprocal' }] }))
+  })
+
+  it('offers Kelvin and mired unit conversions in both directions', async () => {
+    render(<ProfileVisualEditor initialProfile={identityProfile} editing={false} saving={false} onClose={vi.fn()} onSave={vi.fn()} runPreview={vi.fn()} />)
+
+    await userEvent.click(screen.getByRole('button', { name: /单位转换/ }))
+    const route = screen.getByLabelText('第 1 步单位路径')
+    expect(within(route).getByRole('option', { name: 'kelvin → mired' })).toBeInTheDocument()
+    expect(within(route).getByRole('option', { name: 'mired → kelvin' })).toBeInTheDocument()
+    await userEvent.selectOptions(route, 'kelvin:mired')
+    expect(route).toHaveValue('kelvin:mired')
+  })
+
+  it('adds a lossless int to number conversion only for int input', async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined)
+    render(<ProfileVisualEditor initialProfile={identityProfile} editing={false} saving={false} onClose={vi.fn()} onSave={onSave} runPreview={vi.fn()} />)
+
+    const numericTypes = screen.getByText('数值类型转换').closest('section')!
+    await userEvent.click(within(numericTypes).getByRole('button', { name: /整数转数值/ }))
+    expect(screen.getByText('将安全范围内的 int 无损转换为 number；反向写入仅接受安全整数。')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '保存并热更新' }))
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ inputType: 'int', outputType: 'number', transforms: [{ type: 'int-number' }] }))
+  })
+
   it('only offers compatible steps and marks clamp pipelines as forward-only', async () => {
     render(<ProfileVisualEditor initialProfile={{ ...identityProfile, inputType: 'number', outputType: 'number' }} editing={false} saving={false} onClose={vi.fn()} onSave={vi.fn()} runPreview={vi.fn()} />)
     expect(screen.getByRole('button', { name: /布尔反转/ })).toBeDisabled()

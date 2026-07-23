@@ -31,6 +31,10 @@ type managedTarget interface {
 	IsPaired() bool
 }
 
+type readyTarget interface {
+	Ready() <-chan struct{}
+}
+
 type targetFactory func(context.Context, homekit.Config, *application.DeviceService, *slog.Logger) (managedTarget, error)
 type matterFactory func(context.Context, mattertarget.Config, *application.DeviceService, mattertarget.Storage, *slog.Logger) (managedTarget, error)
 
@@ -151,21 +155,43 @@ func (m *Manager) Apply(ctx context.Context, config target.Config) (application.
 		done <- err
 		close(done)
 		if runCtx.Err() == nil && err != nil {
+			m.mu.Lock()
+			if current, exists := m.running[config.ID]; exists && current.done == done {
+				delete(m.running, config.ID)
+			}
+			m.mu.Unlock()
 			m.logger.Error("target runtime exited", "target_id", config.ID, "error", err)
 			m.setStatus(config.ID, "error")
 		}
 	}()
 
-	select {
-	case startErr := <-done:
-		m.mu.Lock()
-		delete(m.running, config.ID)
-		m.mu.Unlock()
-		if startErr == nil {
-			startErr = errors.New("target stopped during startup")
+	if readiness, ok := next.(readyTarget); ok {
+		select {
+		case startErr := <-done:
+			m.mu.Lock()
+			delete(m.running, config.ID)
+			m.mu.Unlock()
+			if startErr == nil {
+				startErr = errors.New("target stopped during startup")
+			}
+			return application.TargetRegistration{}, startErr
+		case <-readiness.Ready():
+		case <-ctx.Done():
+			_ = m.stop(context.Background(), config.ID)
+			return application.TargetRegistration{}, fmt.Errorf("start target %q: %w", config.ID, ctx.Err())
 		}
-		return application.TargetRegistration{}, startErr
-	case <-time.After(m.startGrace):
+	} else {
+		select {
+		case startErr := <-done:
+			m.mu.Lock()
+			delete(m.running, config.ID)
+			m.mu.Unlock()
+			if startErr == nil {
+				startErr = errors.New("target stopped during startup")
+			}
+			return application.TargetRegistration{}, startErr
+		case <-time.After(m.startGrace):
+		}
 	}
 
 	pairing := next.PairingInfo()

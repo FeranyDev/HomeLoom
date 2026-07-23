@@ -2,6 +2,7 @@ import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
+import type { MatterTarget } from './types/target'
 
 const api = vi.hoisted(() => ({
   getAuthStatus: vi.fn(), login: vi.fn(), logout: vi.fn(), setupAdministrator: vi.fn(),
@@ -88,6 +89,29 @@ describe('App integration', () => {
 
 		await waitFor(() => expect(screen.queryByRole('heading', { name: '客厅灯' })).not.toBeInTheDocument())
 		expect(screen.getByRole('status')).toHaveTextContent('0 / 0')
+	})
+
+	it('removes a Matter bridge when the target stream publishes its deletion tombstone', async () => {
+		api.listTargets.mockResolvedValue([{
+			id: 'matter-main', type: 'matter', name: 'Matter 主桥', enabled: true, status: 'running',
+			deviceIds: [], devices: [], config: {}, commissioning: { state: 'uncommissioned', windowOpen: false },
+			fabricCount: 0, endpointCount: 0,
+		}])
+		api.getAuthStatus.mockResolvedValue({ initialized: true, authenticated: true, username: 'admin' })
+		render(<App />)
+		const user = userEvent.setup()
+		await user.click(await screen.findByRole('button', { name: '桥接中心' }))
+		expect(await screen.findByRole('heading', { name: 'Matter 主桥' })).toBeInTheDocument()
+		const handlers = api.subscribeEvents.mock.calls[0][0] as { onTarget: (target: MatterTarget) => void }
+
+		act(() => handlers.onTarget({
+			id: 'matter-main', type: 'matter', name: 'Matter 主桥', enabled: false, status: 'error',
+			deviceIds: [], devices: [], config: {}, commissioning: { state: 'unknown', windowOpen: false },
+			fabricCount: 0, endpointCount: 0, removed: true,
+		}))
+
+		await waitFor(() => expect(screen.queryByRole('heading', { name: 'Matter 主桥' })).not.toBeInTheDocument())
+		expect(screen.getByText('还没有目标实例')).toBeInTheDocument()
 	})
 
   it('initializes the sole administrator and loads the dashboard', async () => {

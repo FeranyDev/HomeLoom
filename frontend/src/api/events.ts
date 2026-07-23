@@ -2,6 +2,7 @@ import type { AuditEvent, DeviceCommand, Diagnostics } from '../types/diagnostic
 import type { Device, StateValue } from '../types/device'
 import type { Provider } from '../types/provider'
 import type { Target } from '../types/target'
+import { normalizeTarget } from './targets'
 
 export interface RuntimeDelta {
 	providers?: Provider[]
@@ -40,7 +41,7 @@ function ensureSource() {
 	source.addEventListener('state', (event) => { const value = parse<StateValue>(event); if (value) dispatch('onState', value) })
 	source.addEventListener('command', (event) => { const value = parse<DeviceCommand>(event); if (value) dispatch('onCommand', value) })
 	source.addEventListener('audit', (event) => { const value = parse<AuditEvent>(event); if (value) dispatch('onAudit', value) })
-	source.addEventListener('target', (event) => { const value = parse<Target>(event); if (value) dispatch('onTarget', value) })
+	source.addEventListener('target', (event) => { const value = parse<unknown>(event); if (value) dispatch('onTarget', normalizeTarget(value)) })
 	source.addEventListener('runtime', (event) => { const value = parse<RuntimeDelta>(event); if (value) dispatch('onRuntime', value) })
 	source.onerror = () => dispatch('onConnection', false)
 }

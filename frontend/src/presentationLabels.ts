@@ -23,13 +23,13 @@ const valueTypes: Record<ValueType, string> = { bool: '布尔值', int: '整数'
 const parameterLevels: Record<ParameterLevel, string> = { required: '必需', optional: '可选', custom: '自定义' }
 const targetTypes: Record<TargetType, string> = { 'apple-hap': 'Apple 家庭桥', matter: 'Matter 桥' }
 const transformTypes: Record<MappingTransformType, string> = {
-	invert: '布尔反转', scale: '数值缩放', clamp: '范围裁剪', enum: '枚举映射', unit: '单位转换',
+	invert: '布尔反转', reciprocal: '数值倒数', 'int-number': '整数转数值', scale: '数值缩放', clamp: '范围裁剪', enum: '枚举映射', unit: '单位转换',
 	'range-enum': '数值分段转枚举', 'enum-number': '枚举转数值', threshold: '数值阈值转布尔', 'bool-number': '布尔转数值', 'bool-enum': '布尔转枚举', 'enum-bool': '枚举转布尔',
 	'map-range': '区间线性映射', round: '数值取整', 'parse-number': '文本解析为数值', 'number-string': '数值格式化为文本',
 }
 const unitNames: Record<string, string> = {
 	percent: '百分比', degree: '角度', mired: '微倒度', watt: '瓦特', 'kilowatt-hour': '千瓦时',
-	'microgram-per-cubic-meter': '微克/立方米', celsius: '摄氏度', fahrenheit: '华氏度',
+	'microgram-per-cubic-meter': '微克/立方米', celsius: '摄氏度', fahrenheit: '华氏度', kelvin: '开尔文',
 	lux: '勒克斯', ppm: '百万分比', second: '秒', hour: '小时', count: '次',
 	volt: '伏特', ampere: '安培', hertz: '赫兹', ratio: '比值', hectopascal: '百帕',
 	kilopascal: '千帕', decibel: '分贝', liter: '升', 'liter-per-minute': '升/分钟',

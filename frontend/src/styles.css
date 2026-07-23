@@ -846,6 +846,14 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .enum-pair-list span { color: #747b72; font-size: 10px; }
 .mapping-route-priority { margin: 0; padding: 10px 12px; border: 1px solid rgba(91, 112, 79, .22); background: rgba(91, 112, 79, .06); color: #4d5d45; font-size: 13px; }
 .enum-compatibility p { margin: 0; color: #795b3f; font-size: 11px; }
+.numeric-range-comparison { display: grid !important; grid-column: 1 / -1; grid-template-columns: repeat(7, auto); gap: 10px !important; align-items: center !important; padding: 14px; border: 1px solid #b8beb4; background: rgba(255,255,255,.55); }
+.numeric-range-comparison > header { display: flex; grid-column: 1 / -1; justify-content: space-between; gap: 16px; }
+.numeric-range-comparison > header strong { font-size: 11px; letter-spacing: .08em; }
+.numeric-range-comparison > header span, .numeric-range-comparison small { color: #596a58; font-size: 11px; }
+.numeric-range-comparison section { display: grid; gap: 5px; min-width: 0; }
+.numeric-range-comparison code { padding: 6px 8px; border: 1px solid #c4c8c0; background: rgba(255,255,255,.7); color: #4c544b; font-size: 11px; white-space: nowrap; }
+.numeric-range-comparison section.is-effective code { border-color: #7f9978; background: #e4eee1; }
+.numeric-range-comparison section.is-empty code { border-color: #bd8d7e; background: #f4e3dd; color: #8a4938; }
 .mapping-route-list { display: grid; }
 .mapping-route-list article { display: grid; grid-template-columns: auto 1fr auto; gap: 14px; align-items: center; padding: 14px 0; border-top: 1px solid #d6d5cd; }
 .mapping-route-list article.is-disabled { opacity: .5; }
@@ -1247,6 +1255,8 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 	.mapping-arrow { min-height: 38px; transform: rotate(90deg); }
 	.mapping-route-toolbar, .custom-property-grid { grid-template-columns: 1fr; }
 	.mapping-route-toolbar > div { align-items: stretch; flex-direction: column; }
+	.numeric-range-comparison { grid-template-columns: 1fr; }
+	.numeric-range-comparison > i { display: none; }
 	.custom-property-grid fieldset { grid-template-columns: 1fr; }
 	.mapping-route-list article, .custom-property-list article { grid-template-columns: auto 1fr; }
 	.mapping-route-list article > div:last-child, .custom-property-list article > div:last-child { grid-column: 2; }

@@ -22,6 +22,8 @@ type EnumCompatibility = {
   sourceOnly: string[]; targetOnly: string[]
 }
 
+type NumericDefinition = { min?: number; max?: number; step?: number; unit?: string }
+
 type BindingAPI = {
   listBindings: typeof mappingApi.listMappingBindings; listProfiles: typeof mappingApi.listMappingProfiles
   create: typeof mappingApi.createMappingBinding; update: typeof mappingApi.updateMappingBinding
@@ -97,6 +99,77 @@ function propertyValueText(value: PropertyValue): string {
   return value.string ?? '—'
 }
 
+function numericRangeText(definition?: NumericDefinition): string {
+  if (!definition || (definition.min === undefined && definition.max === undefined)) return '未声明'
+  const minimum = definition.min === undefined ? '−∞' : String(definition.min)
+  const maximum = definition.max === undefined ? '+∞' : String(definition.max)
+  return `${minimum} ～ ${maximum}${definition.step !== undefined ? `，步长 ${definition.step}` : ''}${definition.unit ? ` ${definition.unit}` : ''}`
+}
+
+function unitValue(value: number, from?: string, to?: string): number | undefined {
+  if (!from || !to || from === to) return value
+  if (from === 'celsius' && to === 'fahrenheit') return value * 9 / 5 + 32
+  if (from === 'fahrenheit' && to === 'celsius') return (value - 32) * 5 / 9
+  if (from === 'ratio' && to === 'percent') return value * 100
+  if (from === 'percent' && to === 'ratio') return value / 100
+  if ((from === 'kelvin' && to === 'mired') || (from === 'mired' && to === 'kelvin')) return value > 0 ? 1_000_000 / value : undefined
+  return undefined
+}
+
+function projectNumericDefinition(definition: NumericDefinition | undefined, profile?: MappingProfileInfo): NumericDefinition | undefined {
+  if (!definition) return undefined
+  const current: NumericDefinition = { ...definition }
+  for (const transform of profile?.transforms ?? []) {
+    const endpoints = [current.min, current.max].filter((value): value is number => value !== undefined)
+    let values: number[] | undefined
+    if (transform.type === 'int-number') continue
+    if (transform.type === 'scale') {
+      values = endpoints.map((value) => value * (transform.factor ?? 0) + (transform.offset ?? 0))
+      if (current.step !== undefined) current.step = Math.abs(current.step * (transform.factor ?? 0))
+    } else if (transform.type === 'reciprocal') {
+      if (endpoints.some((value) => value === 0)) return undefined
+      values = endpoints.map((value) => 1 / value); current.step = undefined
+    } else if (transform.type === 'unit') {
+      values = endpoints.map((value) => unitValue(value, transform.fromUnit, transform.toUnit)).filter((value): value is number => value !== undefined)
+      if (values.length !== endpoints.length) return undefined
+      if (current.step !== undefined && transform.fromUnit && transform.toUnit && !['kelvin', 'mired'].includes(transform.fromUnit) && !['kelvin', 'mired'].includes(transform.toUnit)) {
+        const zero = unitValue(0, transform.fromUnit, transform.toUnit)
+        const stepped = unitValue(current.step, transform.fromUnit, transform.toUnit)
+        current.step = zero !== undefined && stepped !== undefined ? Math.abs(stepped - zero) : undefined
+      } else current.step = undefined
+      current.unit = transform.toUnit
+    } else if (transform.type === 'map-range') {
+      const span = (transform.inputMax ?? 0) - (transform.inputMin ?? 0)
+      if (span === 0) return undefined
+      values = endpoints.map((value) => (transform.outputMin ?? 0) + (value - (transform.inputMin ?? 0)) * ((transform.outputMax ?? 0) - (transform.outputMin ?? 0)) / span)
+      current.step = current.step === undefined ? undefined : Math.abs(current.step * ((transform.outputMax ?? 0) - (transform.outputMin ?? 0)) / span)
+    } else if (transform.type === 'round') {
+      const round = transform.mode === 'floor' ? Math.floor : transform.mode === 'ceil' ? Math.ceil : Math.round
+      values = endpoints.map(round); current.step = 1
+    } else if (transform.type === 'clamp') {
+      if (current.min === undefined || (transform.min !== undefined && transform.min > current.min)) current.min = transform.min
+      if (current.max === undefined || (transform.max !== undefined && transform.max < current.max)) current.max = transform.max
+      continue
+    } else {
+      return undefined
+    }
+    if (values.length > 0) {
+      current.min = Math.min(...values)
+      current.max = Math.max(...values)
+    }
+  }
+  return current
+}
+
+function intersectNumericDefinitions(source?: NumericDefinition, target?: NumericDefinition): NumericDefinition | undefined {
+  if (!source || !target || (source.unit && target.unit && source.unit !== target.unit)) return undefined
+  const minimum = source.min === undefined ? target.min : target.min === undefined ? source.min : Math.max(source.min, target.min)
+  const maximum = source.max === undefined ? target.max : target.max === undefined ? source.max : Math.min(source.max, target.max)
+  if (minimum !== undefined && maximum !== undefined && minimum > maximum) return undefined
+  const steps = [source.step, target.step].filter((value): value is number => value !== undefined)
+  return { min: minimum, max: maximum, step: steps.length ? Math.max(...steps) : undefined, unit: target.unit ?? source.unit }
+}
+
 export function BindingManager({ device, profileRevision = 0, catalogRevision = 0, api = defaultAPI, initialStage = 'provider', providerOnly = false, consumerOnly = false, consumerLabel, targetId, consumerDeviceId, consumerId, consumerDeviceType }: {
   device: Device; profileRevision?: number; catalogRevision?: number; api?: BindingAPI
   initialStage?: 'provider' | 'consumer'; providerOnly?: boolean; consumerOnly?: boolean; consumerLabel?: string; targetId?: string; consumerDeviceId?: string; consumerId?: string; consumerDeviceType?: DeviceType
@@ -154,6 +227,12 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
   const enumCompatibility = compareEnumDomains(stage === 'provider' ? source?.definition : undefined, stage === 'provider' ? modelParameter : undefined)
   const enumProfileRequired = stage === 'provider' && enumCompatibility.kind === 'requires-profile' && !profileId
   const compatibleProfiles = profiles.filter((item) => item.inputType === inputType && item.outputType === outputType && !item.transforms.some((transform) => transform.type === 'clamp') && (stage === 'provider' ? item.kind !== 'target' : item.kind !== 'provider'))
+  const selectedProfile = profiles.find((item) => item.id === profileId)
+  const numericSource = stage === 'provider' ? source?.definition : modelParameter
+  const numericTarget = stage === 'provider' ? modelParameter : consumer?.property
+  const projectedNumericSource = projectNumericDefinition(numericSource, selectedProfile)
+  const effectiveNumericRange = intersectNumericDefinitions(projectedNumericSource, numericTarget)
+  const showNumericRange = (inputType === 'int' || inputType === 'number') && (outputType === 'int' || outputType === 'number')
   const defaultProviderRoutes = useMemo<DefaultProviderRoute[]>(() => {
     const explicitTargets = new Set(bindings.filter((item) => item.stage === 'provider' && item.enabled).map((item) => pathKey({ endpointId: item.modelEndpointId, capabilityId: item.modelCapabilityId, propertyId: item.modelPropertyId })))
     const modelParameters = catalog.models.find((item) => item.deviceType === device.type)?.parameters ?? []
@@ -242,7 +321,12 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
         {stage === 'consumer' ? consumers.length > 0 ? <div className="mapping-node-list">{matterConsumerGroups.map((group) => <section className="matter-cluster-group" key={group.cluster}><header><span>Cluster</span><strong>{matterClusterLabel(group.cluster)}</strong><small>Cluster → Attribute / Command</small></header>{group.items.map((item) => { const key = `${item.consumer.id}/${item.property.id}`; const member = matterMember(item.property); return <button key={key} className={key === consumerKey ? 'is-selected' : ''} onClick={() => setConsumerKey(key)}><span>Matter · {member.kind === 'command' ? 'Command（命令）' : 'Attribute（属性）'}</span><strong>{matterConsumerPathLabel(member.cluster, member.member, member.kind)}</strong><code>{member.cluster} → {member.kind === 'command' ? 'Command' : 'Attribute'} → {member.member}</code><small>{valueTypeLabel(item.property.type)} · {parameterLevelLabel(item.property.level)} · {permissionLabel(item.property.readable, item.property.writable, item.property.notifiable)}</small></button> })}</section>)}{otherConsumers.map((item) => { const key = `${item.consumer.id}/${item.property.id}`; return <button key={key} className={key === consumerKey ? 'is-selected' : ''} onClick={() => setConsumerKey(key)}><span>{item.consumer.name}（{item.consumer.id}）</span><strong>{consumerPropertyLabel(item.property.id)}</strong><code>{item.property.id}</code><small>{valueTypeLabel(item.property.type)} · {parameterLevelLabel(item.property.level)} · {permissionLabel(item.property.readable, item.property.writable, item.property.notifiable)}</small></button> })}</div> : <div className="mapping-context"><b>暂无消费端属性目录</b><p>目标适配器 {consumerId ?? '未指定'} 尚未发布该设备模型的属性，不能回退使用其他消费者的属性。</p></div> : <div className="mapping-context"><b>消费端边界（Consumer）</b><p>属性目录由具体目标适配器发布，统一模型层不预设 HomeKit、Matter 或其他协议字段。</p></div>}
       </section>
     </div>
-    <div className={`mapping-route-toolbar ${editingID || editingDefaultKey ? 'is-editing' : ''}`}><label>转换配置（Profile）<select aria-label="映射转换 Profile" value={profileId} onChange={(event) => setProfileId(event.target.value)}><option value="">恒等转换（identity）· 不转换</option>{compatibleProfiles.map((item) => <option key={item.id} value={item.id}>{item.id} · {item.transforms.map((transform) => transform.type).join(' → ') || 'identity'}</option>)}</select></label><div><small>{editingDefaultKey ? '正在修改默认映射；保存后写入当前设备的独立覆盖。' : editingID ? `正在编辑数据库路由 ${editingID}` : inputType && outputType ? `类型：${valueTypeLabel(inputType)} → ${valueTypeLabel(outputType)}；同一来源可继续映射到其他模型属性。` : '请选择两端属性'}</small>{(editingID || editingDefaultKey) && <button onClick={clearEditing}>取消编辑</button>}<button className="add-button" disabled={saving || !modelParameter || (stage === 'provider' ? !source : !consumer || !consumerDevice) || (!profileId && inputType !== outputType) || enumProfileRequired} onClick={() => void save()}>{saving ? '保存中…' : editingDefaultKey ? '保存默认映射覆盖' : editingID ? '保存路由修改' : `＋ 保存第 ${stage === 'provider' ? '一' : '二'} 段路由`}</button></div>{enumCompatibility.kind !== 'none' && <div className={`enum-compatibility is-${profileId ? 'profile' : enumCompatibility.kind}`} role="status"><header><strong>枚举值域检查（ENUM DOMAIN）</strong><span>{profileId ? `由 Profile ${profileId} 转换` : enumCompatibility.kind === 'exact' ? '完全一致，可直接映射' : enumCompatibility.kind === 'normalized' ? '仅格式差异，可自动对齐' : enumCompatibility.kind === 'partial' ? '部分兼容，存在模型独有值' : '语义不一致，需要 Profile'}</span></header><div className="enum-domain-comparison"><section><small>来源值域（Provider）</small><div>{enumCompatibility.source.map((item) => <code key={item}>{item}</code>)}</div></section><i>→</i><section><small>统一模型值域（Model）</small><div>{enumCompatibility.target.map((item) => <code key={item}>{item}</code>)}</div></section></div><div className="enum-pair-list">{enumCompatibility.pairs.map((item) => <span key={`${item.source}/${item.target}`}><code>{item.source}</code> → <code>{item.target}</code></span>)}</div>{!profileId && enumCompatibility.targetOnly.length > 0 && <p>模型独有：<code>{enumCompatibility.targetOnly.join(' / ')}</code>；此设备不能反向写入这些值。</p>}{!profileId && enumCompatibility.sourceOnly.length > 0 && <p>无法自动对齐：<code>{enumCompatibility.sourceOnly.join(' / ')}</code>；请选择枚举转换 Profile 后保存。</p>}</div>}</div>
+    <div className={`mapping-route-toolbar ${editingID || editingDefaultKey ? 'is-editing' : ''}`}>
+      <label>转换配置（Profile）<select aria-label="映射转换 Profile" value={profileId} onChange={(event) => setProfileId(event.target.value)}><option value="">恒等转换（identity）· 不转换</option>{compatibleProfiles.map((item) => <option key={item.id} value={item.id}>{item.id} · {item.transforms.map((transform) => transform.type).join(' → ') || 'identity'}</option>)}</select></label>
+      <div><small>{editingDefaultKey ? '正在修改默认映射；保存后写入当前设备的独立覆盖。' : editingID ? `正在编辑数据库路由 ${editingID}` : inputType && outputType ? `类型：${valueTypeLabel(inputType)} → ${valueTypeLabel(outputType)}；同一来源可继续映射到其他模型属性。` : '请选择两端属性'}</small>{(editingID || editingDefaultKey) && <button onClick={clearEditing}>取消编辑</button>}<button className="add-button" disabled={saving || !modelParameter || (stage === 'provider' ? !source : !consumer || !consumerDevice) || (!profileId && inputType !== outputType) || enumProfileRequired} onClick={() => void save()}>{saving ? '保存中…' : editingDefaultKey ? '保存默认映射覆盖' : editingID ? '保存路由修改' : `＋ 保存第 ${stage === 'provider' ? '一' : '二'} 段路由`}</button></div>
+      {showNumericRange && <div className="numeric-range-comparison" role="status"><header><strong>数值范围（NUMERIC RANGE）</strong><span>最终范围由两端约束取交集</span></header><section><small>{stage === 'provider' ? '来源范围（Provider）' : '统一模型范围（Model）'}</small><code>{numericRangeText(numericSource)}</code></section><i>→</i><section><small>转换后范围</small><code>{projectedNumericSource ? numericRangeText(projectedNumericSource) : '无法静态推导'}</code></section><i>∩</i><section><small>{stage === 'provider' ? '统一模型范围（Model）' : `${consumer?.consumer.name ?? '消费端'}范围（Consumer）`}</small><code>{numericRangeText(numericTarget)}</code></section><i>=</i><section className={effectiveNumericRange ? 'is-effective' : 'is-empty'}><small>最终有效范围</small><code>{effectiveNumericRange ? numericRangeText(effectiveNumericRange) : '无有效交集'}</code></section></div>}
+      {enumCompatibility.kind !== 'none' && <div className={`enum-compatibility is-${profileId ? 'profile' : enumCompatibility.kind}`} role="status"><header><strong>枚举值域检查（ENUM DOMAIN）</strong><span>{profileId ? `由 Profile ${profileId} 转换` : enumCompatibility.kind === 'exact' ? '完全一致，可直接映射' : enumCompatibility.kind === 'normalized' ? '仅格式差异，可自动对齐' : enumCompatibility.kind === 'partial' ? '部分兼容，存在模型独有值' : '语义不一致，需要 Profile'}</span></header><div className="enum-domain-comparison"><section><small>来源值域（Provider）</small><div>{enumCompatibility.source.map((item) => <code key={item}>{item}</code>)}</div></section><i>→</i><section><small>统一模型值域（Model）</small><div>{enumCompatibility.target.map((item) => <code key={item}>{item}</code>)}</div></section></div><div className="enum-pair-list">{enumCompatibility.pairs.map((item) => <span key={`${item.source}/${item.target}`}><code>{item.source}</code> → <code>{item.target}</code></span>)}</div>{!profileId && enumCompatibility.targetOnly.length > 0 && <p>模型独有：<code>{enumCompatibility.targetOnly.join(' / ')}</code>；此设备不能反向写入这些值。</p>}{!profileId && enumCompatibility.sourceOnly.length > 0 && <p>无法自动对齐：<code>{enumCompatibility.sourceOnly.join(' / ')}</code>；请选择枚举转换 Profile 后保存。</p>}</div>}
+    </div>
     <div className="mapping-route-list"><div className="command-heading"><h3>当前设备路由</h3><span>{visibleDefaultProviderRoutes.length > 0 ? `${visibleDefaultProviderRoutes.length} 条模型默认 · ` : ''}数据库覆盖 · {targetId && consumerDeviceId ? `${targetId} / ${consumerDeviceId}` : `${device.providerId} / ${device.id}`}</span></div>{stage === 'provider' && <p className="mapping-route-priority">优先级：手工数据库路由覆盖相同目标的模型默认路由；同一来源可以保留多条指向不同模型属性的路由。</p>}{visibleDefaultProviderRoutes.map((item) => <article key={`default-${item.key}`} className="is-default"><span className="route-stage is-default">模型默认（DEFAULT）</span><div><strong>{item.source.deviceName}</strong><code>{item.source.endpointId}.{item.source.capabilityId}.{item.source.propertyId} → {item.model.path.endpointId}.{item.model.path.capabilityId}.{item.model.path.propertyId}</code><small>{deviceTypeLabel(item.source.deviceType)} · 恒等转换（identity）· 目标未被手工路由占用时生效</small></div><div><button aria-label={`编辑默认映射 ${item.source.propertyId}`} onClick={() => editDefault(item)}>编辑覆盖</button></div></article>)}{bindings.map((item) => <article key={item.id} className={item.enabled ? '' : 'is-disabled'}><span className={`route-stage is-${item.stage}`}>{item.stage === 'provider' ? '数据库覆盖（P → M）' : '模型 →消费端（M → C）'}</span><div><strong>{item.targetId && item.consumerDeviceId ? `${item.targetId} / ${item.consumerDeviceId}` : `${item.providerId} / ${item.deviceId}`}</strong><code>{item.stage === 'provider' ? `${item.endpointId}.${item.capabilityId}.${item.propertyId}` : `${item.modelEndpointId}.${item.modelCapabilityId}.${item.modelPropertyId}`} → {item.stage === 'provider' ? `${item.modelEndpointId}.${item.modelCapabilityId}.${item.modelPropertyId}` : `${item.consumerId}.${item.consumerProperty}`}</code><small>{item.deviceType ? deviceTypeLabel(item.deviceType) : '设备类型未指定'} · {item.profileId || '恒等转换（identity）'} · {item.enabled ? '实时生效' : '已停用'}</small></div><div><button aria-label={`编辑映射路由 ${item.id}`} onClick={() => edit(item)}>编辑</button><button onClick={() => void toggle(item)}>{item.enabled ? '停用' : '启用'}</button><button className="danger-link" onClick={() => void remove(item)}>删除</button></div></article>)}{bindings.length === 0 && visibleDefaultProviderRoutes.length === 0 && <p className="mapping-route-empty">当前设备没有可自动匹配的默认路由，请从上方选择来源属性和统一模型属性后保存。</p>}</div>
   </section>
 }

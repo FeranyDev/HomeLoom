@@ -709,14 +709,14 @@ components:
       type: object
       required: [type]
       properties:
-        type: { type: string, enum: [invert, scale, clamp, enum, unit, range-enum, enum-number, threshold, bool-number, bool-enum, enum-bool, map-range, round, parse-number, number-string] }
+        type: { type: string, enum: [invert, reciprocal, int-number, scale, clamp, enum, unit, range-enum, enum-number, threshold, bool-number, bool-enum, enum-bool, map-range, round, parse-number, number-string] }
         factor: { type: number }
         offset: { type: number }
         min: { type: number }
         max: { type: number }
         values: { type: object, additionalProperties: { type: string } }
-        fromUnit: { type: string, enum: [celsius, fahrenheit, kelvin, ratio, percent] }
-        toUnit: { type: string, enum: [celsius, fahrenheit, kelvin, ratio, percent] }
+        fromUnit: { type: string, enum: [celsius, fahrenheit, kelvin, mired, ratio, percent] }
+        toUnit: { type: string, enum: [celsius, fahrenheit, kelvin, mired, ratio, percent] }
         bands:
           type: array
           items: { $ref: "#/components/schemas/MappingRangeBand" }
@@ -932,6 +932,11 @@ components:
         defaultModelPath: { $ref: "#/components/schemas/ModelPath" }
         level: { type: string, enum: [required, optional, custom] }
         type: { type: string, enum: [bool, int, number, string, enum] }
+        unit: { type: string }
+        min: { type: number }
+        max: { type: number }
+        step: { type: number, exclusiveMinimum: 0 }
+        enum: { type: array, items: { type: string } }
         readable: { type: boolean }
         writable: { type: boolean }
         notifiable: { type: boolean }

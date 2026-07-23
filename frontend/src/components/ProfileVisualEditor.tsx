@@ -12,18 +12,20 @@ const transformGroups: { label: string; types: MappingTransformType[] }[] = [
   { label: '数值 ⇄ 布尔', types: ['threshold', 'bool-number'] },
   { label: '布尔 ⇄ 枚举', types: ['bool-enum', 'enum-bool'] },
   { label: '文本 ⇄ 数值', types: ['parse-number', 'number-string'] },
-  { label: '同类型转换', types: ['invert', 'enum', 'scale', 'map-range', 'round', 'unit', 'clamp'] },
+  { label: '数值类型转换', types: ['int-number', 'round'] },
+  { label: '同类型转换', types: ['invert', 'enum', 'reciprocal', 'scale', 'map-range', 'unit', 'clamp'] },
 ]
 const unitRoutes = [
   ['celsius', 'fahrenheit'], ['fahrenheit', 'celsius'], ['celsius', 'kelvin'],
-  ['kelvin', 'celsius'], ['ratio', 'percent'], ['percent', 'ratio'],
+  ['kelvin', 'celsius'], ['kelvin', 'mired'], ['mired', 'kelvin'],
+  ['ratio', 'percent'], ['percent', 'ratio'],
   ['celsius', 'celsius'], ['fahrenheit', 'fahrenheit'], ['kelvin', 'kelvin'],
-  ['ratio', 'ratio'], ['percent', 'percent'],
+  ['mired', 'mired'], ['ratio', 'ratio'], ['percent', 'percent'],
 ] as const
 
 function outputType(input: ValueType, transforms: MappingTransform[]): ValueType {
   return transforms.reduce<ValueType>((current, transform) => {
-    if (transform.type === 'scale' || transform.type === 'unit' || transform.type === 'clamp' || transform.type === 'map-range' || transform.type === 'parse-number' || transform.type === 'enum-number' || transform.type === 'bool-number') return 'number'
+    if (transform.type === 'reciprocal' || transform.type === 'int-number' || transform.type === 'scale' || transform.type === 'unit' || transform.type === 'clamp' || transform.type === 'map-range' || transform.type === 'parse-number' || transform.type === 'enum-number' || transform.type === 'bool-number') return 'number'
     if (transform.type === 'range-enum' || transform.type === 'bool-enum') return 'enum'
     if (transform.type === 'threshold' || transform.type === 'enum-bool') return 'bool'
     if (transform.type === 'round') return 'int'
@@ -48,6 +50,7 @@ function defaultTransform(type: MappingTransformType): MappingTransform {
 
 function supported(type: MappingTransformType, input: ValueType): boolean {
   if (type === 'invert') return input === 'bool'
+  if (type === 'int-number') return input === 'int'
   if (type === 'enum') return input === 'enum' || input === 'string'
   if (type === 'enum-number') return input === 'enum' || input === 'string'
   if (type === 'bool-enum') return input === 'bool'
@@ -161,6 +164,8 @@ function TransformEditor({ transform, index, count, onChange, onMove, onRemove }
     {transform.type === 'parse-number' && <p className="profile-transform-note">将数字文本解析为 number；反向写入时生成不带多余零的规范文本。</p>}
     {transform.type === 'number-string' && <p className="profile-transform-note">将 int / number 格式化为文本；反向写入时解析并校验数值类型。</p>}
     {transform.type === 'invert' && <p className="profile-transform-note">布尔值自动执行 true ↔ false，无需附加参数。</p>}
+    {transform.type === 'reciprocal' && <p className="profile-transform-note">计算 1 ÷ 输入值；再次执行即可还原，输入值不能为 0。</p>}
+    {transform.type === 'int-number' && <p className="profile-transform-note">将安全范围内的 int 无损转换为 number；反向写入仅接受安全整数。</p>}
   </article>
 }
 
