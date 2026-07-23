@@ -115,7 +115,7 @@ M0 退出条件：Apple Home 实机配对、双向控制、多桥运行和三次
 - [x] 定义所有稳定 ID 的格式和字符限制；
 - [x] 定义设备可用性：online、offline、unknown；
 - [x] 区分 Provider 暂时离线、PostgreSQL 持久禁用和 Provider 删除 tombstone；
-- [x] 内置统一模型扩充到 27 种，覆盖环境、安防、恒温器、独立空调、冷暖设备、门锁、阀门、媒体和清洁家电；
+- [x] 内置统一模型重整并扩充到 36 种，覆盖环境、安防、空气与温控、门窗、水务、能源、媒体和清洁设备；
 - [x] 自定义统一模型支持新增、删除、PostgreSQL 持久化和占用保护；
 
 ### 2.2 类型系统
@@ -136,7 +136,7 @@ M0 退出条件：Apple Home 实机配对、双向控制、多桥运行和三次
 ### 2.3 当前模型契约
 
 - [x] 虚拟开关统一使用 `switch/power` Capability；
-- [x] 温度/湿度统一使用 `single-property-sensor` 的 `sensor/value`；
+- [x] 移除语义不明确的 `single-property-sensor`，温度、湿度及其他测量类型使用独立稳定路径；
 - [x] 一次性升级设备 API 和前端到 schema v1；
 - [x] HomeKit Target 改为读取 Capability；
 - [x] 删除 Target 中对简化 State 字段的直接依赖；
@@ -401,7 +401,7 @@ M1.1 退出条件：新增一种普通设备属性不需要修改 `Device` Go �
 - [x] Speaker；
 - [x] Window Covering。
 
-当前 27 种内置统一模型中，26 种已登记 HomeKit Consumer 合约；`robot-vacuum` 因 HAP 没有原生扫地机器人 Service 而明确保持不支持，不伪装成开关或风扇。详细对应关系见 `docs/homekit-model-support.md`。
+当前 36 种内置统一模型中，27 种已登记 HomeKit Consumer 合约；机器人吸尘器以及 HAP 没有原生语义的气压、噪声、水位、土壤湿度、水泵、热水器、电力计量和充电桩明确保持不支持，不伪装成开关。详细对应关系见 `docs/homekit-model-support.md`。
 
 每种设备必须完成：
 

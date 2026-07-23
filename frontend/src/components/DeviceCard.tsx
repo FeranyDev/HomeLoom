@@ -18,9 +18,13 @@ export function DeviceCard({ device, pending, onPowerChange, onDetails, onMappin
   const power = deviceProperty(device, 'switch', 'power')?.bool ?? false
   const temperature = deviceProperty(device, 'temperature', 'current-temperature')?.number
   const humidity = deviceProperty(device, 'humidity', 'current-humidity')?.number
-	const singleSensor = device.endpoints.flatMap((endpoint) => endpoint.capabilities).find((capability) => capability.id === 'sensor')?.properties.find((property) => property.definition.id === 'value')
-	const sensorValue = singleSensor?.value.number
-	const sensorUnit = singleSensor?.definition.unit === 'celsius' ? '°C' : singleSensor?.definition.unit === 'percent' ? '%' : singleSensor?.definition.unit ?? ''
+	const measurement = device.type === 'temperature-sensor' ? { value: temperature, unit: '°C' }
+		: device.type === 'humidity-sensor' ? { value: humidity, unit: '%' }
+		: device.type === 'pressure-sensor' ? { value: deviceProperty(device, 'pressure', 'current-pressure')?.number, unit: 'hPa' }
+		: device.type === 'noise-sensor' ? { value: deviceProperty(device, 'noise', 'current-level')?.number, unit: 'dB' }
+		: device.type === 'water-level-sensor' ? { value: deviceProperty(device, 'water-level', 'current-level')?.number, unit: '%' }
+		: device.type === 'soil-moisture-sensor' ? { value: deviceProperty(device, 'soil-moisture', 'current-moisture')?.number, unit: '%' }
+		: null
   const contact = deviceProperty(device, 'contact', 'contact-detected')?.bool
   const motion = deviceProperty(device, 'motion', 'motion-detected')?.bool
   const advancedCapability = device.type === 'fan' ? 'fan' : 'air-purifier'
@@ -53,15 +57,16 @@ export function DeviceCard({ device, pending, onPowerChange, onDetails, onMappin
           <span>{pending ? '同步中' : !device.online ? '不可用' : power ? '已开启' : '已关闭'}</span>
           <span className="switch-track"><span /></span>
         </button>
-      ) : device.type === 'single-property-sensor' ? (
+      ) : measurement ? (
         <div className="temperature">
-          <strong>{device.online ? sensorValue?.toFixed(1) : '—'}</strong>
-          <span>{sensorUnit}</span>
+          <strong>{device.online ? measurement.value?.toFixed(1) : '—'}</strong>
+          <span>{measurement.unit}</span>
         </div>
       ) : device.type === 'temperature-humidity-sensor' ? <div className="dual-sensor"><div><strong>{device.online ? temperature?.toFixed(1) : '—'}</strong><span>°C</span></div><div><strong>{device.online ? humidity?.toFixed(1) : '—'}</strong><span>%</span></div></div>
         : device.type === 'fan' || device.type === 'air-purifier' ? <div className={`sensor-state ${device.online && active ? 'is-active' : ''}`}><strong>{!device.online ? '不可用' : `${active ? '运行中' : '已停止'} · ${speed?.toFixed(0) ?? 0}%`}</strong><span>{device.type === 'fan' ? 'FAN' : `AIR · 滤芯 ${filterLife?.toFixed(0) ?? '—'}%`}</span></div>
         : device.type === 'window-covering' ? <div className="temperature"><strong>{device.online ? position ?? '—' : '—'}</strong><span>%</span></div>
-        : <div className={`sensor-state ${device.online && (contact || motion) ? 'is-active' : ''}`}><strong>{!device.online ? '不可用' : device.type === 'contact-sensor' ? (contact ? '已闭合' : '已打开') : (motion ? '检测到活动' : '无活动')}</strong><span>{device.type === 'contact-sensor' ? 'CONTACT' : 'MOTION'}</span></div>
+        : device.type === 'contact-sensor' || device.type === 'motion-sensor' ? <div className={`sensor-state ${device.online && (contact || motion) ? 'is-active' : ''}`}><strong>{!device.online ? '不可用' : device.type === 'contact-sensor' ? (contact ? '已闭合' : '已打开') : (motion ? '检测到活动' : '无活动')}</strong><span>{device.type === 'contact-sensor' ? 'CONTACT' : 'MOTION'}</span></div>
+        : <div className={`sensor-state ${device.online ? 'is-active' : ''}`}><strong>{device.online ? '状态可用' : '不可用'}</strong><span>{String(device.type).toUpperCase()}</span></div>
       }</div>
 
 	  <dl className="device-card__metadata"><div><dt>设备来源</dt><dd>{device.providerId}</dd></div><div><dt>统一模型</dt><dd>{device.type}</dd></div><div><dt>家庭 / 房间</dt><dd>{deviceLocationLabel(device)}</dd></div><div><dt>上次更新</dt><dd>{updatedAt}</dd></div></dl>

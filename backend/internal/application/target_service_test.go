@@ -176,13 +176,19 @@ func TestTargetSaveAcceptsEveryHomeKitConsumerModel(t *testing.T) {
 	store := &targetStoreStub{}
 	service := NewTargetService(nil, store)
 	var devices []target.VirtualDevice
+	unsupported := map[device.Type]bool{
+		device.TypePressureSensor: true, device.TypeNoiseSensor: true,
+		device.TypeWaterLevelSensor: true, device.TypeSoilMoistureSensor: true,
+		device.TypePump: true, device.TypeWaterHeater: true, device.TypePowerMeter: true,
+		device.TypeEVCharger: true, device.TypeRobotVacuum: true,
+	}
 	for _, model := range device.ModelContracts() {
 		known, supported := mapping.ConsumerModelSupport("homekit", model.DeviceType)
 		if !known {
 			t.Fatalf("HomeKit consumer registry is missing")
 		}
 		if !supported {
-			if model.DeviceType != device.TypeRobotVacuum {
+			if !unsupported[model.DeviceType] {
 				t.Errorf("unexpected unsupported HomeKit model %q", model.DeviceType)
 			}
 			continue
@@ -194,7 +200,7 @@ func TestTargetSaveAcceptsEveryHomeKitConsumerModel(t *testing.T) {
 	if _, err := service.Save(context.Background(), config); err != nil {
 		t.Fatalf("Save() rejected a HomeKit-supported model: %v", err)
 	}
-	if len(store.saved) != 1 || len(store.saved[0].Devices) != len(device.ModelContracts())-1 {
+	if len(store.saved) != 1 || len(store.saved[0].Devices) != len(device.ModelContracts())-len(unsupported) {
 		t.Fatalf("saved HomeKit devices = %d", len(store.saved[0].Devices))
 	}
 }

@@ -6,51 +6,27 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 )
 
-func TestSinglePropertySensorOffersSelectableHomeKitSemantics(t *testing.T) {
-	contract, found := HomeKitConsumerContract(device.TypeSinglePropertySensor)
-	if !found || len(contract.Parameters) != 4 {
-		t.Fatalf("contract = %#v, found=%v", contract, found)
+func TestMeasurementSensorsKeepExplicitHomeKitSemantics(t *testing.T) {
+	tests := []struct {
+		deviceType   device.Type
+		modelPath    device.ParameterPath
+		consumerPath string
+	}{
+		{device.TypeTemperatureSensor, device.ParameterPath{EndpointID: "main", CapabilityID: "temperature", PropertyID: "current-temperature"}, "TemperatureSensor.CurrentTemperature"},
+		{device.TypeHumiditySensor, device.ParameterPath{EndpointID: "main", CapabilityID: "humidity", PropertyID: "current-humidity"}, "HumiditySensor.CurrentRelativeHumidity"},
 	}
-	wantModelPath := device.ParameterPath{EndpointID: "main", CapabilityID: "sensor", PropertyID: "value"}
-	wantTargets := map[string]bool{
-		"TemperatureSensor.CurrentTemperature":   false,
-		"HumiditySensor.CurrentRelativeHumidity": false,
-	}
-	for _, parameter := range contract.Parameters[:2] {
-		if parameter.ModelPath() != wantModelPath || parameter.Level != device.ParameterOptional {
-			t.Fatalf("parameter = %#v", parameter)
+	for _, test := range tests {
+		contract, found := HomeKitConsumerContract(test.deviceType)
+		if !found || len(contract.Parameters) != 3 {
+			t.Fatalf("contract %q = %#v, found=%v", test.deviceType, contract, found)
 		}
-		if _, exists := wantTargets[parameter.Target]; !exists {
-			t.Fatalf("unexpected target %q", parameter.Target)
+		if parameter := contract.Parameters[0]; parameter.ModelPath() != test.modelPath || parameter.Level != device.ParameterRequired || parameter.Target != test.consumerPath {
+			t.Fatalf("measurement mapping %q = %#v", test.deviceType, parameter)
 		}
-		wantTargets[parameter.Target] = true
-	}
-	if contract.Parameters[2].Source != (device.ParameterPath{EndpointID: "main", CapabilityID: "battery", PropertyID: "level"}) || contract.Parameters[2].Target != "BatteryService.BatteryLevel" || contract.Parameters[2].Level != device.ParameterOptional {
-		t.Fatalf("battery level mapping = %#v", contract.Parameters[2])
-	}
-	if contract.Parameters[3].Source != (device.ParameterPath{EndpointID: "main", CapabilityID: "battery", PropertyID: "low"}) || contract.Parameters[3].Target != "BatteryService.StatusLowBattery" || contract.Parameters[3].Level != device.ParameterOptional {
-		t.Fatalf("low battery mapping = %#v", contract.Parameters[3])
-	}
-	for target, found := range wantTargets {
-		if !found {
-			t.Fatalf("missing target %q", target)
+		property, found := FindConsumerProperty("homekit", test.deviceType, test.consumerPath)
+		if !found || property.DefaultModelPath != test.modelPath || property.Type != device.ValueTypeNumber {
+			t.Fatalf("catalog measurement property %q = %#v", test.deviceType, property)
 		}
-	}
-
-	catalog := BuiltInConsumerCatalogs()
-	var matched int
-	for _, property := range catalog[0].Properties {
-		if property.DeviceType == device.TypeSinglePropertySensor {
-			matched++
-			if property.ID == "TemperatureSensor.CurrentTemperature" || property.ID == "HumiditySensor.CurrentRelativeHumidity" {
-				if property.DefaultModelPath != wantModelPath || property.Type != device.ValueTypeNumber {
-					t.Fatalf("catalog sensor property = %#v", property)
-				}
-			}
-		}
-	}
-	if matched != 4 {
-		t.Fatalf("single sensor consumer properties = %d", matched)
 	}
 }
 
@@ -108,7 +84,12 @@ func TestAirConditionerOffersHomeKitHeaterCoolerSemantics(t *testing.T) {
 }
 
 func TestHomeKitSupportsEveryNativeUnifiedModel(t *testing.T) {
-	unsupported := map[device.Type]bool{device.TypeRobotVacuum: true}
+	unsupported := map[device.Type]bool{
+		device.TypePressureSensor: true, device.TypeNoiseSensor: true,
+		device.TypeWaterLevelSensor: true, device.TypeSoilMoistureSensor: true,
+		device.TypePump: true, device.TypeWaterHeater: true, device.TypePowerMeter: true,
+		device.TypeEVCharger: true, device.TypeRobotVacuum: true,
+	}
 	contracts := HomeKitConsumerContracts()
 	if len(contracts) != len(device.ModelContracts())-len(unsupported) {
 		t.Fatalf("HomeKit contracts = %d, models = %d", len(contracts), len(device.ModelContracts()))

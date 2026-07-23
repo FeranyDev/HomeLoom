@@ -686,7 +686,7 @@ func TestConsumerDeviceComposesAuxiliarySourcesAndRoutesWritesByPriority(t *test
 	}
 }
 
-func TestSinglePropertySensorConsumerRouteSelectsHomeKitSemantic(t *testing.T) {
+func TestTemperatureSensorConsumerRouteKeepsExplicitSemantic(t *testing.T) {
 	ctx := context.Background()
 	store, err := openTestStore(t, ctx)
 	if err != nil {
@@ -698,15 +698,15 @@ func TestSinglePropertySensorConsumerRouteSelectsHomeKitSemantic(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := profiles.CreateBinding(ctx, mapping.Binding{
-		ID: "single-sensor-temperature", Stage: mapping.StageConsumer,
-		ProviderID: "provider-1", DeviceID: "sensor-1", DeviceType: device.TypeSinglePropertySensor,
-		ModelEndpointID: "main", ModelCapabilityID: "sensor", ModelPropertyID: "value",
+		ID: "temperature-sensor-homekit", Stage: mapping.StageConsumer,
+		ProviderID: "provider-1", DeviceID: "sensor-1", DeviceType: device.TypeTemperatureSensor,
+		ModelEndpointID: "main", ModelCapabilityID: "temperature", ModelPropertyID: "current-temperature",
 		TargetID: "apple-main", ConsumerDeviceID: "room-sensor",
 		ConsumerID: "homekit", ConsumerProperty: "TemperatureSensor.CurrentTemperature", Enabled: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	item := device.Device{SchemaVersion: 1, ID: "sensor-1", ProviderID: "provider-1", Name: "Room Sensor", Type: device.TypeSinglePropertySensor, Availability: device.AvailabilityOnline, Online: true, LastUpdateAt: time.Now().UTC(), Endpoints: []device.Endpoint{{ID: "main", Name: "Main", Type: "sensor", Capabilities: []device.Capability{{ID: "sensor", Type: "sensor", Properties: []device.Property{{Definition: device.PropertyDefinition{ID: "value", Name: "传感器值", Type: device.ValueTypeNumber, Unit: "celsius", Readable: true, Notifiable: true}, Value: device.NumberValue(22.5)}}}}}}}
+	item := device.Device{SchemaVersion: 1, ID: "sensor-1", ProviderID: "provider-1", Name: "Room Sensor", Type: device.TypeTemperatureSensor, Availability: device.AvailabilityOnline, Online: true, LastUpdateAt: time.Now().UTC(), Endpoints: []device.Endpoint{{ID: "main", Name: "Main", Type: "sensor", Capabilities: []device.Capability{{ID: "temperature", Type: "temperature", Properties: []device.Property{{Definition: device.PropertyDefinition{ID: "current-temperature", Name: "当前温度", Type: device.ValueTypeNumber, Unit: "celsius", Readable: true, Notifiable: true}, Value: device.NumberValue(22.5)}}}}}}}
 	if err := item.NormalizeModelParameters(); err != nil {
 		t.Fatal(err)
 	}
@@ -717,9 +717,6 @@ func TestSinglePropertySensorConsumerRouteSelectsHomeKitSemantic(t *testing.T) {
 	temperature, found := projected.Property("main", "temperature", "current-temperature")
 	if !found || temperature.Value.Number == nil || *temperature.Value.Number != 22.5 {
 		t.Fatalf("temperature projection = %#v, found=%v", temperature, found)
-	}
-	if _, found := projected.Property("main", "humidity", "current-humidity"); found {
-		t.Fatal("temperature-only route unexpectedly projected humidity")
 	}
 }
 

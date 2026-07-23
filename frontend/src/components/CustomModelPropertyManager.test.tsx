@@ -41,5 +41,32 @@ describe('CustomModelPropertyManager', () => {
     expect(screen.getByRole('dialog', { name: '自定义统一模型属性' })).toBeInTheDocument()
     expect(screen.getByLabelText('设备模型（deviceType）')).toHaveValue('fan')
     expect(screen.getByLabelText('设备模型（deviceType）')).toBeDisabled()
+    rerender(<CustomModelPropertyManager deviceType="switch" onChanged={vi.fn()} createRevision={1} />)
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '自定义统一模型属性' })).not.toBeInTheDocument())
+  })
+
+  it('shows only the constraints supported by the selected value type', async () => {
+    render(<CustomModelPropertyManager onChanged={vi.fn()} />)
+    await screen.findByText(/还没有自定义模型属性/)
+    await userEvent.click(screen.getByRole('button', { name: '＋ 新建自定义属性' }))
+
+    const valueType = screen.getByLabelText('值类型（type）')
+    expect(screen.queryByLabelText('单位（unit）')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('最小值（min）')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('枚举值（enum）')).not.toBeInTheDocument()
+
+    await userEvent.selectOptions(valueType, 'number')
+    expect(screen.getByLabelText('单位（unit）')).toBeInTheDocument()
+    expect(screen.getByLabelText('最小值（min）')).toBeInTheDocument()
+    expect(screen.getByLabelText('最大值（max）')).toBeInTheDocument()
+    expect(screen.getByLabelText('步长（step）')).toBeInTheDocument()
+
+    await userEvent.selectOptions(valueType, 'enum')
+    expect(screen.getByLabelText('枚举值（enum）')).toBeInTheDocument()
+    expect(screen.queryByLabelText('单位（unit）')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('最小值（min）')).not.toBeInTheDocument()
+
+    await userEvent.selectOptions(valueType, 'bool')
+    expect(screen.queryByLabelText('枚举值（enum）')).not.toBeInTheDocument()
   })
 })

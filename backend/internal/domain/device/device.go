@@ -18,16 +18,16 @@ type StateTransport string
 const (
 	SchemaVersion = 1
 
-	TypeSwitch               Type = "switch"
-	TypeSinglePropertySensor Type = "single-property-sensor"
-	// Deprecated sensor types are retained only for reading legacy Provider
-	// configurations and snapshots. NormalizeModelParameters migrates them to
-	// TypeSinglePropertySensor before they enter the unified registry.
+	TypeSwitch                    Type = "switch"
 	TypeTemperatureSensor         Type = "temperature-sensor"
+	TypeHumiditySensor            Type = "humidity-sensor"
 	TypeTemperatureHumiditySensor Type = "temperature-humidity-sensor"
+	TypePressureSensor            Type = "pressure-sensor"
+	TypeNoiseSensor               Type = "noise-sensor"
+	TypeWaterLevelSensor          Type = "water-level-sensor"
+	TypeSoilMoistureSensor        Type = "soil-moisture-sensor"
 	TypeLightbulb                 Type = "lightbulb"
 	TypeOutlet                    Type = "outlet"
-	TypeHumiditySensor            Type = "humidity-sensor"
 	TypeContactSensor             Type = "contact-sensor"
 	TypeMotionSensor              Type = "motion-sensor"
 	TypeFan                       Type = "fan"
@@ -48,6 +48,10 @@ const (
 	TypeGarageDoor                Type = "garage-door"
 	TypeSecuritySystem            Type = "security-system"
 	TypeValve                     Type = "valve"
+	TypePump                      Type = "pump"
+	TypeWaterHeater               Type = "water-heater"
+	TypePowerMeter                Type = "power-meter"
+	TypeEVCharger                 Type = "ev-charger"
 	TypeSpeaker                   Type = "speaker"
 	TypeRobotVacuum               Type = "robot-vacuum"
 )

@@ -145,16 +145,8 @@ func (c *Config) applyDefaults() {
 		if item.ID == "" {
 			item.ID = "xiaomi-" + stableID(item.DID)
 		}
-		legacyType := item.Type
-		if legacyType == device.TypeTemperatureSensor || legacyType == device.TypeHumiditySensor {
-			item.Type = device.TypeSinglePropertySensor
-		}
 		for propertyIndex := range item.Properties {
 			mapping := &item.Properties[propertyIndex]
-			if (legacyType == device.TypeTemperatureSensor && mapping.CapabilityID == "temperature" && mapping.PropertyID == "current-temperature") ||
-				(legacyType == device.TypeHumiditySensor && mapping.CapabilityID == "humidity" && mapping.PropertyID == "current-humidity") {
-				mapping.CapabilityID, mapping.CapabilityType, mapping.PropertyID = "sensor", "sensor", "value"
-			}
 			if mapping.EndpointID == "" {
 				mapping.EndpointID = "main"
 			}

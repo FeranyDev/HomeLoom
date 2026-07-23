@@ -48,7 +48,7 @@ beforeEach(() => {
   api.listAuditEvents.mockResolvedValue([])
   api.getSystemVersion.mockResolvedValue({ version: 'test', commit: 'abc', buildTime: 'now' })
   api.getRuntimeSettings.mockResolvedValue(null)
-  api.listModelContracts.mockResolvedValue(Array.from({ length: 27 }, (_, index) => ({ deviceType: `model-${index + 1}`, name: `模型 ${index + 1}`, version: 1, builtIn: true, parameters: [], custom: { publisher: { level: 'custom', behavior: 'preserve-and-mark-custom' }, consumer: { level: 'custom', behavior: 'explicit-path-mapping-only' } } })))
+  api.listModelContracts.mockResolvedValue(Array.from({ length: 36 }, (_, index) => ({ deviceType: `model-${index + 1}`, name: `模型 ${index + 1}`, version: 1, builtIn: true, parameters: [], custom: { publisher: { level: 'custom', behavior: 'preserve-and-mark-custom' }, consumer: { level: 'custom', behavior: 'explicit-path-mapping-only' } } })))
   api.listCustomModelProperties.mockResolvedValue([])
   api.subscribeEvents.mockReturnValue(() => {})
   api.logout.mockResolvedValue(undefined)
@@ -127,7 +127,7 @@ describe('App integration', () => {
     render(<App />)
     const user = userEvent.setup()
     await user.click(await screen.findByRole('button', { name: '统一模型' }))
-    expect(await screen.findByLabelText('27 统一设备模型')).toBeInTheDocument()
+    expect(await screen.findByLabelText('36 统一设备模型')).toBeInTheDocument()
     expect(api.listModelContracts).toHaveBeenCalled()
   })
 

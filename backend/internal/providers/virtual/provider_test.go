@@ -51,7 +51,7 @@ func TestProviderUsesDatabaseDeviceConfiguration(t *testing.T) {
 	if items[0].ID != "desk-light" || !boolProperty(items[0], "switch", "power") {
 		t.Fatalf("switch = %#v", items[0])
 	}
-	if items[1].ID != "outdoor-temp" || items[1].Online || items[1].Type != device.TypeSinglePropertySensor || numberProperty(items[1], "sensor", "value") != 12.5 {
+	if items[1].ID != "outdoor-temp" || items[1].Online || items[1].Type != device.TypeTemperatureSensor || numberProperty(items[1], "temperature", "current-temperature") != 12.5 {
 		t.Fatalf("sensor = %#v", items[1])
 	}
 }
@@ -104,18 +104,18 @@ func TestProviderSupportsHumidityContactAndMotionSensors(t *testing.T) {
 		t.Fatal(err)
 	}
 	items, _ := provider.List(context.Background())
-	if len(items) != 4 || items[0].Type != device.TypeContactSensor || items[1].Type != device.TypeSinglePropertySensor || items[2].Type != device.TypeMotionSensor || items[3].Type != device.TypeTemperatureHumiditySensor {
+	if len(items) != 4 || items[0].Type != device.TypeContactSensor || items[1].Type != device.TypeHumiditySensor || items[2].Type != device.TypeMotionSensor || items[3].Type != device.TypeTemperatureHumiditySensor {
 		t.Fatalf("items = %#v", items)
 	}
 	if numberProperty(items[3], "temperature", "current-temperature") != 22.4 || numberProperty(items[3], "humidity", "current-humidity") != 48.5 {
 		t.Fatalf("combined sensor = %#v", items[3])
 	}
 	humidity := 72.5
-	updated, err := provider.Simulate(context.Background(), providersdk.SimulationRequest{DeviceID: "humidity", Properties: []providersdk.PropertyWriteRequest{{EndpointID: "main", CapabilityID: "sensor", PropertyID: "value", Value: device.NumberValue(humidity)}}})
+	updated, err := provider.Simulate(context.Background(), providersdk.SimulationRequest{DeviceID: "humidity", Properties: []providersdk.PropertyWriteRequest{{EndpointID: "main", CapabilityID: "humidity", PropertyID: "current-humidity", Value: device.NumberValue(humidity)}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	property, ok := updated.Property("main", "sensor", "value")
+	property, ok := updated.Property("main", "humidity", "current-humidity")
 	if !ok || property.Value.Number == nil || *property.Value.Number != humidity {
 		t.Fatalf("humidity = %#v", updated)
 	}
@@ -230,11 +230,11 @@ func TestSimulateUpdatesStateAndPublishesSnapshot(t *testing.T) {
 	defer unsubscribe()
 	online := false
 	temperature := 18.25
-	updated, err := provider.Simulate(context.Background(), providersdk.SimulationRequest{DeviceID: "virtual-temperature-1", Online: &online, Properties: []providersdk.PropertyWriteRequest{{EndpointID: "main", CapabilityID: "sensor", PropertyID: "value", Value: device.NumberValue(temperature)}}})
+	updated, err := provider.Simulate(context.Background(), providersdk.SimulationRequest{DeviceID: "virtual-temperature-1", Online: &online, Properties: []providersdk.PropertyWriteRequest{{EndpointID: "main", CapabilityID: "temperature", PropertyID: "current-temperature", Value: device.NumberValue(temperature)}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Online || numberProperty(updated, "sensor", "value") != temperature {
+	if updated.Online || numberProperty(updated, "temperature", "current-temperature") != temperature {
 		t.Fatalf("updated = %#v", updated)
 	}
 	select {
@@ -246,7 +246,7 @@ func TestSimulateUpdatesStateAndPublishesSnapshot(t *testing.T) {
 		t.Fatal("simulation event was not published")
 	}
 	invalid := 500.0
-	if _, err := provider.Simulate(context.Background(), providersdk.SimulationRequest{DeviceID: updated.ID, Properties: []providersdk.PropertyWriteRequest{{EndpointID: "main", CapabilityID: "sensor", PropertyID: "value", Value: device.NumberValue(invalid)}}}); !errors.Is(err, providersdk.ErrSimulationInvalid) {
+	if _, err := provider.Simulate(context.Background(), providersdk.SimulationRequest{DeviceID: updated.ID, Properties: []providersdk.PropertyWriteRequest{{EndpointID: "main", CapabilityID: "temperature", PropertyID: "current-temperature", Value: device.NumberValue(invalid)}}}); !errors.Is(err, providersdk.ErrSimulationInvalid) {
 		t.Fatalf("invalid error = %v", err)
 	}
 }
@@ -303,7 +303,7 @@ func TestProviderManifestAndCapabilities(t *testing.T) {
 
 func TestReadProperty(t *testing.T) {
 	provider := NewProvider()
-	request := providersdk.PropertyReadRequest{DeviceID: "virtual-temperature-1", EndpointID: "main", CapabilityID: "sensor", PropertyID: "value"}
+	request := providersdk.PropertyReadRequest{DeviceID: "virtual-temperature-1", EndpointID: "main", CapabilityID: "temperature", PropertyID: "current-temperature"}
 	property, err := provider.ReadProperty(context.Background(), request)
 	if err != nil || property.Value.Number == nil || *property.Value.Number != 23.6 {
 		t.Fatalf("ReadProperty() = %#v, %v", property, err)

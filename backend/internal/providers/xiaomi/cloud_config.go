@@ -73,10 +73,6 @@ func (c *CloudConfig) applyDefaults() {
 		if item.ID == "" {
 			item.ID = "xiaomi-miot-" + stableID(item.DID)
 		}
-		legacyType := item.Type
-		if legacyType == device.TypeTemperatureSensor || legacyType == device.TypeHumiditySensor {
-			item.Type = device.TypeSinglePropertySensor
-		}
 		for propertyIndex := range item.Properties {
 			mapping := &item.Properties[propertyIndex]
 			if mapping.EndpointID == "" {

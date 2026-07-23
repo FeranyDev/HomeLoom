@@ -674,7 +674,7 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .custom-model-fields input { width: 100%; }
 .model-delete-action { display: block; margin-top: 10px; }
 .model-catalog-layout { display: grid; grid-template-columns: 265px minmax(0, 1fr); align-items: start; gap: 18px; }
-.model-type-list { display: grid; position: sticky; top: 14px; border: 1px solid #cecdc5; background: rgba(246, 245, 239, .82); }
+.model-type-list { display: grid; position: sticky; top: 14px; max-height: calc(100vh - 28px); max-height: calc(100dvh - 28px); overflow-y: auto; overscroll-behavior-y: contain; scrollbar-gutter: stable; border: 1px solid #cecdc5; background: rgba(246, 245, 239, .82); }
 .model-type-list button { display: grid; grid-template-columns: 1fr auto; gap: 5px 9px; padding: 14px 16px; border: 0; border-bottom: 1px solid #d9d8d0; background: transparent; color: #525850; text-align: left; cursor: pointer; }
 .model-type-list button:last-child { border-bottom: 0; }
 .model-type-list button:hover { background: #fff; }
@@ -1171,7 +1171,7 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 	.model-catalog-summary { justify-items: start; }
 	.custom-model-fields { grid-template-columns: 1fr; }
 	.model-catalog-layout { grid-template-columns: 1fr; }
-	.model-type-list { position: static; grid-template-columns: repeat(2, 1fr); }
+	.model-type-list { position: static; grid-template-columns: repeat(2, 1fr); max-height: none; overflow-y: visible; overscroll-behavior-y: auto; scrollbar-gutter: auto; }
 	.model-type-list button { border-right: 1px solid #d9d8d0; }
 	.model-contract-heading { grid-template-columns: 1fr; }
 	.model-field-toolbar { align-items: stretch; flex-direction: column; }

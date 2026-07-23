@@ -80,6 +80,11 @@ export function UnifiedModelManager({ onModelCountChange }: { onModelCountChange
   }, [selected, level, query])
   const endpoints = useMemo(() => {
     const result = new Map<string, Map<string, ModelParameter[]>>()
+    const requiredCapabilities = new Set(
+      selected?.parameters
+        .filter((parameter) => parameter.level === 'required')
+        .map((parameter) => `${parameter.path.endpointId}/${parameter.path.capabilityId}`),
+    )
     for (const parameter of visibleParameters) {
       const capabilities = result.get(parameter.path.endpointId) ?? new Map<string, ModelParameter[]>()
       const parameters = capabilities.get(parameter.path.capabilityId) ?? []
@@ -87,8 +92,17 @@ export function UnifiedModelManager({ onModelCountChange }: { onModelCountChange
       capabilities.set(parameter.path.capabilityId, parameters)
       result.set(parameter.path.endpointId, capabilities)
     }
+    for (const [endpointId, capabilities] of result) {
+      const sortedCapabilities = [...capabilities].sort(([left], [right]) =>
+        Number(requiredCapabilities.has(`${endpointId}/${right}`)) - Number(requiredCapabilities.has(`${endpointId}/${left}`)),
+      )
+      result.set(endpointId, new Map(sortedCapabilities.map(([capabilityId, parameters]) => [
+        capabilityId,
+        [...parameters].sort((left, right) => Number(right.level === 'required') - Number(left.level === 'required')),
+      ])))
+    }
     return result
-  }, [visibleParameters])
+  }, [selected, visibleParameters])
 
   if (loading) return <section className="model-catalog-loading" aria-label="统一模型加载中">正在读取统一模型…</section>
   if (error && models.length === 0) return <section className="model-catalog-loading"><p className="inline-error" role="alert">{error}</p><button onClick={() => void refresh()}>重新读取</button></section>
@@ -101,7 +115,7 @@ export function UnifiedModelManager({ onModelCountChange }: { onModelCountChange
     {error && <p className="inline-error" role="alert">{error}</p>}
     {creatingModel && <div className="custom-model-editor" role="dialog" aria-label="新增统一模型"><div className="form-heading"><div><p className="eyebrow">统一模型（UNIFIED MODEL）</p><h3>新增统一模型</h3></div><button onClick={() => setCreatingModel(false)}>关闭</button></div><p>先创建稳定的模型标识，再为它添加 Endpoint / Capability / Property 三级属性。模型创建后立即进入 Provider 与 Consumer 映射目录。</p><div className="custom-model-fields"><label>模型标识（deviceType）<input value={modelDraft.deviceType} onChange={(event) => setModelDraft({ ...modelDraft, deviceType: event.target.value })} placeholder="air-quality-monitor" /></label><label>显示名称（name）<input value={modelDraft.name} onChange={(event) => setModelDraft({ ...modelDraft, name: event.target.value })} placeholder="空气质量监测器" /></label><label>模型版本（version）<input type="number" min="1" value={modelDraft.version} onChange={(event) => setModelDraft({ ...modelDraft, version: Number(event.target.value) })} /></label></div><button className="add-button" onClick={() => void saveModel()}>创建并配置属性</button></div>}
     <div className="model-catalog-layout">
-      <aside className="model-type-list" aria-label="统一设备模型列表">
+      <aside className="model-type-list" aria-label="统一设备模型列表" tabIndex={0}>
         {models.map((model) => <button key={model.deviceType} className={selectedType === model.deviceType ? 'is-selected' : ''} onClick={() => { setSelectedType(model.deviceType); setLevel('all'); setQuery('') }}>
           <span>{modelLabel(model)}</span><code>v{model.version}</code>
           <small><i className="is-required">{countLevel(model, 'required')}</i> 必需 · <i className="is-optional">{countLevel(model, 'optional')}</i> 可选 · <i className="is-custom">{countLevel(model, 'custom')}</i> 自定义</small>

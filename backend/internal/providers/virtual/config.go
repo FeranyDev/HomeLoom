@@ -26,8 +26,6 @@ type DeviceConfig struct {
 	Energy       *float64            `json:"energy,omitempty"`
 	Temperature  *float64            `json:"temperature,omitempty"`
 	Humidity     *float64            `json:"humidity,omitempty"`
-	Value        *float64            `json:"value,omitempty"`
-	Unit         string              `json:"unit,omitempty"`
 	Contact      *bool               `json:"contact,omitempty"`
 	Motion       *bool               `json:"motion,omitempty"`
 	BatteryLevel *int64              `json:"batteryLevel,omitempty"`
@@ -65,8 +63,13 @@ func AllModelDeviceConfigs() []DeviceConfig {
 		{ID: "virtual-switch-1", Name: "客厅开关", Type: "switch", Online: boolValue(true), Power: boolValue(false)},
 		{ID: "virtual-lightbulb-1", Name: "客厅灯", Type: "lightbulb", Online: boolValue(true), Power: boolValue(true), Brightness: numberValue(80), ColorTemp: intValue(250), Hue: numberValue(35), Saturation: numberValue(45)},
 		{ID: "virtual-outlet-1", Name: "书房插座", Type: "outlet", Online: boolValue(true), Power: boolValue(false), InUse: boolValue(false), CurrentPower: numberValue(0), Energy: numberValue(1.25)},
-		{ID: "virtual-sensor-1", Name: "客厅温度", Type: "single-property-sensor", Online: boolValue(true), Value: numberValue(23.6), Unit: "celsius", BatteryLevel: intValue(91), LowBattery: boolValue(false)},
+		{ID: "virtual-temperature-1", Name: "客厅温度", Type: "temperature-sensor", Online: boolValue(true), Temperature: numberValue(23.6), BatteryLevel: intValue(91), LowBattery: boolValue(false)},
+		{ID: "virtual-humidity-1", Name: "客厅湿度", Type: "humidity-sensor", Online: boolValue(true), Humidity: numberValue(56.2), BatteryLevel: intValue(90), LowBattery: boolValue(false)},
 		{ID: "virtual-temperature-humidity-1", Name: "客厅温湿度", Type: "temperature-humidity-sensor", Online: boolValue(true), Temperature: numberValue(23.6), Humidity: numberValue(56.2), BatteryLevel: intValue(87), LowBattery: boolValue(false)},
+		{ID: "virtual-pressure-1", Name: "室外气压", Type: "pressure-sensor", Online: boolValue(true)},
+		{ID: "virtual-noise-1", Name: "客厅噪声", Type: "noise-sensor", Online: boolValue(true)},
+		{ID: "virtual-water-level-1", Name: "水箱水位", Type: "water-level-sensor", Online: boolValue(true)},
+		{ID: "virtual-soil-moisture-1", Name: "花园土壤湿度", Type: "soil-moisture-sensor", Online: boolValue(true)},
 		{ID: "virtual-contact-1", Name: "入户门", Type: "contact-sensor", Online: boolValue(true), Contact: boolValue(false), BatteryLevel: intValue(88), LowBattery: boolValue(false), Tampered: boolValue(false)},
 		{ID: "virtual-motion-1", Name: "走廊活动", Type: "motion-sensor", Online: boolValue(true), Motion: boolValue(false), BatteryLevel: intValue(84), LowBattery: boolValue(false), Tampered: boolValue(false)},
 		{ID: "virtual-fan-1", Name: "卧室风扇", Type: "fan", Online: boolValue(true), Active: boolValue(false), Speed: numberValue(35), Mode: "manual", SwingMode: boolValue(true), Direction: "clockwise", ControlLock: boolValue(false)},
@@ -87,6 +90,10 @@ func AllModelDeviceConfigs() []DeviceConfig {
 		{ID: "virtual-garage-door-1", Name: "车库门", Type: "garage-door", Online: boolValue(true)},
 		{ID: "virtual-security-system-1", Name: "家庭安防", Type: "security-system", Online: boolValue(true)},
 		{ID: "virtual-valve-1", Name: "花园水阀", Type: "valve", Online: boolValue(true)},
+		{ID: "virtual-pump-1", Name: "循环水泵", Type: "pump", Online: boolValue(true)},
+		{ID: "virtual-water-heater-1", Name: "热水器", Type: "water-heater", Online: boolValue(true)},
+		{ID: "virtual-power-meter-1", Name: "全屋电力计量", Type: "power-meter", Online: boolValue(true)},
+		{ID: "virtual-ev-charger-1", Name: "车库充电桩", Type: "ev-charger", Online: boolValue(true)},
 		{ID: "virtual-speaker-1", Name: "客厅扬声器", Type: "speaker", Online: boolValue(true)},
 		{ID: "virtual-robot-vacuum-1", Name: "扫地机器人", Type: "robot-vacuum", Online: boolValue(true)},
 	}
@@ -143,7 +150,10 @@ func configuredDevice(providerID string, item DeviceConfig) (device.Device, erro
 		availability = item.Availability
 	}
 	online := availability == device.AvailabilityOnline
-	finish := func(created device.Device) device.Device { created.SetAvailability(availability); return created }
+	finish := func(created device.Device) device.Device {
+		created.SetAvailability(availability)
+		return completeConfiguredDevice(created)
+	}
 	switch item.Type {
 	case "switch", "lightbulb", "outlet":
 		power := false
@@ -162,16 +172,6 @@ func configuredDevice(providerID string, item DeviceConfig) (device.Device, erro
 			return device.Device{}, err
 		}
 		return finish(created), nil
-	case "single-property-sensor":
-		value := 0.0
-		if item.Value != nil {
-			value = *item.Value
-		}
-		created := singlePropertySensorDevice(item.ID, providerID, item.Name, online, value, strings.TrimSpace(item.Unit))
-		if err := applyBatteryConfig(&created, item); err != nil {
-			return device.Device{}, err
-		}
-		return finish(created), nil
 	case "temperature-sensor":
 		temperature := 23.6
 		if item.Temperature != nil {
@@ -180,7 +180,7 @@ func configuredDevice(providerID string, item DeviceConfig) (device.Device, erro
 		if temperature < -100 || temperature > 200 {
 			return device.Device{}, fmt.Errorf("device %q temperature is outside -100..200", item.ID)
 		}
-		created := singlePropertySensorDevice(item.ID, providerID, item.Name, online, temperature, "celsius")
+		created := measurementSensorDevice(item.ID, providerID, item.Name, device.TypeTemperatureSensor, "temperature", "current-temperature", "当前温度", online, temperature, "celsius")
 		if err := applyBatteryConfig(&created, item); err != nil {
 			return device.Device{}, err
 		}
@@ -193,7 +193,7 @@ func configuredDevice(providerID string, item DeviceConfig) (device.Device, erro
 		if humidity < 0 || humidity > 100 {
 			return device.Device{}, fmt.Errorf("device %q humidity is outside 0..100", item.ID)
 		}
-		created := singlePropertySensorDevice(item.ID, providerID, item.Name, online, humidity, "percent")
+		created := measurementSensorDevice(item.ID, providerID, item.Name, device.TypeHumiditySensor, "humidity", "current-humidity", "当前湿度", online, humidity, "percent")
 		if err := applyBatteryConfig(&created, item); err != nil {
 			return device.Device{}, err
 		}
@@ -290,6 +290,43 @@ func configuredDevice(providerID string, item DeviceConfig) (device.Device, erro
 		}
 		return device.Device{}, fmt.Errorf("device %q has unsupported type %q", item.ID, item.Type)
 	}
+}
+
+// completeConfiguredDevice keeps concise demo configuration while ensuring the
+// Virtual Provider publishes every optional field in the selected contract.
+func completeConfiguredDevice(created device.Device) device.Device {
+	baseline, err := contractDevice(created.ID, created.ProviderID, created.Name, created.Type, created.IsOnline())
+	if err != nil || len(created.Endpoints) == 0 || len(baseline.Endpoints) == 0 {
+		return created
+	}
+	target := &created.Endpoints[0]
+	for _, sourceCapability := range baseline.Endpoints[0].Capabilities {
+		capabilityIndex := -1
+		for index := range target.Capabilities {
+			if target.Capabilities[index].ID == sourceCapability.ID {
+				capabilityIndex = index
+				break
+			}
+		}
+		if capabilityIndex < 0 {
+			target.Capabilities = append(target.Capabilities, sourceCapability)
+			continue
+		}
+		capability := &target.Capabilities[capabilityIndex]
+		for _, sourceProperty := range sourceCapability.Properties {
+			found := false
+			for _, current := range capability.Properties {
+				if current.Definition.ID == sourceProperty.Definition.ID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				capability.Properties = append(capability.Properties, sourceProperty)
+			}
+		}
+	}
+	return created
 }
 
 func configurableActiveDeviceValues(item DeviceConfig) (bool, float64, string, error) {

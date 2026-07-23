@@ -186,7 +186,7 @@ func defaultDevices(id string) map[string]device.Device {
 	temperatureID := prefix + "-temperature-1"
 	return map[string]device.Device{
 		switchID:      poweredDevice(switchID, id, "客厅开关", device.TypeSwitch, true, false),
-		temperatureID: singlePropertySensorDevice(temperatureID, id, "客厅温度", true, 23.6, "celsius"),
+		temperatureID: measurementSensorDevice(temperatureID, id, "客厅温度", device.TypeTemperatureSensor, "temperature", "current-temperature", "当前温度", true, 23.6, "celsius"),
 	}
 }
 
@@ -217,23 +217,23 @@ func poweredDevice(id, providerID, name string, deviceType device.Type, online, 
 	return item
 }
 
-func singlePropertySensorDevice(id, providerID, name string, online bool, value float64, unit string) device.Device {
+func measurementSensorDevice(id, providerID, name string, deviceType device.Type, capabilityID, propertyID, propertyName string, online bool, value float64, unit string) device.Device {
 	step := 0.1
-	definition := device.PropertyDefinition{ID: "value", Name: "传感器值", Type: device.ValueTypeNumber, Unit: unit, Readable: true, Notifiable: true, Step: &step, StaleAfterSeconds: 30}
+	definition := device.PropertyDefinition{ID: propertyID, Name: propertyName, Type: device.ValueTypeNumber, Unit: unit, Readable: true, Notifiable: true, Step: &step, StaleAfterSeconds: 30}
 	if unit == "celsius" {
 		minimum, maximum := -100.0, 200.0
-		definition.Name, definition.Min, definition.Max = "当前温度", &minimum, &maximum
+		definition.Min, definition.Max = &minimum, &maximum
 	} else if unit == "percent" {
 		minimum, maximum := 0.0, 100.0
-		definition.Name, definition.Min, definition.Max = "当前湿度", &minimum, &maximum
+		definition.Min, definition.Max = &minimum, &maximum
 	}
 	item := device.Device{SchemaVersion: device.SchemaVersion, ID: id, ProviderID: providerID, Name: name,
-		Type:         device.TypeSinglePropertySensor,
+		Type:         deviceType,
 		Sequence:     1,
 		LastUpdateAt: time.Now().UTC(),
 		Endpoints: []device.Endpoint{{
-			ID: "main", Name: "主端点", Type: "sensor",
-			Capabilities: []device.Capability{{ID: "sensor", Type: "sensor", Properties: []device.Property{{
+			ID: "main", Name: "主端点", Type: string(deviceType),
+			Capabilities: []device.Capability{{ID: capabilityID, Type: capabilityID, Properties: []device.Property{{
 				Definition: definition,
 				Value:      device.NumberValue(value),
 			}}}},

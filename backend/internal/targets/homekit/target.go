@@ -203,7 +203,7 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 			bindings.switches[item.ID], bindings.outletInUse[item.ID], bindings.faults[item.ID] = a.Outlet.On, a.Outlet.OutletInUse, fault
 			bindings.accessories = append(bindings.accessories, a.A)
 			created = a.A
-		case device.TypeSinglePropertySensor:
+		case device.TypeTemperatureSensor, device.TypeHumiditySensor:
 			_, hasTemperature := item.Property("main", "temperature", "current-temperature")
 			_, hasHumidity := item.Property("main", "humidity", "current-humidity")
 			if !hasTemperature && !hasHumidity {

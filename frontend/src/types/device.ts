@@ -1,10 +1,12 @@
 export const builtInDeviceTypes = [
-  'switch', 'single-property-sensor', 'temperature-humidity-sensor', 'lightbulb', 'outlet',
+  'switch', 'temperature-sensor', 'humidity-sensor', 'temperature-humidity-sensor',
+  'pressure-sensor', 'noise-sensor', 'water-level-sensor', 'soil-moisture-sensor', 'lightbulb', 'outlet',
   'contact-sensor', 'motion-sensor', 'fan', 'air-purifier', 'window-covering',
   'illuminance-sensor', 'occupancy-sensor', 'leak-sensor', 'smoke-sensor',
   'carbon-monoxide-sensor', 'carbon-dioxide-sensor', 'air-quality-sensor',
   'thermostat', 'air-conditioner', 'heater-cooler', 'humidifier-dehumidifier', 'lock', 'garage-door',
-  'security-system', 'valve', 'speaker', 'robot-vacuum',
+  'security-system', 'valve', 'pump', 'water-heater', 'power-meter', 'ev-charger',
+  'speaker', 'robot-vacuum',
 ] as const
 export type BuiltInDeviceType = typeof builtInDeviceTypes[number]
 export type DeviceType = BuiltInDeviceType | (string & {})

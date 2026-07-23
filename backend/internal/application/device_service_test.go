@@ -429,7 +429,16 @@ func TestUnknownDeviceStartsWithoutInventedValueAndRecovers(t *testing.T) {
 	service := application.NewDeviceService(provider)
 	defer service.Close()
 	states := service.States("pending")
-	if len(states) != 1 || states[0].Known || states[0].Available || states[0].Quality != domainstate.QualityUnknown || states[0].UnavailableReason != domainstate.UnavailableAvailabilityUnknown || states[0].Value.Kind != "" {
+	powerState := func(items []domainstate.StateValue) (domainstate.StateValue, bool) {
+		for _, item := range items {
+			if item.Key.CapabilityID == "switch" && item.Key.PropertyID == "power" {
+				return item, true
+			}
+		}
+		return domainstate.StateValue{}, false
+	}
+	initial, found := powerState(states)
+	if !found || initial.Known || initial.Available || initial.Quality != domainstate.QualityUnknown || initial.UnavailableReason != domainstate.UnavailableAvailabilityUnknown || initial.Value.Kind != "" {
 		t.Fatalf("initial states = %#v", states)
 	}
 	online := device.AvailabilityOnline
@@ -439,7 +448,8 @@ func TestUnknownDeviceStartsWithoutInventedValueAndRecovers(t *testing.T) {
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		states = service.States("pending")
-		if len(states) == 1 && states[0].Known && states[0].Available && states[0].Quality == domainstate.QualityReported && states[0].Value.Bool != nil && states[0].TraceID != "" {
+		current, found := powerState(states)
+		if found && current.Known && current.Available && current.Quality == domainstate.QualityReported && current.Value.Bool != nil && current.TraceID != "" {
 			return
 		}
 		time.Sleep(time.Millisecond)

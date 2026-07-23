@@ -1,6 +1,6 @@
 # HomeKit 统一模型支持矩阵
 
-更新时间：2026-07-21
+更新时间：2026-07-23
 
 HomeLoom 只在 HAP 提供原生或语义一致的 Service 时发布设备。桥内设备选择器从 Consumer 属性目录动态读取支持范围；不支持的模型会被禁用，并在服务端再次校验。
 
@@ -9,7 +9,8 @@ HomeLoom 只在 HAP 提供原生或语义一致的 Service 时发布设备。桥
 | `switch` | Switch | 完整支持 |
 | `lightbulb` | Lightbulb | 完整支持 |
 | `outlet` | Outlet | 完整支持 |
-| `single-property-sensor` | Temperature Sensor 或 Humidity Sensor | 需要在 Consumer 映射中选择语义 |
+| `temperature-sensor` | Temperature Sensor | 完整支持 |
+| `humidity-sensor` | Humidity Sensor | 完整支持 |
 | `temperature-humidity-sensor` | Temperature Sensor + Humidity Sensor | 完整支持 |
 | `contact-sensor` | Contact Sensor | 完整支持 |
 | `motion-sensor` | Motion Sensor | 完整支持 |
@@ -33,6 +34,14 @@ HomeLoom 只在 HAP 提供原生或语义一致的 Service 时发布设备。桥
 | `speaker` | Speaker | 支持启用、音量和静音 |
 | `window-covering` | Window Covering | 完整支持 |
 | `robot-vacuum` | 无原生 HAP Service | 明确不支持 |
+| `pressure-sensor` | 无原生 HAP Service | 明确不支持 |
+| `noise-sensor` | 无原生 HAP Service | 明确不支持 |
+| `water-level-sensor` | 无独立原生 HAP Service | 明确不支持 |
+| `soil-moisture-sensor` | 无原生 HAP Service | 明确不支持 |
+| `pump` | 无语义一致的原生 HAP Service | 明确不支持 |
+| `water-heater` | 无完整语义一致的原生 HAP Service | 明确不支持 |
+| `power-meter` | 无原生 HAP Service | 明确不支持 |
+| `ev-charger` | 无原生 HAP Service | 明确不支持 |
 
 ## 协议语义限制
 
@@ -42,3 +51,4 @@ HomeLoom 只在 HAP 提供原生或语义一致的 Service 时发布设备。桥
 - HomeKit Valve 的 Set Duration 上限为 3600 秒；统一模型仍允许保存更大的设备原始范围。
 - 可选属性只有在具体设备的统一模型快照或显式 Consumer 映射中存在时才创建对应 Characteristic，避免发布无数据的控件。
 - Speaker Service 的展示方式取决于 Apple Home / Home Hub 版本；HomeLoom 不把扬声器伪装成 Television。
+- 气压、噪声、水位、土壤湿度、电力计量、水泵、热水器和充电桩仍可被 Web、API 和后续 Matter Consumer 使用；HomeKit 不会把它们降级伪装成开关。

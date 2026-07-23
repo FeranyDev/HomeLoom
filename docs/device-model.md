@@ -2,7 +2,7 @@
 
 HomeLoom 的设备快照使用统一的 Endpoint / Capability / Property 模型。实时状态由 Provider 在启动和重连后重新上报，PostgreSQL 不保存设备实时值。
 
-标准属性按 `required`、`optional` 和 `custom` 分级，并分别约束 Provider 发布和 Consumer 映射。完整规则与 27 种内置模型目录见 [统一模型参数分级与角色映射](unified-model-parameters.md)。
+标准属性按 `required`、`optional` 和 `custom` 分级，并分别约束 Provider 发布和 Consumer 映射。完整规则与 36 种内置模型目录见 [统一模型参数分级与角色映射](unified-model-parameters.md)。
 
 ## 版本和兼容性
 
@@ -37,7 +37,7 @@ deviceId / endpointId / capabilityId / propertyId
   "id": "living-room-temperature",
   "providerId": "virtual-main",
   "name": "客厅温度",
-  "type": "single-property-sensor",
+  "type": "temperature-sensor",
   "availability": "online",
   "online": true,
   "endpoints": [{
@@ -45,11 +45,11 @@ deviceId / endpointId / capabilityId / propertyId
     "name": "主端点",
     "type": "sensor",
     "capabilities": [{
-      "id": "sensor",
-      "type": "sensor",
+        "id": "temperature",
+        "type": "temperature",
       "properties": [{
         "definition": {
-          "id": "value",
+          "id": "current-temperature",
           "name": "当前温度",
           "type": "number",
           "unit": "celsius",
@@ -66,7 +66,7 @@ deviceId / endpointId / capabilityId / propertyId
 }
 ```
 
-示例中的 `unit: celsius` 描述这个设备实例当前发布的是温度值，但统一模型类型仍是通用的 `single-property-sensor`。若它发布湿度，可沿用同一个 `sensor.value` 路径并将单位设为 `percent`；最终映射成哪种 HomeKit Service 由桥内虚拟设备的 Consumer 属性映射决定。
+温度和湿度使用不同的模型与稳定路径：`temperature-sensor` 发布 `main/temperature/current-temperature`，`humidity-sensor` 发布 `main/humidity/current-humidity`。统一模型不再通过单位猜测测量语义；同一设备同时发布温度和湿度时使用 `temperature-humidity-sensor`。
 
 ## 属性值契约
 

@@ -4,8 +4,10 @@ import type { TargetType } from './types/target'
 
 const deviceTypes: Record<DeviceType, string> = {
 	switch: '开关', lightbulb: '灯泡', outlet: '插座',
-	'single-property-sensor': '单属性传感器',
+	'temperature-sensor': '温度传感器', 'humidity-sensor': '湿度传感器',
 	'temperature-humidity-sensor': '温湿度传感器',
+	'pressure-sensor': '气压传感器', 'noise-sensor': '噪声传感器',
+	'water-level-sensor': '水位传感器', 'soil-moisture-sensor': '土壤湿度传感器',
 	'contact-sensor': '接触传感器', 'motion-sensor': '活动传感器',
 	fan: '风扇', 'air-purifier': '空气净化器', 'window-covering': '窗帘',
 	'illuminance-sensor': '照度传感器', 'occupancy-sensor': '占用传感器', 'leak-sensor': '漏水传感器',
@@ -13,6 +15,7 @@ const deviceTypes: Record<DeviceType, string> = {
 	'carbon-dioxide-sensor': '二氧化碳传感器', 'air-quality-sensor': '空气质量传感器',
 	thermostat: '恒温器', 'air-conditioner': '空调', 'heater-cooler': '冷暖设备', 'humidifier-dehumidifier': '加湿除湿器',
 	lock: '门锁', 'garage-door': '车库门', 'security-system': '安防系统', valve: '阀门',
+	pump: '水泵', 'water-heater': '热水器', 'power-meter': '电力计量器', 'ev-charger': '电动汽车充电桩',
 	speaker: '扬声器', 'robot-vacuum': '扫地机器人',
 }
 
@@ -27,7 +30,11 @@ const transformTypes: Record<MappingTransformType, string> = {
 const unitNames: Record<string, string> = {
 	percent: '百分比', degree: '角度', mired: '微倒度', watt: '瓦特', 'kilowatt-hour': '千瓦时',
 	'microgram-per-cubic-meter': '微克/立方米', celsius: '摄氏度', fahrenheit: '华氏度',
-	lux: '勒克斯', ppm: '百万分比', second: '秒',
+	lux: '勒克斯', ppm: '百万分比', second: '秒', hour: '小时', count: '次',
+	volt: '伏特', ampere: '安培', hertz: '赫兹', ratio: '比值', hectopascal: '百帕',
+	kilopascal: '千帕', decibel: '分贝', liter: '升', 'liter-per-minute': '升/分钟',
+	'square-meter': '平方米', millimeter: '毫米', 'gram-per-cubic-meter': '克/立方米',
+	'microsiemens-per-centimeter': '微西门子/厘米', aqi: '空气质量指数',
 }
 
 const resourceNames: Record<string, string> = {

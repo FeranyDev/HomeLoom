@@ -1,17 +1,27 @@
 import { describe, expect, it } from 'vitest'
-import { inferXiaomiDeviceType, requiredXiaomiProperties } from './xiaomiMappings'
+import { inferXiaomiDeviceType, requiredXiaomiProperties, xiaomiDeviceTypes } from './xiaomiMappings'
 
 describe('Xiaomi temperature/humidity mapping', () => {
-	it('infers the combined model before the single-property sensor models', () => {
-		expect(inferXiaomiDeviceType({ did: '1', name: '米家温湿度传感器', model: 'temperature-humidity-monitor' })).toBe('temperature-humidity-sensor')
-		expect(inferXiaomiDeviceType({ did: '2', name: '温湿度计' })).toBe('temperature-humidity-sensor')
-		expect(inferXiaomiDeviceType({ did: '3', name: '温度计' })).toBe('single-property-sensor')
-		expect(inferXiaomiDeviceType({ did: '4', name: '湿度计' })).toBe('single-property-sensor')
+	it('offers every built-in model exactly once', () => {
+		const types = xiaomiDeviceTypes.map(([type]) => type)
+		expect(types).toHaveLength(36)
+		expect(new Set(types).size).toBe(36)
+		expect(types).not.toContain('single-property-sensor')
 	})
 
-	it('uses one generic value path for a single-property sensor', () => {
-		expect(requiredXiaomiProperties('single-property-sensor')).toEqual([
-			expect.objectContaining({ capabilityId: 'sensor', propertyId: 'value' }),
+	it('infers the combined model before explicit single-measurement models', () => {
+		expect(inferXiaomiDeviceType({ did: '1', name: '米家温湿度传感器', model: 'temperature-humidity-monitor' })).toBe('temperature-humidity-sensor')
+		expect(inferXiaomiDeviceType({ did: '2', name: '温湿度计' })).toBe('temperature-humidity-sensor')
+		expect(inferXiaomiDeviceType({ did: '3', name: '温度计' })).toBe('temperature-sensor')
+		expect(inferXiaomiDeviceType({ did: '4', name: '湿度计' })).toBe('humidity-sensor')
+	})
+
+	it('uses semantic value paths for single-measurement sensors', () => {
+		expect(requiredXiaomiProperties('temperature-sensor')).toEqual([
+			expect.objectContaining({ capabilityId: 'temperature', propertyId: 'current-temperature' }),
+		])
+		expect(requiredXiaomiProperties('humidity-sensor')).toEqual([
+			expect.objectContaining({ capabilityId: 'humidity', propertyId: 'current-humidity' }),
 		])
 	})
 
@@ -28,6 +38,8 @@ describe('Xiaomi temperature/humidity mapping', () => {
 		expect(inferXiaomiDeviceType({ did: '7', name: '扫地机器人' })).toBe('robot-vacuum')
 		expect(inferXiaomiDeviceType({ did: '8', name: '二氧化碳监测器' })).toBe('carbon-dioxide-sensor')
 		expect(inferXiaomiDeviceType({ did: '9', name: '米家空调伴侣 Pro' })).toBe('air-conditioner')
+		expect(inferXiaomiDeviceType({ did: '10', name: '车库交流充电桩' })).toBe('ev-charger')
+		expect(inferXiaomiDeviceType({ did: '11', name: '花园土壤湿度计' })).toBe('soil-moisture-sensor')
 	})
 
 	it('creates every required path for an expanded model', () => {

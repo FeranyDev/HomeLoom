@@ -16,39 +16,50 @@ Consumer 可以把统一模型中的可选参数提升为自己的必须参数�
 
 ## 当前模型契约
 
-| 模型 | 必须参数 | 可选标准参数 |
-| --- | --- | --- |
-| Switch | `switch.power` | — |
-| Lightbulb | `switch.power` | 亮度、色温、色相、饱和度 |
-| Outlet | `switch.power` | 使用状态、当前功率、累计电量 |
-| Single Property Sensor | `sensor.value` 单一数值；单位与范围由设备实例提供 | 电量、低电量 |
-| Temperature Humidity Sensor | 当前温度、当前湿度 | 电量、低电量 |
-| Contact Sensor | 接触状态 | 电量、低电量、防拆 |
-| Motion Sensor | 活动状态 | 电量、低电量、防拆 |
-| Fan | 启用、当前状态 | 目标模式、转速、摇头、旋转方向、物理控制锁 |
-| Air Purifier | 启用、当前状态 | 目标模式、转速、摆风、控制锁、空气质量、PM2.5、VOC、滤芯状态 |
-| Window Covering | 当前位置、目标位置、运动状态 | 障碍物检测 |
-| Illuminance Sensor | 当前照度 | 电量、低电量 |
-| Occupancy Sensor | 占用状态 | 电量、低电量、防拆 |
-| Leak Sensor | 漏水状态 | 电量、低电量、防拆 |
-| Smoke Sensor | 烟雾状态 | 电量、低电量、防拆 |
-| Carbon Monoxide Sensor | 一氧化碳告警 | 当前浓度、峰值浓度、电量、低电量、防拆 |
-| Carbon Dioxide Sensor | 二氧化碳告警 | 当前浓度、峰值浓度、电量、低电量 |
-| Air Quality Sensor | 当前空气质量 | PM2.5、PM10、VOC、CO₂、NO₂、臭氧浓度 |
-| Thermostat | 当前状态、目标模式、当前温度、目标温度 | 制热/制冷阈值、当前湿度、显示温标 |
-| Air Conditioner v2 | 启用、运行模式、目标温度 | 当前状态、当前温度、风速档位/百分比、上下/左右扫风、导风方向、辅热、睡眠模式、湿度、温标、故障和滤网状态 |
-| Heater Cooler | 启用、当前状态、目标模式、当前温度 | 制热/制冷阈值、风速、摆风、控制锁 |
-| Humidifier Dehumidifier | 启用、当前状态、目标模式、当前湿度、目标湿度 | 水位、控制锁 |
-| Lock | 当前锁定状态、目标锁定状态 | 卡住状态、电量、低电量、防拆 |
-| Garage Door | 当前门状态、目标门状态 | 障碍物检测 |
-| Security System | 当前布防状态、目标布防状态 | 告警类型、防拆 |
-| Valve | 启用、使用状态、阀门类型 | 设定时长、剩余时长 |
-| Speaker | 启用、音量、静音 | 当前/目标媒体状态、输入源 |
-| Robot Vacuum | 启用、当前状态、目标模式 | 清洁进度、吸力、故障、充电与电量状态 |
+内置目录共 36 种模型。设备族只用于组织目录；运行时契约仍由每个模型组合的 Capability 和 Property 决定。
+
+| 设备族 | 模型 | 必须参数 | 主要可选能力 |
+| --- | --- | --- | --- |
+| 基础执行器 | Switch | 开关 | 使用状态、物理锁、故障 |
+| 基础执行器 | Lightbulb | 开关 | 亮度、色温、色彩、颜色模式、灯效、自适应照明、故障 |
+| 基础执行器 | Outlet | 开关 | 使用/过载状态、物理锁、电压、电流、功率、频率、功率因数、电量 |
+| 环境测量 | Temperature Sensor | 当前温度 | 最低/最高温度、电池、防拆、有效与故障状态 |
+| 环境测量 | Humidity Sensor | 当前湿度 | 最低/最高湿度、电池、防拆、有效与故障状态 |
+| 环境测量 | Temperature Humidity Sensor | 当前温度、当前湿度 | 露点、绝对湿度、电池、防拆、有效与故障状态 |
+| 环境测量 | Pressure Sensor | 当前气压 | 气压趋势、电池与健康状态 |
+| 环境测量 | Noise Sensor | 当前声级 | 峰值声级、电池与健康状态 |
+| 环境测量 | Water Level Sensor | 当前水位 | 低水位、溢水、电池与健康状态 |
+| 环境测量 | Soil Moisture Sensor | 当前土壤湿度 | 电导率、土壤温度、电池与健康状态 |
+| 环境测量 | Illuminance Sensor | 当前照度 | 最低/最高照度、电池与健康状态 |
+| 环境测量 | Air Quality Sensor | 当前空气质量 | AQI、PM2.5、PM10、VOC、CO、CO₂、NO₂、臭氧、温湿度、健康状态 |
+| 安防感知 | Contact Sensor | 接触状态 | 打开时长、触发次数、电池、防拆、健康状态 |
+| 安防感知 | Motion Sensor | 活动状态 | 灵敏度、无人延迟、照度、电池、防拆、健康状态 |
+| 安防感知 | Occupancy Sensor | 占用状态 | 人数、灵敏度、无人延迟、电池、防拆、健康状态 |
+| 安防感知 | Leak Sensor | 漏水状态 | 检测水位、电池、防拆、健康状态 |
+| 安防感知 | Smoke Sensor | 烟雾状态 | 烟雾浓度、电池、防拆、健康状态 |
+| 安防感知 | Carbon Monoxide Sensor | 一氧化碳告警 | 当前/峰值浓度、电池、防拆、健康状态 |
+| 安防感知 | Carbon Dioxide Sensor | 二氧化碳告警 | 当前/峰值浓度、电池、防拆、健康状态 |
+| 空气与温控 | Fan | 启用、当前状态 | 模式、转速/档位、摇头、方向、物理锁、定时、故障 |
+| 空气与温控 | Air Purifier | 启用、当前状态 | 模式、风速、空气质量、温湿度、定时、滤芯与故障 |
+| 空气与温控 | Thermostat | 当前状态、目标模式、当前/目标温度 | 阈值、湿度、温标、风机、保持、物理锁、故障 |
+| 空气与温控 | Air Conditioner v3 | 启用、运行模式、目标温度 | 当前反馈、风速、扫风、辅热、睡眠/节能、定时、湿度、滤网和故障 |
+| 空气与温控 | Heater Cooler | 启用、当前状态、目标模式、当前温度 | 阈值、风速、摆风、物理锁、定时和故障 |
+| 空气与温控 | Humidifier Dehumidifier | 启用、当前状态、目标模式、当前/目标湿度 | 水位、缺水、风速、物理锁、定时、滤芯和故障 |
+| 空气与温控 | Water Heater | 启用、当前状态、当前/目标水温 | 模式、水量、剩余加热时间、物理锁和故障 |
+| 门窗与安防 | Window Covering | 当前/目标位置、运动状态 | 障碍物、水平/垂直倾角、暂停、故障 |
+| 门窗与安防 | Lock | 当前/目标锁定状态 | 门状态、卡住、最近操作、物理锁、电池、防拆、健康状态 |
+| 门窗与安防 | Garage Door | 当前/目标门状态 | 障碍物、锁定状态、故障 |
+| 门窗与安防 | Security System | 当前/目标布防状态 | 告警、警号、进出延迟、防拆、故障 |
+| 水务 | Valve | 启用、使用状态、阀门类型 | 开度、定时、流量、累计水量、故障 |
+| 水务 | Pump | 启用、当前状态 | 转速、流量、压力、定时和故障 |
+| 能源 | Power Meter | 当前功率 | 电压、电流、频率、功率因数、有功/无功/视在功率、累计电量、健康状态 |
+| 能源 | EV Charger | 允许充电、当前状态 | 目标电流、会话电量/时长、剩余时长、枪锁、电气参数和故障 |
+| 媒体 | Speaker | 启用、音量、静音 | 播放状态、输入源、媒体信息、进度、随机与循环 |
+| 清洁 | Robot Vacuum | 启用、当前状态、目标模式 | 进度、吸力、面积、时长、拖地水量、耗材、充电、电量和故障 |
 
 内置模型目录和 Consumer 能力目录相互独立。统一模型描述 HomeLoom 内部的稳定语义基准；HomeKit、Matter 或其他 Consumer 只声明自己实际支持的模型和属性，不会因为目录新增模型而被强制实现或伪装成 HomeKit 设备。
 
-`thermostat`、`air-conditioner` 和 `heater-cooler` 分别表示温控策略器、完整空调设备和简单冷暖执行设备。`air-conditioner` v2 保留独立启用状态、制冷/制热/除湿/送风模式和目标温度作为必须参数；当前状态和当前温度调整为可选，因为空调伴侣、红外遥控器通常无法提供真实室温或设备运行反馈。具备传感器的完整空调仍可映射这些可选参数。
+`thermostat`、`air-conditioner` 和 `heater-cooler` 分别表示温控策略器、完整空调设备和简单冷暖执行设备。`air-conditioner` v3 保留独立启用状态、制冷/制热/除湿/送风模式和目标温度作为必须参数；当前状态和当前温度仍为可选，因为空调伴侣、红外遥控器通常无法提供真实反馈。
 
 ## 运行时边界
 
@@ -66,6 +77,6 @@ Provider snapshot
 
 HomeKit Consumer 契约位于 `backend/internal/mapping/consumer_catalog.go`。它把统一路径映射到具体 HAP Characteristic，并允许同一 Provider 设备在不同 Consumer 中选择不同的可选参数集合。
 
-`single-property-sensor` 不固化“温度”或“湿度”语义。Provider 统一发布 `main/sensor/value`，并可在属性定义中给出 `celsius`、`percent` 等单位；桥内每台虚拟设备再独立把这个字段绑定到 `TemperatureSensor.CurrentTemperature`、`HumiditySensor.CurrentRelativeHumidity` 或后续 Consumer 支持的其他目标。需要同时发布温度和湿度时使用 `temperature-humidity-sensor`，它保留两个明确的必需字段。
+旧的 `single-property-sensor` 已从内置目录移除。单位只能描述数值，不能替代测量语义；温度、湿度、气压、噪声、水位和土壤湿度现在分别拥有明确模型和稳定路径。需要同时发布温度和湿度时使用组合模型 `temperature-humidity-sensor`。已有配置需要把 `sensor/value` 路由迁移到对应的语义路径；系统不会根据单位静默猜测并改写持久化映射。
 
 Virtual Provider 会发布当前契约中的完整可选参数集合，用于开发和回归测试。真实 Provider 可以只发布必须参数，再根据设备能力逐项增加可选参数。

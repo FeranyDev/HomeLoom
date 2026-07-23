@@ -40,6 +40,36 @@ describe('UnifiedModelManager', () => {
     expect(within(brightness).getByText(/支持时发布（publish-if-supported）/)).toBeInTheDocument()
   })
 
+  it('puts capabilities and properties with required fields first', async () => {
+    const requiredPower = model.parameters[0]
+    const optionalBrightness = model.parameters[1]
+    const optionalEnergy = {
+      ...optionalBrightness,
+      path: { endpointId: 'main', capabilityId: 'switch', propertyId: 'energy' },
+      name: '能耗',
+    }
+    vi.mocked(api.listModelContracts).mockResolvedValue([{ ...model, parameters: [optionalBrightness, optionalEnergy, requiredPower] }])
+    const { container } = render(<UnifiedModelManager />)
+    await screen.findByRole('heading', { name: '模型与属性字段配置' })
+
+    const capabilities = [...container.querySelectorAll<HTMLElement>('.model-capability')]
+    expect(capabilities.map((item) => item.querySelector('header code')?.textContent)).toEqual(['main / switch', 'main / light'])
+    expect([...capabilities[0].querySelectorAll<HTMLElement>('.model-property-card')].map((item) => item.textContent)).toEqual([
+      expect.stringContaining('power'),
+      expect.stringContaining('energy'),
+    ])
+
+    await userEvent.click(screen.getByRole('button', { name: /可选（optional）/ }))
+    expect(container.querySelector('.model-capability header code')).toHaveTextContent('main / switch')
+  })
+
+  it('exposes the independently scrolling device type list to keyboard users', async () => {
+    render(<UnifiedModelManager />)
+    const list = await screen.findByRole('complementary', { name: '统一设备模型列表' })
+    expect(list).toHaveClass('model-type-list')
+    expect(list).toHaveAttribute('tabindex', '0')
+  })
+
   it('filters the visible property level without changing the contract', async () => {
     render(<UnifiedModelManager />)
     await screen.findByRole('heading', { name: '模型与属性字段配置' })
@@ -51,6 +81,7 @@ describe('UnifiedModelManager', () => {
   it('offers a prominent create entry for the selected model', async () => {
     render(<UnifiedModelManager />)
     await screen.findByRole('heading', { name: '模型与属性字段配置' })
+    expect(screen.queryByRole('button', { name: '＋ 新建自定义属性' })).not.toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '＋ 新增自定义属性' }))
     expect(screen.getByRole('dialog', { name: '自定义统一模型属性' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: '新建自定义属性' })).toBeInTheDocument()

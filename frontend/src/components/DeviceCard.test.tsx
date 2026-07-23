@@ -15,7 +15,7 @@ describe('DeviceCard device types', () => {
 		['cloud', '云端轮询'],
 		['pending', '等待判定'],
 	] as const)('renders Xiaomi cloud runtime mode %s', (runtimeMode, label) => {
-		const device = { ...sensorDevice('single-property-sensor', 'sensor', 'value', { type: 'number', number: 20 }), providerId: 'xiaomi-miot-cloud-main', runtimeMode }
+		const device = { ...sensorDevice('temperature-sensor', 'temperature', 'current-temperature', { type: 'number', number: 20 }), providerId: 'xiaomi-miot-cloud-main', runtimeMode }
 		render(<DeviceCard device={device} pending={false} onPowerChange={() => {}} onDetails={() => {}} />)
 		expect(screen.getByText(label)).toHaveClass('device-runtime-mode', `is-${runtimeMode}`)
 	})
@@ -25,22 +25,22 @@ describe('DeviceCard device types', () => {
 		['cloud-mqtt', '官方云实时'],
 		['cloud-http', '官方云校准'],
 	] as const)('renders the precise Xiaomi state transport %s', (stateTransport, label) => {
-		const device = { ...sensorDevice('single-property-sensor', 'sensor', 'value', { type: 'number', number: 20 }), providerId: 'xiaomi-main', runtimeMode: stateTransport === 'local-mqtt' ? 'local' as const : 'cloud' as const, stateTransport }
+		const device = { ...sensorDevice('temperature-sensor', 'temperature', 'current-temperature', { type: 'number', number: 20 }), providerId: 'xiaomi-main', runtimeMode: stateTransport === 'local-mqtt' ? 'local' as const : 'cloud' as const, stateTransport }
 		render(<DeviceCard device={device} pending={false} onPowerChange={() => {}} onDetails={() => {}} />)
 		expect(screen.getByText(label)).toBeInTheDocument()
 	})
 
 	it('opens mapping configuration from the corresponding device card', async () => {
-		const device = sensorDevice('single-property-sensor', 'sensor', 'value', { type: 'number', number: 20 }, 'celsius')
+		const device = sensorDevice('temperature-sensor', 'temperature', 'current-temperature', { type: 'number', number: 20 }, 'celsius')
 		const onMapping = vi.fn()
 		render(<DeviceCard device={device} pending={false} onPowerChange={() => {}} onDetails={() => {}} onMapping={onMapping} />)
-		expect(screen.getByRole('article', { name: 'single-property-sensor' })).toBeInTheDocument()
+		expect(screen.getByRole('article', { name: 'temperature-sensor' })).toBeInTheDocument()
 		await userEvent.click(screen.getByRole('button', { name: '配置映射' }))
 		expect(onMapping).toHaveBeenCalledWith(device)
 	})
 
 	it('exposes persistent disable separately from provider availability', async () => {
-		const device = sensorDevice('single-property-sensor', 'sensor', 'value', { type: 'number', number: 20 }, 'celsius')
+		const device = sensorDevice('temperature-sensor', 'temperature', 'current-temperature', { type: 'number', number: 20 }, 'celsius')
 		const onEnabledChange = vi.fn()
 		const { rerender } = render(<DeviceCard device={device} pending={false} onPowerChange={() => {}} onDetails={() => {}} onEnabledChange={onEnabledChange} />)
 		await userEvent.click(screen.getByRole('button', { name: '禁用设备' })); expect(onEnabledChange).toHaveBeenCalledWith(device, false)
@@ -56,7 +56,8 @@ describe('DeviceCard device types', () => {
   })
 
   it.each([
-    [sensorDevice('single-property-sensor', 'sensor', 'value', { type: 'number', number: 61.2 }, 'percent'), '61.2', '%'],
+    [sensorDevice('humidity-sensor', 'humidity', 'current-humidity', { type: 'number', number: 61.2 }, 'percent'), '61.2', '%'],
+    [sensorDevice('pressure-sensor', 'pressure', 'current-pressure', { type: 'number', number: 1013.2 }, 'hectopascal'), '1013.2', 'hPa'],
     [sensorDevice('contact-sensor', 'contact', 'contact-detected', { type: 'bool', bool: true }), '已闭合', 'CONTACT'],
     [sensorDevice('motion-sensor', 'motion', 'motion-detected', { type: 'bool', bool: true }), '检测到活动', 'MOTION'],
   ])('renders sensor state for %s', (device, value, unit) => {

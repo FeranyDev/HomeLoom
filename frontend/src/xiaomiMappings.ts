@@ -1,11 +1,11 @@
 import type { XiaomiHubDevice } from './api/xiaomi'
 
 export const xiaomiDeviceTypes = [
-	['switch', '开关'], ['lightbulb', '灯'], ['outlet', '插座'], ['single-property-sensor', '单属性传感器'], ['temperature-humidity-sensor', '温湿度传感器'], ['contact-sensor', '门窗传感器'], ['motion-sensor', '人体传感器'], ['fan', '风扇'], ['air-purifier', '空气净化器'], ['window-covering', '窗帘'],
+	['switch', '开关'], ['lightbulb', '灯'], ['outlet', '插座'], ['temperature-sensor', '温度传感器'], ['humidity-sensor', '湿度传感器'], ['temperature-humidity-sensor', '温湿度传感器'], ['pressure-sensor', '气压传感器'], ['noise-sensor', '噪声传感器'], ['water-level-sensor', '水位传感器'], ['soil-moisture-sensor', '土壤湿度传感器'], ['contact-sensor', '门窗传感器'], ['motion-sensor', '人体传感器'], ['fan', '风扇'], ['air-purifier', '空气净化器'], ['window-covering', '窗帘'],
 	['illuminance-sensor', '照度传感器'], ['occupancy-sensor', '占用传感器'], ['leak-sensor', '漏水传感器'], ['smoke-sensor', '烟雾传感器'],
 	['carbon-monoxide-sensor', '一氧化碳传感器'], ['carbon-dioxide-sensor', '二氧化碳传感器'], ['air-quality-sensor', '空气质量传感器'],
 	['thermostat', '恒温器'], ['air-conditioner', '空调'], ['heater-cooler', '冷暖设备'], ['humidifier-dehumidifier', '加湿除湿器'], ['lock', '门锁'], ['garage-door', '车库门'],
-	['security-system', '安防系统'], ['valve', '阀门'], ['speaker', '扬声器'], ['robot-vacuum', '扫地机器人'],
+	['security-system', '安防系统'], ['valve', '阀门'], ['pump', '水泵'], ['water-heater', '热水器'], ['power-meter', '电力计量器'], ['ev-charger', '电动汽车充电桩'], ['speaker', '扬声器'], ['robot-vacuum', '扫地机器人'],
 ] as const
 
 export function inferXiaomiDeviceType(item: XiaomiHubDevice): string {
@@ -13,7 +13,12 @@ export function inferXiaomiDeviceType(item: XiaomiHubDevice): string {
 	if (/light|lamp|灯/.test(hint)) return 'lightbulb'
 	if (/outlet|plug|插座/.test(hint)) return 'outlet'
 	if (/温湿度/.test(hint) || ((/temperature|thermometer|温度/.test(hint)) && (/humidity|湿度/.test(hint)))) return 'temperature-humidity-sensor'
-	if (/temperature|thermometer|温度|humidity|湿度/.test(hint)) return 'single-property-sensor'
+	if (/soil.?moisture|土壤湿度/.test(hint)) return 'soil-moisture-sensor'
+	if (/temperature|thermometer|温度/.test(hint)) return 'temperature-sensor'
+	if (/humidity|湿度/.test(hint)) return 'humidity-sensor'
+	if (/barometer|pressure.?sensor|气压/.test(hint)) return 'pressure-sensor'
+	if (/noise|sound.?level|噪声|声级/.test(hint)) return 'noise-sensor'
+	if (/water.?level|水位/.test(hint)) return 'water-level-sensor'
 	if (/garage|车库门/.test(hint)) return 'garage-door'
 	if (/smart.?lock|door.?lock|门锁/.test(hint)) return 'lock'
 	if (/contact|door|window|门窗/.test(hint)) return 'contact-sensor'
@@ -33,6 +38,10 @@ export function inferXiaomiDeviceType(item: XiaomiHubDevice): string {
 	if (/humidifier|dehumidifier|加湿|除湿/.test(hint)) return 'humidifier-dehumidifier'
 	if (/security.?system|alarm.?system|安防|报警主机/.test(hint)) return 'security-system'
 	if (/valve|阀门|水阀/.test(hint)) return 'valve'
+	if (/water.?heater|热水器/.test(hint)) return 'water-heater'
+	if (/pump|水泵/.test(hint)) return 'pump'
+	if (/power.?meter|energy.?meter|电表|电力计量/.test(hint)) return 'power-meter'
+	if (/ev.?charger|charging.?pile|充电桩/.test(hint)) return 'ev-charger'
 	if (/speaker|音箱|扬声器/.test(hint)) return 'speaker'
 	if (/robot.?vacuum|vacuum|扫地|吸尘/.test(hint)) return 'robot-vacuum'
 	if (/fan|风扇/.test(hint)) return 'fan'
@@ -42,8 +51,13 @@ export function inferXiaomiDeviceType(item: XiaomiHubDevice): string {
 export function requiredXiaomiProperties(type: string) {
 	const property = (capabilityId: string, propertyId: string, name: string, valueType: string, piid: number, writable: boolean, enumValues?: Record<string, number>) => ({ endpointId: 'main', capabilityId, capabilityType: capabilityId, propertyId, name, valueType, siid: 2, piid, writable, notifiable: true, ...(enumValues ? { enum: enumValues } : {}) })
 	switch (type) {
-	case 'single-property-sensor': return [property('sensor', 'value', '传感器值', 'number', 1, false)]
+	case 'temperature-sensor': return [property('temperature', 'current-temperature', '当前温度', 'number', 1, false)]
+	case 'humidity-sensor': return [property('humidity', 'current-humidity', '当前湿度', 'number', 1, false)]
 	case 'temperature-humidity-sensor': return [property('temperature', 'current-temperature', '当前温度', 'number', 1, false), property('humidity', 'current-humidity', '当前湿度', 'number', 2, false)]
+	case 'pressure-sensor': return [property('pressure', 'current-pressure', '当前气压', 'number', 1, false)]
+	case 'noise-sensor': return [property('noise', 'current-level', '当前声级', 'number', 1, false)]
+	case 'water-level-sensor': return [property('water-level', 'current-level', '当前水位', 'number', 1, false)]
+	case 'soil-moisture-sensor': return [property('soil-moisture', 'current-moisture', '当前土壤湿度', 'number', 1, false)]
 	case 'contact-sensor': return [property('contact', 'contact-detected', '接触状态', 'bool', 1, false)]
 	case 'motion-sensor': return [property('motion', 'motion-detected', '活动状态', 'bool', 1, false)]
 	case 'fan': return [property('fan', 'active', '启用', 'bool', 1, true), property('fan', 'current-state', '当前状态', 'enum', 2, false, { inactive: 0, idle: 1, active: 2 })]
@@ -64,6 +78,10 @@ export function requiredXiaomiProperties(type: string) {
 	case 'garage-door': return [property('garage-door', 'current-state', '当前门状态', 'enum', 1, false, { open: 0, closed: 1, opening: 2, closing: 3, stopped: 4, unknown: 5 }), property('garage-door', 'target-state', '目标门状态', 'enum', 2, true, { open: 0, closed: 1 })]
 	case 'security-system': return [property('security-system', 'current-state', '当前布防状态', 'enum', 1, false, { 'stay-arm': 0, 'away-arm': 1, 'night-arm': 2, disarmed: 3, triggered: 4 }), property('security-system', 'target-state', '目标布防状态', 'enum', 2, true, { 'stay-arm': 0, 'away-arm': 1, 'night-arm': 2, disarmed: 3 })]
 	case 'valve': return [property('valve', 'active', '启用', 'bool', 1, true), property('valve', 'in-use', '正在使用', 'bool', 2, false), property('valve', 'valve-type', '阀门类型', 'enum', 3, false, { generic: 0, irrigation: 1, shower: 2, faucet: 3 })]
+	case 'pump': return [property('pump', 'active', '启用', 'bool', 1, true), property('pump', 'current-state', '当前状态', 'enum', 2, false, { inactive: 0, starting: 1, running: 2, stopping: 3, fault: 4 })]
+	case 'water-heater': return [property('water-heater', 'active', '启用', 'bool', 1, true), property('water-heater', 'current-state', '当前状态', 'enum', 2, false, { inactive: 0, idle: 1, heating: 2, 'keeping-warm': 3, fault: 4 }), property('temperature', 'current-temperature', '当前水温', 'number', 3, false), property('temperature', 'target-temperature', '目标水温', 'number', 4, true)]
+	case 'power-meter': return [property('electrical', 'current-power', '当前功率', 'number', 1, false)]
+	case 'ev-charger': return [property('ev-charger', 'active', '允许充电', 'bool', 1, true), property('ev-charger', 'current-state', '当前状态', 'enum', 2, false, { disconnected: 0, connected: 1, charging: 2, paused: 3, complete: 4, fault: 5 })]
 	case 'speaker': return [property('speaker', 'active', '启用', 'bool', 1, true), property('speaker', 'volume', '音量', 'number', 2, true), property('speaker', 'mute', '静音', 'bool', 3, true)]
 	case 'robot-vacuum': return [property('robot-vacuum', 'active', '启用', 'bool', 1, true), property('robot-vacuum', 'current-state', '当前工作状态', 'enum', 2, false, { idle: 0, cleaning: 1, paused: 2, returning: 3, charging: 4, error: 5 }), property('robot-vacuum', 'target-mode', '目标模式', 'enum', 3, true, { vacuum: 0, mop: 1, 'vacuum-and-mop': 2, spot: 3 })]
 	default: return [property('switch', 'power', '开关', 'bool', 1, true)]
