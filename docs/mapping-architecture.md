@@ -14,6 +14,7 @@ Provider 原始属性
           ▼
 Consumer 属性
   例如 HomeKit Service.Characteristic
+  或 Matter Cluster.Attribute / Cluster.Command
 ```
 
 两段关系分别存储在 PostgreSQL 的 `mapping_bindings` 中，而且都以具体设备为作用域。Provider 路由按 Provider、设备和原始三级路径匹配；Consumer 路由按 Provider、设备、Target 桥、桥内虚拟设备、Consumer 和目标属性匹配。同型号的两台来源设备，以及同一来源设备发布到不同桥或不同虚拟设备时，都可以配置完全不同的路径与转换。Profile 为空表示不转换，配置 Profile 时事件走正向转换，读取和控制走反向转换。
@@ -39,6 +40,14 @@ Provider Manager 只校验快照的结构、稳定 ID、值类型和约束，不
 Consumer 目录公开平台能提供的全部目标属性。Target 先创建独立桥，再在桥内创建拥有稳定 ID、名称和启停状态的虚拟设备；每台虚拟设备绑定一个统一注册表来源设备。属性映射入口位于该桥的对应虚拟设备，编辑器锁定 `providerId + deviceId + targetId + consumerDeviceId`，不会展示或修改其他桥内设备的路由。设备类型只用于筛选当前设备可用的统一模型和 Consumer 属性。HomeKit 路由在该桥内虚拟设备独立的 Consumer 投影视图中生效，不会改写 Core 注册表、影响同型号的其他设备或影响 Web 等其他 Consumer。通知值走正向 Profile；HomeKit 控制先按桥和虚拟设备作用域做反向 Profile，再写入对应的统一模型属性，随后继续沿来源设备的 Provider 路由写回设备。
 
 Provider 路由变化只刷新原始设备快照，不重启 Provider。Consumer 路由变化会保留 HomeKit 身份目录和配对资料，重建附件图以应用新的 Service/Characteristic 关系。
+
+Matter Consumer 目录与 HomeKit 并列注册，不允许回退。目录项使用 `Cluster.Attribute` / `Cluster.Command` 原始名，同时声明中文名、数据类型、单位、范围、枚举、读写订阅方向。Matter Target 把统一模型投影成 sidecar `DeviceSnapshot`；写属性和 Cluster Command 仍按 `targetId + consumerDeviceId` 反向解析，经现有 Provider 路由与同设备串行命令队列写回真实设备。
+
+Matter Endpoint 身份不使用数组下标。Root Node 固定为 `0`，Aggregator 固定为 `1`，虚拟设备从 `2` 开始由 PostgreSQL `matter_endpoint_identities` 分配。删除虚拟设备只写 tombstone，不把编号立即交给另一设备；改名、来源重连、Go/sidecar 重启不会改变 Endpoint ID。
+
+已有 Endpoint 的 Device Type 变更必须经过 `CHANGE ENDPOINT TYPE <targetId> <consumerDeviceId> <deviceType>` 精确确认；确认接口会同时更新持久化 identity、目标配置并重启运行时。普通保存遇到未确认的类型变化会保留明确错误，不会自动重用或替换 Endpoint ID。
+
+Matter sidecar 的状态增量使用有界 JSON-RPC 队列，断线后丢弃旧增量并重放最新全量快照。Fabric、证书、密钥和计数器通过绑定当前 Target 的 `storage.*` RPC 加密保存，不能跨 Target 读取。
 
 ## 前端配置边界
 

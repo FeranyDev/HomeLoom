@@ -21,4 +21,7 @@ frontend/.npm-cache/
 frontend/*.tsbuildinfo
 frontend/vite.config.js
 frontend/vite.config.d.ts
+matter-runtime/node_modules/
+matter-runtime/dist/
+matter-runtime/*.tsbuildinfo
 dist/

@@ -1,14 +1,27 @@
 package mapping
 
-import "github.com/feranydev/homeloom/backend/internal/domain/device"
+import (
+	"strings"
+
+	"github.com/feranydev/homeloom/backend/internal/domain/device"
+)
 
 type ConsumerProperty struct {
 	ID               string                `json:"id"`
 	Name             string                `json:"name"`
+	OriginalName     string                `json:"originalName,omitempty"`
+	Cluster          string                `json:"cluster,omitempty"`
+	Element          string                `json:"element,omitempty"`
+	Kind             string                `json:"kind,omitempty"`
 	DeviceType       device.Type           `json:"deviceType"`
 	DefaultModelPath device.ParameterPath  `json:"defaultModelPath"`
 	Level            device.ParameterLevel `json:"level"`
 	Type             device.ValueType      `json:"type"`
+	Unit             string                `json:"unit,omitempty"`
+	Min              *float64              `json:"min,omitempty"`
+	Max              *float64              `json:"max,omitempty"`
+	Step             *float64              `json:"step,omitempty"`
+	Enum             []string              `json:"enum,omitempty"`
 	Readable         bool                  `json:"readable"`
 	Writable         bool                  `json:"writable"`
 	Notifiable       bool                  `json:"notifiable"`
@@ -38,11 +51,14 @@ func BuiltInConsumerCatalogs() []ConsumerCatalog {
 // and concrete Target implementations. Adding a Consumer does not require
 // application services to know its protocol or property vocabulary.
 func BuiltInConsumerAdapters() []ConsumerAdapter {
-	contracts := HomeKitConsumerContracts()
-	return []ConsumerAdapter{{
-		Catalog:   consumerCatalog("homekit", "Apple Home / HomeKit", contracts),
-		Contracts: contracts,
-	}}
+	homeKitContracts := HomeKitConsumerContracts()
+	matterContracts := MatterConsumerContracts()
+	matterCatalog := consumerCatalog("matter", "Matter", matterContracts)
+	matterCatalog.Properties = append(matterCatalog.Properties, matterCommandProperties(matterContracts)...)
+	return []ConsumerAdapter{
+		{Catalog: consumerCatalog("homekit", "Apple Home / HomeKit", homeKitContracts), Contracts: homeKitContracts},
+		{Catalog: matterCatalog, Contracts: matterContracts},
+	}
 }
 
 func consumerCatalog(id, name string, contracts []device.ConsumerModelContract) ConsumerCatalog {
@@ -56,14 +72,30 @@ func consumerCatalog(id, name string, contracts []device.ConsumerModelContract) 
 		for _, item := range contract.Parameters {
 			modelPath := item.ModelPath()
 			parameter := definitions[modelPath.Key()]
+			cluster, element := splitConsumerPath(item.Target)
+			propertyName := item.Target
+			if id == "matter" && parameter.Name != "" {
+				propertyName = parameter.Name
+			}
 			properties = append(properties, ConsumerProperty{
-				ID: item.Target, Name: item.Target, DeviceType: contract.DeviceType,
+				ID: item.Target, Name: propertyName, OriginalName: item.Target,
+				Cluster: cluster, Element: element, Kind: "attribute", DeviceType: contract.DeviceType,
 				DefaultModelPath: modelPath, Level: item.Level, Type: parameter.Type,
+				Unit: parameter.Unit, Min: parameter.Min, Max: parameter.Max, Step: parameter.Step,
+				Enum:     append([]string(nil), parameter.Enum...),
 				Readable: parameter.Readable, Writable: parameter.Writable, Notifiable: parameter.Notifiable,
 			})
 		}
 	}
 	return ConsumerCatalog{ID: id, Name: name, Properties: properties}
+}
+
+func splitConsumerPath(value string) (string, string) {
+	cluster, element, found := strings.Cut(value, ".")
+	if !found {
+		return "", value
+	}
+	return cluster, element
 }
 
 func ConsumerContract(consumerID string, deviceType device.Type) (device.ConsumerModelContract, bool) {

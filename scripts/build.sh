@@ -26,10 +26,12 @@ esac
 
 cd "$ROOT"
 mkdir -p "$(dirname "$OUTPUT")"
+(cd matter-runtime && "$ROOT/scripts/dev-env.sh" npm run build)
 (cd frontend && "$ROOT/scripts/dev-env.sh" npm run build:embed)
 (cd backend && CGO_ENABLED=0 "$ROOT/scripts/dev-env.sh" go build -trimpath -tags embed_webui \
   -ldflags "-s -w -X ${PACKAGE}.Version=${VERSION} -X ${PACKAGE}.Commit=${COMMIT} -X ${PACKAGE}.BuildTime=${BUILD_TIME}" \
   -o "$OUTPUT" ./cmd/homeloom)
 test -s "$OUTPUT"
 "$OUTPUT" -version
-printf 'built single-binary HomeLoom %s (%s): %s\n' "$VERSION" "$COMMIT" "$OUTPUT"
+printf 'built HomeLoom core %s (%s): %s\n' "$VERSION" "$COMMIT" "$OUTPUT"
+printf 'built Matter sidecar (requires Node.js 20+): %s\n' "$ROOT/matter-runtime/dist/src/cli.js"

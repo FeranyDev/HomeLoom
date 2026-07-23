@@ -1,6 +1,8 @@
 # 单二进制与多平台打包
 
-HomeLoom 保持 Go 后端与 React 前端的源码分层，但发布时会先构建 Vite 静态资源，再通过 Go `embed` 打进同一个可执行文件。发布环境不需要 Node.js、Nginx 或单独的前端目录；Node.js 只参与构建。
+HomeLoom 保持 Go 后端与 React 前端的源码分层。未启用 Matter 时，Vite 静态资源仍通过 Go `embed` 打进同一个可执行文件，发布环境不需要 Nginx 或单独的前端目录。
+
+启用 Matter 后发布形态明确为两个持续运行的制品：Go 主服务和 `matter-runtime` Node.js sidecar。当前 sidecar 要求 Node.js 20+，不属于严格的单进程单二进制发布。`scripts/build.sh` 会同时构建 Go core 与 `matter-runtime/dist/src/cli.js`；部署者必须把整个 `matter-runtime/dist`、锁定依赖和 Node.js 20+ 一起交付。若将来恢复“设备上只运行一个自包含二进制”的硬约束，必须先完成 Node SEA 的逐平台验证，或切换 ConnectedHomeIP 原生路线，不能把当前 sidecar 描述为单二进制。
 
 ## 本机平台
 
@@ -16,7 +18,7 @@ HomeLoom 保持 Go 后端与 React 前端的源码分层，但发布时会先构
 ./scripts/build.sh 0.1.0 dist/homeloom
 ```
 
-构建完成后可以直接检查版本：
+构建完成后可以直接检查 core 版本：
 
 ```bash
 backend/bin/homeloom -version
@@ -82,9 +84,26 @@ HOMELOOM_BUILD_TIME=2026-07-22T00:00:00Z \
 
 嵌入目录、最终制品和所有构建缓存均被 Git 忽略。Go、Go Module 和 npm 缓存仍由 `scripts/dev-env.sh` 放在项目根目录 `.cache/`。
 
+## Matter sidecar
+
+安装锁定依赖并构建：
+
+```bash
+./scripts/dev-env.sh sh -c 'cd matter-runtime && npm ci && npm run build'
+```
+
+Go 主服务为每个启用的 Matter Target 启动一个独立 sidecar、Unix Socket 和身份命名空间。默认入口为 `matter-runtime/dist/src/cli.js`，部署到其他位置时必须设置绝对路径：
+
+```bash
+HOMELOOM_MATTER_RUNTIME=/opt/homeloom/matter-runtime/dist/src/cli.js \
+./backend/bin/homeloom
+```
+
+所有 npm、TypeScript 和 Matter Runtime 构建缓存都进入项目 `.cache/`。`@matter/main` 固定为 `0.17.6`，禁止自动漂移到 nightly。
+
 ## 容器镜像
 
-统一镜像也只包含一个 HomeLoom 可执行文件。镜像构建必须传入版本：
+现有统一镜像仍只包含 HomeLoom core，因此只适合 Web/API、Provider 和 HomeKit；它不会静默把 Matter Target 回退到 HomeKit。Matter 容器发布需要后续镜像显式加入 Node.js 20+、锁定的 sidecar 文件和 host network/mDNS 配置。在此之前，生产 Matter 验收应直接运行双制品部署。
 
 ```bash
 docker build \
@@ -95,7 +114,7 @@ docker build \
   -t homeloom:0.1.0 .
 ```
 
-Compose 使用时同样要求版本号：
+Core Compose 使用时同样要求版本号：
 
 ```bash
 HOMELOOM_VERSION=0.1.0 docker compose up --build -d

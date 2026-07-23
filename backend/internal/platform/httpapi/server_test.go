@@ -353,6 +353,72 @@ func TestTargetCRUDAPIPersistsConfiguration(t *testing.T) {
 	}
 }
 
+func TestMatterTargetAPIAcceptsProtocolConfigWithoutLeakingPasscode(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	targets := application.NewTargetService(nil, store)
+	devices := application.NewDeviceService(virtual.NewProvider())
+	defer devices.Close()
+	server := NewServer(":0", devices, targets, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	body := `{"id":"matter-api","type":"matter","name":"Matter API","enabled":false,"matterConfig":{"networkInterface":"en0","udpPort":5540,"discriminator":1234,"passcode":"20202021","vendorId":65521,"productId":32768,"productName":"HomeLoom","serialNumber":"matter-api","commissioningWindowSeconds":300}}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/targets", bytes.NewBufferString(body))
+	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("create Matter target = %d %s", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "20202021") || strings.Contains(response.Body.String(), `"passcode"`) {
+		t.Fatalf("Matter API leaked commissioning passcode: %s", response.Body.String())
+	}
+	for _, expected := range []string{`"networkInterface":"en0"`, `"udpPort":5540`, `"discriminator":1234`, `"certification":"test"`} {
+		if !strings.Contains(response.Body.String(), expected) {
+			t.Fatalf("Matter API response missing %s: %s", expected, response.Body.String())
+		}
+	}
+	persisted, err := store.ListTargets(ctx)
+	var savedPasscode string
+	for _, current := range persisted {
+		if current.ID == "matter-api" && current.MatterConfig != nil {
+			savedPasscode = current.MatterConfig.Passcode
+		}
+	}
+	if err != nil || savedPasscode != "20202021" {
+		t.Fatalf("persisted Matter config = %#v, %v", persisted, err)
+	}
+}
+
+func TestMatterDangerousAPIsRequireExactConfirmation(t *testing.T) {
+	targets := application.NewTargetService(nil, nil)
+	devices := application.NewDeviceService(virtual.NewProvider())
+	defer devices.Close()
+	server := NewServer(":0", devices, targets, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	tests := []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodPost, "/api/v1/targets/matter/commissioning-window", `{"durationSeconds":300}`},
+		{http.MethodDelete, "/api/v1/targets/matter/fabrics/fabric-1", `{"confirmation":"DELETE FABRIC matter"}`},
+		{http.MethodPost, "/api/v1/targets/matter/factory-reset", `{"confirmation":"FACTORY RESET"}`},
+		{http.MethodPost, "/api/v1/targets/matter/endpoints/lamp/device-type", `{"deviceType":"lightbulb","confirmation":"CHANGE ENDPOINT TYPE matter lamp switch"}`},
+	}
+	for _, test := range tests {
+		request := httptest.NewRequest(test.method, test.path, bytes.NewBufferString(test.body))
+		request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"confirmation"`) {
+			t.Fatalf("%s %s = %d %s", test.method, test.path, response.Code, response.Body.String())
+		}
+	}
+}
+
 func TestDeviceEnabledAPIIsPersisted(t *testing.T) {
 	ctx := context.Background()
 	store, err := openTestStore(t, ctx)

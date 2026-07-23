@@ -1,6 +1,6 @@
 # HomeLoom 详细实施清单
 
-更新时间：2026-07-22
+更新时间：2026-07-23
 
 状态说明：
 
@@ -751,7 +751,19 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [ ] 崩溃重启；
 - [ ] 日志转发；
 - [ ] 资源限制；
-- [ ] Matter Target（详细方案见 [`matter-target-plan.md`](matter-target-plan.md)）；
+- [~] Matter Target 基础架构（详细方案见 [`matter-target-plan.md`](matter-target-plan.md)）：
+  - [x] HomeKit/Matter 判别配置、加密 passcode 和类型不可变；
+  - [x] Node.js 20+ sidecar 工程与固定 `@matter/main` 版本；
+  - [x] Unix Socket JSON-RPC 握手、超时、有界队列、背压、重连与全量重放；
+  - [x] Go 提供的加密 Matter KV、Target 命名空间隔离和身份审计；
+  - [x] 稳定 Endpoint、tombstone、并发与耗尽测试；
+  - [x] Matter Consumer Catalog 与第一批统一模型映射元数据；
+  - [x] Matter 专属前端表单、状态、commissioning/Fabric/factory reset 操作；
+  - [x] OpenAPI、双段映射、打包和网络排障文档；
+  - [x] matter.js 真实 Bridge driver、第一批 13 类官方 Endpoint 与 Catalog 对照测试；
+  - [ ] matter.js Controller、Apple Home 与 `chip-tool` 真实网络验收；
+  - [ ] Apple Home、`chip-tool`、Multi-Admin、三次重启和容器网络实机记录；
+  - [ ] 第二批高级设备与正式 CSA 认证准备。
 - [ ] Zigbee2MQTT/Tuya/ESPHome 评估。
 
 ## 16. 推荐执行顺序

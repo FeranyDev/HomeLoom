@@ -7,9 +7,20 @@ import { BindingManager } from './BindingManager'
 import { deviceTypeLabel } from '../presentationLabels'
 import { targetDescriptor } from '../targetDescriptors'
 import { deviceLocationLabel, homeLocationOptions, matchesDeviceLocation, roomLocationOptions } from '../deviceLocation'
+import { confirmExactPhrase } from '../confirmations'
 
 function inputFromTarget(target: Target, devices: TargetVirtualDevice[]): TargetInput {
-	return { id: target.id, type: target.type, name: target.name, enabled: target.enabled, address: target.address ?? '', pin: target.pairingCode?.replaceAll('-', '') ?? '', setupId: target.setupId ?? '', deviceIds: [], devices }
+	if (target.type === 'matter') {
+		return {
+			id: target.id, type: 'matter', name: target.name, enabled: target.enabled, deviceIds: [], devices,
+			config: {
+				networkInterface: target.config.networkInterface ?? '', udpPort: target.config.udpPort ?? null, discriminator: target.config.discriminator ?? null,
+				passcode: null, vendorId: target.config.vendorId ?? null, productId: target.config.productId ?? null,
+				productName: target.config.productName ?? '', serialNumber: target.config.serialNumber ?? '', commissioningWindowSeconds: target.config.commissioningWindowSeconds ?? null,
+			},
+		}
+	}
+	return { id: target.id, type: 'apple-hap', name: target.name, enabled: target.enabled, config: { address: target.config.address ?? '', pin: '', setupId: target.config.setupId ?? '' }, deviceIds: [], devices }
 }
 
 function stableID(value: string): string { return value.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64) }
@@ -22,7 +33,7 @@ function saveErrorMessage(cause: unknown): string {
 	return cause instanceof Error ? cause.message : '保存消费端设备失败'
 }
 
-export function TargetDeviceManager({ target, devices, onClose, onSave }: { target: Target; devices: Device[]; onClose: () => void; onSave: (input: TargetInput) => Promise<void> }) {
+export function TargetDeviceManager({ target, devices, onClose, onSave, onConfirmMatterEndpointType }: { target: Target; devices: Device[]; onClose: () => void; onSave: (input: TargetInput) => Promise<void>; onConfirmMatterEndpointType?: (consumerDeviceID: string, deviceType: DeviceType, confirmation: string) => Promise<void> }) {
 	const descriptor = targetDescriptor(target.type)
 	const consumerId = target.consumerId ?? descriptor.consumerId
 	const [items, setItems] = useState<TargetVirtualDevice[]>(target.devices ?? [])
@@ -88,7 +99,29 @@ export function TargetDeviceManager({ target, devices, onClose, onSave }: { targ
 
 	async function save() {
 		setSaving(true); setError(null)
-		try { await onSave(inputFromTarget(target, items)) } catch (cause) { setError(saveErrorMessage(cause)) } finally { setSaving(false) }
+		try {
+			const changes = target.type === 'matter' ? items.flatMap((item) => {
+				const previous = target.devices.find((candidate) => candidate.id === item.id)
+				return previous && previous.type !== item.type ? [{ item, previousType: previous.type }] : []
+			}) : []
+			if (changes.length > 0 && !onConfirmMatterEndpointType) throw new Error('Matter Endpoint Device Type 变更确认服务不可用；请保留原类型，或删除后新建消费端设备。')
+			const confirmations: string[] = []
+			for (const { item } of changes) {
+				const phrase = `CHANGE ENDPOINT TYPE ${target.id} ${item.id} ${item.type}`
+				const confirmation = confirmExactPhrase('变更 Matter Endpoint 的 Device Type 会重建该 Endpoint 的协议结构；控制器可能需要重新发现设备。', phrase)
+				if (!confirmation) throw new Error(`未确认 ${item.id} 的 Device Type 变更；已取消保存。`)
+				confirmations.push(confirmation)
+			}
+			const baseItems = items.map((item) => {
+				const change = changes.find((candidate) => candidate.item.id === item.id)
+				return change ? { ...item, type: change.previousType } : item
+			})
+			await onSave(inputFromTarget(target, baseItems))
+			for (let index = 0; index < changes.length; index += 1) {
+				const item = changes[index].item
+				await onConfirmMatterEndpointType!(item.id, item.type, confirmations[index])
+			}
+		} catch (cause) { setError(saveErrorMessage(cause)) } finally { setSaving(false) }
 	}
 
 	return <section className="target-device-manager">

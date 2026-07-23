@@ -2,17 +2,18 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { TargetCard } from './TargetCard'
+import type { MatterTarget } from '../types/target'
 
 const target = {
-  id: 'apple-main', type: 'apple-hap' as const, name: '主桥', enabled: true,
-  status: 'running' as const, address: ':51826', pairingCode: '001-02-003',
-  setupUri: 'X-HM://test', setupId: 'HLM1', paired: false, deviceIds: [],
-	devices: [],
+  id: 'apple-main', type: 'apple-hap' as const, name: '主桥', enabled: true, status: 'running' as const,
+  config: { address: ':51826', setupId: 'HLM1' }, pairing: { pairingCode: '001-02-003', setupUri: 'X-HM://test', paired: false }, deviceIds: [], devices: [],
 }
+
+const callbacks = () => ({ onEdit: vi.fn(), onManageDevices: vi.fn(), onDelete: vi.fn(), onRegeneratePairing: vi.fn(), onClearPairingIdentity: vi.fn() })
 
 describe('TargetCard', () => {
   it('loads the pairing QR only after explicit user action', async () => {
-    render(<TargetCard target={target} onEdit={vi.fn()} onManageDevices={vi.fn()} onDelete={vi.fn()} onRegeneratePairing={vi.fn()} onClearPairingIdentity={vi.fn()} />)
+    render(<TargetCard target={target} {...callbacks()} />)
 		expect(screen.getByRole('button', { name: '重新生成 HomeKit 配对参数' })).toBeInTheDocument()
 		expect(screen.queryByRole('button', { name: '清除 HomeKit 配对身份' })).not.toBeInTheDocument()
     expect(screen.queryByRole('img', { name: /HomeKit 配对二维码/ })).not.toBeInTheDocument()
@@ -23,21 +24,38 @@ describe('TargetCard', () => {
   })
 
 	it('collapses one-time setup details after pairing', () => {
-		render(<TargetCard target={{ ...target, paired: true, pairingCode: undefined, setupId: undefined, setupUri: undefined }} onEdit={vi.fn()} onManageDevices={vi.fn()} onDelete={vi.fn()} onRegeneratePairing={vi.fn()} onClearPairingIdentity={vi.fn()} />)
+		render(<TargetCard target={{ ...target, pairing: { paired: true } }} {...callbacks()} />)
 		expect(screen.getByText('已配对至 Apple Home')).toBeInTheDocument()
 		expect(screen.getByText('已连接 Apple Home')).toBeInTheDocument()
-		expect(screen.queryByText('HomeKit 配对码')).not.toBeInTheDocument()
 		expect(screen.queryByRole('button', { name: '显示配对二维码' })).not.toBeInTheDocument()
 		expect(screen.queryByRole('button', { name: '重新生成 HomeKit 配对参数' })).not.toBeInTheDocument()
 		expect(screen.getByRole('button', { name: '清除 HomeKit 配对身份' })).toBeInTheDocument()
 	})
 
-  it('does not expose HomeKit controls for another Consumer adapter', () => {
-    render(<TargetCard target={{ ...target, id: 'matter-main', type: 'matter', name: 'Matter 目标', setupUri: undefined, pairingCode: undefined, address: undefined }} onEdit={vi.fn()} onManageDevices={vi.fn()} onDelete={vi.fn()} onRegeneratePairing={vi.fn()} onClearPairingIdentity={vi.fn()} />)
-    expect(screen.getByText('Matter（matter）')).toBeInTheDocument()
-    expect(screen.getByText(/不会回退到 HomeKit/)).toBeInTheDocument()
-    expect(screen.queryByText('HomeKit 配对码')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /配对参数/ })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /配对二维码/ })).not.toBeInTheDocument()
+  it('renders Matter runtime fields and only renders the QR while its window is open', () => {
+    const matter: MatterTarget = {
+      id: 'matter-main', type: 'matter', name: 'Matter 目标', enabled: true, status: 'running', deviceIds: [], devices: [],
+      config: { networkInterface: 'en0', udpPort: 5540, protocolVersion: '1.3' }, commissioning: { state: 'commissioned', windowOpen: false },
+      fabricCount: 2, endpointCount: 5, fabrics: [{ id: 'fabric-1', label: 'Apple Home' }], runtime: { interface: 'en0', protocolVersion: '1.3' }, certification: 'test',
+    }
+    const onToggle = vi.fn()
+    render(<TargetCard target={matter} {...callbacks()} onMatterCommissioningToggle={onToggle} onDeleteMatterFabric={vi.fn()} onFactoryResetMatter={vi.fn()} />)
+    expect(screen.getByText('2 个 Fabric · 5 个 Endpoint')).toBeInTheDocument()
+    expect(screen.getAllByText('测试设备 · 未认证')).toHaveLength(2)
+    expect(screen.queryByRole('img', { name: /Matter 配网二维码/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '打开配网窗口' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '删除 Fabric Apple Home' })).toBeInTheDocument()
+    expect(screen.queryByText('HAP 监听地址')).not.toBeInTheDocument()
   })
+
+	it('shows Matter commissioning QR and close action only for an open window', () => {
+		const matter: MatterTarget = {
+			id: 'matter-main', type: 'matter', name: 'Matter 目标', enabled: true, status: 'running', deviceIds: [], devices: [], config: {},
+			commissioning: { state: 'window-open', windowOpen: true, manualPairingCode: '349701123' }, fabricCount: 0, endpointCount: 2, certification: 'unknown',
+		}
+		render(<TargetCard target={matter} {...callbacks()} onMatterCommissioningToggle={vi.fn()} />)
+		expect(screen.getByRole('img', { name: /Matter 配网二维码/ })).toHaveAttribute('src', '/api/v1/targets/matter-main/commissioning-qr')
+		expect(screen.getByText('手工配对码：349701123')).toBeInTheDocument()
+		expect(screen.getByRole('button', { name: '关闭配网窗口' })).toBeInTheDocument()
+	})
 })

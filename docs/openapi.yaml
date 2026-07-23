@@ -506,6 +506,60 @@ paths:
       description: Stops the bridge, safely removes HAP keys and controller pairings, then rebuilds it. Confirmation must equal CLEAR followed by the target ID.
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ConfirmationRequest" } } } }
       responses: { "200": { description: Target rebuilt with a fresh pairing identity }, "400": { $ref: "#/components/responses/BadRequest" }, "404": { $ref: "#/components/responses/NotFound" } }
+  /api/v1/targets/{targetId}/commissioning-qr:
+    parameters: [{ name: targetId, in: path, required: true, schema: { type: string } }]
+    get:
+      operationId: getMatterCommissioningQR
+      description: Returns a no-store PNG only while the Matter commissioning window is open and the runtime exposes a setup payload.
+      responses: { "200": { description: Matter commissioning QR PNG, content: { image/png: { schema: { type: string, format: binary } } } }, "404": { $ref: "#/components/responses/NotFound" } }
+  /api/v1/targets/{targetId}/commissioning-window:
+    parameters: [{ name: targetId, in: path, required: true, schema: { type: string } }]
+    post:
+      operationId: openMatterCommissioningWindow
+      description: Opens the temporary Matter commissioning window. Confirmation must equal OPEN COMMISSIONING followed by the target ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirmation]
+              properties:
+                durationSeconds: { type: integer, minimum: 180, maximum: 900 }
+                confirmation: { type: string, description: Must equal OPEN COMMISSIONING followed by the target ID. }
+      responses: { "200": { description: Updated Matter Target }, "400": { $ref: "#/components/responses/BadRequest" }, "404": { $ref: "#/components/responses/NotFound" } }
+    delete:
+      operationId: closeMatterCommissioningWindow
+      responses: { "200": { description: Updated Matter Target }, "400": { $ref: "#/components/responses/BadRequest" }, "404": { $ref: "#/components/responses/NotFound" } }
+  /api/v1/targets/{targetId}/endpoints/{consumerDeviceId}/device-type:
+    parameters:
+      - { name: targetId, in: path, required: true, schema: { type: string } }
+      - { name: consumerDeviceId, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: confirmMatterEndpointDeviceType
+      description: Atomically confirms the stable Endpoint identity's new Device Type, persists the Target device configuration and reapplies the Matter runtime. Confirmation must equal CHANGE ENDPOINT TYPE followed by target ID, consumer device ID and the new device type.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MatterEndpointDeviceTypeRequest" }
+      responses: { "200": { description: Updated Matter Target }, "400": { $ref: "#/components/responses/BadRequest" }, "404": { $ref: "#/components/responses/NotFound" } }
+  /api/v1/targets/{targetId}/fabrics/{fabricId}:
+    parameters:
+      - { name: targetId, in: path, required: true, schema: { type: string } }
+      - { name: fabricId, in: path, required: true, schema: { type: string } }
+    delete:
+      operationId: deleteMatterFabric
+      description: Confirmation must equal DELETE FABRIC followed by target ID and Fabric ID.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ConfirmationRequest" } } } }
+      responses: { "200": { description: Updated Matter Target }, "400": { $ref: "#/components/responses/BadRequest" }, "404": { $ref: "#/components/responses/NotFound" } }
+  /api/v1/targets/{targetId}/factory-reset:
+    parameters: [{ name: targetId, in: path, required: true, schema: { type: string } }]
+    post:
+      operationId: factoryResetMatterTarget
+      description: Clears Matter Fabric identity through the runtime and encrypted KV namespace. Confirmation must equal FACTORY RESET followed by target ID.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ConfirmationRequest" } } } }
+      responses: { "200": { description: Factory-reset Matter Target }, "400": { $ref: "#/components/responses/BadRequest" }, "404": { $ref: "#/components/responses/NotFound" } }
   /api/v1/commands:
     get:
       operationId: listCommands
@@ -553,6 +607,19 @@ components:
       type: object
       required: [confirmation]
       properties: { confirmation: { type: string } }
+    MatterEndpointDeviceTypeRequest:
+      type: object
+      required: [deviceType, confirmation]
+      properties:
+        deviceType: { type: string, description: New Matter consumer Device Type supported by the current catalog. }
+        confirmation: { type: string, description: Must equal CHANGE ENDPOINT TYPE followed by target ID, consumer device ID and device type. }
+    MatterFabricSummary:
+      type: object
+      required: [id]
+      additionalProperties: false
+      properties:
+        id: { type: string, description: Non-secret Fabric identifier accepted by the Fabric deletion endpoint. }
+        label: { type: string }
     PendingRestoreResponse:
       type: object
       required: [data]
@@ -613,6 +680,7 @@ components:
         enabled: { type: boolean }
         address: { type: string }
         setupId: { type: string }
+        matterConfig: { $ref: "#/components/schemas/MatterConfigPublic" }
         deviceIds: { type: array, deprecated: true, description: Compatibility view containing enabled unified source device IDs., items: { type: string } }
         devices: { type: array, items: { $ref: "#/components/schemas/TargetVirtualDevice" } }
     ConfigurationExport:
@@ -1046,19 +1114,56 @@ components:
         auxiliarySourceDeviceIds: { type: array, description: Ordered auxiliary unified-registry sources aggregated into this Consumer device., items: { type: string } }
         enabled: { type: boolean }
     TargetInput:
+      oneOf:
+        - { $ref: "#/components/schemas/HomeKitTargetInput" }
+        - { $ref: "#/components/schemas/MatterTargetInput" }
+      discriminator: { propertyName: type }
+    TargetInputBase:
       type: object
       required: [type, name, enabled]
       properties:
         id: { type: string }
-        type: { type: string }
+        type: { type: string, enum: [apple-hap, matter] }
         name: { type: string }
         enabled: { type: boolean }
-        address: { type: string }
-        pin: { type: string }
-        setupId: { type: string }
-        storePath: { type: string }
         deviceIds: { type: array, deprecated: true, description: Legacy source-device bindings; migrated into virtual devices when devices is empty., items: { type: string } }
         devices: { type: array, items: { $ref: "#/components/schemas/TargetVirtualDevice" } }
+    HomeKitTargetInput:
+      allOf:
+        - { $ref: "#/components/schemas/TargetInputBase" }
+        - type: object
+          required: [type]
+          properties:
+            type: { type: string, enum: [apple-hap] }
+            address: { type: string }
+            pin: { type: string, pattern: '^[0-9]{8}$' }
+            setupId: { type: string, minLength: 4, maxLength: 4 }
+            storePath: { type: string, readOnly: true }
+    MatterTargetInput:
+      allOf:
+        - { $ref: "#/components/schemas/TargetInputBase" }
+        - type: object
+          required: [type, matterConfig]
+          properties:
+            type: { type: string, enum: [matter] }
+            matterConfig: { $ref: "#/components/schemas/MatterConfigInput" }
+    MatterConfigPublic:
+      type: object
+      properties:
+        networkInterface: { type: string }
+        udpPort: { type: integer, minimum: 1024, maximum: 65535, description: Omit or use zero for automatic allocation. }
+        discriminator: { type: integer, minimum: 0, maximum: 4095 }
+        vendorId: { type: integer, minimum: 1, maximum: 65535 }
+        productId: { type: integer, minimum: 1, maximum: 65535 }
+        productName: { type: string, maxLength: 32 }
+        serialNumber: { type: string, maxLength: 32 }
+        commissioningWindowSeconds: { type: integer, minimum: 180, maximum: 900 }
+    MatterConfigInput:
+      allOf:
+        - { $ref: "#/components/schemas/MatterConfigPublic" }
+        - type: object
+          properties:
+            passcode: { type: string, format: password, pattern: '^[0-9]{8}$', description: Generated when omitted and never returned by Target list or configuration export. }
     Error:
       type: object
       required: [code, message, requestId]

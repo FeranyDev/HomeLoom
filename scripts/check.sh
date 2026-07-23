@@ -14,7 +14,8 @@ fi
 cd "$ROOT"
 ./scripts/dev-env.sh sh -c 'cd backend && go test -timeout 60s ./...'
 if [ "$RACE" = true ]; then
-  ./scripts/dev-env.sh sh -c 'cd backend && go test -race -timeout 90s ./internal/provider ./internal/providers/mqtt ./internal/providers/virtual ./internal/providers/xiaomi ./internal/runtime/providermanager ./internal/runtime/targetmanager ./internal/application ./internal/platform/httpapi ./internal/targets/homekit'
+  ./scripts/dev-env.sh sh -c 'cd backend && go test -race -timeout 90s ./internal/provider ./internal/providers/mqtt ./internal/providers/virtual ./internal/providers/xiaomi ./internal/runtime/providermanager ./internal/runtime/targetmanager ./internal/application ./internal/platform/httpapi ./internal/targets/homekit ./internal/targets/matter'
 fi
+./scripts/dev-env.sh sh -c 'cd matter-runtime && npm run test && npm run typecheck'
 ./scripts/dev-env.sh sh -c 'cd frontend && npm run test:coverage && npm run lint && npm run build:embed'
 ./scripts/dev-env.sh sh -c 'cd backend && go test -tags embed_webui ./internal/webui ./internal/platform/httpapi'

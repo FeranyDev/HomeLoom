@@ -51,16 +51,25 @@ type providerRow struct {
 func (providerRow) TableName() string { return "providers" }
 
 type targetRow struct {
-	ID        string `gorm:"column:id;primaryKey"`
-	Type      string `gorm:"column:type;not null"`
-	Name      string `gorm:"column:name;not null"`
-	Enabled   bool   `gorm:"column:enabled;not null;default:false"`
-	Address   string `gorm:"column:address;not null;default:'';uniqueIndex:targets_enabled_address,where:enabled = true AND address <> ''"`
-	PIN       string `gorm:"column:pin;not null;default:''"`
-	SetupID   string `gorm:"column:setup_id;not null;default:'';uniqueIndex:targets_enabled_setup_id,where:enabled = true AND setup_id <> ''"`
-	StorePath string `gorm:"column:store_path;not null;default:'';uniqueIndex:targets_enabled_store_path,where:enabled = true AND store_path <> ''"`
-	CreatedAt int64  `gorm:"column:created_at;not null"`
-	UpdatedAt int64  `gorm:"column:updated_at;not null"`
+	ID                               string `gorm:"column:id;primaryKey"`
+	Type                             string `gorm:"column:type;not null"`
+	Name                             string `gorm:"column:name;not null"`
+	Enabled                          bool   `gorm:"column:enabled;not null;default:false"`
+	Address                          string `gorm:"column:address;not null;default:'';uniqueIndex:targets_enabled_address,where:enabled = true AND address <> ''"`
+	PIN                              string `gorm:"column:pin;not null;default:''"`
+	SetupID                          string `gorm:"column:setup_id;not null;default:'';uniqueIndex:targets_enabled_setup_id,where:enabled = true AND setup_id <> ''"`
+	StorePath                        string `gorm:"column:store_path;not null;default:'';uniqueIndex:targets_enabled_store_path,where:enabled = true AND store_path <> ''"`
+	MatterNetworkInterface           string `gorm:"column:matter_network_interface;not null;default:''"`
+	MatterUDPPort                    uint32 `gorm:"column:matter_udp_port;not null;default:0"`
+	MatterDiscriminator              uint32 `gorm:"column:matter_discriminator;not null;default:0"`
+	MatterPasscode                   string `gorm:"column:matter_passcode;not null;default:''"`
+	MatterVendorID                   uint32 `gorm:"column:matter_vendor_id;not null;default:0"`
+	MatterProductID                  uint32 `gorm:"column:matter_product_id;not null;default:0"`
+	MatterProductName                string `gorm:"column:matter_product_name;not null;default:''"`
+	MatterSerialNumber               string `gorm:"column:matter_serial_number;not null;default:''"`
+	MatterCommissioningWindowSeconds uint32 `gorm:"column:matter_commissioning_window_seconds;not null;default:0"`
+	CreatedAt                        int64  `gorm:"column:created_at;not null"`
+	UpdatedAt                        int64  `gorm:"column:updated_at;not null"`
 }
 
 func (targetRow) TableName() string { return "targets" }
@@ -79,6 +88,30 @@ type targetVirtualDeviceRow struct {
 }
 
 func (targetVirtualDeviceRow) TableName() string { return "target_virtual_devices" }
+
+type matterRuntimeKVRow struct {
+	TargetID  string    `gorm:"column:target_id;primaryKey"`
+	Key       string    `gorm:"column:key;primaryKey"`
+	Value     string    `gorm:"column:value;not null"`
+	Sensitive bool      `gorm:"column:sensitive;not null;default:true"`
+	UpdatedAt int64     `gorm:"column:updated_at;not null"`
+	Target    targetRow `gorm:"foreignKey:TargetID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+}
+
+func (matterRuntimeKVRow) TableName() string { return "matter_runtime_kv" }
+
+type matterEndpointIdentityRow struct {
+	TargetID         string    `gorm:"column:target_id;primaryKey;uniqueIndex:matter_endpoint_target_endpoint,priority:1"`
+	ConsumerDeviceID string    `gorm:"column:consumer_device_id;primaryKey"`
+	EndpointID       uint32    `gorm:"column:endpoint_id;not null;uniqueIndex:matter_endpoint_target_endpoint,priority:2;check:matter_endpoint_id_range,endpoint_id >= 2 AND endpoint_id <= 65534"`
+	DeviceType       string    `gorm:"column:device_type;not null"`
+	Tombstone        bool      `gorm:"column:tombstone;not null;default:false"`
+	CreatedAt        int64     `gorm:"column:created_at;not null"`
+	UpdatedAt        int64     `gorm:"column:updated_at;not null"`
+	Target           targetRow `gorm:"foreignKey:TargetID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+}
+
+func (matterEndpointIdentityRow) TableName() string { return "matter_endpoint_identities" }
 
 type homeKitAccessoryIDRow struct {
 	TargetID  string    `gorm:"column:target_id;primaryKey;uniqueIndex:homekit_accessory_target_aid,priority:1"`
@@ -227,6 +260,7 @@ func (customUnifiedModelRow) TableName() string { return "custom_unified_models"
 func currentModels() []any {
 	return []any{
 		&providerRow{}, &targetRow{}, &targetVirtualDeviceRow{},
+		&matterRuntimeKVRow{}, &matterEndpointIdentityRow{},
 		&homeKitAccessoryIDRow{}, &homeKitIIDRow{}, &systemSettingRow{},
 		&devicePreferenceRow{}, &auditEventRow{}, &mappingProfileRow{},
 		&mappingBindingRow{}, &customModelPropertyRow{}, &adminUserRow{},

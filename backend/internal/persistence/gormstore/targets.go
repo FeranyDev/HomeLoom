@@ -3,6 +3,7 @@ package gormstore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -14,14 +15,51 @@ import (
 
 func (s *Store) SaveTarget(ctx context.Context, item target.Config) error {
 	defer s.observe(time.Now())
+	item = item.NormalizeProtocolConfig()
 	pin, err := s.secrets.encrypt("target-pin:"+item.ID, item.Pin)
 	if err != nil {
 		return fmt.Errorf("encrypt target pin: %w", err)
 	}
+	matter := target.MatterConfig{}
+	if item.MatterConfig != nil {
+		matter = *item.MatterConfig
+	}
+	matterPasscode, err := s.secrets.encrypt("target-matter-passcode:"+item.ID, matter.Passcode)
+	if err != nil {
+		return fmt.Errorf("encrypt Matter target passcode: %w", err)
+	}
+	var discriminator uint16
+	if matter.Discriminator != nil {
+		discriminator = *matter.Discriminator
+	}
 	now := time.Now().UTC().UnixMilli()
 	return s.orm.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		row := targetRow{ID: item.ID, Type: item.Type, Name: item.Name, Enabled: item.Enabled, Address: item.Address, PIN: pin, SetupID: item.SetupID, StorePath: item.StorePath, CreatedAt: now, UpdatedAt: now}
-		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.AssignmentColumns([]string{"type", "name", "enabled", "address", "pin", "setup_id", "store_path", "updated_at"})}).Create(&row).Error; err != nil {
+		var existing targetRow
+		if err := tx.Select("type").Where("id = ?", item.ID).Take(&existing).Error; err == nil {
+			if existing.Type != item.Type {
+				return fmt.Errorf("target type cannot be changed after creation")
+			}
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("inspect target type: %w", err)
+		}
+		row := targetRow{
+			ID: item.ID, Type: item.Type, Name: item.Name, Enabled: item.Enabled,
+			Address: item.Address, PIN: pin, SetupID: item.SetupID, StorePath: item.StorePath,
+			MatterNetworkInterface: matter.NetworkInterface, MatterUDPPort: uint32(matter.UDPPort),
+			MatterDiscriminator: uint32(discriminator), MatterPasscode: matterPasscode,
+			MatterVendorID: uint32(matter.VendorID), MatterProductID: uint32(matter.ProductID),
+			MatterProductName: matter.ProductName, MatterSerialNumber: matter.SerialNumber,
+			MatterCommissioningWindowSeconds: matter.CommissioningWindowSeconds,
+			CreatedAt:                        now, UpdatedAt: now,
+		}
+		updates := []string{
+			"name", "enabled", "address", "pin", "setup_id", "store_path",
+			"matter_network_interface", "matter_udp_port", "matter_discriminator",
+			"matter_passcode", "matter_vendor_id", "matter_product_id",
+			"matter_product_name", "matter_serial_number",
+			"matter_commissioning_window_seconds", "updated_at",
+		}
+		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.AssignmentColumns(updates)}).Create(&row).Error; err != nil {
 			return fmt.Errorf("save target: %w", err)
 		}
 		if err := tx.Where("target_id = ?", item.ID).Delete(&targetVirtualDeviceRow{}).Error; err != nil {
@@ -44,6 +82,32 @@ func (s *Store) SaveTarget(ctx context.Context, item target.Config) error {
 		if len(rows) > 0 {
 			if err := tx.Create(&rows).Error; err != nil {
 				return fmt.Errorf("save target virtual devices: %w", err)
+			}
+		}
+		if item.Type == "matter" {
+			activeDeviceTypes := make(map[string]string, len(devices))
+			for _, current := range devices {
+				if current.Enabled {
+					activeDeviceTypes[current.ID] = string(current.Type)
+				}
+			}
+			var identities []matterEndpointIdentityRow
+			if err := tx.Where("target_id = ?", item.ID).Find(&identities).Error; err != nil {
+				return fmt.Errorf("list Matter endpoint identities: %w", err)
+			}
+			for _, identity := range identities {
+				nextType, active := activeDeviceTypes[identity.ConsumerDeviceID]
+				if active && nextType != identity.DeviceType {
+					return fmt.Errorf("%w for virtual device %q", target.ErrMatterDeviceTypeChange, identity.ConsumerDeviceID)
+				}
+				if identity.Tombstone == !active {
+					continue
+				}
+				if err := tx.Model(&matterEndpointIdentityRow{}).
+					Where("target_id = ? AND consumer_device_id = ?", item.ID, identity.ConsumerDeviceID).
+					Updates(map[string]any{"tombstone": !active, "updated_at": now}).Error; err != nil {
+					return fmt.Errorf("synchronize Matter endpoint tombstone: %w", err)
+				}
 			}
 		}
 		type virtualDeviceScope struct {
@@ -118,6 +182,21 @@ func (s *Store) ListTargets(ctx context.Context) ([]target.Config, error) {
 		if err != nil {
 			return nil, fmt.Errorf("decrypt target %q pin: %w", item.ID, err)
 		}
+		if item.Type == "matter" {
+			passcode, err := s.secrets.decrypt("target-matter-passcode:"+item.ID, row.MatterPasscode)
+			if err != nil {
+				return nil, fmt.Errorf("decrypt Matter target %q passcode: %w", item.ID, err)
+			}
+			discriminator := uint16(row.MatterDiscriminator)
+			item.MatterConfig = &target.MatterConfig{
+				NetworkInterface: row.MatterNetworkInterface, UDPPort: uint16(row.MatterUDPPort),
+				Discriminator: &discriminator, Passcode: passcode,
+				VendorID: uint16(row.MatterVendorID), ProductID: uint16(row.MatterProductID),
+				ProductName: row.MatterProductName, SerialNumber: row.MatterSerialNumber,
+				CommissioningWindowSeconds: row.MatterCommissioningWindowSeconds,
+			}
+		}
+		item = item.NormalizeProtocolConfig()
 		result = append(result, item)
 	}
 	for index := range result {

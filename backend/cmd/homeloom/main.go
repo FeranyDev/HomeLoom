@@ -14,7 +14,6 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/buildinfo"
 	"github.com/feranydev/homeloom/backend/internal/config"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
-	"github.com/feranydev/homeloom/backend/internal/domain/target"
 	"github.com/feranydev/homeloom/backend/internal/mapping"
 	"github.com/feranydev/homeloom/backend/internal/persistence/gormstore"
 	"github.com/feranydev/homeloom/backend/internal/platform/httpapi"
@@ -204,13 +203,8 @@ func main() {
 	for _, targetConfig := range targetConfigs {
 		registration, targetErr := manager.Apply(ctx, targetConfig)
 		if targetErr != nil {
-			registration.Info = application.TargetInfo{
-				ID: targetConfig.ID, Type: targetConfig.Type, Name: targetConfig.Name,
-				Enabled: targetConfig.Enabled, Status: "error", Address: targetConfig.Address,
-				SetupID: targetConfig.SetupID, DeviceIDs: append([]string{}, targetConfig.DeviceIDs...),
-				Devices: append([]target.VirtualDevice(nil), targetConfig.Devices...),
-				Error:   targetErr.Error(),
-			}
+			registration.Info = application.TargetInfoFromConfig(targetConfig, "error")
+			registration.Info.Error = targetErr.Error()
 			logger.Error("target initialization failed", "target_id", targetConfig.ID, "error", targetErr)
 		}
 		registrations = append(registrations, registration)

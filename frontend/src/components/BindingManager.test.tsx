@@ -201,11 +201,14 @@ describe('BindingManager', () => {
       listBindings: vi.fn(async () => [currentHomeKit]), listProfiles: vi.fn(async () => []), create, update: vi.fn(), remove: vi.fn(),
       catalog: vi.fn(async () => ({ ...(await catalog()), consumers: [
         ...(await catalog()).consumers,
-        { id: 'matter', name: 'Matter', properties: [{ id: 'OnOff.OnOff', name: 'OnOff.OnOff', deviceType: 'switch' as const, defaultModelPath: { endpointId: 'main', capabilityId: 'switch', propertyId: 'power' }, level: 'required' as const, type: 'bool' as const, readable: true, writable: true, notifiable: true }] },
+        { id: 'matter', name: 'Matter', properties: [{ id: 'OnOff.OnOff', name: '开关状态', originalName: 'OnOff.OnOff', cluster: 'OnOff', element: 'OnOff', kind: 'attribute' as const, deviceType: 'switch' as const, defaultModelPath: { endpointId: 'main', capabilityId: 'switch', propertyId: 'power' }, level: 'required' as const, type: 'bool' as const, readable: true, writable: true, notifiable: true }, { id: 'OnOff.Toggle', name: '切换', originalName: 'OnOff.Toggle', cluster: 'OnOff', element: 'Toggle', kind: 'command' as const, deviceType: 'switch' as const, defaultModelPath: { endpointId: 'main', capabilityId: 'switch', propertyId: 'power' }, level: 'optional' as const, type: 'bool' as const, readable: false, writable: true, notifiable: false }] },
       ] })),
     }
     render(<BindingManager device={device} api={api} initialStage="consumer" consumerOnly consumerId="matter" targetId="matter-main" consumerDeviceId="matter-switch" />)
-    expect((await screen.findAllByText('OnOff.OnOff')).length).toBeGreaterThan(0)
+    expect(await screen.findByText('开关（OnOff）')).toBeInTheDocument()
+    expect(screen.getByText('开关（OnOff） → 属性：开关状态（OnOff）')).toBeInTheDocument()
+    expect(screen.getByText('开关（OnOff） → 命令：Toggle')).toBeInTheDocument()
+    expect(screen.getByText('OnOff → Command → Toggle')).toBeInTheDocument()
     expect(screen.queryByText('Switch.On')).not.toBeInTheDocument()
     expect(screen.getByText('0 / 0 生效')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /保存第.*二.*段路由/ }))

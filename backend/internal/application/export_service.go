@@ -15,14 +15,15 @@ import (
 const exportFormatVersion = 1
 
 type ExportTargetConfig struct {
-	ID        string                       `json:"id"`
-	Type      string                       `json:"type"`
-	Name      string                       `json:"name"`
-	Enabled   bool                         `json:"enabled"`
-	Address   string                       `json:"address,omitempty"`
-	SetupID   string                       `json:"setupId,omitempty"`
-	DeviceIDs []string                     `json:"deviceIds"`
-	Devices   []domaintarget.VirtualDevice `json:"devices"`
+	ID           string                       `json:"id"`
+	Type         string                       `json:"type"`
+	Name         string                       `json:"name"`
+	Enabled      bool                         `json:"enabled"`
+	Address      string                       `json:"address,omitempty"`
+	SetupID      string                       `json:"setupId,omitempty"`
+	MatterConfig *domaintarget.MatterConfig   `json:"matterConfig,omitempty"`
+	DeviceIDs    []string                     `json:"deviceIds"`
+	Devices      []domaintarget.VirtualDevice `json:"devices"`
 }
 
 type ConfigurationExport struct {
@@ -75,7 +76,17 @@ func (s *ExportService) configurationAt(generatedAt time.Time) ConfigurationExpo
 	}
 	if s.targets != nil {
 		for _, target := range s.targets.List() {
-			result.Targets = append(result.Targets, ExportTargetConfig{ID: target.ID, Type: target.Type, Name: target.Name, Enabled: target.Enabled, Address: target.Address, SetupID: target.SetupID, DeviceIDs: append([]string{}, target.DeviceIDs...), Devices: append([]domaintarget.VirtualDevice(nil), target.Devices...)})
+			exported := ExportTargetConfig{ID: target.ID, Type: target.Type, Name: target.Name, Enabled: target.Enabled, Address: target.Address, SetupID: target.SetupID, DeviceIDs: append([]string{}, target.DeviceIDs...), Devices: append([]domaintarget.VirtualDevice(nil), target.Devices...)}
+			if target.Type == "matter" {
+				discriminator := target.Discriminator
+				exported.MatterConfig = &domaintarget.MatterConfig{
+					NetworkInterface: target.NetworkInterface, UDPPort: target.UDPPort,
+					Discriminator: &discriminator, VendorID: target.VendorID, ProductID: target.ProductID,
+					ProductName: target.ProductName, SerialNumber: target.SerialNumber,
+					CommissioningWindowSeconds: target.CommissioningWindowSeconds,
+				}
+			}
+			result.Targets = append(result.Targets, exported)
 		}
 		sort.Slice(result.Targets, func(i, j int) bool { return result.Targets[i].ID < result.Targets[j].ID })
 	}

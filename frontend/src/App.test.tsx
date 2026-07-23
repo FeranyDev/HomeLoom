@@ -6,7 +6,7 @@ import { App } from './App'
 const api = vi.hoisted(() => ({
   getAuthStatus: vi.fn(), login: vi.fn(), logout: vi.fn(), setupAdministrator: vi.fn(),
   listDevices: vi.fn(), setDeviceEnabled: vi.fn(), setDevicePower: vi.fn(), setDeviceProperty: vi.fn(), simulateDevice: vi.fn(), executeDeviceCommand: vi.fn(),
-  listTargets: vi.fn(), saveTarget: vi.fn(), deleteTarget: vi.fn(), regenerateTargetPairing: vi.fn(), clearTargetPairingIdentity: vi.fn(),
+  listTargets: vi.fn(), saveTarget: vi.fn(), deleteTarget: vi.fn(), regenerateTargetPairing: vi.fn(), clearTargetPairingIdentity: vi.fn(), openMatterCommissioningWindow: vi.fn(), closeMatterCommissioningWindow: vi.fn(), deleteMatterFabric: vi.fn(), factoryResetMatterTarget: vi.fn(), confirmMatterEndpointDeviceType: vi.fn(),
   listProviders: vi.fn(), saveProvider: vi.fn(), deleteProvider: vi.fn(), restartProvider: vi.fn(), testProviderConnection: vi.fn(),
   getDiagnostics: vi.fn(), getRuntimeSettings: vi.fn(), listAuditEvents: vi.fn(), listCommands: vi.fn(), saveRuntimeSettings: vi.fn(),
   subscribeEvents: vi.fn(),
@@ -22,7 +22,7 @@ vi.mock('./api/devices', () => ({
   subscribeDevices: (_handler: unknown, onStatus: (live: boolean) => void) => { onStatus(true); return () => {} },
 }))
 vi.mock('./api/targets', () => ({
-  listTargets: api.listTargets, saveTarget: api.saveTarget, deleteTarget: api.deleteTarget, regenerateTargetPairing: api.regenerateTargetPairing, clearTargetPairingIdentity: api.clearTargetPairingIdentity,
+  listTargets: api.listTargets, saveTarget: api.saveTarget, deleteTarget: api.deleteTarget, regenerateTargetPairing: api.regenerateTargetPairing, clearTargetPairingIdentity: api.clearTargetPairingIdentity, openMatterCommissioningWindow: api.openMatterCommissioningWindow, closeMatterCommissioningWindow: api.closeMatterCommissioningWindow, deleteMatterFabric: api.deleteMatterFabric, factoryResetMatterTarget: api.factoryResetMatterTarget, confirmMatterEndpointDeviceType: api.confirmMatterEndpointDeviceType,
   subscribeTargets: () => () => {},
 }))
 vi.mock('./api/providers', () => ({ listProviders: api.listProviders, saveProvider: api.saveProvider, deleteProvider: api.deleteProvider, restartProvider: api.restartProvider, testProviderConnection: api.testProviderConnection }))
@@ -52,6 +52,11 @@ beforeEach(() => {
   api.listCustomModelProperties.mockResolvedValue([])
   api.subscribeEvents.mockReturnValue(() => {})
   api.logout.mockResolvedValue(undefined)
+	api.openMatterCommissioningWindow.mockResolvedValue(undefined)
+	api.closeMatterCommissioningWindow.mockResolvedValue(undefined)
+	api.deleteMatterFabric.mockResolvedValue(undefined)
+	api.factoryResetMatterTarget.mockResolvedValue(undefined)
+	api.confirmMatterEndpointDeviceType.mockResolvedValue(undefined)
 })
 
 describe('App integration', () => {
@@ -179,5 +184,21 @@ describe('App integration', () => {
 		await user.selectOptions(screen.getByLabelText('统一模型筛选'), 'switch')
 		expect(screen.getByRole('heading', { name: '父母家开关' })).toBeInTheDocument()
 		expect(screen.queryByRole('heading', { name: '客厅灯' })).not.toBeInTheDocument()
+	})
+
+	it('requires exact phrases for Matter commissioning, Fabric deletion, and factory reset', async () => {
+		api.listTargets.mockResolvedValue([{ id: 'matter-main', type: 'matter', name: 'Matter 主桥', enabled: true, status: 'running', deviceIds: [], devices: [], config: { commissioningWindowSeconds: 900 }, commissioning: { state: 'commissioned', windowOpen: false }, fabricCount: 1, endpointCount: 2, fabrics: [{ id: 'fabric-apple', label: 'Apple Home' }], certification: 'test' }])
+		api.getAuthStatus.mockResolvedValue({ initialized: true, authenticated: true, username: 'admin' })
+		const prompt = vi.spyOn(window, 'prompt').mockReturnValueOnce('OPEN COMMISSIONING matter-main').mockReturnValueOnce('DELETE FABRIC matter-main fabric-apple').mockReturnValueOnce('FACTORY RESET matter-main')
+		render(<App />)
+		const user = userEvent.setup()
+		await user.click(await screen.findByRole('button', { name: '桥接中心' }))
+		await user.click(await screen.findByRole('button', { name: '打开配网窗口' }))
+		await waitFor(() => expect(api.openMatterCommissioningWindow).toHaveBeenCalledWith('matter-main', 900, 'OPEN COMMISSIONING matter-main'))
+		await user.click(screen.getByRole('button', { name: '删除 Fabric Apple Home' }))
+		await waitFor(() => expect(api.deleteMatterFabric).toHaveBeenCalledWith('matter-main', 'fabric-apple', 'DELETE FABRIC matter-main fabric-apple'))
+		await user.click(screen.getByRole('button', { name: '恢复 Matter 出厂身份' }))
+		await waitFor(() => expect(api.factoryResetMatterTarget).toHaveBeenCalledWith('matter-main', 'FACTORY RESET matter-main'))
+		expect(prompt.mock.calls.map((call) => call[0])).toEqual(expect.arrayContaining([expect.stringContaining('OPEN COMMISSIONING matter-main'), expect.stringContaining('DELETE FABRIC matter-main fabric-apple'), expect.stringContaining('FACTORY RESET matter-main')]))
 	})
 })

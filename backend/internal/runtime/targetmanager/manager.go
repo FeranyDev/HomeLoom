@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/application"
+	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	"github.com/feranydev/homeloom/backend/internal/domain/target"
 	"github.com/feranydev/homeloom/backend/internal/targets/homekit"
+	mattertarget "github.com/feranydev/homeloom/backend/internal/targets/matter"
 )
 
 type runningTarget struct {
@@ -20,6 +22,7 @@ type runningTarget struct {
 	done    chan error
 	address string
 	target  managedTarget
+	config  target.Config
 }
 
 type managedTarget interface {
@@ -29,31 +32,56 @@ type managedTarget interface {
 }
 
 type targetFactory func(context.Context, homekit.Config, *application.DeviceService, *slog.Logger) (managedTarget, error)
+type matterFactory func(context.Context, mattertarget.Config, *application.DeviceService, mattertarget.Storage, *slog.Logger) (managedTarget, error)
 
 type Manager struct {
-	root       context.Context
-	devices    *application.DeviceService
-	logger     *slog.Logger
-	mu         sync.Mutex
-	running    map[string]runningTarget
-	onStatus   func(string, string)
-	identities homekit.AccessoryIdentityStore
-	factory    targetFactory
-	startGrace time.Duration
+	root          context.Context
+	devices       *application.DeviceService
+	logger        *slog.Logger
+	mu            sync.Mutex
+	running       map[string]runningTarget
+	onStatus      func(string, string)
+	identities    homekit.AccessoryIdentityStore
+	factory       targetFactory
+	matterStore   *application.MatterStorageService
+	matterFactory matterFactory
+	startGrace    time.Duration
 }
 
-func New(root context.Context, devices *application.DeviceService, logger *slog.Logger, identityStores ...homekit.AccessoryIdentityStore) *Manager {
+func New(root context.Context, devices *application.DeviceService, logger *slog.Logger, dependencies ...any) *Manager {
 	manager := &Manager{
 		root: root, devices: devices, logger: logger, running: make(map[string]runningTarget),
 		factory: func(ctx context.Context, config homekit.Config, devices *application.DeviceService, logger *slog.Logger) (managedTarget, error) {
 			return homekit.New(ctx, config, devices, logger)
 		},
+		matterFactory: func(_ context.Context, config mattertarget.Config, devices *application.DeviceService, storage mattertarget.Storage, logger *slog.Logger) (managedTarget, error) {
+			created, err := mattertarget.New(config, devices, storage, logger)
+			if err != nil {
+				return nil, err
+			}
+			return &managedMatterTarget{Target: created}, nil
+		},
 		startGrace: 200 * time.Millisecond,
 	}
-	if len(identityStores) > 0 {
-		manager.identities = identityStores[0]
+	for _, dependency := range dependencies {
+		if identities, ok := dependency.(homekit.AccessoryIdentityStore); ok && manager.identities == nil {
+			manager.identities = identities
+		}
+		if storage, ok := dependency.(application.MatterStorageStore); ok && manager.matterStore == nil {
+			manager.matterStore = application.NewMatterStorageService(storage)
+		}
 	}
 	return manager
+}
+
+type managedMatterTarget struct {
+	*mattertarget.Target
+}
+
+func (t *managedMatterTarget) PairingInfo() homekit.PairingInfo { return homekit.PairingInfo{} }
+func (t *managedMatterTarget) IsPaired() bool                   { return t.Status().FabricCount > 0 }
+func (t *managedMatterTarget) MatterStatus() mattertarget.CommissioningState {
+	return t.Status()
 }
 
 func (m *Manager) SetStatusHandler(handler func(string, string)) {
@@ -63,6 +91,7 @@ func (m *Manager) SetStatusHandler(handler func(string, string)) {
 }
 
 func (m *Manager) Apply(ctx context.Context, config target.Config) (application.TargetRegistration, error) {
+	config = config.NormalizeProtocolConfig()
 	if !config.Enabled {
 		if err := m.stop(ctx, config.ID); err != nil {
 			return application.TargetRegistration{}, err
@@ -71,23 +100,40 @@ func (m *Manager) Apply(ctx context.Context, config target.Config) (application.
 		info.Paired = m.IsPaired(config)
 		return application.TargetRegistration{Info: info}, nil
 	}
-	if config.Type != "apple-hap" {
-		return application.TargetRegistration{}, fmt.Errorf("target type %q is not implemented", config.Type)
-	}
 	m.mu.Lock()
 	current, exists := m.running[config.ID]
 	sameAddress := exists && current.address == config.Address
 	m.mu.Unlock()
-	if !sameAddress {
+	if config.Type == "apple-hap" && !sameAddress {
 		if err := homekit.CheckAddressAvailable(config.Address); err != nil {
 			return application.TargetRegistration{}, err
 		}
 	}
 
-	next, err := m.factory(ctx, homekit.Config{
-		ID: config.ID, Name: config.Name, Address: config.Address, Pin: config.Pin,
-		SetupID: config.SetupID, StorePath: config.StorePath, DeviceIDs: config.DeviceIDs, Devices: config.Devices, IdentityStore: m.identities,
-	}, m.devices, m.logger)
+	var (
+		next managedTarget
+		err  error
+	)
+	switch config.Type {
+	case "apple-hap":
+		next, err = m.factory(ctx, homekit.Config{
+			ID: config.ID, Name: config.Name, Address: config.Address, Pin: config.Pin,
+			SetupID: config.SetupID, StorePath: config.StorePath, DeviceIDs: config.DeviceIDs, Devices: config.Devices, IdentityStore: m.identities,
+		}, m.devices, m.logger)
+	case "matter":
+		if config.MatterConfig == nil {
+			return application.TargetRegistration{}, errors.New("Matter protocol configuration is required")
+		}
+		if m.matterStore == nil {
+			return application.TargetRegistration{}, errors.New("Matter persistent storage is unavailable")
+		}
+		next, err = m.matterFactory(ctx, mattertarget.Config{
+			ID: config.ID, Name: config.Name, Matter: *config.MatterConfig, Devices: config.Devices,
+			OnStatus: func() { m.setStatus(config.ID, "running") },
+		}, m.devices, m.matterStore, m.logger)
+	default:
+		return application.TargetRegistration{}, fmt.Errorf("target type %q is not implemented", config.Type)
+	}
 	if err != nil {
 		return application.TargetRegistration{}, err
 	}
@@ -98,7 +144,7 @@ func (m *Manager) Apply(ctx context.Context, config target.Config) (application.
 	runCtx, cancel := context.WithCancel(m.root)
 	done := make(chan error, 1)
 	m.mu.Lock()
-	m.running[config.ID] = runningTarget{cancel: cancel, done: done, address: config.Address, target: next}
+	m.running[config.ID] = runningTarget{cancel: cancel, done: done, address: config.Address, target: next, config: config}
 	m.mu.Unlock()
 	go func() {
 		err := next.Start(runCtx)
@@ -125,6 +171,7 @@ func (m *Manager) Apply(ctx context.Context, config target.Config) (application.
 	pairing := next.PairingInfo()
 	info := infoFromConfig(config, "running")
 	info.Paired = next.IsPaired()
+	applyMatterStatus(&info, next)
 	if !info.Paired {
 		info.PairingCode, info.SetupURI = pairing.Code, pairing.SetupURI
 	}
@@ -133,6 +180,12 @@ func (m *Manager) Apply(ctx context.Context, config target.Config) (application.
 
 func (m *Manager) IsPaired(config target.Config) bool {
 	descriptor, _ := target.DescriptorForType(config.Type)
+	if config.Type == "matter" {
+		m.mu.Lock()
+		running, exists := m.running[config.ID]
+		m.mu.Unlock()
+		return exists && running.target.IsPaired()
+	}
 	if !descriptor.SupportsHomeKitPairing || config.StorePath == "" {
 		return false
 	}
@@ -148,6 +201,25 @@ func (m *Manager) IsPaired(config target.Config) bool {
 		return false
 	}
 	return paired
+}
+
+func (m *Manager) RuntimeInfo(config target.Config) application.TargetInfo {
+	m.mu.Lock()
+	running, exists := m.running[config.ID]
+	m.mu.Unlock()
+	status := "disabled"
+	if config.Enabled {
+		status = "error"
+	}
+	if exists {
+		status = "running"
+	}
+	info := infoFromConfig(config, status)
+	if exists {
+		info.Paired = running.target.IsPaired()
+		applyMatterStatus(&info, running.target)
+	}
+	return info
 }
 
 func (m *Manager) Remove(ctx context.Context, id string) error { return m.stop(ctx, id) }
@@ -212,12 +284,119 @@ func (m *Manager) setStatus(id, status string) {
 
 func infoFromConfig(config target.Config, status string) application.TargetInfo {
 	descriptor, _ := target.DescriptorForType(config.Type)
-	return application.TargetInfo{
+	info := application.TargetInfo{
 		ID: config.ID, Type: config.Type, ConsumerID: descriptor.ConsumerID, Name: config.Name, Enabled: config.Enabled,
 		Status: status, Address: config.Address, SetupID: config.SetupID,
 		DeviceIDs: append([]string{}, config.DeviceIDs...),
 		Devices:   append([]target.VirtualDevice(nil), config.Devices...),
 	}
+	if config.MatterConfig != nil {
+		info.NetworkInterface = config.MatterConfig.NetworkInterface
+		info.UDPPort = config.MatterConfig.UDPPort
+		if config.MatterConfig.Discriminator != nil {
+			info.Discriminator = *config.MatterConfig.Discriminator
+		}
+		info.VendorID, info.ProductID = config.MatterConfig.VendorID, config.MatterConfig.ProductID
+		info.ProductName, info.SerialNumber = config.MatterConfig.ProductName, config.MatterConfig.SerialNumber
+		info.CommissioningWindowSeconds = config.MatterConfig.CommissioningWindowSeconds
+		info.ProtocolVersion, info.Certification = "1.4.1", "test"
+	}
+	return info
+}
+
+func applyMatterStatus(info *application.TargetInfo, current managedTarget) {
+	provider, ok := current.(interface {
+		MatterStatus() mattertarget.CommissioningState
+	})
+	if !ok {
+		return
+	}
+	status := provider.MatterStatus()
+	info.CommissioningState = status.State
+	info.CommissioningWindowOpen = status.WindowOpen
+	info.CommissioningWindowExpiresAt = status.WindowExpiresAt
+	info.ManualPairingCode, info.SetupPayload = status.ManualPairingCode, status.SetupPayload
+	info.FabricCount, info.EndpointCount = status.FabricCount, status.EndpointCount
+	if status.UDPPort != 0 {
+		info.UDPPort = status.UDPPort
+	}
+	info.Fabrics = make([]application.MatterFabric, 0, len(status.Fabrics))
+	for _, fabric := range status.Fabrics {
+		info.Fabrics = append(info.Fabrics, application.MatterFabric{ID: fabric.ID, Label: fabric.Label})
+	}
+}
+
+func (m *Manager) matterRuntime(id string) (runningTarget, *managedMatterTarget, error) {
+	m.mu.Lock()
+	running, found := m.running[id]
+	m.mu.Unlock()
+	if !found {
+		return runningTarget{}, nil, application.ErrTargetNotFound
+	}
+	runtime, ok := running.target.(*managedMatterTarget)
+	if !ok {
+		return runningTarget{}, nil, fmt.Errorf("target %q is not a Matter runtime", id)
+	}
+	return running, runtime, nil
+}
+
+func (m *Manager) OpenCommissioningWindow(ctx context.Context, id string, durationSeconds uint32) (application.TargetRegistration, error) {
+	running, runtime, err := m.matterRuntime(id)
+	if err != nil {
+		return application.TargetRegistration{}, err
+	}
+	if err := runtime.OpenCommissioningWindow(ctx, durationSeconds); err != nil {
+		return application.TargetRegistration{}, err
+	}
+	info := infoFromConfig(running.config, "running")
+	applyMatterStatus(&info, runtime)
+	return application.TargetRegistration{Info: info}, nil
+}
+
+func (m *Manager) CloseCommissioningWindow(ctx context.Context, id string) (application.TargetRegistration, error) {
+	running, runtime, err := m.matterRuntime(id)
+	if err != nil {
+		return application.TargetRegistration{}, err
+	}
+	if err := runtime.CloseCommissioningWindow(ctx); err != nil {
+		return application.TargetRegistration{}, err
+	}
+	info := infoFromConfig(running.config, "running")
+	applyMatterStatus(&info, runtime)
+	return application.TargetRegistration{Info: info}, nil
+}
+
+func (m *Manager) RemoveFabric(ctx context.Context, id, fabricID string) (application.TargetRegistration, error) {
+	running, runtime, err := m.matterRuntime(id)
+	if err != nil {
+		return application.TargetRegistration{}, err
+	}
+	if err := runtime.RemoveFabric(ctx, fabricID); err != nil {
+		return application.TargetRegistration{}, err
+	}
+	info := infoFromConfig(running.config, "running")
+	applyMatterStatus(&info, runtime)
+	return application.TargetRegistration{Info: info}, nil
+}
+
+func (m *Manager) FactoryResetMatter(ctx context.Context, id string) (application.TargetRegistration, error) {
+	running, runtime, err := m.matterRuntime(id)
+	if err != nil {
+		return application.TargetRegistration{}, err
+	}
+	if err := runtime.FactoryReset(ctx); err != nil {
+		return application.TargetRegistration{}, err
+	}
+	info := infoFromConfig(running.config, "running")
+	applyMatterStatus(&info, runtime)
+	return application.TargetRegistration{Info: info}, nil
+}
+
+func (m *Manager) ConfirmMatterEndpointDeviceType(ctx context.Context, targetID, consumerDeviceID string, nextType device.Type) error {
+	if m.matterStore == nil {
+		return errors.New("Matter persistent storage is unavailable")
+	}
+	return m.matterStore.ConfirmEndpointDeviceType(ctx, targetID, consumerDeviceID, nextType, true)
 }
 
 func removePairingIdentity(id, path string) error {

@@ -1,6 +1,6 @@
 # 容器部署
 
-`compose.yaml` 面向 Linux 主机。React 管理界面已经嵌入 Go 二进制，只构建一个 HomeLoom 应用镜像：
+`compose.yaml` 面向 Linux 主机。React 管理界面已经嵌入 Go 二进制，当前只构建一个 HomeLoom core 镜像：
 
 ```bash
 HOMELOOM_VERSION=0.1.0 docker compose up --build -d
@@ -8,11 +8,13 @@ HOMELOOM_VERSION=0.1.0 docker compose up --build -d
 
 管理界面和后端 API 均由 `http://主机地址:8090` 提供。PostgreSQL 17 数据保存在 `postgres-data` 卷；HomeKit HAP 身份和 HomeLoom 主密钥保存在 `homeloom-data` 卷。
 
+> Matter 发布边界：当前镜像未包含 Node.js 20+ 和 `matter-runtime`，因此容器中的 Matter Target 会明确启动失败，不会回退到 HomeKit。Matter 实机部署暂时使用宿主机双制品方式；后续专用镜像必须同时包含 sidecar，并继续使用 host network。
+
 ## 为什么使用 host network
 
-HomeKit 依赖局域网 mDNS 发现，并要求客户端能够直连每座桥配置的 HAP 端口。普通 Docker bridge 的 multicast、端口动态映射和容器地址通常无法满足这些条件。Linux 上应使用 host network，并在主机防火墙中仅允许可信局域网访问管理端口和 HAP 端口。
+HomeKit 和 Matter 都依赖局域网 mDNS 发现；Matter 还要求 IPv6 与控制器可直连每座桥的 UDP 端口。普通 Docker bridge 的 multicast、IPv6、动态端口映射和容器地址通常无法满足这些条件。Linux 上应使用 host network，并在主机防火墙中仅允许可信局域网访问管理端口、HAP TCP 端口和所配置的 Matter UDP 端口。
 
-Docker Desktop 的 host network 行为与原生 Linux 不完全一致。macOS/Windows 开发环境建议直接运行后端完成 HomeKit 实机验证，容器主要用于 Web/API 构建检查。
+Docker Desktop、Apple Container 和原生 Linux 的 host network/mDNS 行为不同。macOS/Windows 开发环境建议直接运行双制品完成 HomeKit/Matter 实机验证，容器主要用于 Web/API 构建检查。Matter 控制器与 HomeLoom 必须位于允许 IPv6 link-local、UDP 单播和 mDNS multicast 的同一可达网络。
 
 ## 数据与升级
 

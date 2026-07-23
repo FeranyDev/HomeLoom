@@ -212,16 +212,17 @@ type commandRequest struct {
 }
 
 type targetRequest struct {
-	ID        string                       `json:"id"`
-	Type      string                       `json:"type"`
-	Name      string                       `json:"name"`
-	Enabled   bool                         `json:"enabled"`
-	Address   string                       `json:"address"`
-	Pin       string                       `json:"pin"`
-	SetupID   string                       `json:"setupId"`
-	StorePath string                       `json:"storePath"`
-	DeviceIDs []string                     `json:"deviceIds"`
-	Devices   []domaintarget.VirtualDevice `json:"devices"`
+	ID           string                       `json:"id"`
+	Type         string                       `json:"type"`
+	Name         string                       `json:"name"`
+	Enabled      bool                         `json:"enabled"`
+	Address      string                       `json:"address"`
+	Pin          string                       `json:"pin"`
+	SetupID      string                       `json:"setupId"`
+	StorePath    string                       `json:"storePath"`
+	MatterConfig *domaintarget.MatterConfig   `json:"matterConfig"`
+	DeviceIDs    []string                     `json:"deviceIds"`
+	Devices      []domaintarget.VirtualDevice `json:"devices"`
 }
 
 func (r targetRequest) domain(id string) domaintarget.Config {
@@ -230,7 +231,8 @@ func (r targetRequest) domain(id string) domaintarget.Config {
 	}
 	return domaintarget.Config{
 		ID: id, Type: r.Type, Name: r.Name, Enabled: r.Enabled, Address: r.Address,
-		Pin: r.Pin, SetupID: r.SetupID, StorePath: r.StorePath, DeviceIDs: r.DeviceIDs, Devices: r.Devices,
+		Pin: r.Pin, SetupID: r.SetupID, StorePath: r.StorePath, MatterConfig: r.MatterConfig,
+		DeviceIDs: r.DeviceIDs, Devices: r.Devices,
 	}
 }
 
@@ -1209,6 +1211,13 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		}
 		return c.Blob(http.StatusOK, "image/png", png)
 	})
+	e.GET("/api/v1/targets/:id/commissioning-qr", func(c echo.Context) error {
+		png, err := targets.MatterQR(c.Param("id"))
+		if err != nil {
+			return echo.NewHTTPError(http.StatusNotFound, "Matter commissioning QR code not found")
+		}
+		return c.Blob(http.StatusOK, "image/png", png)
+	})
 	saveTarget := func(c echo.Context, id string) error {
 		var request targetRequest
 		if err := c.Bind(&request); err != nil {
@@ -1248,6 +1257,89 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 			return application.NewValidationError("pairing identity confirmation required", map[string]string{"confirmation": "type CLEAR " + id + " to confirm"})
 		}
 		info, err := targets.ClearPairingIdentity(c.Request().Context(), id)
+		if errors.Is(err, application.ErrTargetNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "target not found")
+		}
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": info})
+	})
+	e.POST("/api/v1/targets/:id/commissioning-window", func(c echo.Context) error {
+		var input struct {
+			DurationSeconds uint32 `json:"durationSeconds"`
+			Confirmation    string `json:"confirmation"`
+		}
+		id := c.Param("id")
+		expected := "OPEN COMMISSIONING " + id
+		if err := c.Bind(&input); err != nil || input.Confirmation != expected {
+			return application.NewValidationError("Matter commissioning window confirmation required", map[string]string{"confirmation": "type " + expected + " to confirm"})
+		}
+		info, err := targets.OpenMatterCommissioningWindow(c.Request().Context(), id, input.DurationSeconds)
+		if errors.Is(err, application.ErrTargetNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "target not found")
+		}
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": info})
+	})
+	e.POST("/api/v1/targets/:id/endpoints/:consumerDeviceId/device-type", func(c echo.Context) error {
+		id, consumerDeviceID := c.Param("id"), c.Param("consumerDeviceId")
+		var input struct {
+			DeviceType   device.Type `json:"deviceType"`
+			Confirmation string      `json:"confirmation"`
+		}
+		if err := c.Bind(&input); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid Matter endpoint device type request")
+		}
+		expected := "CHANGE ENDPOINT TYPE " + id + " " + consumerDeviceID + " " + string(input.DeviceType)
+		if input.Confirmation != expected {
+			return application.NewValidationError("Matter endpoint device type confirmation required", map[string]string{"confirmation": "type " + expected + " to confirm"})
+		}
+		info, err := targets.ConfirmMatterEndpointDeviceType(c.Request().Context(), id, consumerDeviceID, input.DeviceType)
+		if errors.Is(err, application.ErrTargetNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "target not found")
+		}
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": info})
+	})
+	e.DELETE("/api/v1/targets/:id/commissioning-window", func(c echo.Context) error {
+		info, err := targets.CloseMatterCommissioningWindow(c.Request().Context(), c.Param("id"))
+		if errors.Is(err, application.ErrTargetNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "target not found")
+		}
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": info})
+	})
+	e.DELETE("/api/v1/targets/:id/fabrics/:fabricId", func(c echo.Context) error {
+		id, fabricID := c.Param("id"), c.Param("fabricId")
+		var input confirmationRequest
+		expected := "DELETE FABRIC " + id + " " + fabricID
+		if err := c.Bind(&input); err != nil || input.Confirmation != expected {
+			return application.NewValidationError("Matter Fabric deletion confirmation required", map[string]string{"confirmation": "type " + expected + " to confirm"})
+		}
+		info, err := targets.RemoveMatterFabric(c.Request().Context(), id, fabricID)
+		if errors.Is(err, application.ErrTargetNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "target not found")
+		}
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": info})
+	})
+	e.POST("/api/v1/targets/:id/factory-reset", func(c echo.Context) error {
+		id := c.Param("id")
+		var input confirmationRequest
+		expected := "FACTORY RESET " + id
+		if err := c.Bind(&input); err != nil || input.Confirmation != expected {
+			return application.NewValidationError("Matter factory reset confirmation required", map[string]string{"confirmation": "type " + expected + " to confirm"})
+		}
+		info, err := targets.FactoryResetMatter(c.Request().Context(), id)
 		if errors.Is(err, application.ErrTargetNotFound) {
 			return echo.NewHTTPError(http.StatusNotFound, "target not found")
 		}

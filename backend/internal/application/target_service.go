@@ -5,36 +5,62 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"math/big"
 	"net"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	domaintarget "github.com/feranydev/homeloom/backend/internal/domain/target"
 	"github.com/feranydev/homeloom/backend/internal/mapping"
 	homekitqr "github.com/kradalby/homekit-qr"
+	qrcode "github.com/skip2/go-qrcode"
 )
 
 var ErrTargetNotFound = errors.New("target not found")
 
 type TargetInfo struct {
-	ID          string                       `json:"id"`
-	Type        string                       `json:"type"`
-	ConsumerID  string                       `json:"consumerId"`
-	Name        string                       `json:"name"`
-	Enabled     bool                         `json:"enabled"`
-	Status      string                       `json:"status"`
-	Address     string                       `json:"address,omitempty"`
-	SetupID     string                       `json:"setupId,omitempty"`
-	PairingCode string                       `json:"pairingCode,omitempty"`
-	SetupURI    string                       `json:"setupUri,omitempty"`
-	Paired      bool                         `json:"paired"`
-	DeviceIDs   []string                     `json:"deviceIds"`
-	Devices     []domaintarget.VirtualDevice `json:"devices"`
-	Error       string                       `json:"error,omitempty"`
+	ID                           string                       `json:"id"`
+	Type                         string                       `json:"type"`
+	ConsumerID                   string                       `json:"consumerId"`
+	Name                         string                       `json:"name"`
+	Enabled                      bool                         `json:"enabled"`
+	Status                       string                       `json:"status"`
+	Address                      string                       `json:"address,omitempty"`
+	SetupID                      string                       `json:"setupId,omitempty"`
+	PairingCode                  string                       `json:"pairingCode,omitempty"`
+	SetupURI                     string                       `json:"setupUri,omitempty"`
+	Paired                       bool                         `json:"paired"`
+	DeviceIDs                    []string                     `json:"deviceIds"`
+	Devices                      []domaintarget.VirtualDevice `json:"devices"`
+	Error                        string                       `json:"error,omitempty"`
+	NetworkInterface             string                       `json:"networkInterface,omitempty"`
+	UDPPort                      uint16                       `json:"udpPort,omitempty"`
+	Discriminator                uint16                       `json:"discriminator,omitempty"`
+	VendorID                     uint16                       `json:"vendorId,omitempty"`
+	ProductID                    uint16                       `json:"productId,omitempty"`
+	ProductName                  string                       `json:"productName,omitempty"`
+	SerialNumber                 string                       `json:"serialNumber,omitempty"`
+	CommissioningWindowSeconds   uint32                       `json:"commissioningWindowSeconds,omitempty"`
+	CommissioningState           string                       `json:"commissioningState,omitempty"`
+	CommissioningWindowOpen      bool                         `json:"commissioningWindowOpen,omitempty"`
+	CommissioningWindowExpiresAt string                       `json:"commissioningWindowExpiresAt,omitempty"`
+	ManualPairingCode            string                       `json:"manualPairingCode,omitempty"`
+	SetupPayload                 string                       `json:"setupPayload,omitempty"`
+	FabricCount                  int                          `json:"fabricCount,omitempty"`
+	Fabrics                      []MatterFabric               `json:"fabrics,omitempty"`
+	EndpointCount                int                          `json:"endpointCount,omitempty"`
+	ProtocolVersion              string                       `json:"protocolVersion,omitempty"`
+	Certification                string                       `json:"certification,omitempty"`
+}
+
+type MatterFabric struct {
+	ID    string `json:"id"`
+	Label string `json:"label,omitempty"`
 }
 
 type TargetRegistration struct {
@@ -70,6 +96,21 @@ type TargetRuntime interface {
 	IsPaired(domaintarget.Config) bool
 }
 
+type MatterTargetRuntime interface {
+	OpenCommissioningWindow(context.Context, string, uint32) (TargetRegistration, error)
+	CloseCommissioningWindow(context.Context, string) (TargetRegistration, error)
+	RemoveFabric(context.Context, string, string) (TargetRegistration, error)
+	FactoryResetMatter(context.Context, string) (TargetRegistration, error)
+}
+
+type MatterEndpointTypeRuntime interface {
+	ConfirmMatterEndpointDeviceType(context.Context, string, string, device.Type) error
+}
+
+type TargetRuntimeInfo interface {
+	RuntimeInfo(domaintarget.Config) TargetInfo
+}
+
 func NewTargetService(registrations []TargetRegistration, store TargetStore, configs ...domaintarget.Config) *TargetService {
 	service := &TargetService{targets: make(map[string]TargetRegistration), configs: make(map[string]domaintarget.Config), store: store, listeners: make(map[uint64]*targetSubscription)}
 	for _, registration := range registrations {
@@ -77,6 +118,7 @@ func NewTargetService(registrations []TargetRegistration, store TargetStore, con
 		service.targets[registration.Info.ID] = registration
 	}
 	for _, config := range configs {
+		config = config.NormalizeProtocolConfig()
 		service.configs[config.ID] = config
 	}
 	return service
@@ -133,11 +175,48 @@ func (s *TargetService) Save(ctx context.Context, item domaintarget.Config) (Tar
 		wasPaired = runtime.IsPaired(existing)
 	}
 	if editing {
-		if item.Pin == "" || wasPaired {
-			item.Pin = existing.Pin
+		if existing.Type == "apple-hap" {
+			next := domaintarget.HomeKitConfig{}
+			if item.HomeKitConfig != nil {
+				next = *item.HomeKitConfig
+			}
+			if next.Address == "" {
+				next.Address = item.Address
+			}
+			if next.Pin == "" {
+				next.Pin = item.Pin
+			}
+			if next.SetupID == "" {
+				next.SetupID = item.SetupID
+			}
+			if next.StorePath == "" {
+				next.StorePath = item.StorePath
+			}
+			if next.Pin == "" || wasPaired {
+				next.Pin = existing.Pin
+			}
+			if next.SetupID == "" || wasPaired {
+				next.SetupID = existing.SetupID
+			}
+			item.HomeKitConfig = &next
+			item.Address, item.Pin, item.SetupID, item.StorePath = next.Address, next.Pin, next.SetupID, next.StorePath
 		}
-		if item.SetupID == "" || wasPaired {
-			item.SetupID = existing.SetupID
+		if existing.Type == "matter" {
+			previous := domaintarget.MatterConfig{}
+			if existing.MatterConfig != nil {
+				previous = *existing.MatterConfig
+			}
+			next := previous
+			if item.MatterConfig != nil {
+				next = *item.MatterConfig
+			}
+			if next.Passcode == "" {
+				next.Passcode = previous.Passcode
+			}
+			if next.Discriminator == nil {
+				next.Discriminator = previous.Discriminator
+			}
+			item.MatterConfig = &next
 		}
 	}
 	item, err := s.withDefaults(item)
@@ -160,6 +239,7 @@ func (s *TargetService) Save(ctx context.Context, item domaintarget.Config) (Tar
 		DeviceIDs: append([]string{}, item.DeviceIDs...),
 		Devices:   append([]domaintarget.VirtualDevice(nil), item.Devices...),
 	}
+	applyMatterConfigInfo(&info, item)
 	registration := TargetRegistration{Info: info}
 	if s.runtime != nil {
 		applied, applyErr := s.runtime.Apply(ctx, item)
@@ -202,6 +282,40 @@ func (s *TargetService) Save(ctx context.Context, item domaintarget.Config) (Tar
 	return registration.Info, nil
 }
 
+func applyMatterConfigInfo(info *TargetInfo, config domaintarget.Config) {
+	if config.Type != "matter" || config.MatterConfig == nil {
+		return
+	}
+	matter := config.MatterConfig
+	info.NetworkInterface, info.UDPPort = matter.NetworkInterface, matter.UDPPort
+	if matter.Discriminator != nil {
+		info.Discriminator = *matter.Discriminator
+	}
+	info.VendorID, info.ProductID = matter.VendorID, matter.ProductID
+	info.ProductName, info.SerialNumber = matter.ProductName, matter.SerialNumber
+	info.CommissioningWindowSeconds = matter.CommissioningWindowSeconds
+	info.ProtocolVersion, info.Certification = "1.4.1", "test"
+	if info.CommissioningState == "" {
+		info.CommissioningState = "uncommissioned"
+	}
+}
+
+// TargetInfoFromConfig creates the non-sensitive public projection used when a
+// runtime cannot start. Commissioning passcodes and identity material are
+// intentionally absent.
+func TargetInfoFromConfig(config domaintarget.Config, status string) TargetInfo {
+	descriptor, _ := domaintarget.DescriptorForType(config.Type)
+	info := TargetInfo{
+		ID: config.ID, Type: config.Type, ConsumerID: descriptor.ConsumerID,
+		Name: config.Name, Enabled: config.Enabled, Status: status,
+		Address: config.Address, SetupID: config.SetupID,
+		DeviceIDs: append([]string(nil), config.DeviceIDs...),
+		Devices:   append([]domaintarget.VirtualDevice(nil), config.Devices...),
+	}
+	applyMatterConfigInfo(&info, config)
+	return info
+}
+
 var validTargetID = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 func (s *TargetService) withDefaults(item domaintarget.Config) (domaintarget.Config, error) {
@@ -230,6 +344,10 @@ func (s *TargetService) withDefaults(item domaintarget.Config) (domaintarget.Con
 	}
 	descriptor, _ := domaintarget.DescriptorForType(item.Type)
 	if descriptor.SupportsHomeKitPairing {
+		if item.MatterConfig != nil {
+			return item, NewValidationError("invalid target configuration", map[string]string{"matterConfig": "is only valid for Matter targets"})
+		}
+		item = item.NormalizeProtocolConfig()
 		if item.Address == "" {
 			item.Address = s.nextAddress()
 		}
@@ -248,6 +366,47 @@ func (s *TargetService) withDefaults(item domaintarget.Config) (domaintarget.Con
 			item.SetupID = setupID
 		}
 		item.StorePath = filepath.Join("data", "hap", item.ID)
+		item = item.NormalizeProtocolConfig()
+	}
+	if item.Type == "matter" {
+		if item.HomeKitConfig != nil || item.Address != "" || item.Pin != "" || item.SetupID != "" || item.StorePath != "" {
+			return item, NewValidationError("invalid target configuration", map[string]string{"homeKitConfig": "is only valid for HomeKit targets"})
+		}
+		config := domaintarget.MatterConfig{}
+		if item.MatterConfig != nil {
+			config = *item.MatterConfig
+		}
+		if config.Discriminator == nil {
+			value, err := randomMatterDiscriminator()
+			if err != nil {
+				return item, fmt.Errorf("generate Matter discriminator: %w", err)
+			}
+			config.Discriminator = &value
+		}
+		if config.Passcode == "" {
+			passcode, err := randomMatterPasscode()
+			if err != nil {
+				return item, fmt.Errorf("generate Matter passcode: %w", err)
+			}
+			config.Passcode = passcode
+		}
+		if config.VendorID == 0 {
+			config.VendorID = domaintarget.DefaultMatterVendorID
+		}
+		if config.ProductID == 0 {
+			config.ProductID = domaintarget.DefaultMatterProductID
+		}
+		if config.ProductName == "" {
+			config.ProductName = "HomeLoom Matter Bridge"
+		}
+		if config.SerialNumber == "" {
+			config.SerialNumber = item.ID
+		}
+		if config.CommissioningWindowSeconds == 0 {
+			config.CommissioningWindowSeconds = domaintarget.DefaultMatterCommissioningWindowSeconds
+		}
+		item.MatterConfig = &config
+		item = item.NormalizeProtocolConfig()
 	}
 	if len(item.Devices) == 0 && len(item.DeviceIDs) > 0 {
 		for _, id := range item.DeviceIDs {
@@ -300,6 +459,29 @@ func randomString(alphabet string, length int) (string, error) {
 		result[index] = alphabet[int(value)%len(alphabet)]
 	}
 	return string(result), nil
+}
+
+func randomMatterDiscriminator() (uint16, error) {
+	value, err := rand.Int(rand.Reader, big.NewInt(4096))
+	if err != nil {
+		return 0, err
+	}
+	return uint16(value.Uint64()), nil
+}
+
+func randomMatterPasscode() (string, error) {
+	max := big.NewInt(99_999_998)
+	for {
+		random, err := rand.Int(rand.Reader, max)
+		if err != nil {
+			return "", err
+		}
+		value := random.Uint64() + 1
+		passcode := fmt.Sprintf("%08d", value)
+		if validMatterPasscode(passcode) {
+			return passcode, nil
+		}
+	}
 }
 
 func (s *TargetService) Delete(ctx context.Context, id string) error {
@@ -355,6 +537,11 @@ func (s *TargetService) RegeneratePairing(ctx context.Context, id string) (Targe
 		return TargetInfo{}, fmt.Errorf("generate target setup id: %w", err)
 	}
 	config.Pin, config.SetupID = pin, setupID
+	if config.HomeKitConfig != nil {
+		next := *config.HomeKitConfig
+		next.Pin, next.SetupID = pin, setupID
+		config.HomeKitConfig = &next
+	}
 	return s.Save(ctx, config)
 }
 
@@ -418,6 +605,40 @@ func validateTarget(item domaintarget.Config) error {
 			}
 		}
 	}
+	if item.Type == "matter" {
+		config := item.MatterConfig
+		if config == nil {
+			fields["matterConfig"] = "required"
+		} else {
+			if config.UDPPort > 0 && config.UDPPort < 1024 {
+				fields["matterConfig.udpPort"] = "must be zero for automatic allocation or between 1024 and 65535"
+			}
+			if config.Discriminator == nil || *config.Discriminator > 4095 {
+				fields["matterConfig.discriminator"] = "must be between 0 and 4095"
+			}
+			if !validMatterPasscode(config.Passcode) {
+				fields["matterConfig.passcode"] = "must be a non-reserved 8-digit Matter passcode"
+			}
+			if config.VendorID == 0 {
+				fields["matterConfig.vendorId"] = "must be between 1 and 65535"
+			}
+			if config.ProductID == 0 {
+				fields["matterConfig.productId"] = "must be between 1 and 65535"
+			}
+			if strings.TrimSpace(config.ProductName) == "" || utf8.RuneCountInString(config.ProductName) > 32 {
+				fields["matterConfig.productName"] = "must contain between 1 and 32 characters"
+			}
+			if !validMatterSerial.MatchString(config.SerialNumber) || len(config.SerialNumber) > 32 {
+				fields["matterConfig.serialNumber"] = "must contain 1 to 32 ASCII letters, numbers, dots, underscores or hyphens"
+			}
+			if config.CommissioningWindowSeconds < 180 || config.CommissioningWindowSeconds > 900 {
+				fields["matterConfig.commissioningWindowSeconds"] = "must be between 180 and 900 seconds"
+			}
+			if len(config.NetworkInterface) > 128 || strings.ContainsAny(config.NetworkInterface, "\x00\r\n") {
+				fields["matterConfig.networkInterface"] = "must be at most 128 characters and contain no control separators"
+			}
+		}
+	}
 	seenIDs := make(map[string]bool)
 	for index, current := range item.Devices {
 		prefix := fmt.Sprintf("devices.%d", index)
@@ -462,13 +683,34 @@ func validateTarget(item domaintarget.Config) error {
 	return nil
 }
 
+var validMatterSerial = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+func validMatterPasscode(value string) bool {
+	if len(value) != 8 {
+		return false
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	if value == "00000000" || value == "12345678" || value == "87654321" || value > "99999998" {
+		return false
+	}
+	allSame := true
+	for index := 1; index < len(value); index++ {
+		allSame = allSame && value[index] == value[0]
+	}
+	return !allSame
+}
+
 func targetConsumerID(targetType string) string {
 	descriptor, _ := domaintarget.DescriptorForType(targetType)
 	return descriptor.ConsumerID
 }
 
 func (s *TargetService) List() []TargetInfo {
-	s.mu.RLock()
+	s.mu.Lock()
 	result := make([]TargetInfo, 0, len(s.order))
 	for _, id := range s.order {
 		info := s.targets[id].Info
@@ -477,10 +719,16 @@ func (s *TargetService) List() []TargetInfo {
 			if descriptor.SupportsHomeKitPairing {
 				info.Paired = s.runtime.IsPaired(config)
 			}
+			if runtime, ok := s.runtime.(TargetRuntimeInfo); ok && config.Type == "matter" {
+				info = runtime.RuntimeInfo(config)
+				registration := s.targets[id]
+				registration.Info = info
+				s.targets[id] = registration
+			}
 		}
 		result = append(result, pairingSafeInfo(info))
 	}
-	s.mu.RUnlock()
+	s.mu.Unlock()
 	return result
 }
 
@@ -500,6 +748,183 @@ func (s *TargetService) QR(id string) ([]byte, error) {
 	return append([]byte(nil), registration.QR...), nil
 }
 
+func (s *TargetService) MatterQR(id string) ([]byte, error) {
+	s.mu.Lock()
+	registration, found := s.targets[id]
+	config, hasConfig := s.configs[id]
+	if found && hasConfig {
+		if runtime, ok := s.runtime.(TargetRuntimeInfo); ok {
+			registration.Info = runtime.RuntimeInfo(config)
+			s.targets[id] = registration
+		}
+	}
+	s.mu.Unlock()
+	if !found || registration.Info.Type != "matter" || !registration.Info.CommissioningWindowOpen || registration.Info.SetupPayload == "" {
+		return nil, errors.New("Matter commissioning QR code not found")
+	}
+	png, err := qrcode.Encode(registration.Info.SetupPayload, qrcode.Medium, 320)
+	if err != nil {
+		return nil, fmt.Errorf("encode Matter commissioning QR: %w", err)
+	}
+	return png, nil
+}
+
+func (s *TargetService) OpenMatterCommissioningWindow(ctx context.Context, id string, durationSeconds uint32) (TargetInfo, error) {
+	s.mu.RLock()
+	config, found := s.configs[id]
+	runtime, ok := s.runtime.(MatterTargetRuntime)
+	s.mu.RUnlock()
+	if !found {
+		return TargetInfo{}, ErrTargetNotFound
+	}
+	if config.Type != "matter" {
+		return TargetInfo{}, errors.New("target is not a Matter bridge")
+	}
+	if !ok {
+		return TargetInfo{}, errors.New("Matter runtime controls are unavailable")
+	}
+	if durationSeconds == 0 && config.MatterConfig != nil {
+		durationSeconds = config.MatterConfig.CommissioningWindowSeconds
+	}
+	if durationSeconds < 180 || durationSeconds > 900 {
+		return TargetInfo{}, NewValidationError("invalid commissioning window", map[string]string{"durationSeconds": "must be between 180 and 900 seconds"})
+	}
+	registration, err := runtime.OpenCommissioningWindow(ctx, id, durationSeconds)
+	return s.applyMatterRegistration(id, registration, err)
+}
+
+func (s *TargetService) CloseMatterCommissioningWindow(ctx context.Context, id string) (TargetInfo, error) {
+	runtime, err := s.matterRuntime(id)
+	if err != nil {
+		return TargetInfo{}, err
+	}
+	registration, callErr := runtime.CloseCommissioningWindow(ctx, id)
+	return s.applyMatterRegistration(id, registration, callErr)
+}
+
+func (s *TargetService) RemoveMatterFabric(ctx context.Context, id, fabricID string) (TargetInfo, error) {
+	if strings.TrimSpace(fabricID) == "" {
+		return TargetInfo{}, NewValidationError("invalid Matter Fabric", map[string]string{"fabricId": "required"})
+	}
+	runtime, err := s.matterRuntime(id)
+	if err != nil {
+		return TargetInfo{}, err
+	}
+	registration, callErr := runtime.RemoveFabric(ctx, id, fabricID)
+	return s.applyMatterRegistration(id, registration, callErr)
+}
+
+func (s *TargetService) FactoryResetMatter(ctx context.Context, id string) (TargetInfo, error) {
+	runtime, err := s.matterRuntime(id)
+	if err != nil {
+		return TargetInfo{}, err
+	}
+	registration, callErr := runtime.FactoryResetMatter(ctx, id)
+	return s.applyMatterRegistration(id, registration, callErr)
+}
+
+func (s *TargetService) ConfirmMatterEndpointDeviceType(ctx context.Context, id, consumerDeviceID string, nextType device.Type) (TargetInfo, error) {
+	s.mu.RLock()
+	config, found := s.configs[id]
+	runtime := s.runtime
+	endpointRuntime, supported := runtime.(MatterEndpointTypeRuntime)
+	s.mu.RUnlock()
+	if !found {
+		return TargetInfo{}, ErrTargetNotFound
+	}
+	if config.Type != "matter" {
+		return TargetInfo{}, errors.New("target is not a Matter bridge")
+	}
+	if strings.TrimSpace(consumerDeviceID) == "" {
+		return TargetInfo{}, NewValidationError("invalid Matter endpoint", map[string]string{"consumerDeviceId": "required"})
+	}
+	if !supported {
+		return TargetInfo{}, errors.New("Matter endpoint identity controls are unavailable")
+	}
+	if s.store == nil {
+		return TargetInfo{}, errors.New("target store is unavailable")
+	}
+	if _, ok := mapping.ConsumerContract("matter", nextType); !ok {
+		return TargetInfo{}, NewValidationError("invalid Matter endpoint device type", map[string]string{"deviceType": fmt.Sprintf("%q is not supported by the Matter consumer", nextType)})
+	}
+	next := config
+	next.Devices = append([]domaintarget.VirtualDevice(nil), config.Devices...)
+	deviceIndex := -1
+	var previousType device.Type
+	for index := range next.Devices {
+		if next.Devices[index].ID == consumerDeviceID {
+			deviceIndex, previousType = index, next.Devices[index].Type
+			break
+		}
+	}
+	if deviceIndex < 0 {
+		return TargetInfo{}, NewValidationError("Matter endpoint not found", map[string]string{"consumerDeviceId": "does not belong to this target"})
+	}
+	if previousType == nextType {
+		return TargetInfo{}, NewValidationError("Matter endpoint device type is unchanged", map[string]string{"deviceType": "must differ from the current device type"})
+	}
+	next.Devices[deviceIndex].Type = nextType
+	if err := validateTarget(next); err != nil {
+		return TargetInfo{}, err
+	}
+	if err := endpointRuntime.ConfirmMatterEndpointDeviceType(ctx, id, consumerDeviceID, nextType); err != nil {
+		return TargetInfo{}, err
+	}
+	if err := s.store.SaveTarget(ctx, next); err != nil {
+		_ = endpointRuntime.ConfirmMatterEndpointDeviceType(ctx, id, consumerDeviceID, previousType)
+		return TargetInfo{}, err
+	}
+	registration, err := runtime.Apply(ctx, next)
+	if err != nil {
+		registration.Info = TargetInfoFromConfig(next, "error")
+		registration.Info.Error = fmt.Sprintf("Matter endpoint type was confirmed and persisted, but applying the target failed: %v", err)
+	} else {
+		registration.Info.ConsumerID = "matter"
+	}
+	s.mu.Lock()
+	if previous, ok := s.targets[id]; ok && len(registration.QR) == 0 {
+		registration.QR = previous.QR
+	}
+	s.configs[id] = next
+	s.targets[id] = registration
+	s.mu.Unlock()
+	s.notify(registration.Info)
+	return registration.Info, nil
+}
+
+func (s *TargetService) matterRuntime(id string) (MatterTargetRuntime, error) {
+	s.mu.RLock()
+	config, found := s.configs[id]
+	runtime, ok := s.runtime.(MatterTargetRuntime)
+	s.mu.RUnlock()
+	if !found {
+		return nil, ErrTargetNotFound
+	}
+	if config.Type != "matter" {
+		return nil, errors.New("target is not a Matter bridge")
+	}
+	if !ok {
+		return nil, errors.New("Matter runtime controls are unavailable")
+	}
+	return runtime, nil
+}
+
+func (s *TargetService) applyMatterRegistration(id string, registration TargetRegistration, err error) (TargetInfo, error) {
+	if err != nil {
+		return TargetInfo{}, err
+	}
+	registration.Info.ConsumerID = "matter"
+	s.mu.Lock()
+	previous, found := s.targets[id]
+	if found && len(registration.QR) == 0 {
+		registration.QR = previous.QR
+	}
+	s.targets[id] = registration
+	s.mu.Unlock()
+	s.notify(registration.Info)
+	return registration.Info, nil
+}
+
 func pairingSafeInfo(info TargetInfo) TargetInfo {
 	if info.Paired {
 		info.SetupID = ""
@@ -517,6 +942,12 @@ func (s *TargetService) SetStatus(id, status string) {
 		return
 	}
 	registration.Info.Status = status
+	if config, exists := s.configs[id]; exists && config.Type == "matter" {
+		if runtime, supported := s.runtime.(TargetRuntimeInfo); supported {
+			registration.Info = runtime.RuntimeInfo(config)
+			registration.Info.Status = status
+		}
+	}
 	s.targets[id] = registration
 	s.mu.Unlock()
 	s.notify(registration.Info)

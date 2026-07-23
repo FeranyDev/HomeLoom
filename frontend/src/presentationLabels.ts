@@ -85,6 +85,21 @@ const characteristicNames: Record<string, string> = {
 	PositionState: '运动状态', ObstructionDetected: '障碍物检测',
 }
 
+const matterClusterNames: Record<string, string> = {
+	OnOff: '开关', LevelControl: '亮度控制', ColorControl: '颜色控制', TemperatureMeasurement: '温度测量',
+	RelativeHumidityMeasurement: '相对湿度测量', BooleanState: '布尔状态', OccupancySensing: '占用感知',
+	WindowCovering: '窗帘控制', FanControl: '风扇控制', Thermostat: '恒温器', DoorLock: '门锁',
+	BridgedDeviceBasicInformation: '桥接设备基本信息', Descriptor: '设备描述',
+}
+
+const matterMemberNames: Record<string, string> = {
+	OnOff: '开关状态', CurrentLevel: '当前亮度', MoveToLevel: '设置亮度', CurrentHue: '当前色相', CurrentSaturation: '当前饱和度',
+	CurrentTemperature: '当前温度', MeasuredValue: '测量值', Occupancy: '占用状态', PresentValue: '当前值',
+	CurrentPositionLiftPercent100ths: '当前位置', TargetPositionLiftPercent100ths: '目标位置', PercentSetting: '百分比设定',
+	FanMode: '风扇模式', PercentCurrent: '当前转速', OccupiedCoolingSetpoint: '制冷设定温度', OccupiedHeatingSetpoint: '制热设定温度',
+	LockState: '门锁状态', LockDoor: '上锁', UnlockDoor: '解锁', Reachable: '可达状态',
+}
+
 export function bilingual(raw: string, translated?: string): string {
 	return translated && translated !== raw ? `${translated}（${raw}）` : raw
 }
@@ -112,6 +127,15 @@ export function consumerPropertyLabel(id: string): string {
 	const characteristic = id.slice(separator + 1)
 	const translated = [serviceNames[service], characteristicNames[characteristic]].filter(Boolean).join(' · ')
 	return bilingual(id, translated || undefined)
+}
+
+export function matterClusterLabel(cluster: string): string { return bilingual(cluster, matterClusterNames[cluster]) }
+
+export function matterMemberLabel(member: string): string { return bilingual(member, matterMemberNames[member]) }
+
+export function matterConsumerPathLabel(cluster: string, member: string, kind: 'attribute' | 'command'): string {
+	const memberKind = kind === 'command' ? '命令' : '属性'
+	return `${matterClusterLabel(cluster)} → ${memberKind}：${matterMemberLabel(member)}`
 }
 
 export function permissionLabel(readable: boolean, writable: boolean, notifiable: boolean): string {

@@ -33,6 +33,12 @@ func (s *Store) initializeSecrets(ctx context.Context) error {
 	if err := s.encryptPlaintextTargetPINs(ctx); err != nil {
 		return err
 	}
+	if err := s.encryptPlaintextMatterPasscodes(ctx); err != nil {
+		return err
+	}
+	if err := s.encryptPlaintextMatterRuntimeValues(ctx); err != nil {
+		return err
+	}
 	return s.encryptPlaintextProviderConfigs(ctx)
 }
 
@@ -58,6 +64,14 @@ func loadOrCreateMasterKey(ctx context.Context, store *Store) ([]byte, error) {
 	if queryErr := store.orm.WithContext(ctx).Model(&targetRow{}).Where("pin LIKE ?", encryptedPrefix+"%").Count(&encryptedTargets).Error; queryErr != nil {
 		return nil, fmt.Errorf("inspect encrypted target secrets: %w", queryErr)
 	}
+	var encryptedMatterTargets int64
+	if queryErr := store.orm.WithContext(ctx).Model(&targetRow{}).Where("matter_passcode LIKE ?", encryptedPrefix+"%").Count(&encryptedMatterTargets).Error; queryErr != nil {
+		return nil, fmt.Errorf("inspect encrypted Matter target secrets: %w", queryErr)
+	}
+	var matterIdentityRows int64
+	if queryErr := store.orm.WithContext(ctx).Model(&matterRuntimeKVRow{}).Count(&matterIdentityRows).Error; queryErr != nil {
+		return nil, fmt.Errorf("inspect Matter runtime identities: %w", queryErr)
+	}
 	var encryptedProviders int64
 	providerSecretQuery := "config_json LIKE ?"
 	if store.databaseKind == databasePostgreSQL {
@@ -66,7 +80,7 @@ func loadOrCreateMasterKey(ctx context.Context, store *Store) ([]byte, error) {
 	if queryErr := store.orm.WithContext(ctx).Model(&providerRow{}).Where(providerSecretQuery, "%"+encryptedPrefix+"%").Count(&encryptedProviders).Error; queryErr != nil {
 		return nil, fmt.Errorf("inspect encrypted provider secrets: %w", queryErr)
 	}
-	if encryptedTargets > 0 || encryptedProviders > 0 {
+	if encryptedTargets > 0 || encryptedMatterTargets > 0 || matterIdentityRows > 0 || encryptedProviders > 0 {
 		return nil, errors.New("master key is missing for encrypted database secrets")
 	}
 	key := make([]byte, 32)
@@ -156,6 +170,44 @@ func (s *Store) encryptPlaintextTargetPINs(ctx context.Context) error {
 			}
 			if err := tx.Model(&targetRow{}).Where("id = ?", item.ID).Update("pin", encrypted).Error; err != nil {
 				return fmt.Errorf("encrypt target secret: %w", err)
+			}
+		}
+		return nil
+	})
+}
+
+func (s *Store) encryptPlaintextMatterPasscodes(ctx context.Context) error {
+	var rows []targetRow
+	if err := s.orm.WithContext(ctx).Select("id", "matter_passcode").Where("matter_passcode <> ? AND matter_passcode NOT LIKE ?", "", encryptedPrefix+"%").Find(&rows).Error; err != nil {
+		return fmt.Errorf("list plaintext Matter target secrets: %w", err)
+	}
+	return s.orm.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, item := range rows {
+			encrypted, err := s.secrets.encrypt("target-matter-passcode:"+item.ID, item.MatterPasscode)
+			if err != nil {
+				return err
+			}
+			if err := tx.Model(&targetRow{}).Where("id = ?", item.ID).Update("matter_passcode", encrypted).Error; err != nil {
+				return fmt.Errorf("encrypt Matter target secret: %w", err)
+			}
+		}
+		return nil
+	})
+}
+
+func (s *Store) encryptPlaintextMatterRuntimeValues(ctx context.Context) error {
+	var rows []matterRuntimeKVRow
+	if err := s.orm.WithContext(ctx).Where("value NOT LIKE ?", encryptedPrefix+"%").Find(&rows).Error; err != nil {
+		return fmt.Errorf("list plaintext Matter runtime values: %w", err)
+	}
+	return s.orm.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, item := range rows {
+			encrypted, err := s.secrets.encrypt(matterRuntimeSecretScope(item.TargetID, item.Key), item.Value)
+			if err != nil {
+				return err
+			}
+			if err := tx.Model(&matterRuntimeKVRow{}).Where("target_id = ? AND key = ?", item.TargetID, item.Key).Update("value", encrypted).Error; err != nil {
+				return fmt.Errorf("encrypt Matter runtime value: %w", err)
 			}
 		}
 		return nil

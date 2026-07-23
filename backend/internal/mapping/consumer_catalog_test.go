@@ -31,11 +31,12 @@ func TestMeasurementSensorsKeepExplicitHomeKitSemantics(t *testing.T) {
 }
 
 func TestConsumerContractRegistryDoesNotFallBackToHomeKit(t *testing.T) {
-	if _, found := ConsumerContract("matter", device.TypeSwitch); found {
-		t.Fatal("unregistered Matter consumer unexpectedly resolved to HomeKit")
+	matter, found := ConsumerContract("matter", device.TypeSwitch)
+	if !found || matter.ConsumerID != "matter" || len(matter.Parameters) != 1 || matter.Parameters[0].Target != "OnOff.OnOff" {
+		t.Fatalf("registered Matter switch contract = %#v, found=%v", matter, found)
 	}
 	if _, found := FindConsumerProperty("matter", device.TypeSwitch, "Switch.On"); found {
-		t.Fatal("unregistered Matter property unexpectedly resolved to HomeKit")
+		t.Fatal("Matter property unexpectedly fell back to HomeKit")
 	}
 	contract, found := ConsumerContract("homekit", device.TypeSwitch)
 	if !found || contract.ConsumerID != "homekit" {
@@ -47,8 +48,99 @@ func TestConsumerContractRegistryDoesNotFallBackToHomeKit(t *testing.T) {
 	if known, supported := ConsumerModelSupport("homekit", device.TypeRobotVacuum); !known || supported {
 		t.Fatalf("HomeKit robot vacuum support = known %v, supported %v", known, supported)
 	}
-	if known, supported := ConsumerModelSupport("matter", device.TypeSwitch); known || supported {
-		t.Fatalf("unregistered Matter support = known %v, supported %v", known, supported)
+	if known, supported := ConsumerModelSupport("matter", device.TypeSwitch); !known || !supported {
+		t.Fatalf("Matter switch support = known %v, supported %v", known, supported)
+	}
+	if known, supported := ConsumerModelSupport("matter", device.TypeRobotVacuum); !known || supported {
+		t.Fatalf("unsupported Matter model = known %v, supported %v", known, supported)
+	}
+}
+
+func TestMatterCatalogDeclaresClusterMetadataAndModelConstraints(t *testing.T) {
+	property, found := FindConsumerProperty("matter", device.TypeTemperatureSensor, "TemperatureMeasurement.MeasuredValue")
+	if !found {
+		t.Fatal("Matter temperature attribute is missing")
+	}
+	if property.Name != "当前温度" || property.OriginalName != "TemperatureMeasurement.MeasuredValue" {
+		t.Fatalf("Matter temperature labels = %#v", property)
+	}
+	if property.Cluster != "TemperatureMeasurement" || property.Element != "MeasuredValue" || property.Kind != "attribute" {
+		t.Fatalf("Matter temperature path metadata = %#v", property)
+	}
+	if property.Type != device.ValueTypeNumber || property.Unit != "celsius" || property.Min == nil || property.Max == nil || property.Step == nil {
+		t.Fatalf("Matter temperature constraints = %#v", property)
+	}
+}
+
+func TestMatterCatalogPublishesCommandsSeparatelyFromAttributes(t *testing.T) {
+	command, found := FindConsumerProperty("matter", device.TypeLock, "DoorLock.UnlockDoor")
+	if !found {
+		t.Fatal("Matter DoorLock.UnlockDoor command is missing")
+	}
+	if command.Kind != "command" || command.Cluster != "DoorLock" || command.Element != "UnlockDoor" {
+		t.Fatalf("Matter command metadata = %#v", command)
+	}
+	if command.Readable || !command.Writable || command.Notifiable {
+		t.Fatalf("Matter command directions = %#v", command)
+	}
+	attribute, found := FindConsumerProperty("matter", device.TypeLock, "DoorLock.LockState")
+	if !found || attribute.Kind != "attribute" || !attribute.Readable || !attribute.Notifiable {
+		t.Fatalf("Matter lock attribute = %#v, found=%v", attribute, found)
+	}
+}
+
+func TestMatterFirstDeviceBatchIsExplicitlySupported(t *testing.T) {
+	supported := []device.Type{
+		device.TypeSwitch, device.TypeOutlet, device.TypeLightbulb,
+		device.TypeTemperatureSensor, device.TypeHumiditySensor, device.TypeTemperatureHumiditySensor,
+		device.TypeContactSensor, device.TypeMotionSensor, device.TypeOccupancySensor,
+		device.TypeWindowCovering, device.TypeFan, device.TypeThermostat, device.TypeLock,
+	}
+	for _, deviceType := range supported {
+		known, ok := ConsumerModelSupport("matter", deviceType)
+		if !known || !ok {
+			t.Errorf("Matter support for %q = known %v, supported %v", deviceType, known, ok)
+		}
+	}
+}
+
+func TestMatterCatalogUsesWritableAndSemanticallyMatchingAttributes(t *testing.T) {
+	fan, found := ConsumerContract("matter", device.TypeFan)
+	if !found {
+		t.Fatal("Matter fan contract is missing")
+	}
+	for _, parameter := range fan.Parameters {
+		if parameter.Target == "FanControl.FanMode" && parameter.Source.PropertyID != "target-state" {
+			t.Fatalf("FanMode must route to writable target-state, got %#v", parameter)
+		}
+	}
+	thermostat, found := ConsumerContract("matter", device.TypeThermostat)
+	if !found {
+		t.Fatal("Matter thermostat contract is missing")
+	}
+	want := map[string]string{
+		"current-state": "Thermostat.ThermostatRunningState",
+		"display-units": "ThermostatUserInterfaceConfiguration.TemperatureDisplayMode",
+	}
+	for _, parameter := range thermostat.Parameters {
+		if target, exists := want[parameter.Source.PropertyID]; exists {
+			if parameter.Target != target {
+				t.Fatalf("thermostat %s = %s; want %s", parameter.Source.PropertyID, parameter.Target, target)
+			}
+			delete(want, parameter.Source.PropertyID)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing thermostat mappings: %#v", want)
+	}
+	lock, found := ConsumerContract("matter", device.TypeLock)
+	if !found {
+		t.Fatal("Matter lock contract is missing")
+	}
+	for _, parameter := range lock.Parameters {
+		if parameter.Source.PropertyID == "target-state" || parameter.Source.PropertyID == "last-operation" {
+			t.Fatalf("read-only DoorLock attributes must not masquerade as %s: %#v", parameter.Source.PropertyID, parameter)
+		}
 	}
 }
 

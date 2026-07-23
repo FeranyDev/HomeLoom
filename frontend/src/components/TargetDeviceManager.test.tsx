@@ -12,7 +12,7 @@ vi.mock('../api/mapping', async (importOriginal) => {
 	return { ...actual, listConsumerCatalogs: vi.fn() }
 })
 
-const target: Target = { id: 'apple-main', type: 'apple-hap', name: '主桥', enabled: true, status: 'running', address: ':51826', setupId: 'HLM1', pairingCode: '001-02-003', deviceIds: [], devices: [] }
+const target: Target = { id: 'apple-main', type: 'apple-hap', name: '主桥', enabled: true, status: 'running', config: { address: ':51826', setupId: 'HLM1' }, pairing: { pairingCode: '001-02-003', paired: false }, deviceIds: [], devices: [] }
 const source: Device = { schemaVersion: 1, id: 'source-switch', providerId: 'virtual-main', name: '来源开关', type: 'switch', availability: 'online', online: true, lastUpdateAt: '2026-07-15T00:00:00Z', endpoints: [] }
 const robot: Device = { ...source, id: 'source-vacuum', name: '扫地机器人', type: 'robot-vacuum' }
 
@@ -48,6 +48,29 @@ describe('TargetDeviceManager', () => {
 		await userEvent.click(screen.getByRole('button', { name: '＋ 添加消费端设备' }))
 		await userEvent.click(screen.getByRole('button', { name: '保存消费端设备并应用目标' }))
 		expect(await screen.findByRole('alert')).toHaveTextContent('devices.0.type: unified model "robot-vacuum" is not supported by consumer "homekit"')
+	})
+
+	it('requires an exact phrase and uses the explicit endpoint API for a Matter Device Type change', async () => {
+		vi.mocked(listConsumerCatalogs).mockResolvedValue([{ id: 'matter', name: 'Matter', properties: [
+			{ id: 'OnOff.OnOff', name: 'OnOff', deviceType: 'switch', defaultModelPath: { endpointId: 'main', capabilityId: 'switch', propertyId: 'power' }, level: 'required', type: 'bool', readable: true, writable: true, notifiable: true },
+			{ id: 'OnOff.Light', name: 'Light', deviceType: 'lightbulb', defaultModelPath: { endpointId: 'main', capabilityId: 'lightbulb', propertyId: 'power' }, level: 'required', type: 'bool', readable: true, writable: true, notifiable: true },
+		] }])
+		const matter: Target = {
+			id: 'matter-main', type: 'matter', name: 'Matter', enabled: true, status: 'running',
+			config: {}, commissioning: { state: 'commissioned', windowOpen: false }, fabricCount: 1, endpointCount: 1,
+			deviceIds: ['source-switch'], devices: [{ id: 'lamp', name: 'Lamp', type: 'switch', sourceDeviceId: 'source-switch', enabled: true }],
+		}
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		const onConfirm = vi.fn().mockResolvedValue(undefined)
+		const prompt = vi.spyOn(window, 'prompt').mockReturnValue('CHANGE ENDPOINT TYPE matter-main lamp lightbulb')
+		render(<TargetDeviceManager target={matter} devices={[source]} onClose={() => {}} onSave={onSave} onConfirmMatterEndpointType={onConfirm} />)
+		await waitFor(() => expect(screen.getByLabelText('lamp 设备类型')).toBeEnabled())
+		await userEvent.selectOptions(screen.getByLabelText('lamp 设备类型'), 'lightbulb')
+		await userEvent.click(screen.getByRole('button', { name: '保存消费端设备并应用目标' }))
+		await waitFor(() => expect(onConfirm).toHaveBeenCalledWith('lamp', 'lightbulb', 'CHANGE ENDPOINT TYPE matter-main lamp lightbulb'))
+		expect(onSave.mock.calls[0][0].devices[0].type).toBe('switch')
+		expect(prompt).toHaveBeenCalledWith(expect.stringContaining('CHANGE ENDPOINT TYPE matter-main lamp lightbulb'))
+		prompt.mockRestore()
 	})
 
 	it('allows a source model to bind as a different HomeKit device type', async () => {

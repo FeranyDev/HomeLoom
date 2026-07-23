@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import * as mappingApi from '../api/mapping'
 import type { Device, DeviceType, PropertyDefinition, PropertyValue } from '../types/device'
-import type { MappingBinding, MappingCatalog, MappingProfileInfo, SourceCatalogDevice, SourceCatalogMetadata, SourceValueStatus } from '../types/mapping'
-import { consumerPropertyLabel, deviceTypeLabel, parameterLevelLabel, permissionLabel, propertyDisplayLabel, valueTypeLabel } from '../presentationLabels'
+import type { ConsumerProperty, MappingBinding, MappingCatalog, MappingProfileInfo, SourceCatalogDevice, SourceCatalogMetadata, SourceValueStatus } from '../types/mapping'
+import { consumerPropertyLabel, deviceTypeLabel, matterClusterLabel, matterConsumerPathLabel, parameterLevelLabel, permissionLabel, propertyDisplayLabel, valueTypeLabel } from '../presentationLabels'
 
 type ProviderProperty = {
   key: string; providerId: string; deviceId: string; deviceName: string; deviceType: DeviceType
@@ -37,6 +37,11 @@ const defaultAPI: BindingAPI = {
 const pathKey = (path: { endpointId: string; capabilityId: string; propertyId: string }) => `${path.endpointId}/${path.capabilityId}/${path.propertyId}`
 const routeError = (cause: unknown) => cause instanceof Error ? cause.message : '映射路由操作失败'
 const canonicalEnumToken = (value: string) => value.trim().toLowerCase().replace(/[\s_]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
+
+function matterMember(property: ConsumerProperty): { cluster: string; member: string; kind: 'attribute' | 'command' } {
+	const segments = property.id.split('.')
+	return { cluster: property.cluster ?? segments[0] ?? 'UnknownCluster', member: property.element ?? property.member ?? (segments.slice(1).join('.') || property.id), kind: property.kind ?? 'attribute' }
+}
 
 function orderModelParameters(parameters: MappingCatalog['models'][number]['parameters']) {
   const capabilities = new Map<string, typeof parameters>()
@@ -135,6 +140,14 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
   const modelParameter = parameters.find((item) => pathKey(item.path) === modelKey)
   const consumerCatalogs = consumerId ? catalog.consumers.filter((item) => item.id === consumerId) : catalog.consumers
   const consumers = consumerCatalogs.flatMap((item) => item.properties.map((property) => ({ consumer: item, property }))).filter((item) => item.property.deviceType === targetConsumerType)
+	const matterConsumerGroups = consumers.filter((item) => item.consumer.id === 'matter').reduce<Array<{ cluster: string; items: typeof consumers }>>((groups, item) => {
+		const cluster = matterMember(item.property).cluster
+		const group = groups.find((candidate) => candidate.cluster === cluster)
+		if (group) group.items.push(item)
+		else groups.push({ cluster, items: [item] })
+		return groups
+	}, [])
+  const otherConsumers = consumers.filter((item) => item.consumer.id !== 'matter')
   const consumer = consumers.find((item) => `${item.consumer.id}/${item.property.id}` === consumerKey)
   const inputType = stage === 'provider' ? source?.definition.type : modelParameter?.type
   const outputType = stage === 'provider' ? modelParameter?.type : consumer?.property.type
@@ -226,7 +239,7 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
       </section>
       <div className="mapping-arrow"><span>→</span><small>{stage === 'consumer' ? profileId || 'identity' : '统一状态'}</small></div>
       <section className={`mapping-lane ${stage === 'consumer' ? '' : 'is-context'}`}><header><span>消费端（CONSUMERS）</span><strong>{consumerCatalogs.map((item) => item.name).join(' / ') || consumerId || '目标完整属性'}</strong><small>{consumers.length} 个属性</small></header>
-        {stage === 'consumer' ? consumers.length > 0 ? <div className="mapping-node-list">{consumers.map((item) => { const key = `${item.consumer.id}/${item.property.id}`; return <button key={key} className={key === consumerKey ? 'is-selected' : ''} onClick={() => setConsumerKey(key)}><span>{item.consumer.name}（{item.consumer.id}）</span><strong>{consumerPropertyLabel(item.property.id)}</strong><code>{item.property.id}</code><small>{valueTypeLabel(item.property.type)} · {parameterLevelLabel(item.property.level)} · {permissionLabel(item.property.readable, item.property.writable, item.property.notifiable)}</small></button> })}</div> : <div className="mapping-context"><b>暂无消费端属性目录</b><p>目标适配器 {consumerId ?? '未指定'} 尚未发布该设备模型的属性，不能回退使用其他消费者的属性。</p></div> : <div className="mapping-context"><b>消费端边界（Consumer）</b><p>属性目录由具体目标适配器发布，统一模型层不预设 HomeKit、Matter 或其他协议字段。</p></div>}
+        {stage === 'consumer' ? consumers.length > 0 ? <div className="mapping-node-list">{matterConsumerGroups.map((group) => <section className="matter-cluster-group" key={group.cluster}><header><span>Cluster</span><strong>{matterClusterLabel(group.cluster)}</strong><small>Cluster → Attribute / Command</small></header>{group.items.map((item) => { const key = `${item.consumer.id}/${item.property.id}`; const member = matterMember(item.property); return <button key={key} className={key === consumerKey ? 'is-selected' : ''} onClick={() => setConsumerKey(key)}><span>Matter · {member.kind === 'command' ? 'Command（命令）' : 'Attribute（属性）'}</span><strong>{matterConsumerPathLabel(member.cluster, member.member, member.kind)}</strong><code>{member.cluster} → {member.kind === 'command' ? 'Command' : 'Attribute'} → {member.member}</code><small>{valueTypeLabel(item.property.type)} · {parameterLevelLabel(item.property.level)} · {permissionLabel(item.property.readable, item.property.writable, item.property.notifiable)}</small></button> })}</section>)}{otherConsumers.map((item) => { const key = `${item.consumer.id}/${item.property.id}`; return <button key={key} className={key === consumerKey ? 'is-selected' : ''} onClick={() => setConsumerKey(key)}><span>{item.consumer.name}（{item.consumer.id}）</span><strong>{consumerPropertyLabel(item.property.id)}</strong><code>{item.property.id}</code><small>{valueTypeLabel(item.property.type)} · {parameterLevelLabel(item.property.level)} · {permissionLabel(item.property.readable, item.property.writable, item.property.notifiable)}</small></button> })}</div> : <div className="mapping-context"><b>暂无消费端属性目录</b><p>目标适配器 {consumerId ?? '未指定'} 尚未发布该设备模型的属性，不能回退使用其他消费者的属性。</p></div> : <div className="mapping-context"><b>消费端边界（Consumer）</b><p>属性目录由具体目标适配器发布，统一模型层不预设 HomeKit、Matter 或其他协议字段。</p></div>}
       </section>
     </div>
     <div className={`mapping-route-toolbar ${editingID || editingDefaultKey ? 'is-editing' : ''}`}><label>转换配置（Profile）<select aria-label="映射转换 Profile" value={profileId} onChange={(event) => setProfileId(event.target.value)}><option value="">恒等转换（identity）· 不转换</option>{compatibleProfiles.map((item) => <option key={item.id} value={item.id}>{item.id} · {item.transforms.map((transform) => transform.type).join(' → ') || 'identity'}</option>)}</select></label><div><small>{editingDefaultKey ? '正在修改默认映射；保存后写入当前设备的独立覆盖。' : editingID ? `正在编辑数据库路由 ${editingID}` : inputType && outputType ? `类型：${valueTypeLabel(inputType)} → ${valueTypeLabel(outputType)}；同一来源可继续映射到其他模型属性。` : '请选择两端属性'}</small>{(editingID || editingDefaultKey) && <button onClick={clearEditing}>取消编辑</button>}<button className="add-button" disabled={saving || !modelParameter || (stage === 'provider' ? !source : !consumer || !consumerDevice) || (!profileId && inputType !== outputType) || enumProfileRequired} onClick={() => void save()}>{saving ? '保存中…' : editingDefaultKey ? '保存默认映射覆盖' : editingID ? '保存路由修改' : `＋ 保存第 ${stage === 'provider' ? '一' : '二'} 段路由`}</button></div>{enumCompatibility.kind !== 'none' && <div className={`enum-compatibility is-${profileId ? 'profile' : enumCompatibility.kind}`} role="status"><header><strong>枚举值域检查（ENUM DOMAIN）</strong><span>{profileId ? `由 Profile ${profileId} 转换` : enumCompatibility.kind === 'exact' ? '完全一致，可直接映射' : enumCompatibility.kind === 'normalized' ? '仅格式差异，可自动对齐' : enumCompatibility.kind === 'partial' ? '部分兼容，存在模型独有值' : '语义不一致，需要 Profile'}</span></header><div className="enum-domain-comparison"><section><small>来源值域（Provider）</small><div>{enumCompatibility.source.map((item) => <code key={item}>{item}</code>)}</div></section><i>→</i><section><small>统一模型值域（Model）</small><div>{enumCompatibility.target.map((item) => <code key={item}>{item}</code>)}</div></section></div><div className="enum-pair-list">{enumCompatibility.pairs.map((item) => <span key={`${item.source}/${item.target}`}><code>{item.source}</code> → <code>{item.target}</code></span>)}</div>{!profileId && enumCompatibility.targetOnly.length > 0 && <p>模型独有：<code>{enumCompatibility.targetOnly.join(' / ')}</code>；此设备不能反向写入这些值。</p>}{!profileId && enumCompatibility.sourceOnly.length > 0 && <p>无法自动对齐：<code>{enumCompatibility.sourceOnly.join(' / ')}</code>；请选择枚举转换 Profile 后保存。</p>}</div>}</div>

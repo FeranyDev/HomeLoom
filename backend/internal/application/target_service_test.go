@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,13 +20,23 @@ type targetStoreStub struct {
 }
 
 type targetRuntimeStub struct {
-	applied []target.Config
-	reset   []target.Config
-	paired  map[string]bool
+	applied         []target.Config
+	reset           []target.Config
+	paired          map[string]bool
+	matterOperation string
+	matterDuration  uint32
+	matterFabricID  string
+	endpointTarget  string
+	endpointID      string
+	endpointType    device.Type
+	applyErr        error
 }
 
 func (s *targetRuntimeStub) Apply(_ context.Context, item target.Config) (TargetRegistration, error) {
 	s.applied = append(s.applied, item)
+	if s.applyErr != nil {
+		return TargetRegistration{}, s.applyErr
+	}
 	return TargetRegistration{Info: TargetInfo{ID: item.ID, Type: item.Type, Name: item.Name, Enabled: item.Enabled, Status: "running", Address: item.Address, SetupID: item.SetupID, PairingCode: item.Pin, DeviceIDs: item.DeviceIDs, Devices: item.Devices}, QR: []byte("qr")}, nil
 }
 func (s *targetRuntimeStub) Remove(context.Context, string) error { return nil }
@@ -34,6 +45,32 @@ func (s *targetRuntimeStub) ResetPairing(_ context.Context, item target.Config) 
 	return TargetRegistration{Info: TargetInfo{ID: item.ID, Type: item.Type, Name: item.Name, Enabled: item.Enabled, Status: "running", Address: item.Address, SetupID: item.SetupID, PairingCode: item.Pin, DeviceIDs: item.DeviceIDs, Devices: item.Devices}, QR: []byte("new-qr")}, nil
 }
 func (s *targetRuntimeStub) IsPaired(item target.Config) bool { return s.paired[item.ID] }
+func (s *targetRuntimeStub) matterRegistration(id string, windowOpen bool) TargetRegistration {
+	return TargetRegistration{Info: TargetInfo{
+		ID: id, Type: "matter", Enabled: true, Status: "running", CommissioningState: "commissioned",
+		CommissioningWindowOpen: windowOpen, FabricCount: 1, EndpointCount: 3,
+	}}
+}
+func (s *targetRuntimeStub) OpenCommissioningWindow(_ context.Context, id string, duration uint32) (TargetRegistration, error) {
+	s.matterOperation, s.matterDuration = "open", duration
+	return s.matterRegistration(id, true), nil
+}
+func (s *targetRuntimeStub) CloseCommissioningWindow(_ context.Context, id string) (TargetRegistration, error) {
+	s.matterOperation = "close"
+	return s.matterRegistration(id, false), nil
+}
+func (s *targetRuntimeStub) RemoveFabric(_ context.Context, id, fabricID string) (TargetRegistration, error) {
+	s.matterOperation, s.matterFabricID = "remove-fabric", fabricID
+	return s.matterRegistration(id, false), nil
+}
+func (s *targetRuntimeStub) FactoryResetMatter(_ context.Context, id string) (TargetRegistration, error) {
+	s.matterOperation = "factory-reset"
+	return s.matterRegistration(id, false), nil
+}
+func (s *targetRuntimeStub) ConfirmMatterEndpointDeviceType(_ context.Context, targetID, consumerDeviceID string, nextType device.Type) error {
+	s.endpointTarget, s.endpointID, s.endpointType = targetID, consumerDeviceID, nextType
+	return nil
+}
 
 func (s *targetStoreStub) SaveTarget(_ context.Context, item target.Config) error {
 	if s.saveErr != nil {
@@ -80,6 +117,58 @@ func TestTargetDefaultsFollowSelectedAdapter(t *testing.T) {
 	}
 	if len(store.saved) != 1 || store.saved[0].StorePath != "" || store.saved[0].Pin != "" {
 		t.Fatalf("stored Matter target = %#v", store.saved)
+	}
+	config := store.saved[0].MatterConfig
+	if config == nil || config.Discriminator == nil || *config.Discriminator > 4095 || !validMatterPasscode(config.Passcode) {
+		t.Fatalf("Matter commissioning defaults = %#v", config)
+	}
+	if config.VendorID != target.DefaultMatterVendorID || config.ProductID != target.DefaultMatterProductID ||
+		config.ProductName == "" || config.SerialNumber != info.ID ||
+		config.CommissioningWindowSeconds != target.DefaultMatterCommissioningWindowSeconds {
+		t.Fatalf("Matter product defaults = %#v", config)
+	}
+}
+
+func TestMatterTargetRejectsUnsafeAndCrossProtocolConfiguration(t *testing.T) {
+	discriminator := uint16(4096)
+	cases := []target.Config{
+		{ID: "matter-address", Type: "matter", Name: "Matter", Address: ":51826"},
+		{ID: "matter-pin", Type: "matter", Name: "Matter", Pin: "12345678"},
+		{ID: "matter-port", Type: "matter", Name: "Matter", MatterConfig: &target.MatterConfig{UDPPort: 80}},
+		{ID: "matter-disc", Type: "matter", Name: "Matter", MatterConfig: &target.MatterConfig{Discriminator: &discriminator}},
+		{ID: "matter-passcode", Type: "matter", Name: "Matter", MatterConfig: &target.MatterConfig{Passcode: "11111111"}},
+		{ID: "matter-window", Type: "matter", Name: "Matter", MatterConfig: &target.MatterConfig{CommissioningWindowSeconds: 901}},
+		{ID: "apple-matter", Type: "apple-hap", Name: "HomeKit", MatterConfig: &target.MatterConfig{}},
+	}
+	for _, item := range cases {
+		service := NewTargetService(nil, &targetStoreStub{})
+		if _, err := service.Save(context.Background(), item); err == nil {
+			t.Fatalf("Save() accepted unsafe target %#v", item)
+		}
+	}
+}
+
+func TestMatterTargetUpdatePreservesGeneratedCommissioningIdentity(t *testing.T) {
+	store := &targetStoreStub{}
+	service := NewTargetService(nil, store)
+	if _, err := service.Save(context.Background(), target.Config{ID: "matter-main", Type: "matter", Name: "Matter"}); err != nil {
+		t.Fatal(err)
+	}
+	created := store.saved[0]
+	if _, err := service.Save(context.Background(), target.Config{
+		ID: "matter-main", Type: "matter", Name: "Renamed",
+		MatterConfig: &target.MatterConfig{
+			NetworkInterface: "en0", VendorID: target.DefaultMatterVendorID,
+			ProductID: target.DefaultMatterProductID, ProductName: "HomeLoom Matter Bridge",
+			SerialNumber: "matter-main", CommissioningWindowSeconds: 900,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	updated := store.saved[1]
+	if updated.MatterConfig == nil || updated.MatterConfig.Passcode != created.MatterConfig.Passcode ||
+		updated.MatterConfig.Discriminator == nil || *updated.MatterConfig.Discriminator != *created.MatterConfig.Discriminator {
+		t.Fatalf("commissioning identity changed: created=%#v updated=%#v", created.MatterConfig, updated.MatterConfig)
 	}
 }
 
@@ -276,6 +365,9 @@ func TestPairedTargetHidesAndLocksOneTimeSetupParameters(t *testing.T) {
 	updated.Name = "Renamed"
 	updated.Pin = "87654321"
 	updated.SetupID = "NEW1"
+	updated.HomeKitConfig = &target.HomeKitConfig{
+		Address: config.Address, Pin: "22223333", SetupID: "PTR1", StorePath: config.StorePath,
+	}
 	savedInfo, err := service.Save(ctx, updated)
 	if err != nil {
 		t.Fatal(err)
@@ -333,4 +425,127 @@ func TestSlowTargetStatusSubscriberDoesNotBlockUpdates(t *testing.T) {
 	}
 	close(blocked)
 	unsubscribe()
+}
+
+func TestMatterRuntimeControlsUpdateRegistration(t *testing.T) {
+	discriminator := uint16(1234)
+	config := target.Config{
+		ID: "matter-main", Type: "matter", Name: "Matter", Enabled: true,
+		MatterConfig: &target.MatterConfig{
+			Discriminator: &discriminator, Passcode: "20202021", VendorID: 0xfff1, ProductID: 0x8000,
+			ProductName: "HomeLoom", SerialNumber: "matter-main", CommissioningWindowSeconds: 900,
+		},
+	}
+	runtime := &targetRuntimeStub{}
+	service := NewTargetService([]TargetRegistration{{Info: TargetInfo{ID: config.ID, Type: "matter"}}}, &targetStoreStub{}, config)
+	service.SetRuntime(runtime)
+	info, err := service.OpenMatterCommissioningWindow(context.Background(), config.ID, 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.matterOperation != "open" || runtime.matterDuration != 300 || !info.CommissioningWindowOpen {
+		t.Fatalf("open operation = %q %d, info=%#v", runtime.matterOperation, runtime.matterDuration, info)
+	}
+	if _, err := service.RemoveMatterFabric(context.Background(), config.ID, "fabric-1"); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.matterOperation != "remove-fabric" || runtime.matterFabricID != "fabric-1" {
+		t.Fatalf("fabric operation = %q %q", runtime.matterOperation, runtime.matterFabricID)
+	}
+	if _, err := service.FactoryResetMatter(context.Background(), config.ID); err != nil || runtime.matterOperation != "factory-reset" {
+		t.Fatalf("factory reset = %q, %v", runtime.matterOperation, err)
+	}
+}
+
+func TestMatterRuntimeControlsRejectWrongTargetAndUnsafeDuration(t *testing.T) {
+	homekit := target.Config{ID: "apple", Type: "apple-hap"}
+	matter := target.Config{ID: "matter", Type: "matter", MatterConfig: &target.MatterConfig{CommissioningWindowSeconds: 900}}
+	runtime := &targetRuntimeStub{}
+	service := NewTargetService(nil, &targetStoreStub{}, homekit, matter)
+	service.SetRuntime(runtime)
+	if _, err := service.OpenMatterCommissioningWindow(context.Background(), "missing", 300); !errors.Is(err, ErrTargetNotFound) {
+		t.Fatalf("missing target error = %v", err)
+	}
+	if _, err := service.CloseMatterCommissioningWindow(context.Background(), homekit.ID); err == nil {
+		t.Fatal("HomeKit target accepted Matter operation")
+	}
+	if _, err := service.OpenMatterCommissioningWindow(context.Background(), matter.ID, 179); err == nil {
+		t.Fatal("unsafe commissioning duration was accepted")
+	}
+}
+
+func TestConfirmMatterEndpointDeviceTypePersistsIdentityAndReappliesMultipleChanges(t *testing.T) {
+	discriminator := uint16(1234)
+	config := target.Config{
+		ID: "matter-main", Type: "matter", Name: "Matter", Enabled: true,
+		MatterConfig: &target.MatterConfig{
+			Discriminator: &discriminator, Passcode: "20202021", VendorID: 0xfff1, ProductID: 0x8000,
+			ProductName: "HomeLoom", SerialNumber: "matter-main", CommissioningWindowSeconds: 900,
+		},
+		Devices: []target.VirtualDevice{{
+			ID: "living-room", Name: "Living room", Type: device.TypeSwitch,
+			SourceDeviceID: "source-switch", Enabled: true,
+		}, {
+			ID: "desk-outlet", Name: "Desk outlet", Type: device.TypeOutlet,
+			SourceDeviceID: "source-outlet", Enabled: true,
+		}},
+	}
+	store, runtime := &targetStoreStub{}, &targetRuntimeStub{}
+	service := NewTargetService([]TargetRegistration{{Info: TargetInfo{ID: config.ID, Type: "matter"}}}, store, config)
+	service.SetRuntime(runtime)
+
+	info, err := service.ConfirmMatterEndpointDeviceType(context.Background(), config.ID, "living-room", device.TypeLightbulb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err = service.ConfirmMatterEndpointDeviceType(context.Background(), config.ID, "desk-outlet", device.TypeContactSensor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.endpointTarget != config.ID || runtime.endpointID != "desk-outlet" || runtime.endpointType != device.TypeContactSensor {
+		t.Fatalf("endpoint confirmation = %q %q %q", runtime.endpointTarget, runtime.endpointID, runtime.endpointType)
+	}
+	if len(store.saved) != 2 || store.saved[0].Devices[0].Type != device.TypeLightbulb ||
+		store.saved[1].Devices[0].Type != device.TypeLightbulb || store.saved[1].Devices[1].Type != device.TypeContactSensor {
+		t.Fatalf("saved target = %#v", store.saved)
+	}
+	if len(runtime.applied) != 2 || runtime.applied[1].Devices[0].Type != device.TypeLightbulb ||
+		runtime.applied[1].Devices[1].Type != device.TypeContactSensor ||
+		info.Devices[0].Type != device.TypeLightbulb || info.Devices[1].Type != device.TypeContactSensor {
+		t.Fatalf("reapplied target = %#v, info=%#v", runtime.applied, info)
+	}
+}
+
+func TestConfirmMatterEndpointDeviceTypeRejectsUnownedEndpoint(t *testing.T) {
+	config := target.Config{ID: "matter-main", Type: "matter", MatterConfig: &target.MatterConfig{}}
+	service := NewTargetService(nil, &targetStoreStub{}, config)
+	service.SetRuntime(&targetRuntimeStub{})
+	if _, err := service.ConfirmMatterEndpointDeviceType(context.Background(), config.ID, "missing", device.TypeSwitch); err == nil {
+		t.Fatal("confirmation accepted an endpoint outside the target")
+	}
+}
+
+func TestConfirmMatterEndpointDeviceTypeKeepsPersistedConfigWhenRuntimeApplyFails(t *testing.T) {
+	discriminator := uint16(1234)
+	config := target.Config{
+		ID: "matter-main", Type: "matter", Name: "Matter", MatterConfig: &target.MatterConfig{
+			Discriminator: &discriminator, Passcode: "20202021", VendorID: 0xfff1, ProductID: 0x8000,
+			ProductName: "HomeLoom", SerialNumber: "matter-main", CommissioningWindowSeconds: 900,
+		},
+		Devices: []target.VirtualDevice{{ID: "lamp", Name: "Lamp", Type: device.TypeSwitch, SourceDeviceID: "source", Enabled: true}},
+	}
+	store := &targetStoreStub{}
+	runtime := &targetRuntimeStub{applyErr: errors.New("runtime unavailable")}
+	service := NewTargetService([]TargetRegistration{{Info: TargetInfo{ID: config.ID, Type: "matter"}}}, store, config)
+	service.SetRuntime(runtime)
+	info, err := service.ConfirmMatterEndpointDeviceType(context.Background(), config.ID, "lamp", device.TypeLightbulb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Status != "error" || !strings.Contains(info.Error, "runtime unavailable") {
+		t.Fatalf("error info = %#v", info)
+	}
+	if service.configs[config.ID].Devices[0].Type != device.TypeLightbulb || store.saved[0].Devices[0].Type != device.TypeLightbulb {
+		t.Fatalf("service and store diverged: config=%#v saved=%#v", service.configs[config.ID], store.saved)
+	}
 }

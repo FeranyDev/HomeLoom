@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { executeDeviceCommand, listDevices, setDeviceEnabled, setDevicePower, setDeviceProperty, simulateDevice } from './api/devices'
-import { clearTargetPairingIdentity, deleteTarget, listTargets, regenerateTargetPairing, saveTarget } from './api/targets'
+import { clearTargetPairingIdentity, closeMatterCommissioningWindow, confirmMatterEndpointDeviceType, deleteMatterFabric, deleteTarget, factoryResetMatterTarget, listTargets, openMatterCommissioningWindow, regenerateTargetPairing, saveTarget } from './api/targets'
 import { deleteProvider, listProviders, restartProvider, saveProvider, testProviderConnection } from './api/providers'
 import { getDiagnostics, getRuntimeSettings, listAuditEvents, listCommands, saveRuntimeSettings } from './api/diagnostics'
 import { subscribeEvents } from './api/events'
@@ -17,7 +17,7 @@ import { ToastCenter } from './components/ToastCenter'
 import { useToasts } from './useToasts'
 import { CollectionEmpty, LoadingState } from './components/PageState'
 import type { Device, DeviceAvailability, PropertyValue } from './types/device'
-import type { Target, TargetInput } from './types/target'
+import type { MatterFabric, MatterTarget, Target, TargetInput } from './types/target'
 import type { Provider, ProviderInput } from './types/provider'
 import type { AuditEvent, DeviceCommand, Diagnostics, RuntimeSettings, SystemVersion } from './types/diagnostics'
 import { usePageRoute } from './routing'
@@ -186,6 +186,29 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
 		if (!confirmation) return
 		try { await clearTargetPairingIdentity(target.id, confirmation); await refresh(); notify('success', `目标“${target.name}”的 HomeKit 配对身份已清除并重建`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '清除 HomeKit 配对身份失败') }
 	}
+	async function handleMatterCommissioningToggle(target: MatterTarget, open: boolean) {
+		let confirmation: string | null = null
+		if (open) {
+			confirmation = confirmExactPhrase('这会在局域网内临时公开 Matter 配网入口。只在准备添加可信控制器时执行。', `OPEN COMMISSIONING ${target.id}`)
+			if (!confirmation) return
+		}
+		try {
+			await (open ? openMatterCommissioningWindow(target.id, target.config.commissioningWindowSeconds, confirmation!) : closeMatterCommissioningWindow(target.id))
+			await refresh()
+			notify('success', open ? `目标“${target.name}”的 Matter 配网窗口已打开` : `目标“${target.name}”的 Matter 配网窗口已关闭`)
+		} catch (cause) { notify('error', cause instanceof Error ? cause.message : '更新 Matter 配网窗口失败') }
+	}
+	async function handleMatterFabricDelete(target: MatterTarget, fabric: MatterFabric) {
+		const label = fabric.label ?? fabric.id
+		const confirmation = confirmExactPhrase(`这会立即撤销 Fabric“${label}”对桥内所有 Matter 设备的访问。`, `DELETE FABRIC ${target.id} ${fabric.id}`)
+		if (!confirmation) return
+		try { await deleteMatterFabric(target.id, fabric.id, confirmation); await refresh(); notify('success', `Matter Fabric“${label}”已删除`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '删除 Matter Fabric 失败') }
+	}
+	async function handleMatterFactoryReset(target: MatterTarget) {
+		const confirmation = confirmExactPhrase('这会清除所有 Matter Fabric、运行时身份与配网资料；已加入的控制器将立即失去访问权限。', `FACTORY RESET ${target.id}`)
+		if (!confirmation) return
+		try { await factoryResetMatterTarget(target.id, confirmation); await refresh(); notify('success', `目标“${target.name}”已恢复 Matter 出厂身份`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '恢复 Matter 出厂身份失败') }
+	}
 	async function handleProviderSave(input: ProviderInput, editing: boolean) { try { await saveProvider(input, editing); setProviderForm({ open: false, provider: null }); await refresh(); notify('success', editing ? 'Provider 配置已更新' : 'Provider 已创建') } catch (cause) { notify('error', cause instanceof Error ? cause.message : '保存 Provider 失败'); throw cause } }
 	async function handleProviderTest(input: ProviderInput) { try { await testProviderConnection(input); notify('success', 'Provider 连接测试成功') } catch (cause) { notify('error', cause instanceof Error ? cause.message : 'Provider 连接测试失败'); throw cause } }
 	async function handleProviderDelete(provider: Provider) { if (!confirmProviderDeletion(provider.name)) return; try { await deleteProvider(provider.id); await refresh(); notify('success', `Provider“${provider.name}”已删除`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '删除 Provider 失败') } }
@@ -267,13 +290,13 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
             />
           ))}
 		  {filteredDevices.length === 0 && <CollectionEmpty title="没有匹配的设备" description={devices.length ? '请调整搜索文字或在线状态筛选。' : '启用 Provider 后，发现的设备会显示在这里。'} />}
-		</section> : page === 'providers' ? deviceProvider ? deviceProvider.type === 'mqtt' ? <MQTTDeviceManager provider={deviceProvider} devices={devices.filter((item) => item.providerId === deviceProvider.id && !item.removed)} onClose={() => setDeviceProviderID(null)} onSave={async (input, editing) => { await handleProviderSave(input, editing); setDeviceProviderID(null) }} /> : <XiaomiDeviceManager provider={deviceProvider} onMapping={setMappingDevice} onClose={() => setDeviceProviderID(null)} onSave={async (input, editing) => { await handleProviderSave(input, editing); setDeviceProviderID(null) }} /> : <ProviderWorkspace providers={providers} devices={devices} onEdit={(item) => setProviderForm({ open: true, provider: item })} onManageDevices={(item) => setDeviceProviderID(item.id)} onDelete={(item) => void handleProviderDelete(item)} onRestart={handleProviderRestart} onTest={handleProviderTest} onSimulate={handleSimulation} /> : page === 'mapping' ? <MappingWorkspace /> : page === 'system' ? <SystemDashboard diagnostics={diagnostics} commands={commands} auditEvents={auditEvents} settings={runtimeSettings} onSettingsSave={handleRuntimeSettingsSave} /> : targetDeviceTarget ? <TargetDeviceManager target={targetDeviceTarget} devices={devices.filter((item) => !item.removed)} onClose={() => setTargetDeviceID(null)} onSave={async (input) => { await saveTarget(input, true); await refresh(); notify('success', '消费端设备已保存并实时应用到目标实例') }} /> : <section className="target-list">
+		</section> : page === 'providers' ? deviceProvider ? deviceProvider.type === 'mqtt' ? <MQTTDeviceManager provider={deviceProvider} devices={devices.filter((item) => item.providerId === deviceProvider.id && !item.removed)} onClose={() => setDeviceProviderID(null)} onSave={async (input, editing) => { await handleProviderSave(input, editing); setDeviceProviderID(null) }} /> : <XiaomiDeviceManager provider={deviceProvider} onMapping={setMappingDevice} onClose={() => setDeviceProviderID(null)} onSave={async (input, editing) => { await handleProviderSave(input, editing); setDeviceProviderID(null) }} /> : <ProviderWorkspace providers={providers} devices={devices} onEdit={(item) => setProviderForm({ open: true, provider: item })} onManageDevices={(item) => setDeviceProviderID(item.id)} onDelete={(item) => void handleProviderDelete(item)} onRestart={handleProviderRestart} onTest={handleProviderTest} onSimulate={handleSimulation} /> : page === 'mapping' ? <MappingWorkspace /> : page === 'system' ? <SystemDashboard diagnostics={diagnostics} commands={commands} auditEvents={auditEvents} settings={runtimeSettings} onSettingsSave={handleRuntimeSettingsSave} /> : targetDeviceTarget ? <TargetDeviceManager target={targetDeviceTarget} devices={devices.filter((item) => !item.removed)} onClose={() => setTargetDeviceID(null)} onSave={async (input) => { await saveTarget(input, true); await refresh(); notify('success', '消费端设备已保存并实时应用到目标实例') }} onConfirmMatterEndpointType={async (consumerDeviceID, deviceType, confirmation) => { await confirmMatterEndpointDeviceType(targetDeviceTarget.id, consumerDeviceID, deviceType, confirmation); await refresh(); notify('success', `Matter Endpoint“${consumerDeviceID}”已切换为 ${deviceType}`) }} /> : <section className="target-list">
 		  <div className="config-note">
 		    <span>配置来源</span>
 		    <strong>PostgreSQL · targets</strong>
 		    <p>目标实例、消费端设备与映射统一保存在数据库中；各适配器独有的配对参数按目标类型管理。</p>
 		  </div>
-		  {targets.map((target) => <TargetCard key={target.id} target={target} onEdit={(item) => setTargetForm({ open: true, target: item })} onManageDevices={(item) => setTargetDeviceID(item.id)} onDelete={(item) => void handleTargetDelete(item)} onRegeneratePairing={(item) => void handleTargetPairingRegenerate(item)} onClearPairingIdentity={(item) => void handleTargetPairingIdentityClear(item)} />)}
+		  {targets.map((target) => <TargetCard key={target.id} target={target} onEdit={(item) => setTargetForm({ open: true, target: item })} onManageDevices={(item) => setTargetDeviceID(item.id)} onDelete={(item) => void handleTargetDelete(item)} onRegeneratePairing={(item) => void handleTargetPairingRegenerate(item)} onClearPairingIdentity={(item) => void handleTargetPairingIdentityClear(item)} onMatterCommissioningToggle={(item, open) => void handleMatterCommissioningToggle(item, open)} onDeleteMatterFabric={(item, fabric) => void handleMatterFabricDelete(item, fabric)} onFactoryResetMatter={(item) => void handleMatterFactoryReset(item)} />)}
 		  {targets.length === 0 && <CollectionEmpty title="还没有目标实例" description="新建目标并配置消费端设备后，即可接入 HomeKit、Matter 或其他消费平台。" />}
 		</section>
       )}

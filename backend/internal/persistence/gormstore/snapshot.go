@@ -21,24 +21,26 @@ const (
 )
 
 type databaseSnapshot struct {
-	FormatVersion         int                      `json:"formatVersion"`
-	SchemaVersion         int                      `json:"schemaVersion"`
-	CreatedAt             time.Time                `json:"createdAt"`
-	Providers             []providerRow            `json:"providers"`
-	Targets               []targetRow              `json:"targets"`
-	TargetVirtualDevices  []targetVirtualDeviceRow `json:"targetVirtualDevices"`
-	HomeKitAccessoryIDs   []homeKitAccessoryIDRow  `json:"homeKitAccessoryIds"`
-	HomeKitIIDs           []homeKitIIDRow          `json:"homeKitIids"`
-	SystemSettings        []systemSettingRow       `json:"systemSettings"`
-	DevicePreferences     []devicePreferenceRow    `json:"devicePreferences"`
-	AuditEvents           []auditEventRow          `json:"auditEvents"`
-	MappingProfiles       []mappingProfileRow      `json:"mappingProfiles"`
-	MappingBindings       []mappingBindingRow      `json:"mappingBindings"`
-	CustomModelProperties []customModelPropertyRow `json:"customModelProperties"`
-	AdminUsers            []adminUserRow           `json:"adminUsers"`
-	AdminSessions         []adminSessionRow        `json:"adminSessions"`
-	MIoTSpecCache         []miotSpecCacheRow       `json:"miotSpecCache"`
-	CustomUnifiedModels   []customUnifiedModelRow  `json:"customUnifiedModels"`
+	FormatVersion         int                         `json:"formatVersion"`
+	SchemaVersion         int                         `json:"schemaVersion"`
+	CreatedAt             time.Time                   `json:"createdAt"`
+	Providers             []providerRow               `json:"providers"`
+	Targets               []targetRow                 `json:"targets"`
+	TargetVirtualDevices  []targetVirtualDeviceRow    `json:"targetVirtualDevices"`
+	MatterRuntimeValues   []matterRuntimeKVRow        `json:"matterRuntimeValues"`
+	MatterEndpointIDs     []matterEndpointIdentityRow `json:"matterEndpointIdentities"`
+	HomeKitAccessoryIDs   []homeKitAccessoryIDRow     `json:"homeKitAccessoryIds"`
+	HomeKitIIDs           []homeKitIIDRow             `json:"homeKitIids"`
+	SystemSettings        []systemSettingRow          `json:"systemSettings"`
+	DevicePreferences     []devicePreferenceRow       `json:"devicePreferences"`
+	AuditEvents           []auditEventRow             `json:"auditEvents"`
+	MappingProfiles       []mappingProfileRow         `json:"mappingProfiles"`
+	MappingBindings       []mappingBindingRow         `json:"mappingBindings"`
+	CustomModelProperties []customModelPropertyRow    `json:"customModelProperties"`
+	AdminUsers            []adminUserRow              `json:"adminUsers"`
+	AdminSessions         []adminSessionRow           `json:"adminSessions"`
+	MIoTSpecCache         []miotSpecCacheRow          `json:"miotSpecCache"`
+	CustomUnifiedModels   []customUnifiedModelRow     `json:"customUnifiedModels"`
 }
 
 type pendingRestoreMarker struct {
@@ -94,6 +96,7 @@ func (s *Store) readSnapshot(ctx context.Context) (databaseSnapshot, error) {
 		}{
 			{"providers", &result.Providers}, {"targets", &result.Targets},
 			{"target virtual devices", &result.TargetVirtualDevices}, {"HomeKit accessory IDs", &result.HomeKitAccessoryIDs},
+			{"Matter runtime values", &result.MatterRuntimeValues}, {"Matter endpoint identities", &result.MatterEndpointIDs},
 			{"HomeKit IIDs", &result.HomeKitIIDs}, {"system settings", &result.SystemSettings},
 			{"device preferences", &result.DevicePreferences}, {"audit events", &result.AuditEvents},
 			{"mapping profiles", &result.MappingProfiles}, {"mapping bindings", &result.MappingBindings},
@@ -157,6 +160,14 @@ func ValidateRestoreCandidate(_ context.Context, path string) error {
 	for _, target := range snapshot.Targets {
 		if _, err := codec.decrypt("target-pin:"+target.ID, target.PIN); err != nil {
 			return fmt.Errorf("validate target %q secret: %w", target.ID, err)
+		}
+		if _, err := codec.decrypt("target-matter-passcode:"+target.ID, target.MatterPasscode); err != nil {
+			return fmt.Errorf("validate Matter target %q secret: %w", target.ID, err)
+		}
+	}
+	for _, value := range snapshot.MatterRuntimeValues {
+		if _, err := codec.decrypt(matterRuntimeSecretScope(value.TargetID, value.Key), value.Value); err != nil {
+			return fmt.Errorf("validate Matter target %q runtime key %q: %w", value.TargetID, value.Key, err)
 		}
 	}
 	validator := &Store{secrets: codec}
@@ -232,7 +243,8 @@ func (s *Store) replaceRows(ctx context.Context, snapshot databaseSnapshot) erro
 	return s.orm.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		unscoped := tx.Session(&gorm.Session{AllowGlobalUpdate: true})
 		deleteOrder := []any{
-			&adminSessionRow{}, &homeKitIIDRow{}, &homeKitAccessoryIDRow{}, &targetVirtualDeviceRow{},
+			&adminSessionRow{}, &homeKitIIDRow{}, &homeKitAccessoryIDRow{}, &matterEndpointIdentityRow{},
+			&matterRuntimeKVRow{}, &targetVirtualDeviceRow{},
 			&mappingBindingRow{}, &mappingProfileRow{}, &customModelPropertyRow{}, &customUnifiedModelRow{},
 			&miotSpecCacheRow{}, &auditEventRow{}, &devicePreferenceRow{}, &systemSettingRow{},
 			&providerRow{}, &targetRow{}, &adminUserRow{},
@@ -252,7 +264,8 @@ func (s *Store) replaceRows(ctx context.Context, snapshot databaseSnapshot) erro
 			{"mapping bindings", &snapshot.MappingBindings}, {"custom model properties", &snapshot.CustomModelProperties},
 			{"custom unified models", &snapshot.CustomUnifiedModels}, {"MIoT spec cache", &snapshot.MIoTSpecCache},
 			{"target virtual devices", &snapshot.TargetVirtualDevices}, {"HomeKit accessory IDs", &snapshot.HomeKitAccessoryIDs},
-			{"HomeKit IIDs", &snapshot.HomeKitIIDs},
+			{"HomeKit IIDs", &snapshot.HomeKitIIDs}, {"Matter runtime values", &snapshot.MatterRuntimeValues},
+			{"Matter endpoint identities", &snapshot.MatterEndpointIDs},
 		}
 		for _, item := range insertOrder {
 			if err := createSnapshotRows(tx, item.rows); err != nil {

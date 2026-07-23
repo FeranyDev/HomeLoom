@@ -62,6 +62,14 @@ export interface CustomModel { deviceType: DeviceType; name: string; version: nu
 export interface ConsumerProperty {
   id: string; name: string; deviceType: DeviceType; defaultModelPath: ModelPath; level: ParameterLevel; type: ValueType
   readable: boolean; writable: boolean; notifiable: boolean
+	/** Matter catalog entries identify the protocol member without overloading a HomeKit service path. */
+	originalName?: string
+	cluster?: string
+	/** Canonical server field for the Attribute or Command name. */
+	element?: string
+	/** Transitional alias accepted from early Matter catalog payloads. */
+	member?: string
+	kind?: 'attribute' | 'command'
 }
 export interface ConsumerCatalog { id: string; name: string; properties: ConsumerProperty[] }
 export interface SourceCatalogMetadata {

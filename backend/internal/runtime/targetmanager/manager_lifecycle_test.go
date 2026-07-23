@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/application"
+	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	"github.com/feranydev/homeloom/backend/internal/domain/target"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
 	"github.com/feranydev/homeloom/backend/internal/targets/homekit"
+	mattertarget "github.com/feranydev/homeloom/backend/internal/targets/matter"
 )
 
 type lifecycleTarget struct {
@@ -22,6 +24,37 @@ type lifecycleTarget struct {
 	stopped chan struct{}
 	exit    chan error
 	once    sync.Once
+}
+
+type lifecycleMatterStore struct{}
+
+func (lifecycleMatterStore) PutMatterRuntimeValue(context.Context, string, string, []byte) error {
+	return nil
+}
+func (lifecycleMatterStore) GetMatterRuntimeValue(context.Context, string, string) ([]byte, bool, error) {
+	return nil, false, nil
+}
+func (lifecycleMatterStore) ListMatterRuntimeValues(context.Context, string) ([]target.MatterRuntimeValue, error) {
+	return nil, nil
+}
+func (lifecycleMatterStore) DeleteMatterRuntimeValue(context.Context, string, string) error {
+	return nil
+}
+func (lifecycleMatterStore) ClearMatterRuntimeValues(context.Context, string) error { return nil }
+func (lifecycleMatterStore) AllocateMatterEndpoint(context.Context, string, string, device.Type) (uint16, error) {
+	return 2, nil
+}
+func (lifecycleMatterStore) TombstoneMatterEndpoint(context.Context, string, string) error {
+	return nil
+}
+func (lifecycleMatterStore) ConfirmMatterEndpointDeviceType(context.Context, string, string, device.Type, bool) error {
+	return nil
+}
+func (lifecycleMatterStore) MatterEndpointIdentity(context.Context, string, string) (target.MatterEndpointIdentity, bool, error) {
+	return target.MatterEndpointIdentity{}, false, nil
+}
+func (lifecycleMatterStore) ListMatterEndpointIdentities(context.Context, string) ([]target.MatterEndpointIdentity, error) {
+	return nil, nil
 }
 
 func newLifecycleTarget(id string) *lifecycleTarget {
@@ -179,5 +212,53 @@ func TestRuntimeFailureAfterStartupPublishesErrorStatus(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("runtime failure status was not published")
+	}
+}
+
+func TestMatterTargetUsesIndependentRuntimeFactory(t *testing.T) {
+	devices := application.NewDeviceService(virtual.NewProvider())
+	defer devices.Close()
+	manager := New(context.Background(), devices, slog.New(slog.NewTextHandler(io.Discard, nil)), lifecycleMatterStore{})
+	created := newLifecycleTarget("matter-one")
+	var received mattertarget.Config
+	manager.matterFactory = func(_ context.Context, config mattertarget.Config, _ *application.DeviceService, _ mattertarget.Storage, _ *slog.Logger) (managedTarget, error) {
+		received = config
+		return created, nil
+	}
+	manager.startGrace = time.Millisecond
+	discriminator := uint16(1234)
+	config := target.Config{
+		ID: "matter-one", Type: "matter", Name: "Matter One", Enabled: true,
+		MatterConfig: &target.MatterConfig{
+			Discriminator: &discriminator, Passcode: "20202021", VendorID: 0xfff1, ProductID: 0x8000,
+			ProductName: "HomeLoom", SerialNumber: "matter-one", CommissioningWindowSeconds: 900,
+		},
+	}
+	registration, err := manager.Apply(context.Background(), config)
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if received.ID != config.ID || received.Matter.Passcode != config.MatterConfig.Passcode {
+		t.Fatalf("Matter factory config = %#v", received)
+	}
+	if registration.Info.Type != "matter" || registration.Info.ConsumerID != "matter" || registration.Info.ProtocolVersion != "1.4.1" {
+		t.Fatalf("Matter registration = %#v", registration.Info)
+	}
+	if err := manager.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMatterTargetRefusesStartupWithoutPersistentStorage(t *testing.T) {
+	devices := application.NewDeviceService(virtual.NewProvider())
+	defer devices.Close()
+	manager := New(context.Background(), devices, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	discriminator := uint16(1)
+	_, err := manager.Apply(context.Background(), target.Config{
+		ID: "matter", Type: "matter", Enabled: true,
+		MatterConfig: &target.MatterConfig{Discriminator: &discriminator},
+	})
+	if err == nil {
+		t.Fatal("Matter target started without persistent storage")
 	}
 }
