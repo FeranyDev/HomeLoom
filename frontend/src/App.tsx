@@ -118,7 +118,7 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
 	  const reconcileTimer = window.setInterval(() => void refresh(), 5 * 60 * 1000)
 		const unsubscribe = subscribeEvents({
 			onConnection: setLive,
-			onDevice: (updated) => setDevices((current) => { const exists = current.some((item) => item.id === updated.id); return exists ? current.map((item) => item.id === updated.id ? updated : item) : [...current, updated] }),
+			onDevice: (updated) => setDevices((current) => { if (updated.removed) return current.filter((item) => item.id !== updated.id); const exists = current.some((item) => item.id === updated.id); return exists ? current.map((item) => item.id === updated.id ? updated : item) : [...current, updated] }),
 			onCommand: (updated) => setCommands((current) => { const exists = current.some((item) => item.id === updated.id); const next = exists ? current.map((item) => item.id === updated.id ? updated : item) : [updated, ...current]; return next.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()).slice(0, commandHistoryLimit.current) }),
 			onAudit: (updated) => setAuditEvents((current) => [updated, ...current.filter((item) => item.id !== updated.id)].slice(0, 200)),
 			onTarget: (updated) => setTargets((current) => { const exists = current.some((item) => item.id === updated.id); return exists ? current.map((item) => item.id === updated.id ? updated : item) : [...current, updated] }),

@@ -18,6 +18,28 @@ import (
 
 type silentProvider struct{ inner *virtual.Provider }
 
+type removalEventProvider struct {
+	inner   *virtual.Provider
+	handler func(device.Device)
+}
+
+func (p *removalEventProvider) Manifest() providersdk.Manifest { return p.inner.Manifest() }
+func (p *removalEventProvider) Capabilities() providersdk.Capabilities {
+	return p.inner.Capabilities()
+}
+func (p *removalEventProvider) Initialize(ctx context.Context) error {
+	return p.inner.Initialize(ctx)
+}
+func (p *removalEventProvider) Close(ctx context.Context) error { return p.inner.Close(ctx) }
+func (p *removalEventProvider) DiscoverDevices(ctx context.Context) ([]device.Device, error) {
+	return p.inner.DiscoverDevices(ctx)
+}
+func (p *removalEventProvider) Subscribe(handler func(device.Device)) func() {
+	p.handler = handler
+	return func() { p.handler = nil }
+}
+func (p *removalEventProvider) emit(item device.Device) { p.handler(item) }
+
 type transientApplicationProvider struct {
 	inner   *virtual.Provider
 	handler func(providersdk.DeviceEvent)
@@ -219,6 +241,42 @@ func TestDeviceServiceRoutesProviderEvents(t *testing.T) {
 	states := service.States("virtual-switch-1")
 	if len(states) != 1 || states[0].Version != 2 {
 		t.Fatalf("States() = %#v", states)
+	}
+}
+
+func TestDeviceServiceRemovesProviderTombstonesFromRegistry(t *testing.T) {
+	provider := &removalEventProvider{inner: virtual.NewProvider()}
+	service := application.NewDeviceService(provider)
+	defer service.Close()
+	notified := make(chan device.Device, 1)
+	unsubscribe := service.Subscribe(func(item device.Device) { notified <- item })
+	defer unsubscribe()
+
+	items, err := service.List(context.Background())
+	if err != nil || len(items) == 0 {
+		t.Fatalf("List() = %#v, %v", items, err)
+	}
+	removed := items[0]
+	removed.Removed = true
+	removed.SetOnline(false)
+	provider.emit(removed)
+
+	select {
+	case tombstone := <-notified:
+		if !tombstone.Removed || tombstone.ID != removed.ID {
+			t.Fatalf("notification = %#v", tombstone)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("removal tombstone was not published")
+	}
+	items, err = service.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		if item.ID == removed.ID {
+			t.Fatalf("removed device is still registered: %#v", item)
+		}
 	}
 }
 

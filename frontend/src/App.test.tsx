@@ -71,6 +71,20 @@ describe('App integration', () => {
 		intervalSpy.mockRestore()
 	})
 
+	it('removes a device immediately when the Provider publishes a removal tombstone', async () => {
+		const item = { schemaVersion: 1, id: 'living-light', providerId: 'xiaomi-main', name: '客厅灯', type: 'lightbulb', availability: 'online', online: true, endpoints: [], lastUpdateAt: '2026-07-22T00:00:00Z' }
+		api.listDevices.mockResolvedValue([item])
+		api.getAuthStatus.mockResolvedValue({ initialized: true, authenticated: true, username: 'admin' })
+		render(<App />)
+		expect(await screen.findByRole('heading', { name: '客厅灯' })).toBeInTheDocument()
+		const handlers = api.subscribeEvents.mock.calls[0][0] as { onDevice: (device: typeof item & { removed?: boolean }) => void }
+
+		act(() => handlers.onDevice({ ...item, availability: 'offline', online: false, removed: true }))
+
+		await waitFor(() => expect(screen.queryByRole('heading', { name: '客厅灯' })).not.toBeInTheDocument())
+		expect(screen.getByRole('status')).toHaveTextContent('0 / 0')
+	})
+
   it('initializes the sole administrator and loads the dashboard', async () => {
     api.getAuthStatus.mockResolvedValue({ initialized: false, authenticated: false })
     api.setupAdministrator.mockResolvedValue({ initialized: true, authenticated: true, username: 'owner' })

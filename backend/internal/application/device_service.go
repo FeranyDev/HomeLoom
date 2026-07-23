@@ -1281,7 +1281,14 @@ func (s *DeviceService) handleEvent(event eventbus.Event) {
 	if !item.IsOnline() {
 		s.resetSnapshotSequence(item.ID)
 	}
-	s.registry.Upsert(item)
+	if item.Removed {
+		// Removed snapshots are tombstones used to notify live consumers. Keeping
+		// them in the registry makes deleted Provider mappings linger until the
+		// process rebuilds the registry on restart.
+		s.registry.Delete(item.ID)
+	} else {
+		s.registry.Upsert(item)
+	}
 	if item.IsOnline() {
 		s.applySnapshot(item, event.TraceID)
 	} else {

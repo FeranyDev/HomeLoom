@@ -28,6 +28,12 @@ func (r *DeviceRegistry) Upsert(item device.Device) {
 	r.mu.Unlock()
 }
 
+func (r *DeviceRegistry) Delete(id string) {
+	r.mu.Lock()
+	delete(r.devices, id)
+	r.mu.Unlock()
+}
+
 func (r *DeviceRegistry) Get(id string) (device.Device, bool) {
 	r.mu.RLock()
 	item, ok := r.devices[id]

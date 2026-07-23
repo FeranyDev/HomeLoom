@@ -18,3 +18,17 @@ func TestRegistryUpsertAndSortedList(t *testing.T) {
 		t.Fatalf("upserted name = %q", items[1].Name)
 	}
 }
+
+func TestRegistryDelete(t *testing.T) {
+	registry := NewDeviceRegistry([]device.Device{{ID: "a"}, {ID: "b"}})
+	registry.Delete("a")
+	registry.Delete("missing")
+
+	if _, exists := registry.Get("a"); exists {
+		t.Fatal("deleted device is still registered")
+	}
+	items := registry.List()
+	if len(items) != 1 || items[0].ID != "b" {
+		t.Fatalf("List() = %#v", items)
+	}
+}
