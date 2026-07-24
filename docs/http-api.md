@@ -147,7 +147,7 @@ Profile 管理入口为 `GET/POST /api/v1/mapping/profiles` 和 `GET/PUT/DELETE 
 
 HomeLoom 随程序提供 provider、capability 和 target 三类内置示例 Profile。内置 ID 只读且不能被用户配置覆盖。`POST /api/v1/mapping/profiles/import` 会先验证完整批次，再使用所选数据库的单个事务写入，任何一项错误都不会产生部分导入。`GET /api/v1/mapping/profiles/export` 只导出用户 Profile，生成的文件可以直接重新导入；全局脱敏配置导出和诊断包则包含内置与用户 Profile，便于还原排障上下文。
 
-运行时属性绑定入口为 `GET/POST /api/v1/mapping/bindings` 和 `GET/PUT/DELETE /api/v1/mapping/bindings/{id}`。绑定存储于所选数据库的 `mapping_bindings`，精确指定 Provider、设备、Endpoint、Capability 和 Property 路径；ID 可以省略并由后端生成。启用后，Provider 快照和读取结果执行 `forward` 转换，属性控制执行 `reverse` 转换。保存、启停或删除会同步重新发现并处理当前 Provider 快照，不重启 Provider 或 Target。运行时绑定允许输入和输出类型不同，但每一步必须能够生成合法的反向写入值；因此仅正向的 `clamp` 不能绑定到真实读写链路。分段枚举和阈值转换通过显式 `reverse`/`trueNumber`/`falseNumber` 保存反向代表值。正在被绑定引用的用户 Profile 不能删除，也不能更新为不兼容流水线。
+运行时属性绑定入口为 `GET/POST /api/v1/mapping/bindings` 和 `GET/PUT/DELETE /api/v1/mapping/bindings/{id}`。绑定存储于所选数据库的 `mapping_bindings`，精确指定 Provider、设备、Endpoint、Capability 和 Property 路径；ID 可以省略并由后端生成。启用后，Provider 快照和读取结果执行 `forward` 转换，属性控制执行 `reverse` 转换。保存、启停或删除会同步重新发现并处理当前 Provider 快照，不重启 Provider 或 Target。运行时绑定允许输入和输出类型不同，但每一步必须能够生成合法的反向写入值；因此仅正向的 `clamp` 不能绑定到真实读写链路。分段枚举和阈值转换通过显式 `reverse`/`trueNumber`/`falseNumber` 保存反向代表值；枚举多对一折叠通过 `values` 正向映射与可选 `reverseValues` 指定每个折叠目标的反向代表来源值。正在被绑定引用的用户 Profile 不能删除，也不能更新为不兼容流水线。
 
 `GET /api/v1/mapping/catalog` 中的数值型 Consumer 属性返回协议真实的 `unit`、`min`、`max` 和 `step`。配置界面展示来源范围、转换后范围、目标协议范围及其最终交集。HomeKit 运行时使用同一交集发布 Characteristic 的数值元数据；状态推送与控制写入受该范围约束，完全无交集的数值 Characteristic 不会发布。
 

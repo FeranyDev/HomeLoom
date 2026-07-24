@@ -6,7 +6,7 @@ Matter 模式采用 Go 主服务加 Node.js 20+ sidecar。每个 Matter Target �
 
 当前 `@matter/main` 固定为 `0.17.6`，其标准模型对应 Matter 1.4.1；管理界面的“协议版本”展示该规范版本。Go ↔ sidecar 的内部 IPC 合约另行固定为 `1.0`。开发、测试和构建统一通过 `scripts/dev-env.sh`，npm、Go、TypeScript 缓存全部写入项目 `.cache/`。
 
-真实 driver 的第一批设备覆盖开关、插座、扩展彩灯、温度、湿度、接触、活动、占用、窗帘、风扇、恒温器和门锁。测试会直接读取 Go Matter Catalog，要求每个公开类型和 Cluster Attribute/Command 路径都能由官方 matter.js Endpoint 构造，避免管理端暴露运行时无法重放的类型。
+真实 driver 当前覆盖 22 类官方标准 Device Type：开关、插座、扩展彩灯、温度、湿度、接触、活动、占用、窗帘、风扇、恒温器、门锁、照度、气压、漏水、烟雾、一氧化碳、空气质量、阀门、水泵、空气净化器、扬声器。测试会直接读取 Go Matter Catalog，要求每个公开类型和 Cluster Attribute/Command 路径都能由官方 matter.js Endpoint 构造，避免管理端暴露运行时无法重放的类型。
 
 Matter 消费端设备类型只发布当前协议中的标准 Device Type。HomeLoom 的 `temperature-humidity-sensor` 是统一模型逻辑类型，不是 Matter 标准聚合传感器，因此不会出现在 Matter 的“消费端设备类型”列表，后端也会拒绝直接保存该类型。需要导出温湿度来源时，用户可以显式创建标准的 `temperature-sensor` 或 `humidity-sensor` 消费端映射；系统不会自动拆分或隐式创建 Endpoint。
 
@@ -61,7 +61,7 @@ Matter Fabric、NOC、密钥和计数器通过反向 `storage.*` RPC 保存到 P
 
 ## 验收边界
 
-日常 CI 覆盖 IPC 合约、背压、断线恢复、双实例隔离、第一批 12 种标准 Matter Device Type、100 Endpoint Go 快照、Endpoint 稳定身份、数据库恢复和前端操作。以下项目需要维护者在真实局域网执行：
+日常 CI 覆盖 IPC 合约、背压、断线恢复、双实例隔离、当前已开放的 22 种标准 Matter Device Type、100 Endpoint Go 快照、Endpoint 稳定身份、数据库恢复和前端操作。以下项目需要维护者在真实局域网执行：
 
 - Apple Home 首次 commissioning、读写与订阅；
 - `chip-tool` commissioning/read/write/subscribe；

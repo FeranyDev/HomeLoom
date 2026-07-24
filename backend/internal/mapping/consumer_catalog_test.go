@@ -123,6 +123,9 @@ func TestMatterFirstDeviceBatchIsExplicitlySupported(t *testing.T) {
 		device.TypeTemperatureSensor, device.TypeHumiditySensor,
 		device.TypeContactSensor, device.TypeMotionSensor, device.TypeOccupancySensor,
 		device.TypeWindowCovering, device.TypeFan, device.TypeThermostat, device.TypeLock,
+		device.TypeIlluminanceSensor, device.TypePressureSensor, device.TypeLeakSensor,
+		device.TypeSmokeSensor, device.TypeCarbonMonoxideSensor, device.TypeAirQualitySensor,
+		device.TypeValve, device.TypePump, device.TypeAirPurifier, device.TypeSpeaker,
 	}
 	for _, deviceType := range supported {
 		known, ok := ConsumerModelSupport("matter", deviceType)

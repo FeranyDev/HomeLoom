@@ -306,4 +306,144 @@ describe('BindingManager', () => {
 	expect(within(compatibility).getByText('由 Profile fan-level-map 转换')).toBeInTheDocument()
 	expect(save).toBeEnabled()
   })
+
+  it('shows consumer enum values while configuring the second-stage route', async () => {
+    const airConditioner: Device = {
+      schemaVersion: 1, id: 'virtual-ac-1', providerId: 'virtual-main', name: '虚拟空调', type: 'air-conditioner',
+      availability: 'online', online: true, lastUpdateAt: new Date().toISOString(), endpoints: [],
+    }
+    const consumerEnumCatalog = vi.fn(async () => ({
+      providers: [{ ...airConditioner, catalog: { complete: true, source: 'device-snapshot' } }],
+      models: [{
+        deviceType: 'air-conditioner' as const, version: 2, builtIn: true,
+        custom: { publisher: { level: 'custom' as const, behavior: 'preserve' }, consumer: { level: 'custom' as const, behavior: 'explicit' } },
+        parameters: [{
+          path: { endpointId: 'main', capabilityId: 'air-conditioner', propertyId: 'fan-speed' },
+          name: '风速档位', level: 'optional' as const, type: 'enum' as const, enum: ['auto', 'low', 'medium', 'high'],
+          readable: true, writable: true, notifiable: true,
+          publisher: { level: 'optional' as const, behavior: 'may-publish' },
+          consumer: { level: 'optional' as const, behavior: 'may-map' },
+        }],
+      }],
+      consumers: [{
+        id: 'homekit', name: 'Apple Home / HomeKit', properties: [{
+          id: 'HeaterCooler.RotationSpeed', name: 'HeaterCooler.RotationSpeed', deviceType: 'air-conditioner' as const,
+          defaultModelPath: { endpointId: 'main', capabilityId: 'air-conditioner', propertyId: 'fan-speed' },
+          level: 'optional' as const, type: 'enum' as const, enum: ['auto', 'low', 'medium', 'high', 'turbo'],
+          readable: true, writable: true, notifiable: true,
+        }],
+      }],
+    }))
+    const api = {
+      listBindings: vi.fn(async () => []), listProfiles: vi.fn(async () => []),
+      create: vi.fn(), update: vi.fn(), remove: vi.fn(), catalog: consumerEnumCatalog,
+    }
+    render(<BindingManager device={airConditioner} api={api} initialStage="consumer" consumerOnly consumerId="homekit" />)
+    expect(await screen.findByText(/模型枚举：auto \/ low \/ medium \/ high/)).toBeInTheDocument()
+    expect(screen.getByText(/消费端枚举：auto \/ low \/ medium \/ high \/ turbo/)).toBeInTheDocument()
+    const compatibility = await screen.findByRole('status')
+    expect(within(compatibility).getByText('部分兼容，存在消费端独有值')).toBeInTheDocument()
+    expect(compatibility).toHaveTextContent('auto → auto')
+    expect(compatibility).toHaveTextContent('high → high')
+    expect(compatibility).toHaveTextContent('消费端独有：turbo')
+    expect(within(compatibility).getByText('统一模型值域（Model）')).toBeInTheDocument()
+    expect(within(compatibility).getByText('消费端值域（Consumer）')).toBeInTheDocument()
+  })
+
+  it('requires an enum Profile when consumer values cannot be aligned from the model', async () => {
+    const airConditioner: Device = {
+      schemaVersion: 1, id: 'virtual-ac-2', providerId: 'virtual-main', name: '虚拟空调', type: 'air-conditioner',
+      availability: 'online', online: true, lastUpdateAt: new Date().toISOString(), endpoints: [],
+    }
+    const consumerEnumCatalog = vi.fn(async () => ({
+      providers: [{ ...airConditioner, catalog: { complete: true, source: 'device-snapshot' } }],
+      models: [{
+        deviceType: 'air-conditioner' as const, version: 2, builtIn: true,
+        custom: { publisher: { level: 'custom' as const, behavior: 'preserve' }, consumer: { level: 'custom' as const, behavior: 'explicit' } },
+        parameters: [{
+          path: { endpointId: 'main', capabilityId: 'air-conditioner', propertyId: 'fan-speed' },
+          name: '风速档位', level: 'optional' as const, type: 'enum' as const, enum: ['Automatic', 'Silent'],
+          readable: true, writable: true, notifiable: true,
+          publisher: { level: 'optional' as const, behavior: 'may-publish' },
+          consumer: { level: 'optional' as const, behavior: 'may-map' },
+        }],
+      }],
+      consumers: [{
+        id: 'homekit', name: 'Apple Home / HomeKit', properties: [{
+          id: 'HeaterCooler.RotationSpeed', name: 'HeaterCooler.RotationSpeed', deviceType: 'air-conditioner' as const,
+          defaultModelPath: { endpointId: 'main', capabilityId: 'air-conditioner', propertyId: 'fan-speed' },
+          level: 'optional' as const, type: 'enum' as const, enum: ['auto', 'low', 'medium', 'high'],
+          readable: true, writable: true, notifiable: true,
+        }],
+      }],
+    }))
+    const api = {
+      listBindings: vi.fn(async () => []),
+      listProfiles: vi.fn(async () => [{
+        schemaVersion: 1 as const, id: 'model-to-homekit-fan', version: 1, kind: 'target' as const,
+        inputType: 'enum' as const, outputType: 'enum' as const,
+        transforms: [{ type: 'enum' as const, values: { Automatic: 'auto', Silent: 'low' } }], builtIn: false,
+      }]),
+      create: vi.fn(), update: vi.fn(), remove: vi.fn(), catalog: consumerEnumCatalog,
+    }
+    render(<BindingManager device={airConditioner} api={api} initialStage="consumer" consumerOnly consumerId="homekit" />)
+    const compatibility = await screen.findByRole('status')
+    expect(within(compatibility).getByText('语义不一致，需要 Profile')).toBeInTheDocument()
+    expect(compatibility).toHaveTextContent('无法自动对齐：Automatic / Silent')
+    const save = screen.getByRole('button', { name: /保存第.*二.*段路由/ })
+    expect(save).toBeDisabled()
+    await userEvent.selectOptions(screen.getByLabelText('映射转换 Profile'), 'model-to-homekit-fan')
+    expect(within(compatibility).getByText('由 Profile model-to-homekit-fan 转换')).toBeInTheDocument()
+    expect(save).toBeEnabled()
+  })
+
+  it('keeps consumer properties and enum panel unobstructed during second-stage mapping', async () => {
+    const airConditioner: Device = {
+      schemaVersion: 1, id: 'virtual-ac-layout', providerId: 'virtual-main', name: '虚拟空调', type: 'air-conditioner',
+      availability: 'online', online: true, lastUpdateAt: new Date().toISOString(), endpoints: [],
+    }
+    const catalog = vi.fn(async () => ({
+      providers: [{ ...airConditioner, catalog: { complete: true, source: 'device-snapshot' } }],
+      models: [{
+        deviceType: 'air-conditioner' as const, version: 2, builtIn: true,
+        custom: { publisher: { level: 'custom' as const, behavior: 'preserve' }, consumer: { level: 'custom' as const, behavior: 'explicit' } },
+        parameters: [{
+          path: { endpointId: 'main', capabilityId: 'air-conditioner', propertyId: 'fan-speed' },
+          name: '风速档位', level: 'optional' as const, type: 'enum' as const, enum: ['auto', 'low', 'medium', 'high'],
+          readable: true, writable: true, notifiable: true,
+          publisher: { level: 'optional' as const, behavior: 'may-publish' },
+          consumer: { level: 'optional' as const, behavior: 'may-map' },
+        }],
+      }],
+      consumers: [{
+        id: 'homekit', name: 'Apple Home / HomeKit', properties: [
+          { id: 'HeaterCooler.Active', name: 'HeaterCooler.Active', deviceType: 'air-conditioner' as const, defaultModelPath: { endpointId: 'main', capabilityId: 'air-conditioner', propertyId: 'power' }, level: 'required' as const, type: 'bool' as const, readable: true, writable: true, notifiable: true },
+          { id: 'HeaterCooler.RotationSpeed', name: 'HeaterCooler.RotationSpeed', deviceType: 'air-conditioner' as const, defaultModelPath: { endpointId: 'main', capabilityId: 'air-conditioner', propertyId: 'fan-speed' }, level: 'optional' as const, type: 'enum' as const, enum: ['auto', 'low', 'medium', 'high', 'turbo'], readable: true, writable: true, notifiable: true },
+          { id: 'HeaterCooler.CurrentTemperature', name: 'HeaterCooler.CurrentTemperature', deviceType: 'air-conditioner' as const, defaultModelPath: { endpointId: 'main', capabilityId: 'air-conditioner', propertyId: 'temperature' }, level: 'optional' as const, type: 'number' as const, readable: true, writable: false, notifiable: true },
+        ],
+      }],
+    }))
+    const api = {
+      listBindings: vi.fn(async () => []), listProfiles: vi.fn(async () => []),
+      create: vi.fn(), update: vi.fn(), remove: vi.fn(), catalog,
+    }
+    const { container } = render(<BindingManager device={airConditioner} api={api} initialStage="consumer" consumerOnly consumerId="homekit" />)
+    await screen.findByText('消费端（CONSUMERS）')
+    const consumerLanes = [...container.querySelectorAll('.mapping-lane')].filter((lane) => !lane.classList.contains('is-model') && !lane.classList.contains('is-context'))
+    expect(consumerLanes).toHaveLength(1)
+    const consumerList = consumerLanes[0].querySelector('.mapping-node-list') as HTMLElement
+    expect(consumerList).not.toBeNull()
+    await waitFor(() => expect(consumerList.querySelectorAll('button').length).toBeGreaterThanOrEqual(3))
+    // Last consumer property remains in the scrollable list, not clipped out of the lane.
+    expect(within(consumerList).getByText('HeaterCooler.CurrentTemperature')).toBeInTheDocument()
+    await userEvent.click(within(consumerList).getByRole('button', { name: /HeaterCooler\.RotationSpeed/ }))
+    expect(await screen.findByText(/消费端枚举：auto \/ low \/ medium \/ high \/ turbo/)).toBeInTheDocument()
+    const compatibility = await screen.findByRole('status')
+    expect(compatibility).toHaveClass('enum-compatibility')
+    expect(compatibility.parentElement).toHaveClass('mapping-route-toolbar')
+    // Enum panel must stay a block/grid sibling under the toolbar, not collapse into the action flex row.
+    expect(container.querySelector('.mapping-route-actions')).not.toBeNull()
+    expect(container.querySelector('.mapping-route-actions .enum-compatibility')).toBeNull()
+    expect(compatibility.compareDocumentPosition(consumerList) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy()
+  })
 })

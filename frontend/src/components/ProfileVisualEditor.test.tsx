@@ -143,4 +143,32 @@ describe('ProfileVisualEditor', () => {
     await userEvent.click(screen.getByRole('button', { name: '保存并热更新' }))
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ inputType: 'bool', outputType: 'number', transforms: [expect.objectContaining({ type: 'bool-number' })] }))
   })
+
+  it('allows many-to-one enum maps when reverse representatives are selected', async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined)
+    render(<ProfileVisualEditor initialProfile={{
+      ...identityProfile,
+      inputType: 'enum',
+      outputType: 'enum',
+      transforms: [{
+        type: 'enum',
+        values: { low: 'low', mid: 'low', high: 'high', turbo: 'high' },
+        reverseValues: { low: 'low', high: 'high' },
+      }],
+    }} editing={false} saving={false} onClose={vi.fn()} onSave={onSave} runPreview={vi.fn()} />)
+
+    expect(screen.getByText('多个来源折叠到同一目标时，反向控制写入使用选定的代表来源值。')).toBeInTheDocument()
+    const reverseSelect = screen.getByLabelText('第 1 步目标 low 反向代表值')
+    expect(reverseSelect).toHaveValue('low')
+    await userEvent.selectOptions(reverseSelect, 'mid')
+
+    await userEvent.click(screen.getByRole('button', { name: '保存并热更新' }))
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      transforms: [expect.objectContaining({
+        type: 'enum',
+        values: expect.objectContaining({ low: 'low', mid: 'low', high: 'high', turbo: 'high' }),
+        reverseValues: expect.objectContaining({ low: 'mid', high: 'high' }),
+      })],
+    }))
+  })
 })

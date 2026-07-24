@@ -760,10 +760,10 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
   - [x] Matter Consumer Catalog 与第一批统一模型映射元数据；
   - [x] Matter 专属前端表单、状态、commissioning/Fabric/factory reset 操作；
   - [x] OpenAPI、双段映射、打包和网络排障文档；
-  - [x] matter.js 真实 Bridge driver、第一批 13 类官方 Endpoint 与 Catalog 对照测试；
+  - [x] matter.js 真实 Bridge driver、官方 Endpoint 与 Catalog 对照测试（第一批 12 类 + 第二批 10 类，共 22 类）；
   - [ ] matter.js Controller、Apple Home 与 `chip-tool` 真实网络验收；
   - [ ] Apple Home、`chip-tool`、Multi-Admin、三次重启和容器网络实机记录；
-  - [ ] 第二批高级设备与正式 CSA 认证准备。
+  - [ ] 剩余高级设备（空调、车库门、扫地机、能耗/EVSE 等）与正式 CSA 认证准备。
 - [ ] Zigbee2MQTT/Tuya/ESPHome 评估。
 
 ## 16. 推荐执行顺序

@@ -152,19 +152,25 @@ HomeLoom 的温湿度组合传感器属于统一模型逻辑类型，Matter 没�
 
 ## 9. 第二批设备模型
 
+- [x] 照度传感器（Light Sensor / Illuminance Measurement）；
+- [x] 气压传感器（Pressure Sensor）；
+- [x] 漏水传感器（Water Leak Detector / Boolean State）；
+- [x] 烟雾传感器（Smoke CO Alarm · Smoke feature）；
+- [x] 一氧化碳传感器（Smoke CO Alarm · CO feature）；
+- [x] 空气质量传感器（Air Quality + PM2.5/PM10/VOC/CO/CO₂ 数值测量，可选温湿度）；
+- [x] 阀门（Water Valve / Valve Configuration And Control · Level）；
+- [x] 水泵（Pump · OnOff + Level + Pump Configuration）；
+- [x] 空气净化器（Air Purifier · Fan Control + OnOff）；
+- [x] 扬声器音量控制（Speaker · OnOff 静音 + Level 音量；不做完整媒体控制）；
 - [ ] 空调/Room Air Conditioner；
-- [ ] 空气质量、PM2.5、VOC、CO、CO₂；
-- [ ] 烟雾、漏水等安全传感器；
-- [ ] 阀门、水泵；
 - [ ] 车库门；
-- [ ] 空气净化器与滤芯状态；
 - [ ] 机器人吸尘器；
 - [ ] 能耗、电压、电流、功率属性，根据 Matter 规范版本和生态兼容性分级接入；
-- [ ] 媒体与音箱最后处理，避免第一阶段引入完整媒体控制模型。
+- [ ] 完整媒体控制与更多影音设备。
 
 机器人吸尘器需要重新按 Matter 原生设备模型评估，不能沿用 HomeKit Consumer 的“不支持”结论。
 
-第二批类型在 Catalog 与前端中保持未开放，必须遵循“统一模型映射 → 官方 Device Type/Cluster → driver 构造测试 → 控制器验收”的顺序逐类启用，禁止先暴露目录再让 `state.replay` 失败。
+后续新增类型仍必须遵循“统一模型映射 → 官方 Device Type/Cluster → driver 构造测试 → 控制器验收”的顺序逐类启用，禁止先暴露目录再让 `state.replay` 失败。
 
 ## 10. 状态与控制链路
 
@@ -317,7 +323,7 @@ Matter 不能只用 HomeKit 的 `paired: boolean` 表达运行状态。
 
 ### 第二轮：完整基础桥（代码基础完成，真实双桥与 Multi-Admin 待验收）
 
-- [x] 扩充并验证第一批 12 类标准 Matter 设备模型；
+- [x] 扩充并验证官方标准 Matter 设备模型（第一批 12 类 + 第二批 10 类）；
 - [x] 多 Fabric 管理 API 和 commissioning window 生命周期；
 - [x] sidecar 故障恢复与全量重放；
 - [~] 100 Endpoint 稳定身份和状态 burst 已自动测试，真实 Controller 订阅压力测试待执行；
@@ -325,9 +331,10 @@ Matter 不能只用 HomeKit 的 `paired: boolean` 表达运行状态。
 
 退出条件：[~] 双 Target 的进程、IPC、数据库和身份隔离已自动验证；仍需两座真实网络桥并行运行、Multi-Admin 和 Runtime 故障恢复实机验收。
 
-### 第三轮：高级设备与发布准备（未开始）
+### 第三轮：高级设备与发布准备（进行中）
 
-- [ ] 第二批设备模型；
+- [x] 第二批官方设备模型（照度、气压、漏水、烟雾、一氧化碳、空气质量、阀门、水泵、空气净化器、扬声器）；
+- [ ] 剩余高级设备：Room Air Conditioner、车库门、机器人吸尘器、能耗与 EVSE 等；
 - [ ] 生态差异兼容；
 - [ ] 完整 `chip-tool` 回归；
 - [ ] Apple Home、Google Home 等实机记录；

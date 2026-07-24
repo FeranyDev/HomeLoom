@@ -97,7 +97,27 @@ function localErrors(profile: MappingProfile): string[] {
       const values = Object.entries(transform.values ?? {})
       if (values.length === 0) errors.push(`第 ${index + 1} 步至少需要一组枚举映射。`)
       if (values.some(([source, target]) => !source || !target)) errors.push(`第 ${index + 1} 步枚举来源值和目标值不能为空。`)
-      if (new Set(values.map(([, target]) => target)).size !== values.length) errors.push(`第 ${index + 1} 步枚举目标值必须唯一，才能反向转换。`)
+      const sourcesByTarget = new Map<string, string[]>()
+      for (const [source, target] of values) {
+        if (!source || !target) continue
+        const sources = sourcesByTarget.get(target) ?? []
+        sources.push(source)
+        sourcesByTarget.set(target, sources)
+      }
+      const reverseValues = transform.reverseValues ?? {}
+      for (const [target, sources] of sourcesByTarget) {
+        const canonical = reverseValues[target]
+        if (sources.length > 1 && !canonical) {
+          errors.push(`第 ${index + 1} 步目标值“${target}”由多个来源折叠，请指定反向代表值。`)
+          continue
+        }
+        if (canonical && !sources.includes(canonical)) {
+          errors.push(`第 ${index + 1} 步目标值“${target}”的反向代表值必须是映射到它的来源值之一。`)
+        }
+      }
+      for (const target of Object.keys(reverseValues)) {
+        if (!sourcesByTarget.has(target)) errors.push(`第 ${index + 1} 步反向代表值“${target}”未出现在正向目标中。`)
+      }
     }
     if (transform.type === 'unit' && !unitRoutes.some(([from, to]) => from === transform.fromUnit && to === transform.toUnit) && transform.fromUnit !== transform.toUnit) errors.push(`第 ${index + 1} 步单位路径不受支持。`)
     if (transform.type === 'range-enum' || transform.type === 'enum-number') {
@@ -155,7 +175,52 @@ function TransformEditor({ transform, index, count, onChange, onMove, onRemove }
     {transform.type === 'scale' && <div className="profile-transform-fields"><label>缩放系数（factor）<input aria-label={`第 ${index + 1} 步缩放系数`} type="number" step="any" value={transform.factor ?? 1} onChange={(event) => onChange({ ...transform, factor: Number(event.target.value) })} /></label><label>偏移量（offset）<input aria-label={`第 ${index + 1} 步偏移量`} type="number" step="any" value={transform.offset ?? 0} onChange={(event) => onChange({ ...transform, offset: Number(event.target.value) })} /></label></div>}
     {transform.type === 'clamp' && <div className="profile-transform-fields"><label>最小值（min）<input aria-label={`第 ${index + 1} 步最小值`} type="number" step="any" value={transform.min ?? ''} onChange={(event) => onChange({ ...transform, min: event.target.value === '' ? undefined : Number(event.target.value) })} /></label><label>最大值（max）<input aria-label={`第 ${index + 1} 步最大值`} type="number" step="any" value={transform.max ?? ''} onChange={(event) => onChange({ ...transform, max: event.target.value === '' ? undefined : Number(event.target.value) })} /></label></div>}
     {transform.type === 'unit' && <label className="profile-unit-route">单位路径（fromUnit → toUnit）<select aria-label={`第 ${index + 1} 步单位路径`} value={`${transform.fromUnit}:${transform.toUnit}`} onChange={(event) => { const [fromUnit, toUnit] = event.target.value.split(':'); onChange({ type: 'unit', fromUnit, toUnit }) }}>{unitRoutes.map(([from, to]) => <option key={`${from}:${to}`} value={`${from}:${to}`}>{from} → {to}</option>)}</select></label>}
-    {transform.type === 'enum' && <div className="profile-enum-map"><div className="profile-enum-head"><span>来源值（source）</span><span>目标值（target）</span><span /></div>{values.map(([source, target], row) => <div key={`${source}-${row}`}><input aria-label={`第 ${index + 1} 步来源值 ${row + 1}`} value={source} onChange={(event) => { const next = Object.fromEntries(values.map(([key, value], item) => item === row ? [event.target.value, value] : [key, value])); onChange({ ...transform, values: next }) }} /><span>→</span><input aria-label={`第 ${index + 1} 步目标值 ${row + 1}`} value={target} onChange={(event) => { const next = Object.fromEntries(values.map(([key, value], item) => item === row ? [key, event.target.value] : [key, value])); onChange({ ...transform, values: next }) }} /><button aria-label={`删除第 ${index + 1} 步枚举行 ${row + 1}`} onClick={() => onChange({ ...transform, values: Object.fromEntries(values.filter((_, item) => item !== row)) })}>×</button></div>)}<button onClick={() => onChange({ ...transform, values: { ...(transform.values ?? {}), [`value-${values.length + 1}`]: `mapped-${values.length + 1}` } })}>＋ 添加枚举值</button></div>}
+    {transform.type === 'enum' && (() => {
+      const reverseValues = transform.reverseValues ?? {}
+      const sourcesByTarget = new Map<string, string[]>()
+      for (const [source, target] of values) {
+        if (!target) continue
+        const sources = sourcesByTarget.get(target) ?? []
+        sources.push(source)
+        sourcesByTarget.set(target, sources)
+      }
+      const foldedTargets = [...sourcesByTarget.entries()].filter(([, sources]) => sources.length > 1)
+      const updateValues = (nextValues: Record<string, string>) => {
+        const nextSourcesByTarget = new Map<string, string[]>()
+        for (const [source, target] of Object.entries(nextValues)) {
+          const sources = nextSourcesByTarget.get(target) ?? []
+          sources.push(source)
+          nextSourcesByTarget.set(target, sources)
+        }
+        const nextReverse: Record<string, string> = {}
+        for (const [target, sources] of nextSourcesByTarget) {
+          const current = reverseValues[target]
+          if (sources.length > 1) {
+            nextReverse[target] = sources.includes(current) ? current : sources[0]
+          } else if (current && sources.includes(current)) {
+            nextReverse[target] = current
+          }
+        }
+        onChange({ ...transform, values: nextValues, reverseValues: Object.keys(nextReverse).length ? nextReverse : undefined })
+      }
+      return <div className="profile-enum-map">
+        <div className="profile-enum-head"><span>来源值（source）</span><span>目标值（target）</span><span /></div>
+        {values.map(([source, target], row) => <div key={`${source}-${row}`}><input aria-label={`第 ${index + 1} 步来源值 ${row + 1}`} value={source} onChange={(event) => { const next = Object.fromEntries(values.map(([key, value], item) => item === row ? [event.target.value, value] : [key, value])); updateValues(next) }} /><span>→</span><input aria-label={`第 ${index + 1} 步目标值 ${row + 1}`} value={target} onChange={(event) => { const next = Object.fromEntries(values.map(([key, value], item) => item === row ? [key, event.target.value] : [key, value])); updateValues(next) }} /><button aria-label={`删除第 ${index + 1} 步枚举行 ${row + 1}`} onClick={() => updateValues(Object.fromEntries(values.filter((_, item) => item !== row)))}>×</button></div>)}
+        <button onClick={() => updateValues({ ...(transform.values ?? {}), [`value-${values.length + 1}`]: `mapped-${values.length + 1}` })}>＋ 添加枚举值</button>
+        {foldedTargets.length > 0 && <div className="profile-enum-reverse">
+          <div className="profile-enum-head"><span>折叠目标（target）</span><span>反向代表值（reverseValues）</span><span /></div>
+          {foldedTargets.map(([target, sources]) => <div key={target}>
+            <code>{target}</code>
+            <span>←</span>
+            <select aria-label={`第 ${index + 1} 步目标 ${target} 反向代表值`} value={reverseValues[target] ?? sources[0]} onChange={(event) => onChange({ ...transform, reverseValues: { ...reverseValues, [target]: event.target.value } })}>
+              {sources.map((source) => <option key={source} value={source}>{source}</option>)}
+            </select>
+            <span />
+          </div>)}
+          <p>多个来源折叠到同一目标时，反向控制写入使用选定的代表来源值。</p>
+        </div>}
+      </div>
+    })()}
     {(transform.type === 'range-enum' || transform.type === 'enum-number') && <div className="profile-range-bands"><div className="profile-range-head"><span>数值上限（≤ max）</span><span>枚举值（value）</span><span>代表数值（reverse）</span><span /></div>{bands.map((band, row) => <div key={row}><input aria-label={`第 ${index + 1} 步分段上限 ${row + 1}`} type="number" step="any" placeholder={row === bands.length - 1 ? '+∞（留空）' : undefined} value={band.max ?? ''} onChange={(event) => onChange({ ...transform, bands: bands.map((item, itemIndex) => itemIndex === row ? { ...item, max: event.target.value === '' ? undefined : Number(event.target.value) } : item) })} /><input aria-label={`第 ${index + 1} 步分段枚举 ${row + 1}`} value={band.value} onChange={(event) => onChange({ ...transform, bands: bands.map((item, itemIndex) => itemIndex === row ? { ...item, value: event.target.value } : item) })} /><input aria-label={`第 ${index + 1} 步分段反向值 ${row + 1}`} type="number" step="any" value={band.reverse} onChange={(event) => onChange({ ...transform, bands: bands.map((item, itemIndex) => itemIndex === row ? { ...item, reverse: Number(event.target.value) } : item) })} /><button aria-label={`删除第 ${index + 1} 步分段 ${row + 1}`} onClick={() => onChange({ ...transform, bands: bands.filter((_, itemIndex) => itemIndex !== row) })}>×</button></div>)}<p>数值按“≤ 上限”匹配枚举；枚举转换为数值时使用对应代表值。最后一行上限留空表示剩余范围。</p><button onClick={() => { const fallback = bands.at(-1) ?? { value: 'high', reverse: 100 }; const previousMax = bands.length > 1 ? bands[bands.length - 2].max ?? 0 : 0; const max = previousMax + 10; onChange({ ...transform, bands: [...bands.slice(0, -1), { max, value: `band-${bands.length}`, reverse: previousMax + 5 }, fallback] }) }}>＋ 在最终分段前添加</button></div>}
     {(transform.type === 'threshold' || transform.type === 'bool-number') && <div className="profile-transform-fields profile-threshold-fields"><label>比较方式（operator）<select aria-label={`第 ${index + 1} 步比较方式`} value={transform.operator ?? 'gte'} onChange={(event) => onChange({ ...transform, operator: event.target.value as MappingTransform['operator'] })}><option value="gte">大于等于（≥）</option><option value="gt">大于（&gt;）</option><option value="lte">小于等于（≤）</option><option value="lt">小于（&lt;）</option></select></label><label>阈值（threshold）<input aria-label={`第 ${index + 1} 步阈值`} type="number" step="any" value={transform.threshold ?? ''} onChange={(event) => onChange({ ...transform, threshold: Number(event.target.value) })} /></label><label>true 代表值<input aria-label={`第 ${index + 1} 步 true 反向值`} type="number" step="any" value={transform.trueNumber ?? ''} onChange={(event) => onChange({ ...transform, trueNumber: Number(event.target.value) })} /></label><label>false 代表值<input aria-label={`第 ${index + 1} 步 false 反向值`} type="number" step="any" value={transform.falseNumber ?? ''} onChange={(event) => onChange({ ...transform, falseNumber: Number(event.target.value) })} /></label></div>}
     {(transform.type === 'bool-enum' || transform.type === 'enum-bool') && <div className="profile-transform-fields"><label>true 对应值<input aria-label={`第 ${index + 1} 步 true 对应值`} value={transform.trueValue ?? ''} onChange={(event) => onChange({ ...transform, trueValue: event.target.value })} /></label><label>false 对应值<input aria-label={`第 ${index + 1} 步 false 对应值`} value={transform.falseValue ?? ''} onChange={(event) => onChange({ ...transform, falseValue: event.target.value })} /></label></div>}

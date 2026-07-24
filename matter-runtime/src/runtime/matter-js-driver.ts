@@ -1261,6 +1261,168 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
       }
     }
 
+
+    const ValveBase = sdk.valveConfigurationAndControl.ValveConfigurationAndControlServer.with("Level");
+    class HostValveServer extends ValveBase {
+      override async open(request: {
+        openDuration?: number | null;
+        targetLevel?: number | null;
+      }): Promise<void> {
+        const result = await this.env.get(Runtime).command(
+          this.endpoint.number,
+          "ValveConfigurationAndControl.Open",
+          {
+            openDuration: request.openDuration ?? null,
+            targetLevel: request.targetLevel ?? null,
+          },
+        );
+        if (!result.accepted) {
+          failure(result.message);
+        }
+        this.state.targetState = 1;
+        if (request.targetLevel !== undefined && request.targetLevel !== null) {
+          this.state.targetLevel = request.targetLevel;
+        }
+      }
+
+      override async close(): Promise<void> {
+        const result = await this.env.get(Runtime).command(
+          this.endpoint.number,
+          "ValveConfigurationAndControl.Close",
+          {},
+        );
+        if (!result.accepted) {
+          failure(result.message);
+        }
+        this.state.targetState = 0;
+        this.state.targetLevel = 0;
+      }
+    }
+
+    class HostSpeakerOnOffServer extends GenericOnOffBase {
+      override async on(): Promise<void> {
+        // Matter On means audio is not muted.
+        const result = await this.env.get(Runtime).attribute(
+          this.endpoint.number,
+          "OnOff.OnOff",
+          false,
+        );
+        if (!result.accepted) {
+          failure(result.message);
+        }
+        this.state.onOff = true;
+      }
+
+      override async off(): Promise<void> {
+        const result = await this.env.get(Runtime).attribute(
+          this.endpoint.number,
+          "OnOff.OnOff",
+          true,
+        );
+        if (!result.accepted) {
+          failure(result.message);
+        }
+        this.state.onOff = false;
+      }
+
+      override async toggle(): Promise<void> {
+        if (this.state.onOff) {
+          await this.off();
+        } else {
+          await this.on();
+        }
+      }
+    }
+
+    const GenericLevelBase = sdk.levelControl.LevelControlServer.with("OnOff");
+    class HostSpeakerLevelServer extends GenericLevelBase {
+      override async moveToLevel(request: {
+        level: number;
+        transitionTime: number | null;
+        optionsMask: Record<string, boolean>;
+        optionsOverride: Record<string, boolean>;
+      }): Promise<void> {
+        const result = await this.env.get(Runtime).command(
+          this.endpoint.number,
+          "LevelControl.MoveToLevel",
+          {
+            level: matterLevelToPercent(request.level),
+            transitionTime: request.transitionTime,
+          },
+        );
+        if (!result.accepted) {
+          failure(result.message);
+        }
+        this.state.currentLevel = request.level;
+      }
+
+      override async moveToLevelWithOnOff(request: {
+        level: number;
+        transitionTime: number | null;
+      }): Promise<void> {
+        await this.moveToLevel({
+          ...request,
+          optionsMask: {},
+          optionsOverride: {},
+        });
+      }
+    }
+
+    class HostPumpLevelServer extends GenericLevelBase {
+      override async moveToLevel(request: {
+        level: number;
+        transitionTime: number | null;
+        optionsMask: Record<string, boolean>;
+        optionsOverride: Record<string, boolean>;
+      }): Promise<void> {
+        const result = await this.env.get(Runtime).attribute(
+          this.endpoint.number,
+          "LevelControl.CurrentLevel",
+          matterLevelToPercent(request.level),
+        );
+        if (!result.accepted) {
+          failure(result.message);
+        }
+        this.state.currentLevel = request.level;
+      }
+
+      override async moveToLevelWithOnOff(request: {
+        level: number;
+        transitionTime: number | null;
+      }): Promise<void> {
+        await this.moveToLevel({
+          ...request,
+          optionsMask: {},
+          optionsOverride: {},
+        });
+        const onOff = this.agent.maybeGet(HostGenericOnOffServer);
+        if (onOff !== undefined) {
+          onOff.state.onOff = request.level > 0;
+        }
+      }
+    }
+
+    const SmokeCoBase = sdk.smokeCoAlarmBehavior.SmokeCoAlarmServer;
+    const Pm25Server = sdk.pm25ConcentrationMeasurement.Pm25ConcentrationMeasurementServer.with(
+      "NumericMeasurement",
+    );
+    const Pm10Server = sdk.pm10ConcentrationMeasurement.Pm10ConcentrationMeasurementServer.with(
+      "NumericMeasurement",
+    );
+    const VocServer =
+      sdk.totalVolatileOrganicCompoundsConcentrationMeasurement
+        .TotalVolatileOrganicCompoundsConcentrationMeasurementServer.with("NumericMeasurement");
+    const Co2Server = sdk.carbonDioxideConcentrationMeasurement.CarbonDioxideConcentrationMeasurementServer.with(
+      "NumericMeasurement",
+    );
+    const CoServer = sdk.carbonMonoxideConcentrationMeasurement.CarbonMonoxideConcentrationMeasurementServer.with(
+      "NumericMeasurement",
+    );
+    const PumpConfigServer = sdk.pumpConfigurationAndControl.PumpConfigurationAndControlServer.with(
+      "ConstantSpeed",
+      "Automatic",
+    );
+
     switch (normalizeDeviceType(device.deviceType)) {
       case "switch":
         return sdk.onOffLight.OnOffLightDevice.with(HostOnOffServer, BridgeInfo) as never;
@@ -1308,6 +1470,49 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
       case "lock":
         return sdk.doorLockDevice.DoorLockDevice.with(
           HostDoorLockServer,
+          BridgeInfo,
+        ) as never;
+      case "illuminance":
+        return sdk.lightSensor.LightSensorDevice.with(BridgeInfo) as never;
+      case "pressure":
+        return sdk.pressureSensor.PressureSensorDevice.with(BridgeInfo) as never;
+      case "leak":
+        return sdk.waterLeakDetector.WaterLeakDetectorDevice.with(BridgeInfo) as never;
+      case "smoke":
+        return sdk.smokeCoAlarm.SmokeCoAlarmDevice.with(SmokeCoBase, BridgeInfo) as never;
+      case "carbon-monoxide":
+        return sdk.smokeCoAlarm.SmokeCoAlarmDevice.with(SmokeCoBase, BridgeInfo) as never;
+      case "air-quality":
+        return sdk.airQualitySensor.AirQualitySensorDevice.with(
+          sdk.temperatureMeasurement.TemperatureMeasurementServer,
+          sdk.relativeHumidityMeasurement.RelativeHumidityMeasurementServer,
+          Pm25Server,
+          Pm10Server,
+          VocServer,
+          Co2Server,
+          CoServer,
+          BridgeInfo,
+        ) as never;
+      case "valve":
+        return sdk.waterValve.WaterValveDevice.with(HostValveServer, BridgeInfo) as never;
+      case "pump":
+        return sdk.pumpDevice.PumpDevice.with(
+          HostGenericOnOffServer,
+          HostPumpLevelServer,
+          PumpConfigServer,
+          sdk.pressureMeasurement.PressureMeasurementServer,
+          BridgeInfo,
+        ) as never;
+      case "air-purifier":
+        return sdk.airPurifier.AirPurifierDevice.with(
+          HostGenericOnOffServer,
+          HostFanControlServer,
+          BridgeInfo,
+        ) as never;
+      case "speaker":
+        return sdk.speakerDevice.SpeakerDevice.with(
+          HostSpeakerOnOffServer,
+          HostSpeakerLevelServer,
           BridgeInfo,
         ) as never;
       default:
@@ -1487,6 +1692,202 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
       }
       state.doorLock = lock;
     }
+
+    if (deviceType === "illuminance") {
+      state.illuminanceMeasurement = {
+        measuredValue: luxToMatterIlluminance(
+          numberValue(device.attributes["IlluminanceMeasurement.MeasuredValue"], 0),
+        ),
+        minMeasuredValue: 1,
+        maxMeasuredValue: 0xfffe,
+      };
+    }
+
+    if (deviceType === "pressure") {
+      state.pressureMeasurement = {
+        measuredValue: hectopascalToMatterPressure(
+          numberValue(device.attributes["PressureMeasurement.MeasuredValue"], 0),
+        ),
+        minMeasuredValue: null,
+        maxMeasuredValue: null,
+      };
+    }
+
+    if (deviceType === "leak") {
+      state.booleanState = {
+        stateValue: booleanValue(
+          device.attributes["BooleanState.StateValue"] ?? false,
+          "BooleanState.StateValue",
+        ),
+      };
+    }
+
+    if (deviceType === "smoke") {
+      const smokeDetected = booleanValue(
+        device.attributes["SmokeCoAlarm.SmokeState"] ?? false,
+        "SmokeCoAlarm.SmokeState",
+      );
+      state.smokeCoAlarm = {
+        expressedState: smokeDetected ? 1 : 0,
+        smokeState: smokeDetected ? 2 : 0,
+        coState: 0,
+        batteryAlert: 0,
+        testInProgress: false,
+        hardwareFaultAlert: false,
+        endOfServiceAlert: 0,
+      };
+    }
+
+    if (deviceType === "carbon-monoxide") {
+      const coDetected = booleanValue(
+        device.attributes["SmokeCoAlarm.CoState"] ?? false,
+        "SmokeCoAlarm.CoState",
+      );
+      state.smokeCoAlarm = {
+        expressedState: coDetected ? 2 : 0,
+        smokeState: 0,
+        coState: coDetected ? 2 : 0,
+        batteryAlert: 0,
+        testInProgress: false,
+        hardwareFaultAlert: false,
+        endOfServiceAlert: 0,
+      };
+    }
+
+    if (deviceType === "air-quality") {
+      state.airQuality = {
+        airQuality: airQualityValue(device.attributes["AirQuality.AirQuality"] ?? "unknown"),
+      };
+      state.pm25ConcentrationMeasurement = concentrationState(
+        device.attributes["Pm25ConcentrationMeasurement.MeasuredValue"],
+      );
+      state.pm10ConcentrationMeasurement = concentrationState(
+        device.attributes["Pm10ConcentrationMeasurement.MeasuredValue"],
+      );
+      state.totalVolatileOrganicCompoundsConcentrationMeasurement = concentrationState(
+        device.attributes["TotalVolatileOrganicCompoundsConcentrationMeasurement.MeasuredValue"],
+      );
+      state.carbonDioxideConcentrationMeasurement = concentrationState(
+        device.attributes["CarbonDioxideConcentrationMeasurement.MeasuredValue"],
+      );
+      state.carbonMonoxideConcentrationMeasurement = concentrationState(
+        device.attributes["CarbonMonoxideConcentrationMeasurement.MeasuredValue"],
+      );
+      if (device.attributes["TemperatureMeasurement.MeasuredValue"] !== undefined) {
+        state.temperatureMeasurement = {
+          measuredValue: celsiusToMatterTemperature(
+            numberValue(device.attributes["TemperatureMeasurement.MeasuredValue"], 0),
+          ),
+          minMeasuredValue: -10_000,
+          maxMeasuredValue: 20_000,
+        };
+      }
+      if (device.attributes["RelativeHumidityMeasurement.MeasuredValue"] !== undefined) {
+        state.relativeHumidityMeasurement = {
+          measuredValue: percentToMatterPercent100ths(
+            numberValue(device.attributes["RelativeHumidityMeasurement.MeasuredValue"], 0),
+          ),
+          minMeasuredValue: 0,
+          maxMeasuredValue: 10_000,
+        };
+      }
+    }
+
+    if (deviceType === "valve") {
+      const active = booleanValue(
+        device.attributes["ValveConfigurationAndControl.TargetState"] ?? false,
+        "ValveConfigurationAndControl.TargetState",
+      );
+      const inUse = booleanValue(
+        device.attributes["ValveConfigurationAndControl.CurrentState"] ?? active,
+        "ValveConfigurationAndControl.CurrentState",
+      );
+      const level = matterPercent(
+        device.attributes["ValveConfigurationAndControl.CurrentLevel"],
+        active ? 100 : 0,
+      );
+      const openDuration =
+        device.attributes["ValveConfigurationAndControl.DefaultOpenDuration"] === undefined
+          ? null
+          : integerValue(device.attributes["ValveConfigurationAndControl.DefaultOpenDuration"], 0);
+      const remaining =
+        device.attributes["ValveConfigurationAndControl.RemainingDuration"] === undefined
+          ? null
+          : integerValue(device.attributes["ValveConfigurationAndControl.RemainingDuration"], 0);
+      state.valveConfigurationAndControl = {
+        currentState: inUse || active ? 1 : 0,
+        targetState: active ? 1 : 0,
+        currentLevel: level,
+        targetLevel: active ? level : 0,
+        openDuration,
+        defaultOpenDuration: openDuration,
+        remainingDuration: remaining,
+        defaultOpenLevel: 100,
+      };
+    }
+
+    if (deviceType === "pump") {
+      const active = typeof onOff === "boolean" ? onOff : false;
+      const speed = matterPercent(device.attributes["LevelControl.CurrentLevel"], active ? 100 : 0);
+      state.levelControl = {
+        currentLevel: percentToMatterLevel(speed),
+        minLevel: 1,
+        maxLevel: 254,
+      };
+      state.pumpConfigurationAndControl = {
+        maxPressure: null,
+        maxSpeed: null,
+        maxFlow: null,
+        effectiveOperationMode: 0,
+        effectiveControlMode: 0,
+        capacity: Math.round(speed * 200),
+        operationMode: 0,
+        controlMode: 0,
+      };
+      if (device.attributes["PressureMeasurement.MeasuredValue"] !== undefined) {
+        state.pressureMeasurement = {
+          measuredValue: hectopascalToMatterPressure(
+            numberValue(device.attributes["PressureMeasurement.MeasuredValue"], 0),
+          ),
+          minMeasuredValue: null,
+          maxMeasuredValue: null,
+        };
+      }
+    }
+
+    if (deviceType === "air-purifier") {
+      const active = typeof onOff === "boolean" ? onOff : true;
+      const fanMode = unifiedFanModeToMatter(
+        device.attributes["FanControl.FanMode"] ?? (active ? "auto" : "off"),
+        active,
+      );
+      const percentSetting = matterPercent(
+        device.attributes["FanControl.PercentSetting"],
+        active ? 100 : 0,
+      );
+      state.fanControl = {
+        fanMode,
+        fanModeSequence: 2,
+        percentSetting: fanMode === 5 ? null : percentSetting,
+        percentCurrent: active ? percentSetting : 0,
+        rockSupport: { rockLeftRight: true },
+        rockSetting: fanRockSettingValue(
+          device.attributes["FanControl.RockSetting"] ?? false,
+        ),
+      };
+    }
+
+    if (deviceType === "speaker") {
+      const muted = booleanValue(device.attributes["OnOff.OnOff"] ?? false, "OnOff.OnOff");
+      state.onOff = { onOff: !muted };
+      state.levelControl = {
+        currentLevel: percentToMatterLevel(
+          numberValue(device.attributes["LevelControl.CurrentLevel"], 50),
+        ),
+        minLevel: 1,
+        maxLevel: 254,
+      };
+    }
     return state;
   }
 
@@ -1528,9 +1929,15 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
     value: JsonValue,
   ): Promise<void> {
     switch (path) {
-      case "OnOff.OnOff":
-        await endpoint.setStateOf("onOff", { onOff: booleanValue(value, path) });
+      case "OnOff.OnOff": {
+        const onOff = booleanValue(value, path);
+        // Speaker Catalog maps mute onto OnOff.OnOff; Matter On means unmuted.
+        const device = this.#devicesByEndpoint.get(endpoint.number);
+        const isSpeaker =
+          device !== undefined && normalizeDeviceType(device.deviceType) === "speaker";
+        await endpoint.setStateOf("onOff", { onOff: isSpeaker ? !onOff : onOff });
         return;
+      }
       case "LevelControl.CurrentLevel":
         await endpoint.setStateOf("levelControl", {
           currentLevel: percentToMatterLevel(numberValue(value)),
@@ -1652,6 +2059,86 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
       case "DoorLock.DoorState":
         await endpoint.setStateOf("doorLock", {
           doorState: doorStateValue(value),
+        });
+        return;
+      case "IlluminanceMeasurement.MeasuredValue":
+        await endpoint.setStateOf("illuminanceMeasurement", {
+          measuredValue: value === null ? null : luxToMatterIlluminance(numberValue(value)),
+        });
+        return;
+      case "PressureMeasurement.MeasuredValue":
+        await endpoint.setStateOf("pressureMeasurement", {
+          measuredValue: value === null ? null : hectopascalToMatterPressure(numberValue(value)),
+        });
+        return;
+      case "SmokeCoAlarm.SmokeState": {
+        const smokeDetected = booleanValue(value, path);
+        await endpoint.setStateOf("smokeCoAlarm", {
+          smokeState: smokeDetected ? 2 : 0,
+          expressedState: smokeDetected ? 1 : 0,
+        });
+        return;
+      }
+      case "SmokeCoAlarm.CoState": {
+        const coDetected = booleanValue(value, path);
+        await endpoint.setStateOf("smokeCoAlarm", {
+          coState: coDetected ? 2 : 0,
+          expressedState: coDetected ? 2 : 0,
+        });
+        return;
+      }
+      case "AirQuality.AirQuality":
+        await endpoint.setStateOf("airQuality", {
+          airQuality: airQualityValue(value),
+        });
+        return;
+      case "Pm25ConcentrationMeasurement.MeasuredValue":
+        await endpoint.setStateOf("pm25ConcentrationMeasurement", concentrationState(value));
+        return;
+      case "Pm10ConcentrationMeasurement.MeasuredValue":
+        await endpoint.setStateOf("pm10ConcentrationMeasurement", concentrationState(value));
+        return;
+      case "TotalVolatileOrganicCompoundsConcentrationMeasurement.MeasuredValue":
+        await endpoint.setStateOf(
+          "totalVolatileOrganicCompoundsConcentrationMeasurement",
+          concentrationState(value),
+        );
+        return;
+      case "CarbonDioxideConcentrationMeasurement.MeasuredValue":
+        await endpoint.setStateOf("carbonDioxideConcentrationMeasurement", concentrationState(value));
+        return;
+      case "CarbonMonoxideConcentrationMeasurement.MeasuredValue":
+        await endpoint.setStateOf("carbonMonoxideConcentrationMeasurement", concentrationState(value));
+        return;
+      case "ValveConfigurationAndControl.TargetState": {
+        const open = valveOpenValue(value);
+        await endpoint.setStateOf("valveConfigurationAndControl", {
+          targetState: open ? 1 : 0,
+          targetLevel: open ? 100 : 0,
+        });
+        return;
+      }
+      case "ValveConfigurationAndControl.CurrentState": {
+        const open = valveOpenValue(value);
+        await endpoint.setStateOf("valveConfigurationAndControl", {
+          currentState: open ? 1 : 0,
+        });
+        return;
+      }
+      case "ValveConfigurationAndControl.CurrentLevel":
+        await endpoint.setStateOf("valveConfigurationAndControl", {
+          currentLevel: matterPercent(value, 0),
+        });
+        return;
+      case "ValveConfigurationAndControl.DefaultOpenDuration":
+        await endpoint.setStateOf("valveConfigurationAndControl", {
+          defaultOpenDuration: value === null ? null : integerValue(value),
+          openDuration: value === null ? null : integerValue(value),
+        });
+        return;
+      case "ValveConfigurationAndControl.RemainingDuration":
+        await endpoint.setStateOf("valveConfigurationAndControl", {
+          remainingDuration: value === null ? null : integerValue(value),
         });
         return;
       default:
@@ -1810,6 +2297,16 @@ type NormalizedDeviceType =
   | "fan"
   | "thermostat"
   | "lock"
+  | "illuminance"
+  | "pressure"
+  | "leak"
+  | "smoke"
+  | "carbon-monoxide"
+  | "air-quality"
+  | "valve"
+  | "pump"
+  | "air-purifier"
+  | "speaker"
   | "unsupported";
 
 function normalizeDeviceType(deviceType: string): NormalizedDeviceType {
@@ -1859,6 +2356,46 @@ function normalizeDeviceType(deviceType: string): NormalizedDeviceType {
     case "door-lock":
     case "doorlock":
       return "lock";
+    case "illuminance":
+    case "illuminance-sensor":
+    case "illuminancesensor":
+    case "light-sensor":
+    case "lightsensor":
+      return "illuminance";
+    case "pressure":
+    case "pressure-sensor":
+    case "pressuresensor":
+      return "pressure";
+    case "leak":
+    case "leak-sensor":
+    case "leaksensor":
+    case "water-leak-detector":
+    case "waterleakdetector":
+      return "leak";
+    case "smoke":
+    case "smoke-sensor":
+    case "smokesensor":
+    case "smoke-co-alarm":
+      return "smoke";
+    case "carbon-monoxide":
+    case "carbon-monoxide-sensor":
+    case "carbonmonoxidesensor":
+      return "carbon-monoxide";
+    case "air-quality":
+    case "air-quality-sensor":
+    case "airqualitysensor":
+      return "air-quality";
+    case "valve":
+    case "water-valve":
+    case "watervalve":
+      return "valve";
+    case "pump":
+      return "pump";
+    case "air-purifier":
+    case "airpurifier":
+      return "air-purifier";
+    case "speaker":
+      return "speaker";
     default:
       return "unsupported";
   }
@@ -2257,6 +2794,84 @@ function doorStateValue(value: JsonValue): number | null {
   );
 }
 
+function luxToMatterIlluminance(lux: number): number {
+  if (!(lux > 0)) {
+    return 0;
+  }
+  return Math.max(1, Math.min(0xfffe, Math.round(10_000 * Math.log10(lux) + 1)));
+}
+
+function hectopascalToMatterPressure(hectopascal: number): number {
+  // Matter PressureMeasurement stores 0.1 kPa units; 1 hPa == 0.1 kPa.
+  return Math.max(-32_767, Math.min(32_767, Math.round(hectopascal)));
+}
+
+function airQualityValue(value: JsonValue): number {
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 6) {
+    return value;
+  }
+  if (typeof value === "string") {
+    switch (value.trim().toLowerCase()) {
+      case "unknown":
+        return 0;
+      case "excellent":
+      case "good":
+        return 1;
+      case "fair":
+        return 2;
+      case "inferior":
+      case "moderate":
+        return 3;
+      case "poor":
+        return 4;
+      case "very-poor":
+      case "verypoor":
+        return 5;
+      case "extremely-poor":
+        return 6;
+    }
+  }
+  throw new AdapterOperationError(
+    "invalid_attribute_value",
+    "AirQuality.AirQuality requires a Matter air-quality enum",
+  );
+}
+
+function concentrationState(value: JsonValue | undefined): Record<string, unknown> {
+  if (value === undefined || value === null) {
+    return {
+      measuredValue: null,
+      minMeasuredValue: null,
+      maxMeasuredValue: null,
+      measurementMedium: 0,
+      measurementUnit: 4,
+    };
+  }
+  return {
+    measuredValue: numberValue(value),
+    minMeasuredValue: null,
+    maxMeasuredValue: null,
+    measurementMedium: 0,
+    measurementUnit: 4,
+  };
+}
+
+function valveOpenValue(value: JsonValue): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (value === 1 || value === "open" || value === "Open") {
+    return true;
+  }
+  if (value === 0 || value === 2 || value === "closed" || value === "Closed" || value === "transitioning") {
+    return false;
+  }
+  throw new AdapterOperationError(
+    "invalid_attribute_value",
+    "Valve state requires a boolean or open/closed enum",
+  );
+}
+
 function isJsonObject(value: JsonValue): value is { [key: string]: JsonValue } {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -2279,6 +2894,16 @@ export const MATTER_DRIVER_CATALOG_DEVICE_TYPE_CONSTANTS = [
   "Fan",
   "Thermostat",
   "Lock",
+  "IlluminanceSensor",
+  "PressureSensor",
+  "LeakSensor",
+  "SmokeSensor",
+  "CarbonMonoxideSensor",
+  "AirQualitySensor",
+  "Valve",
+  "Pump",
+  "AirPurifier",
+  "Speaker",
 ] as const;
 
 export const MATTER_DRIVER_ATTRIBUTE_PATHS = [
@@ -2306,6 +2931,21 @@ export const MATTER_DRIVER_ATTRIBUTE_PATHS = [
   "ThermostatUserInterfaceConfiguration.TemperatureDisplayMode",
   "DoorLock.LockState",
   "DoorLock.DoorState",
+  "IlluminanceMeasurement.MeasuredValue",
+  "PressureMeasurement.MeasuredValue",
+  "SmokeCoAlarm.SmokeState",
+  "SmokeCoAlarm.CoState",
+  "AirQuality.AirQuality",
+  "Pm25ConcentrationMeasurement.MeasuredValue",
+  "Pm10ConcentrationMeasurement.MeasuredValue",
+  "TotalVolatileOrganicCompoundsConcentrationMeasurement.MeasuredValue",
+  "CarbonDioxideConcentrationMeasurement.MeasuredValue",
+  "CarbonMonoxideConcentrationMeasurement.MeasuredValue",
+  "ValveConfigurationAndControl.TargetState",
+  "ValveConfigurationAndControl.CurrentState",
+  "ValveConfigurationAndControl.CurrentLevel",
+  "ValveConfigurationAndControl.DefaultOpenDuration",
+  "ValveConfigurationAndControl.RemainingDuration",
 ] as const;
 
 export const MATTER_DRIVER_COMMAND_PATHS = [
@@ -2316,4 +2956,6 @@ export const MATTER_DRIVER_COMMAND_PATHS = [
   "WindowCovering.StopMotion",
   "DoorLock.LockDoor",
   "DoorLock.UnlockDoor",
+  "ValveConfigurationAndControl.Open",
+  "ValveConfigurationAndControl.Close",
 ] as const;

@@ -68,7 +68,7 @@ test("every backend Matter Catalog type and path is implemented by the driver", 
   }
 });
 
-test("all first-batch Catalog types construct official endpoints and bridge state", async (testContext) => {
+test("all Catalog types construct official endpoints and bridge state", async (testContext) => {
   const sdk = await loadPinnedMatterJs();
   const commands: CommandEvent[] = [];
   const writes: AttributeWriteEvent[] = [];
@@ -105,7 +105,7 @@ test("all first-batch Catalog types construct official endpoints and bridge stat
     devices: firstBatchDevices(),
   });
 
-  assert.equal(driver.diagnostics().deviceCount, 12);
+  assert.equal(driver.diagnostics().deviceCount, 22);
   for (const device of firstBatchDevices()) {
     const deviceTypeList = await driver.readAttributeForTest(
       device.id,
@@ -197,6 +197,54 @@ test("all first-batch Catalog types construct official endpoints and bridge stat
     await driver.readAttributeForTest("lock", "doorLock", "doorState"),
     0,
   );
+  assert.equal(
+    await driver.readAttributeForTest("illuminance", "illuminanceMeasurement", "measuredValue"),
+    Math.max(1, Math.min(0xfffe, Math.round(10_000 * Math.log10(120) + 1))),
+  );
+  assert.equal(
+    await driver.readAttributeForTest("pressure", "pressureMeasurement", "measuredValue"),
+    1013,
+  );
+  assert.equal(
+    await driver.readAttributeForTest("leak", "booleanState", "stateValue"),
+    true,
+  );
+  assert.equal(
+    await driver.readAttributeForTest("smoke", "smokeCoAlarm", "smokeState"),
+    2,
+  );
+  assert.equal(
+    await driver.readAttributeForTest("carbon-monoxide", "smokeCoAlarm", "coState"),
+    0,
+  );
+  assert.equal(
+    await driver.readAttributeForTest("air-quality", "airQuality", "airQuality"),
+    1,
+  );
+  assert.equal(
+    await driver.readAttributeForTest(
+      "air-quality",
+      "pm25ConcentrationMeasurement",
+      "measuredValue",
+    ),
+    12.5,
+  );
+  assert.equal(
+    await driver.readAttributeForTest(
+      "valve",
+      "valveConfigurationAndControl",
+      "targetState",
+    ),
+    1,
+  );
+  assert.equal(
+    await driver.readAttributeForTest("pump", "onOff", "onOff"),
+    true,
+  );
+  assert.equal(
+    await driver.readAttributeForTest("speaker", "onOff", "onOff"),
+    true,
+  );
 
   await driver.invokeCommandForTest("fan", "onOff", "off");
   await driver.invokeCommandForTest(
@@ -213,6 +261,7 @@ test("all first-batch Catalog types construct official endpoints and bridge stat
   await driver.invokeCommandForTest("lock", "doorLock", "lockDoor", {
     pinCode: null,
   });
+  await driver.invokeCommandForTest("valve", "valveConfigurationAndControl", "close");
   await driver.invokeCommandForTest("lock", "doorLock", "unlockDoor", {
     pinCode: null,
   });
@@ -353,6 +402,53 @@ function firstBatchDevices(): DeviceSnapshot[] {
     snapshot("lock", 13, "lock", {
       "DoorLock.LockState": "secured",
       "DoorLock.DoorState": true,
+    }),
+    snapshot("illuminance", 14, "illuminance-sensor", {
+      "IlluminanceMeasurement.MeasuredValue": 120,
+    }),
+    snapshot("pressure", 15, "pressure-sensor", {
+      "PressureMeasurement.MeasuredValue": 1013.2,
+    }),
+    snapshot("leak", 16, "leak-sensor", {
+      "BooleanState.StateValue": true,
+    }),
+    snapshot("smoke", 17, "smoke-sensor", {
+      "SmokeCoAlarm.SmokeState": true,
+    }),
+    snapshot("carbon-monoxide", 18, "carbon-monoxide-sensor", {
+      "SmokeCoAlarm.CoState": false,
+    }),
+    snapshot("air-quality", 19, "air-quality-sensor", {
+      "AirQuality.AirQuality": "good",
+      "Pm25ConcentrationMeasurement.MeasuredValue": 12.5,
+      "Pm10ConcentrationMeasurement.MeasuredValue": 20,
+      "TotalVolatileOrganicCompoundsConcentrationMeasurement.MeasuredValue": 80,
+      "CarbonDioxideConcentrationMeasurement.MeasuredValue": 650,
+      "CarbonMonoxideConcentrationMeasurement.MeasuredValue": 1.2,
+      "TemperatureMeasurement.MeasuredValue": 24.5,
+      "RelativeHumidityMeasurement.MeasuredValue": 48,
+    }),
+    snapshot("valve", 20, "valve", {
+      "ValveConfigurationAndControl.TargetState": true,
+      "ValveConfigurationAndControl.CurrentState": true,
+      "ValveConfigurationAndControl.CurrentLevel": 100,
+      "ValveConfigurationAndControl.DefaultOpenDuration": 300,
+      "ValveConfigurationAndControl.RemainingDuration": 120,
+    }),
+    snapshot("pump", 21, "pump", {
+      "OnOff.OnOff": true,
+      "LevelControl.CurrentLevel": 55,
+      "PressureMeasurement.MeasuredValue": 250,
+    }),
+    snapshot("air-purifier", 22, "air-purifier", {
+      "OnOff.OnOff": true,
+      "FanControl.FanMode": "auto",
+      "FanControl.PercentSetting": 40,
+      "FanControl.RockSetting": false,
+    }),
+    snapshot("speaker", 23, "speaker", {
+      "OnOff.OnOff": false,
+      "LevelControl.CurrentLevel": 35,
     }),
   ];
 }

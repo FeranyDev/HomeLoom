@@ -2,7 +2,7 @@ package mapping
 
 import "github.com/feranydev/homeloom/backend/internal/domain/device"
 
-// MatterConsumerContracts declares the first bridge device set using the
+// MatterConsumerContracts declares the official Matter bridge device set using the
 // canonical Matter Cluster.Attribute vocabulary. Runtime-specific scaling
 // (for example Celsius to centi-degrees and percent to percent100ths) belongs
 // to the Matter adapter, not the unified model.
@@ -70,6 +70,53 @@ func MatterConsumerContracts() []device.ConsumerModelContract {
 			required("lock", "current-state", "DoorLock.LockState"),
 			optional("lock", "door-open", "DoorLock.DoorState"),
 		}},
+		{ConsumerID: "matter", DeviceType: device.TypeIlluminanceSensor, Parameters: []device.ConsumerParameterMapping{
+			required("illuminance", "current-illuminance", "IlluminanceMeasurement.MeasuredValue"),
+		}},
+		{ConsumerID: "matter", DeviceType: device.TypePressureSensor, Parameters: []device.ConsumerParameterMapping{
+			required("pressure", "current-pressure", "PressureMeasurement.MeasuredValue"),
+		}},
+		{ConsumerID: "matter", DeviceType: device.TypeLeakSensor, Parameters: []device.ConsumerParameterMapping{
+			required("leak", "leak-detected", "BooleanState.StateValue"),
+		}},
+		{ConsumerID: "matter", DeviceType: device.TypeSmokeSensor, Parameters: []device.ConsumerParameterMapping{
+			required("smoke", "smoke-detected", "SmokeCoAlarm.SmokeState"),
+		}},
+		{ConsumerID: "matter", DeviceType: device.TypeCarbonMonoxideSensor, Parameters: []device.ConsumerParameterMapping{
+			required("carbon-monoxide", "detected", "SmokeCoAlarm.CoState"),
+		}},
+		{ConsumerID: "matter", DeviceType: device.TypeAirQualitySensor, Parameters: []device.ConsumerParameterMapping{
+			required("air-quality", "current-air-quality", "AirQuality.AirQuality"),
+			optional("air-quality", "pm2.5-density", "Pm25ConcentrationMeasurement.MeasuredValue"),
+			optional("air-quality", "pm10-density", "Pm10ConcentrationMeasurement.MeasuredValue"),
+			optional("air-quality", "voc-density", "TotalVolatileOrganicCompoundsConcentrationMeasurement.MeasuredValue"),
+			optional("air-quality", "carbon-dioxide-level", "CarbonDioxideConcentrationMeasurement.MeasuredValue"),
+			optional("air-quality", "carbon-monoxide-level", "CarbonMonoxideConcentrationMeasurement.MeasuredValue"),
+			optional("temperature", "current-temperature", "TemperatureMeasurement.MeasuredValue"),
+			optional("humidity", "current-humidity", "RelativeHumidityMeasurement.MeasuredValue"),
+		}},
+		{ConsumerID: "matter", DeviceType: device.TypeValve, Parameters: []device.ConsumerParameterMapping{
+			required("valve", "active", "ValveConfigurationAndControl.TargetState"),
+			optional("valve", "in-use", "ValveConfigurationAndControl.CurrentState"),
+			optional("valve", "position", "ValveConfigurationAndControl.CurrentLevel"),
+			optional("valve", "set-duration", "ValveConfigurationAndControl.DefaultOpenDuration"),
+			optional("valve", "remaining-duration", "ValveConfigurationAndControl.RemainingDuration"),
+		}},
+		{ConsumerID: "matter", DeviceType: device.TypePump, Parameters: []device.ConsumerParameterMapping{
+			required("pump", "active", "OnOff.OnOff"),
+			optional("pump", "speed", "LevelControl.CurrentLevel"),
+			optional("pressure", "current-pressure", "PressureMeasurement.MeasuredValue"),
+		}},
+		{ConsumerID: "matter", DeviceType: device.TypeAirPurifier, Parameters: []device.ConsumerParameterMapping{
+			required("air-purifier", "active", "OnOff.OnOff"),
+			optional("air-purifier", "target-state", "FanControl.FanMode"),
+			optional("air-purifier", "rotation-speed", "FanControl.PercentSetting"),
+			optional("air-purifier", "swing-mode", "FanControl.RockSetting"),
+		}},
+		{ConsumerID: "matter", DeviceType: device.TypeSpeaker, Parameters: []device.ConsumerParameterMapping{
+			required("speaker", "mute", "OnOff.OnOff"),
+			required("speaker", "volume", "LevelControl.CurrentLevel"),
+		}},
 	}
 }
 
@@ -96,6 +143,14 @@ func matterCommandProperties(contracts []device.ConsumerModelContract) []Consume
 		{device.TypeWindowCovering, path("window-covering", "target-position"), "WindowCovering.StopMotion", "停止窗帘"},
 		{device.TypeLock, path("lock", "target-state"), "DoorLock.LockDoor", "上锁"},
 		{device.TypeLock, path("lock", "target-state"), "DoorLock.UnlockDoor", "解锁"},
+		{device.TypeValve, path("valve", "active"), "ValveConfigurationAndControl.Open", "打开阀门"},
+		{device.TypeValve, path("valve", "active"), "ValveConfigurationAndControl.Close", "关闭阀门"},
+		{device.TypePump, path("pump", "active"), "OnOff.On", "启动水泵"},
+		{device.TypePump, path("pump", "active"), "OnOff.Off", "停止水泵"},
+		{device.TypeAirPurifier, path("air-purifier", "active"), "OnOff.On", "启动净化器"},
+		{device.TypeAirPurifier, path("air-purifier", "active"), "OnOff.Off", "停止净化器"},
+		{device.TypeSpeaker, path("speaker", "mute"), "OnOff.On", "取消静音"},
+		{device.TypeSpeaker, path("speaker", "mute"), "OnOff.Off", "静音"},
 	}
 	result := make([]ConsumerProperty, 0, len(definitions))
 	for _, definition := range definitions {

@@ -215,10 +215,22 @@ func applyReverse(transform Transform, value device.PropertyValue, expected devi
 	case TransformClamp:
 		return device.PropertyValue{}, fmt.Errorf("clamp is not reversible")
 	case TransformEnum:
+		if source, ok := transform.ReverseValues[*value.String]; ok {
+			return stringValueForType(source, expected), nil
+		}
+		var found string
+		var matches int
 		for source, target := range transform.Values {
 			if target == *value.String {
-				return stringValueForType(source, expected), nil
+				found = source
+				matches++
 			}
+		}
+		if matches == 1 {
+			return stringValueForType(found, expected), nil
+		}
+		if matches > 1 {
+			return device.PropertyValue{}, fmt.Errorf("enum value %q has ambiguous reverse mapping", *value.String)
 		}
 		return device.PropertyValue{}, fmt.Errorf("enum value %q has no reverse mapping", *value.String)
 	case TransformUnit:

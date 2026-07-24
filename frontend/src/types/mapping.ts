@@ -12,6 +12,7 @@ export interface MappingTransform {
   min?: number
   max?: number
   values?: Record<string, string>
+  reverseValues?: Record<string, string>
   fromUnit?: string
   toUnit?: string
   bands?: MappingRangeBand[]

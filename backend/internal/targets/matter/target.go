@@ -735,13 +735,30 @@ func (t *Target) executeClusterCommand(ctx context.Context, virtualID, path stri
 	}
 	switch path {
 	case "OnOff.On":
+		if virtual, found := t.virtualDevice(virtualID); found && virtual.Type == device.TypeSpeaker {
+			// Matter On means unmuted for Speaker device type.
+			return t.writeAttribute(ctx, virtualID, "OnOff.OnOff", false)
+		}
 		return t.writeAttribute(ctx, virtualID, "OnOff.OnOff", true)
 	case "OnOff.Off":
+		if virtual, found := t.virtualDevice(virtualID); found && virtual.Type == device.TypeSpeaker {
+			return t.writeAttribute(ctx, virtualID, "OnOff.OnOff", true)
+		}
 		return t.writeAttribute(ctx, virtualID, "OnOff.OnOff", false)
 	case "LevelControl.MoveToLevel":
 		return t.writeAttribute(ctx, virtualID, "LevelControl.CurrentLevel", fields["level"])
 	case "WindowCovering.GoToLiftPercentage":
 		return t.writeAttribute(ctx, virtualID, "WindowCovering.TargetPositionLiftPercent100ths", fields["liftPercent100ths"])
+	case "ValveConfigurationAndControl.Open":
+		if err := t.writeAttribute(ctx, virtualID, "ValveConfigurationAndControl.TargetState", true); err != nil {
+			return err
+		}
+		if level, ok := fields["targetLevel"]; ok && level != nil {
+			return t.writeAttribute(ctx, virtualID, "ValveConfigurationAndControl.CurrentLevel", level)
+		}
+		return nil
+	case "ValveConfigurationAndControl.Close":
+		return t.writeAttribute(ctx, virtualID, "ValveConfigurationAndControl.TargetState", false)
 	default:
 		return application.ErrPropertyUnsupported
 	}

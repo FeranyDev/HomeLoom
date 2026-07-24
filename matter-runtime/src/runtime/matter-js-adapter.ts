@@ -30,9 +30,19 @@ export interface LoadedMatterJs {
   readonly fanDevice: typeof import("@matter/main/devices/fan");
   readonly thermostatDevice: typeof import("@matter/main/devices/thermostat");
   readonly doorLockDevice: typeof import("@matter/main/devices/door-lock");
+  readonly lightSensor: typeof import("@matter/main/devices/light-sensor");
+  readonly pressureSensor: typeof import("@matter/main/devices/pressure-sensor");
+  readonly waterLeakDetector: typeof import("@matter/main/devices/water-leak-detector");
+  readonly smokeCoAlarm: typeof import("@matter/main/devices/smoke-co-alarm");
+  readonly airQualitySensor: typeof import("@matter/main/devices/air-quality-sensor");
+  readonly waterValve: typeof import("@matter/main/devices/water-valve");
+  readonly pumpDevice: typeof import("@matter/main/devices/pump");
+  readonly airPurifier: typeof import("@matter/main/devices/air-purifier");
+  readonly speakerDevice: typeof import("@matter/main/devices/speaker");
   readonly onOff: typeof import("@matter/main/behaviors/on-off");
   readonly levelControl: typeof import("@matter/main/behaviors/level-control");
   readonly colorControl: typeof import("@matter/main/behaviors/color-control");
+  readonly temperatureMeasurement: typeof import("@matter/main/behaviors/temperature-measurement");
   readonly relativeHumidityMeasurement: typeof import("@matter/main/behaviors/relative-humidity-measurement");
   readonly booleanState: typeof import("@matter/main/behaviors/boolean-state");
   readonly occupancySensing: typeof import("@matter/main/behaviors/occupancy-sensing");
@@ -41,6 +51,17 @@ export interface LoadedMatterJs {
   readonly thermostat: typeof import("@matter/main/behaviors/thermostat");
   readonly thermostatUserInterfaceConfiguration: typeof import("@matter/main/behaviors/thermostat-user-interface-configuration");
   readonly doorLock: typeof import("@matter/main/behaviors/door-lock");
+  readonly illuminanceMeasurement: typeof import("@matter/main/behaviors/illuminance-measurement");
+  readonly pressureMeasurement: typeof import("@matter/main/behaviors/pressure-measurement");
+  readonly smokeCoAlarmBehavior: typeof import("@matter/main/behaviors/smoke-co-alarm");
+  readonly airQuality: typeof import("@matter/main/behaviors/air-quality");
+  readonly pm25ConcentrationMeasurement: typeof import("@matter/main/behaviors/pm25-concentration-measurement");
+  readonly pm10ConcentrationMeasurement: typeof import("@matter/main/behaviors/pm10-concentration-measurement");
+  readonly totalVolatileOrganicCompoundsConcentrationMeasurement: typeof import("@matter/main/behaviors/total-volatile-organic-compounds-concentration-measurement");
+  readonly carbonDioxideConcentrationMeasurement: typeof import("@matter/main/behaviors/carbon-dioxide-concentration-measurement");
+  readonly carbonMonoxideConcentrationMeasurement: typeof import("@matter/main/behaviors/carbon-monoxide-concentration-measurement");
+  readonly valveConfigurationAndControl: typeof import("@matter/main/behaviors/valve-configuration-and-control");
+  readonly pumpConfigurationAndControl: typeof import("@matter/main/behaviors/pump-configuration-and-control");
   readonly bridgedDeviceBasicInformation: typeof import("@matter/main/behaviors/bridged-device-basic-information");
 }
 
@@ -153,9 +174,19 @@ export async function loadPinnedMatterJs(): Promise<LoadedMatterJs> {
     fanDevice,
     thermostatDevice,
     doorLockDevice,
+    lightSensor,
+    pressureSensor,
+    waterLeakDetector,
+    smokeCoAlarm,
+    airQualitySensor,
+    waterValve,
+    pumpDevice,
+    airPurifier,
+    speakerDevice,
     onOff,
     levelControl,
     colorControl,
+    temperatureMeasurement,
     relativeHumidityMeasurement,
     booleanState,
     occupancySensing,
@@ -164,6 +195,17 @@ export async function loadPinnedMatterJs(): Promise<LoadedMatterJs> {
     thermostat,
     thermostatUserInterfaceConfiguration,
     doorLock,
+    illuminanceMeasurement,
+    pressureMeasurement,
+    smokeCoAlarmBehavior,
+    airQuality,
+    pm25ConcentrationMeasurement,
+    pm10ConcentrationMeasurement,
+    totalVolatileOrganicCompoundsConcentrationMeasurement,
+    carbonDioxideConcentrationMeasurement,
+    carbonMonoxideConcentrationMeasurement,
+    valveConfigurationAndControl,
+    pumpConfigurationAndControl,
     bridgedDeviceBasicInformation,
   ] = await Promise.all([
     import("@matter/main"),
@@ -181,9 +223,19 @@ export async function loadPinnedMatterJs(): Promise<LoadedMatterJs> {
     import("@matter/main/devices/fan"),
     import("@matter/main/devices/thermostat"),
     import("@matter/main/devices/door-lock"),
+    import("@matter/main/devices/light-sensor"),
+    import("@matter/main/devices/pressure-sensor"),
+    import("@matter/main/devices/water-leak-detector"),
+    import("@matter/main/devices/smoke-co-alarm"),
+    import("@matter/main/devices/air-quality-sensor"),
+    import("@matter/main/devices/water-valve"),
+    import("@matter/main/devices/pump"),
+    import("@matter/main/devices/air-purifier"),
+    import("@matter/main/devices/speaker"),
     import("@matter/main/behaviors/on-off"),
     import("@matter/main/behaviors/level-control"),
     import("@matter/main/behaviors/color-control"),
+    import("@matter/main/behaviors/temperature-measurement"),
     import("@matter/main/behaviors/relative-humidity-measurement"),
     import("@matter/main/behaviors/boolean-state"),
     import("@matter/main/behaviors/occupancy-sensing"),
@@ -192,6 +244,17 @@ export async function loadPinnedMatterJs(): Promise<LoadedMatterJs> {
     import("@matter/main/behaviors/thermostat"),
     import("@matter/main/behaviors/thermostat-user-interface-configuration"),
     import("@matter/main/behaviors/door-lock"),
+    import("@matter/main/behaviors/illuminance-measurement"),
+    import("@matter/main/behaviors/pressure-measurement"),
+    import("@matter/main/behaviors/smoke-co-alarm"),
+    import("@matter/main/behaviors/air-quality"),
+    import("@matter/main/behaviors/pm25-concentration-measurement"),
+    import("@matter/main/behaviors/pm10-concentration-measurement"),
+    import("@matter/main/behaviors/total-volatile-organic-compounds-concentration-measurement"),
+    import("@matter/main/behaviors/carbon-dioxide-concentration-measurement"),
+    import("@matter/main/behaviors/carbon-monoxide-concentration-measurement"),
+    import("@matter/main/behaviors/valve-configuration-and-control"),
+    import("@matter/main/behaviors/pump-configuration-and-control"),
     import("@matter/main/behaviors/bridged-device-basic-information"),
   ]);
   return {
@@ -210,9 +273,19 @@ export async function loadPinnedMatterJs(): Promise<LoadedMatterJs> {
     fanDevice,
     thermostatDevice,
     doorLockDevice,
+    lightSensor,
+    pressureSensor,
+    waterLeakDetector,
+    smokeCoAlarm,
+    airQualitySensor,
+    waterValve,
+    pumpDevice,
+    airPurifier,
+    speakerDevice,
     onOff,
     levelControl,
     colorControl,
+    temperatureMeasurement,
     relativeHumidityMeasurement,
     booleanState,
     occupancySensing,
@@ -221,6 +294,17 @@ export async function loadPinnedMatterJs(): Promise<LoadedMatterJs> {
     thermostat,
     thermostatUserInterfaceConfiguration,
     doorLock,
+    illuminanceMeasurement,
+    pressureMeasurement,
+    smokeCoAlarmBehavior,
+    airQuality,
+    pm25ConcentrationMeasurement,
+    pm10ConcentrationMeasurement,
+    totalVolatileOrganicCompoundsConcentrationMeasurement,
+    carbonDioxideConcentrationMeasurement,
+    carbonMonoxideConcentrationMeasurement,
+    valveConfigurationAndControl,
+    pumpConfigurationAndControl,
     bridgedDeviceBasicInformation,
   };
 }

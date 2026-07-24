@@ -54,26 +54,27 @@ type Profile struct {
 }
 
 type Transform struct {
-	Type        TransformType     `json:"type"`
-	Factor      *float64          `json:"factor,omitempty"`
-	Offset      *float64          `json:"offset,omitempty"`
-	Min         *float64          `json:"min,omitempty"`
-	Max         *float64          `json:"max,omitempty"`
-	Values      map[string]string `json:"values,omitempty"`
-	FromUnit    string            `json:"fromUnit,omitempty"`
-	ToUnit      string            `json:"toUnit,omitempty"`
-	Bands       []RangeBand       `json:"bands,omitempty"`
-	Threshold   *float64          `json:"threshold,omitempty"`
-	Operator    string            `json:"operator,omitempty"`
-	TrueNumber  *float64          `json:"trueNumber,omitempty"`
-	FalseNumber *float64          `json:"falseNumber,omitempty"`
-	TrueValue   string            `json:"trueValue,omitempty"`
-	FalseValue  string            `json:"falseValue,omitempty"`
-	InputMin    *float64          `json:"inputMin,omitempty"`
-	InputMax    *float64          `json:"inputMax,omitempty"`
-	OutputMin   *float64          `json:"outputMin,omitempty"`
-	OutputMax   *float64          `json:"outputMax,omitempty"`
-	Mode        string            `json:"mode,omitempty"`
+	Type          TransformType     `json:"type"`
+	Factor        *float64          `json:"factor,omitempty"`
+	Offset        *float64          `json:"offset,omitempty"`
+	Min           *float64          `json:"min,omitempty"`
+	Max           *float64          `json:"max,omitempty"`
+	Values        map[string]string `json:"values,omitempty"`
+	ReverseValues map[string]string `json:"reverseValues,omitempty"`
+	FromUnit      string            `json:"fromUnit,omitempty"`
+	ToUnit        string            `json:"toUnit,omitempty"`
+	Bands         []RangeBand       `json:"bands,omitempty"`
+	Threshold     *float64          `json:"threshold,omitempty"`
+	Operator      string            `json:"operator,omitempty"`
+	TrueNumber    *float64          `json:"trueNumber,omitempty"`
+	FalseNumber   *float64          `json:"falseNumber,omitempty"`
+	TrueValue     string            `json:"trueValue,omitempty"`
+	FalseValue    string            `json:"falseValue,omitempty"`
+	InputMin      *float64          `json:"inputMin,omitempty"`
+	InputMax      *float64          `json:"inputMax,omitempty"`
+	OutputMin     *float64          `json:"outputMin,omitempty"`
+	OutputMax     *float64          `json:"outputMax,omitempty"`
+	Mode          string            `json:"mode,omitempty"`
 }
 
 // RangeBand is an ordered numeric band. Max is inclusive; a nil Max is the
@@ -200,19 +201,7 @@ func Validate(profile Profile) error {
 			if current != device.ValueTypeEnum && current != device.ValueTypeString {
 				fields[path] = "enum mapping requires enum or string input"
 			}
-			if len(transform.Values) == 0 {
-				fields[path+".values"] = "must not be empty"
-			}
-			seen := make(map[string]struct{}, len(transform.Values))
-			for source, target := range transform.Values {
-				if source == "" || target == "" {
-					fields[path+".values"] = "source and target values must not be empty"
-				}
-				if _, duplicate := seen[target]; duplicate {
-					fields[path+".values"] = "target values must be unique for reverse mapping"
-				}
-				seen[target] = struct{}{}
-			}
+			validateEnumValues(fields, path, transform.Values, transform.ReverseValues)
 		case TransformUnit:
 			if !numericType(current) {
 				fields[path] = "unit conversion requires int or number input"
@@ -322,6 +311,52 @@ func float64Value(value *float64, fallback float64) float64 {
 func finite(value float64) bool { return !math.IsNaN(value) && !math.IsInf(value, 0) }
 
 func finitePointer(value *float64) bool { return value != nil && finite(*value) }
+
+func validateEnumValues(fields map[string]string, path string, values, reverseValues map[string]string) {
+	if len(values) == 0 {
+		fields[path+".values"] = "must not be empty"
+		return
+	}
+	sourcesByTarget := make(map[string][]string, len(values))
+	for source, target := range values {
+		if source == "" || target == "" {
+			fields[path+".values"] = "source and target values must not be empty"
+			return
+		}
+		sourcesByTarget[target] = append(sourcesByTarget[target], source)
+	}
+	for target, sources := range sourcesByTarget {
+		canonical, hasReverse := reverseValues[target]
+		if len(sources) > 1 && !hasReverse {
+			fields[path+".reverseValues."+target] = "required when multiple sources map to this target"
+			continue
+		}
+		if !hasReverse {
+			continue
+		}
+		if canonical == "" {
+			fields[path+".reverseValues."+target] = "must not be empty"
+			continue
+		}
+		if !containsString(sources, canonical) {
+			fields[path+".reverseValues."+target] = "must be a source that maps to this target"
+		}
+	}
+	for target := range reverseValues {
+		if _, ok := sourcesByTarget[target]; !ok {
+			fields[path+".reverseValues."+target] = "must match a target produced by values"
+		}
+	}
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
 
 func validateBooleanLabels(fields map[string]string, path, trueValue, falseValue string) {
 	if strings.TrimSpace(trueValue) == "" || strings.TrimSpace(falseValue) == "" {

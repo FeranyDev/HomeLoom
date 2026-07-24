@@ -107,7 +107,63 @@ func TestPreviewDefaultClampAndErrors(t *testing.T) {
 	}
 	duplicate := profile(device.ValueTypeEnum, device.ValueTypeEnum, Transform{Type: TransformEnum, Values: map[string]string{"a": "same", "b": "same"}})
 	if err := Validate(duplicate); err == nil {
-		t.Fatal("ambiguous enum reverse accepted")
+		t.Fatal("ambiguous enum reverse accepted without reverseValues")
+	}
+	manyToOne := profile(device.ValueTypeEnum, device.ValueTypeEnum, Transform{
+		Type: TransformEnum,
+		Values: map[string]string{
+			"low": "low", "mid": "low", "high": "high", "turbo": "high",
+		},
+		ReverseValues: map[string]string{"low": "mid", "high": "high"},
+	})
+	if err := Validate(manyToOne); err != nil {
+		t.Fatalf("many-to-one enum with reverseValues rejected: %v", err)
+	}
+	badReverse := profile(device.ValueTypeEnum, device.ValueTypeEnum, Transform{
+		Type: TransformEnum,
+		Values: map[string]string{
+			"low": "low", "mid": "low",
+		},
+		ReverseValues: map[string]string{"low": "high"},
+	})
+	if err := Validate(badReverse); err == nil {
+		t.Fatal("reverseValues outside forward mapping accepted")
+	}
+}
+
+func TestEnumManyToOneForwardAndReverse(t *testing.T) {
+	transform := Transform{
+		Type: TransformEnum,
+		Values: map[string]string{
+			"low": "low", "mid": "low", "high": "high", "turbo": "high",
+		},
+		ReverseValues: map[string]string{"low": "mid", "high": "high"},
+	}
+	profile := profile(device.ValueTypeEnum, device.ValueTypeEnum, transform)
+	for _, test := range []struct {
+		name      string
+		direction Direction
+		value     device.PropertyValue
+		want      string
+	}{
+		{"forward low", DirectionForward, device.EnumValue("low"), "low"},
+		{"forward mid folds to low", DirectionForward, device.EnumValue("mid"), "low"},
+		{"forward turbo folds to high", DirectionForward, device.EnumValue("turbo"), "high"},
+		{"reverse low uses canonical mid", DirectionReverse, device.EnumValue("low"), "mid"},
+		{"reverse high uses canonical high", DirectionReverse, device.EnumValue("high"), "high"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := Preview(PreviewRequest{Profile: profile, Direction: test.direction, Value: valuePointer(test.value)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Value.String == nil || *result.Value.String != test.want {
+				t.Fatalf("value = %#v, want %q", result.Value, test.want)
+			}
+		})
+	}
+	if _, err := Preview(PreviewRequest{Profile: profile, Direction: DirectionReverse, Value: valuePointer(device.EnumValue("quiet"))}); err == nil {
+		t.Fatal("unmapped reverse enum accepted")
 	}
 }
 
@@ -213,3 +269,22 @@ func profile(input, output device.ValueType, transforms ...Transform) Profile {
 }
 
 func valuePointer(value device.PropertyValue) *device.PropertyValue { return &value }
+
+func TestEnumReverseValuesOptionalForOneToOne(t *testing.T) {
+	transform := Transform{
+		Type:          TransformEnum,
+		Values:        map[string]string{"off": "inactive", "on": "active"},
+		ReverseValues: map[string]string{"inactive": "off", "active": "on"},
+	}
+	profile := profile(device.ValueTypeEnum, device.ValueTypeEnum, transform)
+	if err := Validate(profile); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Preview(PreviewRequest{Profile: profile, Direction: DirectionReverse, Value: valuePointer(device.EnumValue("active"))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Value.String == nil || *result.Value.String != "on" {
+		t.Fatalf("value = %#v", result.Value)
+	}
+}

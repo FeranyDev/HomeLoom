@@ -714,7 +714,8 @@ components:
         offset: { type: number }
         min: { type: number }
         max: { type: number }
-        values: { type: object, additionalProperties: { type: string } }
+        values: { type: object, additionalProperties: { type: string }, description: Forward enum map from source to target. Multiple sources may share one target when reverseValues provides a canonical reverse source for that target. }
+        reverseValues: { type: object, additionalProperties: { type: string }, description: Optional reverse enum map from target to a canonical source. Required for every target that is produced by more than one source. }
         fromUnit: { type: string, enum: [celsius, fahrenheit, kelvin, mired, ratio, percent] }
         toUnit: { type: string, enum: [celsius, fahrenheit, kelvin, mired, ratio, percent] }
         bands:
