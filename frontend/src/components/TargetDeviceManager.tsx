@@ -25,6 +25,15 @@ function inputFromTarget(target: Target, devices: TargetVirtualDevice[]): Target
 
 function stableID(value: string): string { return value.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64) }
 
+function generatedConsumerDeviceID(targetID: string, sourceID: string, deviceType: DeviceType, matter: boolean, ordinal = 1): string {
+	const base = stableID(`${targetID}-${sourceID}`)
+	const ordinalSuffix = ordinal > 1 ? `-${ordinal}` : ''
+	if (!matter) return `${base.slice(0, 64 - ordinalSuffix.length)}${ordinalSuffix}`
+	const typeSuffix = `-${stableID(deviceType)}`
+	const identitySuffix = `${ordinalSuffix}${typeSuffix}`
+	return `${base.slice(0, 64 - identitySuffix.length)}${identitySuffix}`
+}
+
 function saveErrorMessage(cause: unknown): string {
 	if (cause instanceof ApiError && Object.keys(cause.fields).length > 0) {
 		const details = Object.entries(cause.fields).map(([field, message]) => `${field}: ${message}`).join('；')
@@ -82,15 +91,14 @@ export function TargetDeviceManager({ target, devices, onClose, onSave, onConfir
 
 	function add() {
 		if (!source) { setError('请选择统一模型来源设备'); return }
+		if (!deviceType || (supportedTypes && !supportedTypes.has(deviceType))) { setError('请选择当前目标适配器支持的设备类型'); return }
 		const requestedID = stableID(id)
-		const baseID = requestedID || stableID(`${target.id}-${source.id}`)
+		const baseID = requestedID || generatedConsumerDeviceID(target.id, source.id, deviceType, target.type === 'matter')
 		let nextID = baseID
 		for (let suffix = 2; !requestedID && items.some((item) => item.id === nextID); suffix += 1) {
-			const suffixText = `-${suffix}`
-			nextID = `${baseID.slice(0, 64 - suffixText.length)}${suffixText}`
+			nextID = generatedConsumerDeviceID(target.id, source.id, deviceType, target.type === 'matter', suffix)
 		}
 		if (!nextID || items.some((item) => item.id === nextID)) { setError('消费端设备 ID 无效或重复'); return }
-		if (!deviceType || (supportedTypes && !supportedTypes.has(deviceType))) { setError('请选择当前目标适配器支持的设备类型'); return }
 		setItems((current) => [...current, { id: nextID, name: name.trim() || source.name, type: deviceType, sourceDeviceId: source.id, auxiliarySourceDeviceIds: auxiliarySourceDeviceIds, enabled: true }])
 		setID(''); setName(''); setError(null)
 		setAuxiliarySourceDeviceIds([])

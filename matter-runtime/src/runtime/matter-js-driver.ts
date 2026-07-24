@@ -1277,11 +1277,6 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
         return sdk.temperatureSensor.TemperatureSensorDevice.with(BridgeInfo) as never;
       case "humidity":
         return sdk.humiditySensor.HumiditySensorDevice.with(BridgeInfo) as never;
-      case "temperature-humidity":
-        return sdk.temperatureSensor.TemperatureSensorDevice.with(
-          sdk.relativeHumidityMeasurement.RelativeHumidityMeasurementServer,
-          BridgeInfo,
-        ) as never;
       case "contact":
         return sdk.contactSensor.ContactSensorDevice.with(BridgeInfo) as never;
       case "motion":
@@ -1356,7 +1351,7 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
       };
     }
 
-    if (deviceType === "temperature" || deviceType === "temperature-humidity") {
+    if (deviceType === "temperature") {
       state.temperatureMeasurement = {
         measuredValue: celsiusToMatterTemperature(
           numberValue(device.attributes["TemperatureMeasurement.MeasuredValue"], 0),
@@ -1366,7 +1361,7 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
       };
     }
 
-    if (deviceType === "humidity" || deviceType === "temperature-humidity") {
+    if (deviceType === "humidity") {
       state.relativeHumidityMeasurement = {
         measuredValue: percentToMatterPercent100ths(
           numberValue(device.attributes["RelativeHumidityMeasurement.MeasuredValue"], 0),
@@ -1808,7 +1803,6 @@ type NormalizedDeviceType =
   | "light"
   | "temperature"
   | "humidity"
-  | "temperature-humidity"
   | "contact"
   | "motion"
   | "occupancy"
@@ -1842,10 +1836,6 @@ function normalizeDeviceType(deviceType: string): NormalizedDeviceType {
     case "humidity-sensor":
     case "humiditysensor":
       return "humidity";
-    case "temperature-humidity":
-    case "temperature-humidity-sensor":
-    case "temperaturehumiditysensor":
-      return "temperature-humidity";
     case "contact":
     case "contact-sensor":
     case "contactsensor":
@@ -2282,7 +2272,6 @@ export const MATTER_DRIVER_CATALOG_DEVICE_TYPE_CONSTANTS = [
   "Lightbulb",
   "TemperatureSensor",
   "HumiditySensor",
-  "TemperatureHumiditySensor",
   "ContactSensor",
   "MotionSensor",
   "OccupancySensor",

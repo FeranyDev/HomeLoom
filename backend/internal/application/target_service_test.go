@@ -153,6 +153,24 @@ func TestMatterTargetRejectsUnsafeAndCrossProtocolConfiguration(t *testing.T) {
 	}
 }
 
+func TestMatterTargetRejectsNonStandardAggregateSensorType(t *testing.T) {
+	service := NewTargetService(nil, &targetStoreStub{})
+	_, err := service.Save(context.Background(), target.Config{
+		ID: "matter-climate", Type: "matter", Name: "Matter",
+		Devices: []target.VirtualDevice{{
+			ID: "climate", Name: "Climate", Type: device.TypeTemperatureHumiditySensor,
+			SourceDeviceID: "source-climate", Enabled: true,
+		}},
+	})
+	var validation *ValidationError
+	if !errors.As(err, &validation) {
+		t.Fatalf("Save() error = %v; want ValidationError", err)
+	}
+	if message := validation.Fields["devices.0.type"]; !strings.Contains(message, "not supported by consumer \"matter\"") {
+		t.Fatalf("devices.0.type validation = %q", message)
+	}
+}
+
 func TestMatterTargetUpdatePreservesGeneratedCommissioningIdentity(t *testing.T) {
 	store := &targetStoreStub{}
 	service := NewTargetService(nil, store)

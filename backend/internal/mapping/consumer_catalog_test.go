@@ -79,6 +79,9 @@ func TestConsumerContractRegistryDoesNotFallBackToHomeKit(t *testing.T) {
 	if known, supported := ConsumerModelSupport("matter", device.TypeRobotVacuum); !known || supported {
 		t.Fatalf("unsupported Matter model = known %v, supported %v", known, supported)
 	}
+	if known, supported := ConsumerModelSupport("matter", device.TypeTemperatureHumiditySensor); !known || supported {
+		t.Fatalf("non-standard Matter aggregate sensor = known %v, supported %v", known, supported)
+	}
 }
 
 func TestMatterCatalogDeclaresClusterMetadataAndModelConstraints(t *testing.T) {
@@ -117,7 +120,7 @@ func TestMatterCatalogPublishesCommandsSeparatelyFromAttributes(t *testing.T) {
 func TestMatterFirstDeviceBatchIsExplicitlySupported(t *testing.T) {
 	supported := []device.Type{
 		device.TypeSwitch, device.TypeOutlet, device.TypeLightbulb,
-		device.TypeTemperatureSensor, device.TypeHumiditySensor, device.TypeTemperatureHumiditySensor,
+		device.TypeTemperatureSensor, device.TypeHumiditySensor,
 		device.TypeContactSensor, device.TypeMotionSensor, device.TypeOccupancySensor,
 		device.TypeWindowCovering, device.TypeFan, device.TypeThermostat, device.TypeLock,
 	}

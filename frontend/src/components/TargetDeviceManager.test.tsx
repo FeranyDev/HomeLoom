@@ -15,6 +15,7 @@ vi.mock('../api/mapping', async (importOriginal) => {
 const target: Target = { id: 'apple-main', type: 'apple-hap', name: '主桥', enabled: true, status: 'running', config: { address: ':51826', setupId: 'HLM1' }, pairing: { pairingCode: '001-02-003', paired: false }, deviceIds: [], devices: [] }
 const source: Device = { schemaVersion: 1, id: 'source-switch', providerId: 'virtual-main', name: '来源开关', type: 'switch', availability: 'online', online: true, lastUpdateAt: '2026-07-15T00:00:00Z', endpoints: [] }
 const robot: Device = { ...source, id: 'source-vacuum', name: '扫地机器人', type: 'robot-vacuum' }
+const climate: Device = { ...source, id: 'source-climate', name: '温湿度传感器', type: 'temperature-humidity-sensor' }
 
 describe('TargetDeviceManager', () => {
 	beforeEach(() => {
@@ -71,6 +72,72 @@ describe('TargetDeviceManager', () => {
 		expect(onSave.mock.calls[0][0].devices[0].type).toBe('switch')
 		expect(prompt).toHaveBeenCalledWith(expect.stringContaining('CHANGE ENDPOINT TYPE matter-main lamp lightbulb'))
 		prompt.mockRestore()
+	})
+
+	it('only offers protocol-standard Matter consumer device types', async () => {
+		vi.mocked(listConsumerCatalogs).mockResolvedValue([{ id: 'matter', name: 'Matter', properties: [
+			{ id: 'TemperatureMeasurement.MeasuredValue', name: '当前温度', deviceType: 'temperature-sensor', defaultModelPath: { endpointId: 'main', capabilityId: 'temperature', propertyId: 'current-temperature' }, level: 'required', type: 'number', readable: true, writable: false, notifiable: true },
+			{ id: 'RelativeHumidityMeasurement.MeasuredValue', name: '当前湿度', deviceType: 'humidity-sensor', defaultModelPath: { endpointId: 'main', capabilityId: 'humidity', propertyId: 'current-humidity' }, level: 'required', type: 'number', readable: true, writable: false, notifiable: true },
+		] }])
+		const matter: Target = {
+			id: 'matter-main', type: 'matter', name: 'Matter', enabled: true, status: 'running',
+			config: {}, commissioning: { state: 'commissioned', windowOpen: false }, fabricCount: 1, endpointCount: 0,
+			deviceIds: [], devices: [],
+		}
+		render(<TargetDeviceManager target={matter} devices={[climate]} onClose={() => {}} onSave={vi.fn()} />)
+		const typeSelect = screen.getByLabelText('消费端设备类型') as HTMLSelectElement
+		await waitFor(() => expect(Array.from(typeSelect.options, (option) => option.value)).toEqual([
+			'', 'temperature-sensor', 'humidity-sensor',
+		]))
+	})
+
+	it('includes the Matter Device Type in automatically generated consumer IDs', async () => {
+		vi.mocked(listConsumerCatalogs).mockResolvedValue([{ id: 'matter', name: 'Matter', properties: [
+			{ id: 'TemperatureMeasurement.MeasuredValue', name: '当前温度', deviceType: 'temperature-sensor', defaultModelPath: { endpointId: 'main', capabilityId: 'temperature', propertyId: 'current-temperature' }, level: 'required', type: 'number', readable: true, writable: false, notifiable: true },
+			{ id: 'RelativeHumidityMeasurement.MeasuredValue', name: '当前湿度', deviceType: 'humidity-sensor', defaultModelPath: { endpointId: 'main', capabilityId: 'humidity', propertyId: 'current-humidity' }, level: 'required', type: 'number', readable: true, writable: false, notifiable: true },
+		] }])
+		const matter: Target = {
+			id: 'matter-jmsjfa', type: 'matter', name: 'Matter', enabled: true, status: 'running',
+			config: {}, commissioning: { state: 'commissioned', windowOpen: false }, fabricCount: 2, endpointCount: 0,
+			deviceIds: [], devices: [],
+		}
+		const xiaomiClimate = { ...climate, id: 'xiaomi-blt-3-1p04292pl0400' }
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		render(<TargetDeviceManager target={matter} devices={[xiaomiClimate]} onClose={() => {}} onSave={onSave} />)
+		const typeSelect = screen.getByLabelText('消费端设备类型')
+		await waitFor(() => expect(typeSelect).toHaveValue('temperature-sensor'))
+		await userEvent.click(screen.getByRole('button', { name: '＋ 添加消费端设备' }))
+		await userEvent.selectOptions(typeSelect, 'humidity-sensor')
+		await userEvent.click(screen.getByRole('button', { name: '＋ 添加消费端设备' }))
+		await userEvent.click(screen.getByRole('button', { name: '保存消费端设备并应用目标' }))
+		expect(onSave.mock.calls[0][0].devices.map((item: { id: string }) => item.id)).toEqual([
+			'matter-jmsjfa-xiaomi-blt-3-1p04292pl0400-temperature-sensor',
+			'matter-jmsjfa-xiaomi-blt-3-1p04292pl0400-humidity-sensor',
+		])
+	})
+
+	it('preserves the Matter Device Type suffix when generated IDs exceed 64 characters', async () => {
+		vi.mocked(listConsumerCatalogs).mockResolvedValue([{ id: 'matter', name: 'Matter', properties: [
+			{ id: 'TemperatureMeasurement.MeasuredValue', name: '当前温度', deviceType: 'temperature-sensor', defaultModelPath: { endpointId: 'main', capabilityId: 'temperature', propertyId: 'current-temperature' }, level: 'required', type: 'number', readable: true, writable: false, notifiable: true },
+		] }])
+		const matter: Target = {
+			id: `matter-${'bridge'.repeat(8)}`, type: 'matter', name: 'Matter', enabled: true, status: 'running',
+			config: {}, commissioning: { state: 'commissioned', windowOpen: false }, fabricCount: 0, endpointCount: 0,
+			deviceIds: [], devices: [],
+		}
+		const longSource = { ...climate, id: `source-${'climate'.repeat(8)}` }
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		render(<TargetDeviceManager target={matter} devices={[longSource]} onClose={() => {}} onSave={onSave} />)
+		await waitFor(() => expect(screen.getByLabelText('消费端设备类型')).toHaveValue('temperature-sensor'))
+		await userEvent.click(screen.getByRole('button', { name: '＋ 添加消费端设备' }))
+		await userEvent.click(screen.getByRole('button', { name: '＋ 添加消费端设备' }))
+		await userEvent.click(screen.getByRole('button', { name: '保存消费端设备并应用目标' }))
+		const generatedIDs = onSave.mock.calls[0][0].devices.map((item: { id: string }) => item.id)
+		expect(new Set(generatedIDs).size).toBe(2)
+		for (const generatedID of generatedIDs) {
+			expect(generatedID).toHaveLength(64)
+			expect(generatedID).toMatch(/-temperature-sensor$/)
+		}
 	})
 
 	it('allows a source model to bind as a different HomeKit device type', async () => {

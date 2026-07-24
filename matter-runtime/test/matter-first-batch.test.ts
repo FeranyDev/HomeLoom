@@ -105,7 +105,7 @@ test("all first-batch Catalog types construct official endpoints and bridge stat
     devices: firstBatchDevices(),
   });
 
-  assert.equal(driver.diagnostics().deviceCount, 13);
+  assert.equal(driver.diagnostics().deviceCount, 12);
   for (const device of firstBatchDevices()) {
     const deviceTypeList = await driver.readAttributeForTest(
       device.id,
@@ -117,7 +117,6 @@ test("all first-batch Catalog types construct official endpoints and bridge stat
       `${device.deviceType} did not construct an official descriptor`,
     );
   }
-
   assert.equal(
     await driver.readAttributeForTest(
       "humidity",
@@ -125,22 +124,6 @@ test("all first-batch Catalog types construct official endpoints and bridge stat
       "measuredValue",
     ),
     4_250,
-  );
-  assert.equal(
-    await driver.readAttributeForTest(
-      "temperature-humidity",
-      "temperatureMeasurement",
-      "measuredValue",
-    ),
-    2_125,
-  );
-  assert.equal(
-    await driver.readAttributeForTest(
-      "temperature-humidity",
-      "relativeHumidityMeasurement",
-      "measuredValue",
-    ),
-    5_550,
   );
   assert.equal(
     await driver.readAttributeForTest("contact", "booleanState", "stateValue"),
@@ -338,32 +321,28 @@ function firstBatchDevices(): DeviceSnapshot[] {
     snapshot("humidity", 6, "humidity-sensor", {
       "RelativeHumidityMeasurement.MeasuredValue": 42.5,
     }),
-    snapshot("temperature-humidity", 7, "temperature-humidity-sensor", {
-      "TemperatureMeasurement.MeasuredValue": 21.25,
-      "RelativeHumidityMeasurement.MeasuredValue": 55.5,
-    }),
-    snapshot("contact", 8, "contact-sensor", {
+    snapshot("contact", 7, "contact-sensor", {
       "BooleanState.StateValue": true,
     }),
-    snapshot("motion", 9, "motion-sensor", {
+    snapshot("motion", 8, "motion-sensor", {
       "OccupancySensing.Occupancy": true,
     }),
-    snapshot("occupancy", 10, "occupancy-sensor", {
+    snapshot("occupancy", 9, "occupancy-sensor", {
       "OccupancySensing.Occupancy": false,
     }),
-    snapshot("window-covering", 11, "window-covering", {
+    snapshot("window-covering", 10, "window-covering", {
       "WindowCovering.CurrentPositionLiftPercent100ths": 25,
       "WindowCovering.TargetPositionLiftPercent100ths": 75,
       "WindowCovering.OperationalStatus": "increasing",
       "WindowCovering.SafetyStatus": true,
     }),
-    snapshot("fan", 12, "fan", {
+    snapshot("fan", 11, "fan", {
       "OnOff.OnOff": true,
       "FanControl.FanMode": "auto",
       "FanControl.PercentSetting": 63,
       "FanControl.RockSetting": true,
     }),
-    snapshot("thermostat", 13, "thermostat", {
+    snapshot("thermostat", 12, "thermostat", {
       "Thermostat.ThermostatRunningState": "heating",
       "Thermostat.SystemMode": "heat",
       "Thermostat.LocalTemperature": 20.5,
@@ -371,7 +350,7 @@ function firstBatchDevices(): DeviceSnapshot[] {
       "Thermostat.OccupiedCoolingSetpoint": 25,
       "ThermostatUserInterfaceConfiguration.TemperatureDisplayMode": "fahrenheit",
     }),
-    snapshot("lock", 14, "lock", {
+    snapshot("lock", 13, "lock", {
       "DoorLock.LockState": "secured",
       "DoorLock.DoorState": true,
     }),

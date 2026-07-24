@@ -37,10 +37,6 @@ func MatterConsumerContracts() []device.ConsumerModelContract {
 		{ConsumerID: "matter", DeviceType: device.TypeHumiditySensor, Parameters: []device.ConsumerParameterMapping{
 			required("humidity", "current-humidity", "RelativeHumidityMeasurement.MeasuredValue"),
 		}},
-		{ConsumerID: "matter", DeviceType: device.TypeTemperatureHumiditySensor, Parameters: []device.ConsumerParameterMapping{
-			required("temperature", "current-temperature", "TemperatureMeasurement.MeasuredValue"),
-			required("humidity", "current-humidity", "RelativeHumidityMeasurement.MeasuredValue"),
-		}},
 		{ConsumerID: "matter", DeviceType: device.TypeContactSensor, Parameters: []device.ConsumerParameterMapping{
 			required("contact", "contact-detected", "BooleanState.StateValue"),
 		}},

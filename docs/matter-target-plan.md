@@ -1,6 +1,6 @@
 # Matter 桥实施方案
 
-> 实施状态（2026-07-23）：第一轮代码基础与第一批 13 类真实 matter.js Endpoint 已落地，包括判别配置、加密身份、稳定 Endpoint、双向 IPC、增量状态、commissioning/Fabric/reset 管理、前端与自动测试。代码侧第二轮基础能力（双实例隔离、崩溃重连、全量重放、100 Endpoint 快照、状态 burst 背压）也已覆盖。Apple Home、`chip-tool`、真实 Multi-Admin、容器网络和连续重启仍需维护者在目标局域网验收；第二批高级设备及 CSA 认证准备仍按第三轮推进，不能以本地自动测试替代。
+> 实施状态（2026-07-24）：第一轮代码基础与第一批 12 类标准 matter.js Endpoint 已落地，包括判别配置、加密身份、稳定 Endpoint、双向 IPC、增量状态、commissioning/Fabric/reset 管理、前端与自动测试。代码侧第二轮基础能力（双实例隔离、崩溃重连、全量重放、100 Endpoint 快照、状态 burst 背压）也已覆盖。Apple Home、`chip-tool`、真实 Multi-Admin、容器网络和连续重启仍需维护者在目标局域网验收；第二批高级设备及 CSA 认证准备仍按第三轮推进，不能以本地自动测试替代。
 
 状态图例：
 
@@ -103,6 +103,7 @@ Matter 桥不能简单按数组序号生成 Endpoint。删除设备后也不能�
 - [x] 删除设备后保留 Endpoint tombstone，不立即复用编号；
 - [x] 重启、改名、来源设备重连后 Endpoint ID 不变；
 - [x] 同一统一设备绑定到多个 Matter 虚拟设备时分别分配稳定 Endpoint；
+- [x] Matter 消费端设备自动 ID 包含标准 Device Type 后缀，避免删除映射后以另一类型重建时撞上旧 tombstone；
 - [x] Device Type 变更要求输入 `CHANGE ENDPOINT TYPE <targetId> <consumerDeviceId> <deviceType>`，也可选择创建新虚拟设备；
 - [x] 分配并发、重启稳定性、删除恢复和编号耗尽测试已覆盖。
 
@@ -116,6 +117,7 @@ Matter 桥不能简单按数组序号生成 Endpoint。删除设备后也不能�
 - [x] 复用 Consumer Profile 正反向转换与 Provider 回写链路；
 - [x] 同一统一模型属性允许映射到多个 Matter 属性；
 - [x] 不支持的模型明确标记，不回退到 HomeKit；
+- [x] “消费端设备类型”只列出当前协议的标准 Device Type，非标准逻辑聚合类型不进入 Catalog；
 - [x] 前端同时显示中文字段名和原始 Matter Cluster/Attribute 名称；
 - [x] Catalog 单元测试及 Catalog ↔ driver 类型/路径精确对照测试已覆盖。
 
@@ -128,13 +130,14 @@ Matter 桥不能简单按数组序号生成 Endpoint。删除设备后也不能�
 - [x] 灯 → On/Off、Level Control、Color Control；
 - [x] 单属性温度传感器 → Temperature Measurement；
 - [x] 单属性湿度传感器 → Relative Humidity Measurement；
-- [x] 温湿度组合传感器 → Temperature Measurement + Relative Humidity Measurement；
 - [x] 门磁/接触传感器 → Boolean State；
 - [x] 活动/占用传感器 → Occupancy Sensing（PIR）；
 - [x] 窗帘 → Window Covering（Lift + Position Aware Lift）；
 - [x] 风扇 → Fan Control + On/Off；
 - [x] 恒温器 → Thermostat + Thermostat UI Configuration；
 - [x] 门锁 → Door Lock（Door Position Sensor）。
+
+HomeLoom 的温湿度组合传感器属于统一模型逻辑类型，Matter 没有对应的标准聚合 Device Type，因此禁止将其直接选为 Matter 消费端设备类型，也不自动拆分 Endpoint。用户需要显式创建标准的 Temperature Sensor 或 Humidity Sensor 消费端映射。
 
 每种设备必须同时完成：
 
@@ -219,7 +222,7 @@ Matter 不能只用 HomeKit 的 `paired: boolean` 表达运行状态。
 - [x] Matter Consumer Catalog 单元测试及 driver 精确对照测试；
 - [x] Endpoint 分配、tombstone 和重启稳定性测试；
 - [x] Go ↔ Matter IPC 合约测试；
-- [x] 第一批 13 类属性双向转换与官方 Endpoint 构造测试；
+- [x] 第一批 12 类标准 Device Type 的属性双向转换与官方 Endpoint 构造测试；
 - [x] Window Covering、Fan、Thermostat、Door Lock 等 Command/可写属性回写测试；
 - [x] sidecar 断线、崩溃重启与全量恢复测试；
 - [x] 数据库加密身份、备份和重启恢复测试；
@@ -233,8 +236,8 @@ Matter 不能只用 HomeKit 的 `paired: boolean` 表达运行状态。
 当前回归基线：
 
 - Go 后端全量测试和 Matter 相关包 `-race` 通过；
-- Matter Runtime TypeScript 类型检查与 13/13 测试通过；
-- 前端 33 个测试文件、161/161 测试、lint 和生产/嵌入构建通过；
+- Matter Runtime TypeScript 类型检查与 13/13 测试通过，Catalog ↔ driver 精确覆盖 12 类标准 Device Type；
+- 前端 33 个测试文件、172/172 测试和生产构建通过；既有 lint 与嵌入构建基线保持通过；
 - OpenAPI YAML 解析与 `git diff --check` 通过。
 
 ### 13.2 实机验收
@@ -276,7 +279,7 @@ Matter 不能只用 HomeKit 的 `paired: boolean` 表达运行状态。
 | --- | --- | --- | --- | --- | --- |
 | A. Target 配置与 IPC 合约 | Go 配置判别联合、sidecar 生命周期、JSON-RPC 合约、OpenAPI | 高 | `gpt-5.6-sol` | `high` | `[x]` Go 测试、IPC 契约和 OpenAPI 校验通过 |
 | B. 身份、Endpoint 与恢复 | 加密 KV、Target 隔离、稳定 Endpoint、tombstone、factory reset、全量重放 | 极高 | `gpt-5.6-sol` | `xhigh` | `[x]` 身份/并发/重启/race 测试通过；实机连续重启归入 H |
-| C. 第一批官方 Matter 驱动 | `matter-runtime` 的 13 类 Device Type、Cluster、属性、Command 与回写 | 极高 | `gpt-5.6-sol` | `xhigh` | `[x]` 类型检查和 13/13 官方 Endpoint 测试通过 |
+| C. 第一批官方 Matter 驱动 | `matter-runtime` 的 12 类标准 Device Type、Cluster、属性、Command 与回写 | 极高 | `gpt-5.6-sol` | `xhigh` | `[x]` 类型检查和 12/12 官方 Endpoint 测试通过 |
 | D. Consumer Catalog 与映射 | Cluster 路径、正反向转换、默认映射、Catalog ↔ driver 对照 | 中高 | `gpt-5.6-terra` | `high` | `[x]` Catalog、映射和精确对照测试通过 |
 | E. 管理 API 与桥接中心 | commissioning/Fabric/reset API、Matter 表单、状态卡片、映射与确认交互 | 中高 | `gpt-5.6-terra` | `high` | `[x]` Go 与前端测试、lint、构建通过 |
 | F. 并发、隔离与故障注入 | 双 Target、sidecar 崩溃、背压、burst、100 Endpoint、审计安全 | 高 | `gpt-5.6-sol` | `high` | `[~]` 自动测试完成；真实双桥和 Controller 压力测试归入 H |
@@ -314,7 +317,7 @@ Matter 不能只用 HomeKit 的 `paired: boolean` 表达运行状态。
 
 ### 第二轮：完整基础桥（代码基础完成，真实双桥与 Multi-Admin 待验收）
 
-- [x] 扩充并验证第一批 13 类设备模型；
+- [x] 扩充并验证第一批 12 类标准 Matter 设备模型；
 - [x] 多 Fabric 管理 API 和 commissioning window 生命周期；
 - [x] sidecar 故障恢复与全量重放；
 - [~] 100 Endpoint 稳定身份和状态 burst 已自动测试，真实 Controller 订阅压力测试待执行；
