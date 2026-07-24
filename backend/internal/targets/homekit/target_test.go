@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/brutella/hap/accessory"
@@ -538,6 +539,60 @@ func findHomeKitCharacteristic(item *accessory.A, characteristicType string) *ch
 	return nil
 }
 
+func TestAccessoryBindingsPublishMinimalAirPurifierWithoutFilter(t *testing.T) {
+	provider, err := virtual.NewProviderFromConfig(providerconfig.Config{ID: "minimal-purifier", Config: []byte(`{"devices":[{"id":"purifier","type":"air-purifier","active":true,"speed":40,"mode":"manual"}]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := application.NewDeviceService(provider)
+	defer service.Close()
+	items, _ := service.List(context.Background())
+	var purifier *device.Device
+	for index := range items {
+		if items[index].ID == "purifier" {
+			item := items[index]
+			// Real Xiaomi-like purifiers often only publish active/current-state initially.
+			item.Endpoints = []device.Endpoint{{ID: "main", Name: "主端点", Type: "air-purifier", Capabilities: []device.Capability{{ID: "air-purifier", Type: "air-purifier", Properties: []device.Property{
+				{Definition: device.PropertyDefinition{ID: "active", Name: "启用", Type: device.ValueTypeBool, Readable: true, Writable: true, Notifiable: true}, Value: device.BoolValue(true)},
+				{Definition: device.PropertyDefinition{ID: "current-state", Name: "当前状态", Type: device.ValueTypeEnum, Readable: true, Notifiable: true, Enum: []string{"inactive", "idle", "purifying-air"}}, Value: device.EnumValue("purifying-air")},
+			}}}}}
+			purifier = &item
+			items[index] = item
+		}
+	}
+	if purifier == nil {
+		t.Fatal("purifier device missing")
+	}
+	contract, found := homeKitModelContract(device.TypeAirPurifier)
+	if !found {
+		t.Fatal("HomeKit air purifier contract missing")
+	}
+	if _, err := device.ProjectForConsumer(*purifier, contract); err != nil {
+		t.Fatalf("minimal purifier should project to HomeKit: %v", err)
+	}
+	bindings := newAccessoryBindings(items, map[string]bool{"purifier": true}, nil, service, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if len(bindings.accessories) != 1 || bindings.actives["purifier"] == nil || bindings.airCurrent["purifier"] == nil || bindings.airTargets["purifier"] == nil {
+		t.Fatalf("minimal purifier bindings = %#v", bindings)
+	}
+	if bindings.speeds["purifier"] != nil || bindings.filterLife["purifier"] != nil || bindings.filterChange["purifier"] != nil || bindings.filterResets["purifier"] != nil || bindings.airQualities["purifier"] != nil {
+		t.Fatalf("optional characteristics should be omitted: speeds=%v filterLife=%v filterChange=%v filterResets=%v airQuality=%v", bindings.speeds["purifier"], bindings.filterLife["purifier"], bindings.filterChange["purifier"], bindings.filterResets["purifier"], bindings.airQualities["purifier"])
+	}
+	accessory := bindings.byDevice["purifier"]
+	if accessory == nil {
+		t.Fatal("purifier accessory missing")
+	}
+	serviceTypes := make([]string, 0, len(accessory.Ss))
+	for _, current := range accessory.Ss {
+		serviceTypes = append(serviceTypes, current.Type)
+	}
+	if len(serviceTypes) != 2 || serviceTypes[0] != "3E" || serviceTypes[1] != "BB" {
+		t.Fatalf("minimal purifier services = %#v", serviceTypes)
+	}
+	if len(accessory.Ss[1].Linked) != 0 {
+		t.Fatalf("minimal purifier should not link missing services: %#v", accessory.Ss[1].Linked)
+	}
+}
+
 func TestAccessoryBindingsHandleOneHundredAccessoriesAndBurstUpdates(t *testing.T) {
 	definitions := make([]virtual.DeviceConfig, 0, 100)
 	types := []string{"switch", "fan", "air-purifier", "window-covering", "temperature-sensor"}
@@ -571,5 +626,61 @@ func TestAccessoryBindingsHandleOneHundredAccessoriesAndBurstUpdates(t *testing.
 	}
 	if after := runtime.NumGoroutine(); after > before+2 {
 		t.Fatalf("goroutines grew during burst: %d -> %d", before, after)
+	}
+}
+
+type incompleteSwitchProvider struct {
+	inner *virtual.Provider
+}
+
+func (p *incompleteSwitchProvider) Manifest() providersdk.Manifest { return p.inner.Manifest() }
+func (p *incompleteSwitchProvider) Capabilities() providersdk.Capabilities {
+	return p.inner.Capabilities()
+}
+func (p *incompleteSwitchProvider) Initialize(ctx context.Context) error {
+	return p.inner.Initialize(ctx)
+}
+func (p *incompleteSwitchProvider) Close(ctx context.Context) error { return p.inner.Close(ctx) }
+func (p *incompleteSwitchProvider) DiscoverDevices(ctx context.Context) ([]device.Device, error) {
+	items, err := p.inner.DiscoverDevices(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for index := range items {
+		if items[index].ID != "broken-switch" {
+			continue
+		}
+		items[index].Endpoints = []device.Endpoint{{
+			ID: "main", Name: "主端点", Type: "switch",
+			Capabilities: []device.Capability{{ID: "switch", Type: "switch", Properties: []device.Property{}}},
+		}}
+	}
+	return items, nil
+}
+
+func TestTargetReportsProjectionIssuesForIncompleteDevices(t *testing.T) {
+	inner, err := virtual.NewProviderFromConfig(providerconfig.Config{ID: "broken-bridge", Config: []byte(`{"devices":[{"id":"ok-switch","type":"switch"},{"id":"broken-switch","type":"switch"}]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := application.NewDeviceService(&incompleteSwitchProvider{inner: inner})
+	defer service.Close()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	target, err := New(context.Background(), Config{
+		ID: "bridge", Name: "Bridge", Address: "127.0.0.1:0", Pin: "12345678", SetupID: "TEST",
+		StorePath: t.TempDir(), DeviceIDs: []string{"ok-switch", "broken-switch"},
+	}, service, logger)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	issues := target.Issues()
+	if len(issues) != 1 {
+		t.Fatalf("issues = %#v", issues)
+	}
+	if issues[0].DeviceID != "broken-switch" || issues[0].Stage != "consumer-contract" || !strings.Contains(issues[0].Message, "requires parameter") {
+		t.Fatalf("issue = %#v", issues[0])
+	}
+	if target.PublishedAccessoryCount() != 1 {
+		t.Fatalf("published accessories = %d", target.PublishedAccessoryCount())
 	}
 }

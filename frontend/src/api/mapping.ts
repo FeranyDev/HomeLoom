@@ -1,5 +1,5 @@
 import { requestData } from './client'
-import type { ConsumerCatalog, CustomModel, CustomModelProperty, MappingBinding, MappingCatalog, MappingPreviewRequest, MappingPreviewResult, MappingProfile, MappingProfileInfo, ModelContract } from '../types/mapping'
+import type { ConsumerCatalog, CustomModel, CustomModelProperty, MappingBinding, MappingCatalog, MappingPreviewRequest, MappingPreviewResult, MappingProfile, MappingProfileInfo, ModelContract, ModelEnumOverride } from '../types/mapping'
 
 export const previewMapping = (input: MappingPreviewRequest): Promise<MappingPreviewResult> => requestData('/api/v1/mapping/preview', { method: 'POST', body: JSON.stringify(input) })
 export const listMappingProfiles = (): Promise<MappingProfileInfo[]> => requestData('/api/v1/mapping/profiles')
@@ -20,3 +20,6 @@ export const listCustomModelProperties = (): Promise<CustomModelProperty[]> => r
 export const createCustomModelProperty = (item: CustomModelProperty): Promise<CustomModelProperty> => requestData('/api/v1/device-models/custom-properties', { method: 'POST', body: JSON.stringify(item) })
 export const updateCustomModelProperty = (id: string, item: CustomModelProperty): Promise<CustomModelProperty> => requestData(`/api/v1/device-models/custom-properties/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(item) })
 export const deleteCustomModelProperty = (id: string): Promise<void> => requestData(`/api/v1/device-models/custom-properties/${encodeURIComponent(id)}`, { method: 'DELETE' })
+export const listModelEnumOverrides = (): Promise<ModelEnumOverride[]> => requestData('/api/v1/device-models/enum-overrides')
+export const upsertModelEnumOverride = (item: ModelEnumOverride): Promise<ModelEnumOverride> => requestData('/api/v1/device-models/enum-overrides', { method: 'PUT', body: JSON.stringify(item) })
+export const deleteModelEnumOverride = (id: string): Promise<void> => requestData(`/api/v1/device-models/enum-overrides/${encodeURIComponent(id)}`, { method: 'DELETE' })

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -198,6 +199,7 @@ func (m *Manager) Apply(ctx context.Context, config target.Config) (application.
 	info := infoFromConfig(config, "running")
 	info.Paired = next.IsPaired()
 	applyMatterStatus(&info, next)
+	applyTargetDiagnostics(&info, next)
 	if !info.Paired {
 		info.PairingCode, info.SetupURI = pairing.Code, pairing.SetupURI
 	}
@@ -244,6 +246,7 @@ func (m *Manager) RuntimeInfo(config target.Config) application.TargetInfo {
 	if exists {
 		info.Paired = running.target.IsPaired()
 		applyMatterStatus(&info, running.target)
+		applyTargetDiagnostics(&info, running.target)
 	}
 	return info
 }
@@ -306,6 +309,52 @@ func (m *Manager) setStatus(id, status string) {
 	if handler != nil {
 		handler(id, status)
 	}
+}
+
+func applyTargetDiagnostics(info *application.TargetInfo, current managedTarget) {
+	reporter, ok := current.(interface {
+		Issues() []homekit.ProjectionIssue
+	})
+	if !ok {
+		return
+	}
+	issues := reporter.Issues()
+	if len(issues) == 0 {
+		return
+	}
+	info.Issues = make([]application.TargetIssue, 0, len(issues))
+	info.Diagnostics = map[string]string{
+		"skippedAccessories": fmt.Sprintf("%d", len(issues)),
+	}
+	if counter, ok := current.(interface{ PublishedAccessoryCount() int }); ok {
+		info.Diagnostics["publishedAccessories"] = fmt.Sprintf("%d", counter.PublishedAccessoryCount())
+	}
+	summaryParts := make([]string, 0, len(issues))
+	for _, issue := range issues {
+		info.Issues = append(info.Issues, application.TargetIssue{
+			DeviceID: issue.DeviceID, DeviceName: issue.DeviceName, DeviceType: string(issue.DeviceType),
+			Stage: issue.Stage, Message: issue.Message,
+		})
+		label := issue.DeviceName
+		if label == "" {
+			label = issue.DeviceID
+		}
+		if label == "" {
+			label = string(issue.DeviceType)
+		}
+		summaryParts = append(summaryParts, fmt.Sprintf("%s: %s", label, issue.Message))
+	}
+	if info.Error == "" {
+		if len(summaryParts) == 1 {
+			info.Error = fmt.Sprintf("1 台设备未能发布到桥：%s", summaryParts[0])
+		} else {
+			info.Error = fmt.Sprintf("%d 台设备未能发布到桥：%s", len(summaryParts), summaryParts[0])
+			if len(summaryParts) > 1 {
+				info.Error += fmt.Sprintf(" 等 %d 项问题", len(summaryParts))
+			}
+		}
+	}
+	info.Diagnostics["issueSummary"] = strings.Join(summaryParts, " | ")
 }
 
 func infoFromConfig(config target.Config, status string) application.TargetInfo {

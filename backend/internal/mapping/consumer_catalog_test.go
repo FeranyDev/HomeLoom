@@ -224,3 +224,31 @@ func TestHomeKitSupportsEveryNativeUnifiedModel(t *testing.T) {
 		}
 	}
 }
+
+func TestAirPurifierHomeKitContractIsOptionalBeyondActiveAndCurrentState(t *testing.T) {
+	contract, found := HomeKitConsumerContract(device.TypeAirPurifier)
+	if !found {
+		t.Fatal("HomeKit air-purifier contract is missing")
+	}
+	want := map[string]device.ParameterLevel{
+		"AirPurifier.Active":                         device.ParameterRequired,
+		"AirPurifier.CurrentAirPurifierState":         device.ParameterRequired,
+		"AirPurifier.TargetAirPurifierState":          device.ParameterOptional,
+		"AirPurifier.RotationSpeed":                   device.ParameterOptional,
+		"AirPurifier.SwingMode":                       device.ParameterOptional,
+		"AirPurifier.LockPhysicalControls":            device.ParameterOptional,
+		"AirQualitySensor.AirQuality":                 device.ParameterOptional,
+		"AirQualitySensor.PM2.5Density":               device.ParameterOptional,
+		"AirQualitySensor.VOCDensity":                 device.ParameterOptional,
+		"FilterMaintenance.FilterLifeLevel":           device.ParameterOptional,
+		"FilterMaintenance.FilterChangeIndication":    device.ParameterOptional,
+	}
+	if len(contract.Parameters) != len(want) {
+		t.Fatalf("air-purifier parameters = %#v", contract.Parameters)
+	}
+	for _, parameter := range contract.Parameters {
+		if level, ok := want[parameter.Target]; !ok || level != parameter.Level {
+			t.Fatalf("unexpected air-purifier mapping = %#v", parameter)
+		}
+	}
+}

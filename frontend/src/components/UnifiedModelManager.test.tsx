@@ -8,6 +8,7 @@ import { UnifiedModelManager } from './UnifiedModelManager'
 vi.mock('../api/mapping', () => ({
   listModelContracts: vi.fn(), listCustomModelProperties: vi.fn(), createCustomModelProperty: vi.fn(),
   updateCustomModelProperty: vi.fn(), deleteCustomModelProperty: vi.fn(), createCustomModel: vi.fn(), deleteCustomModel: vi.fn(),
+  listModelEnumOverrides: vi.fn(), upsertModelEnumOverride: vi.fn(), deleteModelEnumOverride: vi.fn(),
 }))
 
 const model: ModelContract = {
@@ -26,6 +27,7 @@ describe('UnifiedModelManager', () => {
   beforeEach(() => {
     vi.mocked(api.listModelContracts).mockResolvedValue([model])
     vi.mocked(api.listCustomModelProperties).mockResolvedValue([])
+    vi.mocked(api.listModelEnumOverrides).mockResolvedValue([])
   })
 
   it('presents one unified model as a three-level field configuration', async () => {
@@ -103,5 +105,49 @@ describe('UnifiedModelManager', () => {
     expect(api.createCustomModel).toHaveBeenCalledWith({ deviceType: 'air-quality-monitor', name: '空气质量监测器', version: 1 })
     expect(await screen.findByRole('heading', { name: '空气质量监测器（air-quality-monitor）' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '＋ 新增自定义属性' })).toBeInTheDocument()
+  })
+
+  it('edits enum options for built-in model properties', async () => {
+    const enumModel = {
+      ...model,
+      parameters: [{
+        path: { endpointId: 'main', capabilityId: 'light', propertyId: 'mode' },
+        name: '模式', level: 'optional', type: 'enum', readable: true, writable: true, notifiable: true,
+        enum: ['auto', 'manual'],
+        publisher: { level: 'optional', behavior: 'publish-if-supported' },
+        consumer: { level: 'optional', behavior: 'map-if-supported' },
+      }],
+    }
+    vi.mocked(api.listModelContracts)
+      .mockResolvedValueOnce([enumModel])
+      .mockResolvedValueOnce([{
+        ...enumModel,
+        parameters: [{ ...enumModel.parameters[0], enum: ['auto', 'manual', 'sleep'] }],
+      }])
+    vi.mocked(api.listModelEnumOverrides)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        id: 'enum-lightbulb-main-light-mode', deviceType: 'lightbulb', endpointId: 'main', capabilityId: 'light', propertyId: 'mode',
+        enum: ['auto', 'manual', 'sleep'],
+      }])
+    vi.mocked(api.upsertModelEnumOverride).mockResolvedValue({
+      id: 'enum-lightbulb-main-light-mode', deviceType: 'lightbulb', endpointId: 'main', capabilityId: 'light', propertyId: 'mode',
+      enum: ['auto', 'manual', 'sleep'],
+    })
+    render(<UnifiedModelManager />)
+    await screen.findByRole('heading', { name: '模型与属性字段配置' })
+    await userEvent.click(screen.getByRole('button', { name: '编辑枚举' }))
+    const dialog = screen.getByRole('dialog', { name: '编辑统一模型枚举' })
+    expect(dialog).toHaveAttribute('aria-modal', 'true')
+    expect(dialog.closest('.modal-backdrop')).toHaveClass('is-enum-editor')
+    const input = screen.getByLabelText('统一模型枚举值')
+    await userEvent.clear(input)
+    await userEvent.type(input, 'auto, manual, sleep')
+    await userEvent.click(screen.getByRole('button', { name: '保存枚举覆盖' }))
+    expect(api.upsertModelEnumOverride).toHaveBeenCalledWith(expect.objectContaining({
+      deviceType: 'lightbulb', endpointId: 'main', capabilityId: 'light', propertyId: 'mode', enum: ['auto', 'manual', 'sleep'],
+    }))
+    expect(await screen.findByText('枚举已覆盖')).toBeInTheDocument()
+    expect(screen.getByText('枚举（enum）：auto / manual / sleep')).toBeInTheDocument()
   })
 })

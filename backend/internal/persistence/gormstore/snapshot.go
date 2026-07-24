@@ -37,6 +37,7 @@ type databaseSnapshot struct {
 	MappingProfiles       []mappingProfileRow         `json:"mappingProfiles"`
 	MappingBindings       []mappingBindingRow         `json:"mappingBindings"`
 	CustomModelProperties []customModelPropertyRow    `json:"customModelProperties"`
+	ModelEnumOverrides    []modelEnumOverrideRow      `json:"modelEnumOverrides"`
 	AdminUsers            []adminUserRow              `json:"adminUsers"`
 	AdminSessions         []adminSessionRow           `json:"adminSessions"`
 	MIoTSpecCache         []miotSpecCacheRow          `json:"miotSpecCache"`
@@ -100,7 +101,7 @@ func (s *Store) readSnapshot(ctx context.Context) (databaseSnapshot, error) {
 			{"HomeKit IIDs", &result.HomeKitIIDs}, {"system settings", &result.SystemSettings},
 			{"device preferences", &result.DevicePreferences}, {"audit events", &result.AuditEvents},
 			{"mapping profiles", &result.MappingProfiles}, {"mapping bindings", &result.MappingBindings},
-			{"custom model properties", &result.CustomModelProperties}, {"administrator users", &result.AdminUsers},
+			{"custom model properties", &result.CustomModelProperties}, {"model enum overrides", &result.ModelEnumOverrides}, {"administrator users", &result.AdminUsers},
 			{"administrator sessions", &result.AdminSessions}, {"MIoT spec cache", &result.MIoTSpecCache},
 			{"custom unified models", &result.CustomUnifiedModels},
 		}
@@ -245,7 +246,7 @@ func (s *Store) replaceRows(ctx context.Context, snapshot databaseSnapshot) erro
 		deleteOrder := []any{
 			&adminSessionRow{}, &homeKitIIDRow{}, &homeKitAccessoryIDRow{}, &matterEndpointIdentityRow{},
 			&matterRuntimeKVRow{}, &targetVirtualDeviceRow{},
-			&mappingBindingRow{}, &mappingProfileRow{}, &customModelPropertyRow{}, &customUnifiedModelRow{},
+			&mappingBindingRow{}, &mappingProfileRow{}, &customModelPropertyRow{}, &modelEnumOverrideRow{}, &customUnifiedModelRow{},
 			&miotSpecCacheRow{}, &auditEventRow{}, &devicePreferenceRow{}, &systemSettingRow{},
 			&providerRow{}, &targetRow{}, &adminUserRow{},
 		}
@@ -261,7 +262,7 @@ func (s *Store) replaceRows(ctx context.Context, snapshot databaseSnapshot) erro
 			{"providers", &snapshot.Providers}, {"targets", &snapshot.Targets}, {"administrator users", &snapshot.AdminUsers},
 			{"system settings", &snapshot.SystemSettings}, {"device preferences", &snapshot.DevicePreferences},
 			{"audit events", &snapshot.AuditEvents}, {"mapping profiles", &snapshot.MappingProfiles},
-			{"mapping bindings", &snapshot.MappingBindings}, {"custom model properties", &snapshot.CustomModelProperties},
+			{"mapping bindings", &snapshot.MappingBindings}, {"custom model properties", &snapshot.CustomModelProperties}, {"model enum overrides", &snapshot.ModelEnumOverrides},
 			{"custom unified models", &snapshot.CustomUnifiedModels}, {"MIoT spec cache", &snapshot.MIoTSpecCache},
 			{"target virtual devices", &snapshot.TargetVirtualDevices}, {"HomeKit accessory IDs", &snapshot.HomeKitAccessoryIDs},
 			{"HomeKit IIDs", &snapshot.HomeKitIIDs}, {"Matter runtime values", &snapshot.MatterRuntimeValues},

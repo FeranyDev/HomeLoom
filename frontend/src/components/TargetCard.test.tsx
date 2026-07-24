@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { TargetCard } from './TargetCard'
-import type { MatterTarget } from '../types/target'
+import type { MatterTarget, Target } from '../types/target'
 
 const target = {
   id: 'apple-main', type: 'apple-hap' as const, name: '主桥', enabled: true, status: 'running' as const,
@@ -58,4 +58,20 @@ describe('TargetCard', () => {
 		expect(screen.getByText('手工配对码：349701123')).toBeInTheDocument()
 		expect(screen.getByRole('button', { name: '关闭配网窗口' })).toBeInTheDocument()
 	})
+
+	it('shows detailed bridge projection issues for HomeKit targets', () => {
+		const broken: Target = {
+			...target,
+			error: '1 台设备未能发布到桥：坏掉的开关: consumer "homekit" requires parameter main/switch/power',
+			diagnostics: { skippedAccessories: '1', publishedAccessories: '1' },
+			issues: [{ deviceId: 'broken-switch', deviceName: '坏掉的开关', deviceType: 'switch', stage: 'consumer-contract', message: 'consumer "homekit" requires parameter main/switch/power' }],
+		}
+		render(<TargetCard target={broken} {...callbacks()} />)
+		expect(screen.getAllByText(/1 台设备未能发布到桥/).length).toBeGreaterThan(0)
+		expect(screen.getByText('坏掉的开关')).toBeInTheDocument()
+		expect(screen.getByText('consumer-contract')).toBeInTheDocument()
+		expect(screen.getByText('consumer "homekit" requires parameter main/switch/power')).toBeInTheDocument()
+		expect(screen.getByText(/已跳过配件 1/)).toBeInTheDocument()
+	})
 })
+

@@ -14,6 +14,8 @@ var (
 	ErrCustomModelPropertyExists   = errors.New("custom model property path already exists")
 	ErrCustomModelNotFound         = errors.New("custom unified model not found")
 	ErrCustomModelExists           = errors.New("unified model already exists")
+	ErrModelEnumOverrideNotFound   = errors.New("model enum override not found")
+	ErrModelEnumOverrideExists     = errors.New("model enum override path already exists")
 )
 
 func (s *ProfileService) ModelContracts() []device.ModelContract {
@@ -39,7 +41,12 @@ func (s *ProfileService) ModelContracts() []device.ModelContract {
 			}
 		}
 	}
+	overrides := make([]mapping.ModelEnumOverride, 0, len(s.enumOverrides))
+	for _, item := range s.enumOverrides {
+		overrides = append(overrides, cloneModelEnumOverride(item))
+	}
 	s.mu.RUnlock()
+	applyModelEnumOverrides(contracts, overrides)
 	for index := range contracts {
 		sort.Slice(contracts[index].Parameters, func(i, j int) bool {
 			return contracts[index].Parameters[i].Path.String() < contracts[index].Parameters[j].Path.String()
@@ -118,6 +125,9 @@ func (s *ProfileService) ResolveModelDefinition(deviceType device.Type, path dev
 		definition := cloneCustomModelProperty(item).Definition
 		definition.ID = path.PropertyID
 		definition.ParameterLevel = device.ParameterCustom
+		if override, hasOverride := s.enumOverrides[string(deviceType)+"\x00"+path.Key()]; hasOverride && definition.Type == device.ValueTypeEnum {
+			definition.Enum = append([]string(nil), override.Enum...)
+		}
 		return definition, true
 	}
 	parameter, ok := s.modelParameterLocked(deviceType, path)
@@ -137,6 +147,9 @@ func (s *ProfileService) ResolveModelDefinition(deviceType device.Type, path dev
 	}
 	result.Readable, result.Writable, result.Notifiable = parameter.Readable, parameter.Writable, parameter.Notifiable
 	result.Enum = append([]string(nil), parameter.Enum...)
+	if override, ok := s.enumOverrides[string(deviceType)+"\x00"+path.Key()]; ok && result.Type == device.ValueTypeEnum {
+		result.Enum = append([]string(nil), override.Enum...)
+	}
 	return result, true
 }
 
@@ -313,11 +326,140 @@ func cloneCustomModelProperty(item mapping.CustomModelProperty) mapping.CustomMo
 }
 
 func customModelValidationError(err error) error {
-	var validation *mapping.ValidationError
-	if !errors.As(err, &validation) {
+	fields := errFields(err)
+	if fields == nil {
 		return err
 	}
-	return NewValidationError("invalid custom model property", validation.Fields)
+	return NewValidationError("invalid custom model property", fields)
+}
+
+func errFields(err error) map[string]string {
+	var validation *mapping.ValidationError
+	if !errors.As(err, &validation) {
+		return nil
+	}
+	return validation.Fields
+}
+
+func (s *ProfileService) ListModelEnumOverrides() []mapping.ModelEnumOverride {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make([]mapping.ModelEnumOverride, 0, len(s.enumOverrides))
+	for _, item := range s.enumOverrides {
+		result = append(result, cloneModelEnumOverride(item))
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].DeviceType != result[j].DeviceType {
+			return result[i].DeviceType < result[j].DeviceType
+		}
+		return result[i].Path().String() < result[j].Path().String()
+	})
+	return result
+}
+
+func (s *ProfileService) UpsertModelEnumOverride(ctx context.Context, item mapping.ModelEnumOverride) (mapping.ModelEnumOverride, error) {
+	if item.ID == "" {
+		item.ID = mapping.ModelEnumOverrideID(item.DeviceType, item.Path())
+	}
+	if err := mapping.ValidateModelEnumOverride(item); err != nil {
+		return mapping.ModelEnumOverride{}, NewValidationError("invalid model enum override", errFields(err))
+	}
+	s.mu.Lock()
+	if !s.modelExistsLocked(item.DeviceType) {
+		s.mu.Unlock()
+		return mapping.ModelEnumOverride{}, NewValidationError("invalid model enum override", map[string]string{"deviceType": "must reference an existing unified device model"})
+	}
+	parameter, ok := s.modelParameterLocked(item.DeviceType, item.Path())
+	if !ok {
+		s.mu.Unlock()
+		return mapping.ModelEnumOverride{}, NewValidationError("invalid model enum override", map[string]string{"propertyId": "must reference an existing model property"})
+	}
+	if parameter.Type != device.ValueTypeEnum {
+		s.mu.Unlock()
+		return mapping.ModelEnumOverride{}, NewValidationError("invalid model enum override", map[string]string{"propertyId": "must reference an enum property"})
+	}
+	if owner, exists := s.enumOverrides[item.Key()]; exists && owner.ID != item.ID {
+		s.mu.Unlock()
+		return mapping.ModelEnumOverride{}, ErrModelEnumOverrideExists
+	}
+	for _, current := range s.enumOverrides {
+		if current.ID == item.ID && current.Key() != item.Key() {
+			s.mu.Unlock()
+			return mapping.ModelEnumOverride{}, ErrModelEnumOverrideExists
+		}
+	}
+	if err := s.store.SaveModelEnumOverride(ctx, item); err != nil {
+		s.mu.Unlock()
+		return mapping.ModelEnumOverride{}, err
+	}
+	s.enumOverrides[item.Key()] = cloneModelEnumOverride(item)
+	s.mu.Unlock()
+	s.notifyChanged(ctx)
+	return cloneModelEnumOverride(item), nil
+}
+
+func (s *ProfileService) DeleteModelEnumOverride(ctx context.Context, id string) error {
+	s.mu.Lock()
+	var current mapping.ModelEnumOverride
+	found := false
+	for _, candidate := range s.enumOverrides {
+		if candidate.ID == id {
+			current, found = candidate, true
+			break
+		}
+	}
+	if !found {
+		s.mu.Unlock()
+		return ErrModelEnumOverrideNotFound
+	}
+	if err := s.store.DeleteModelEnumOverride(ctx, id); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	delete(s.enumOverrides, current.Key())
+	s.mu.Unlock()
+	s.notifyChanged(ctx)
+	return nil
+}
+
+func applyModelEnumOverrides(contracts []device.ModelContract, overrides []mapping.ModelEnumOverride) {
+	if len(overrides) == 0 {
+		return
+	}
+	index := make(map[string]map[string]int, len(contracts))
+	for contractIndex := range contracts {
+		paths := make(map[string]int, len(contracts[contractIndex].Parameters))
+		for parameterIndex, parameter := range contracts[contractIndex].Parameters {
+			paths[parameter.Path.Key()] = parameterIndex
+		}
+		index[string(contracts[contractIndex].DeviceType)] = paths
+	}
+	for _, override := range overrides {
+		paths, ok := index[string(override.DeviceType)]
+		if !ok {
+			continue
+		}
+		parameterIndex, ok := paths[override.Path().Key()]
+		if !ok {
+			continue
+		}
+		for contractIndex := range contracts {
+			if contracts[contractIndex].DeviceType != override.DeviceType {
+				continue
+			}
+			if contracts[contractIndex].Parameters[parameterIndex].Type != device.ValueTypeEnum {
+				break
+			}
+			contracts[contractIndex].Parameters[parameterIndex].Enum = append([]string(nil), override.Enum...)
+			break
+		}
+	}
+}
+
+func cloneModelEnumOverride(item mapping.ModelEnumOverride) mapping.ModelEnumOverride {
+	result := item
+	result.Enum = append([]string(nil), item.Enum...)
+	return result
 }
 
 func (s *ProfileService) modelExistsLocked(deviceType device.Type) bool {

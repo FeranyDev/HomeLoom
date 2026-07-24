@@ -3,6 +3,7 @@ import * as mappingApi from '../api/mapping'
 import type { Device, DeviceType, PropertyDefinition, PropertyValue } from '../types/device'
 import type { ConsumerProperty, MappingBinding, MappingCatalog, MappingProfileInfo, SourceCatalogDevice, SourceCatalogMetadata, SourceValueStatus } from '../types/mapping'
 import { consumerPropertyLabel, deviceTypeLabel, matterClusterLabel, matterConsumerPathLabel, parameterLevelLabel, permissionLabel, propertyDisplayLabel, valueTypeLabel } from '../presentationLabels'
+import { openProfileWorkbench } from '../profileDraft'
 
 type ProviderProperty = {
   key: string; providerId: string; deviceId: string; deviceName: string; deviceType: DeviceType
@@ -196,7 +197,18 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
   const refresh = useCallback(async () => {
     try {
       const [nextBindings, nextProfiles, nextCatalog] = await Promise.all([api.listBindings(), api.listProfiles(), api.catalog()])
-      setBindings(nextBindings.filter((item) => item.providerId === device.providerId && item.deviceId === device.id && (consumerOnly ? item.stage === 'consumer' && item.targetId === targetId && item.consumerDeviceId === consumerDeviceId && (!consumerId || item.consumerId === consumerId) : providerOnly ? item.stage === 'provider' : !item.targetId && !item.consumerDeviceId))); setProfiles(nextProfiles); setCatalog(nextCatalog); setError('')
+      const deviceBindings = nextBindings.filter((item) => item.providerId === device.providerId && item.deviceId === device.id)
+      const visibleBindings = deviceBindings.filter((item) => {
+        if (consumerOnly) {
+          // Keep provider-stage bindings so consumer mapping can mark model parameters
+          // that already have a publisher source, while only editing consumer routes.
+          if (item.stage === 'provider') return true
+          return item.stage === 'consumer' && item.targetId === targetId && item.consumerDeviceId === consumerDeviceId && (!consumerId || item.consumerId === consumerId)
+        }
+        if (providerOnly) return item.stage === 'provider'
+        return !item.targetId && !item.consumerDeviceId
+      })
+      setBindings(visibleBindings); setProfiles(nextProfiles); setCatalog(nextCatalog); setError('')
     } catch (cause) { setError(routeError(cause)) }
   }, [api, consumerDeviceId, consumerId, consumerOnly, device.id, device.providerId, providerOnly, targetId])
   useEffect(() => { void refresh() }, [profileRevision, catalogRevision, refresh])
@@ -252,8 +264,24 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
     })
   }, [bindings, catalog.models, device.type, sources])
   const visibleDefaultProviderRoutes = stage === 'provider' ? defaultProviderRoutes : []
-  const effectiveRouteCount = bindings.filter((item) => item.enabled).length + visibleDefaultProviderRoutes.length
-  const displayedRouteCount = bindings.length + visibleDefaultProviderRoutes.length
+  const listedBindings = useMemo(() => {
+    if (consumerOnly) return bindings.filter((item) => item.stage === 'consumer')
+    if (providerOnly) return bindings.filter((item) => item.stage === 'provider')
+    return bindings
+  }, [bindings, consumerOnly, providerOnly])
+  const publisherBoundModelKeys = useMemo(() => {
+    const keys = new Set<string>()
+    for (const item of bindings) {
+      if (item.stage !== 'provider' || !item.enabled) continue
+      keys.add(pathKey({ endpointId: item.modelEndpointId, capabilityId: item.modelCapabilityId, propertyId: item.modelPropertyId }))
+    }
+    for (const route of defaultProviderRoutes) {
+      keys.add(pathKey(route.model.path))
+    }
+    return keys
+  }, [bindings, defaultProviderRoutes])
+  const effectiveRouteCount = listedBindings.filter((item) => item.enabled).length + visibleDefaultProviderRoutes.length
+  const displayedRouteCount = listedBindings.length + visibleDefaultProviderRoutes.length
 
   useEffect(() => {
     if (!sourceKey && sources[0]) setSourceKey(sources[0].key)
@@ -312,6 +340,36 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
   const toggle = async (item: MappingBinding) => { try { await api.update(item.id, { ...item, enabled: !item.enabled }); await refresh() } catch (cause) { setError(routeError(cause)) } }
   const remove = async (item: MappingBinding) => { if (!window.confirm(`删除映射路由 ${item.id}？`)) return; try { await api.remove(item.id); await refresh() } catch (cause) { setError(routeError(cause)) } }
 
+
+  const openProfileForCurrentMismatch = () => {
+    if (!inputType || !outputType) return
+    const sourceEnum = stage === 'provider' ? source?.definition.enum : modelParameter?.enum
+    const targetEnum = stage === 'provider' ? modelParameter?.enum : consumer?.property.enum
+    const sourceLabel = stage === 'provider'
+      ? `${source?.propertyId ?? 'source'}`
+      : `${modelParameter?.path.propertyId ?? 'model'}`
+    const targetLabel = stage === 'provider'
+      ? `${modelParameter?.path.propertyId ?? 'model'}`
+      : `${consumer?.property.id ?? 'consumer'}`
+    openProfileWorkbench({
+      stage,
+      inputType,
+      outputType,
+      sourceEnum,
+      targetEnum,
+      sourceLabel,
+      targetLabel,
+      reason: enumCompatibility.kind !== 'none' && enumCompatibility.kind !== 'exact'
+        ? enumCompatibility.kind
+        : inputType !== outputType ? 'type-mismatch' : 'manual',
+    })
+  }
+
+  const showProfileJump = Boolean(inputType && outputType && (
+    enumProfileRequired
+    || (!profileId && enumCompatibility.kind === 'partial')
+    || (!profileId && inputType !== outputType)
+  ))
   return <section className="binding-manager mapping-graph">
     <div className="profile-heading"><div><p className="eyebrow">设备映射（DEVICE MAPPING） · {device.providerId}</p><h3>{consumerLabel ?? (providerOnly ? `${device.name} · 来源属性映射` : `${device.name}的双段属性路由`)}</h3><p>{consumerOnly ? `从来源设备的统一模型属性绑定到当前目标设备的 ${consumerId ?? 'Consumer'} 属性；每条属性可独立选择转换配置（Profile）。` : providerOnly ? '将这台提供端（Provider）设备的完整来源属性绑定到统一模型；路径和类型一致的属性会显示为可编辑的默认映射，保存修改后成为当前设备独立的数据库覆盖。' : '本编辑器只读取和修改当前设备。提供端（Provider）与消费端（Consumer）通过统一模型通信，两段路由可分别转换、启停和热更新。'}</p></div><span>{effectiveRouteCount} / {displayedRouteCount} 生效</span></div>
     {!consumerOnly && !providerOnly && <div className="mapping-stage-tabs" role="tablist"><button className={stage === 'provider' ? 'is-active' : ''} onClick={() => setStage('provider')}>① 提供端（Provider）→ 统一模型</button><button className={stage === 'consumer' ? 'is-active' : ''} onClick={() => setStage('consumer')}>② 统一模型 → 消费端（Consumer）</button></div>}
@@ -322,7 +380,11 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
       </section>
       <div className="mapping-arrow"><span>→</span><small>{stage === 'provider' ? profileId || 'identity' : '统一语义'}</small></div>
       <section className="mapping-lane is-model"><header><span>统一模型（UNIFIED MODEL）</span><strong>端点 / 能力 / 属性（Endpoint / Capability / Property）三级基准</strong><label>当前设备<input aria-label="当前映射设备" value={`${device.name} · ${device.providerId} / ${device.id}`} disabled /></label><label>设备模型（deviceType）<select aria-label="统一设备模型" value={effectiveType} disabled>{catalog.models.map((item) => <option key={item.deviceType} value={item.deviceType}>{deviceTypeLabel(item.deviceType)}</option>)}</select></label></header>
-        <div className="mapping-node-list">{parameters.map((item) => <button key={pathKey(item.path)} className={pathKey(item.path) === modelKey ? 'is-selected' : ''} onClick={() => setModelKey(pathKey(item.path))}><span className={`parameter-level is-${item.level}`}>{parameterLevelLabel(item.level)}</span><strong>{propertyDisplayLabel(item.name, item.path.propertyId)}</strong><code>{item.path.endpointId} / {item.path.capabilityId} / {item.path.propertyId}</code><small>{valueTypeLabel(item.type)}{item.unit ? ` · 单位 ${item.unit}` : ''} · {permissionLabel(item.readable, item.writable, item.notifiable)}</small>{item.type === 'enum' && item.enum?.length ? <small className="enum-domain-inline">模型枚举：{item.enum.join(' / ')}</small> : null}</button>)}</div>
+        <div className="mapping-node-list">{parameters.map((item) => {
+          const key = pathKey(item.path)
+          const publisherBound = stage === 'consumer' && publisherBoundModelKeys.has(key)
+          return <button key={key} className={`${key === modelKey ? 'is-selected' : ''}${publisherBound ? ' is-publisher-bound' : ''}`.trim()} onClick={() => setModelKey(key)}><span className={`parameter-level is-${item.level}`}>{parameterLevelLabel(item.level)}</span>{publisherBound && <span className="publisher-bound-mark" title="该统一模型属性已有发布者绑定，可从提供端投影到此属性">已绑定发布者</span>}<strong>{propertyDisplayLabel(item.name, item.path.propertyId)}</strong><code>{item.path.endpointId} / {item.path.capabilityId} / {item.path.propertyId}</code><small>{valueTypeLabel(item.type)}{item.unit ? ` · 单位 ${item.unit}` : ''} · {permissionLabel(item.readable, item.writable, item.notifiable)}</small>{item.type === 'enum' && item.enum?.length ? <small className="enum-domain-inline">模型枚举：{item.enum.join(' / ')}</small> : null}</button>
+        })}</div>
       </section>
       <div className="mapping-arrow"><span>→</span><small>{stage === 'consumer' ? profileId || 'identity' : '统一状态'}</small></div>
       <section className={`mapping-lane ${stage === 'consumer' ? '' : 'is-context'}`}><header><span>消费端（CONSUMERS）</span><strong>{consumerCatalogs.map((item) => item.name).join(' / ') || consumerId || '目标完整属性'}</strong><small>{consumers.length} 个属性</small></header>
@@ -330,11 +392,11 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
       </section>
     </div>
     <div className={`mapping-route-toolbar ${editingID || editingDefaultKey ? 'is-editing' : ''}`}>
-      <label>转换配置（Profile）<select aria-label="映射转换 Profile" value={profileId} onChange={(event) => setProfileId(event.target.value)}><option value="">恒等转换（identity）· 不转换</option>{compatibleProfiles.map((item) => <option key={item.id} value={item.id}>{item.id} · {item.transforms.map((transform) => transform.type).join(' → ') || 'identity'}</option>)}</select></label>
-      <div className="mapping-route-actions"><small>{editingDefaultKey ? '正在修改默认映射；保存后写入当前设备的独立覆盖。' : editingID ? `正在编辑数据库路由 ${editingID}` : inputType && outputType ? `类型：${valueTypeLabel(inputType)} → ${valueTypeLabel(outputType)}；同一来源可继续映射到其他模型属性。` : '请选择两端属性'}</small>{(editingID || editingDefaultKey) && <button onClick={clearEditing}>取消编辑</button>}<button className="add-button" disabled={saving || !modelParameter || (stage === 'provider' ? !source : !consumer || !consumerDevice) || (!profileId && inputType !== outputType) || enumProfileRequired} onClick={() => void save()}>{saving ? '保存中…' : editingDefaultKey ? '保存默认映射覆盖' : editingID ? '保存路由修改' : `＋ 保存第 ${stage === 'provider' ? '一' : '二'} 段路由`}</button></div>
+      <div className="mapping-profile-field"><label>转换配置（Profile）<select aria-label="映射转换 Profile" value={profileId} onChange={(event) => setProfileId(event.target.value)}><option value="">恒等转换（identity）· 不转换</option>{compatibleProfiles.map((item) => <option key={item.id} value={item.id}>{item.id} · {item.transforms.map((transform) => transform.type).join(' → ') || 'identity'}</option>)}</select></label><button type="button" className="mapping-profile-refresh" aria-label="刷新转换配置列表" title="重新加载可用 Profile" onClick={() => void refresh()} disabled={saving}>刷新</button></div>
+      <div className="mapping-route-actions"><small>{editingDefaultKey ? '正在修改默认映射；保存后写入当前设备的独立覆盖。' : editingID ? `正在编辑数据库路由 ${editingID}` : inputType && outputType ? `类型：${valueTypeLabel(inputType)} → ${valueTypeLabel(outputType)}；同一来源可继续映射到其他模型属性。` : '请选择两端属性'}</small>{showProfileJump && enumCompatibility.kind === 'none' && <button type="button" onClick={openProfileForCurrentMismatch}>去配置转换 Profile</button>}{(editingID || editingDefaultKey) && <button onClick={clearEditing}>取消编辑</button>}<button className="add-button" disabled={saving || !modelParameter || (stage === 'provider' ? !source : !consumer || !consumerDevice) || (!profileId && inputType !== outputType) || enumProfileRequired} onClick={() => void save()}>{saving ? '保存中…' : editingDefaultKey ? '保存默认映射覆盖' : editingID ? '保存路由修改' : `＋ 保存第 ${stage === 'provider' ? '一' : '二'} 段路由`}</button></div>
       {showNumericRange && <div className="numeric-range-comparison" role="status"><header><strong>数值范围（NUMERIC RANGE）</strong><span>最终范围由两端约束取交集</span></header><section><small>{stage === 'provider' ? '来源范围（Provider）' : '统一模型范围（Model）'}</small><code>{numericRangeText(numericSource)}</code></section><i>→</i><section><small>转换后范围</small><code>{projectedNumericSource ? numericRangeText(projectedNumericSource) : '无法静态推导'}</code></section><i>∩</i><section><small>{stage === 'provider' ? '统一模型范围（Model）' : `${consumer?.consumer.name ?? '消费端'}范围（Consumer）`}</small><code>{numericRangeText(numericTarget)}</code></section><i>=</i><section className={effectiveNumericRange ? 'is-effective' : 'is-empty'}><small>最终有效范围</small><code>{effectiveNumericRange ? numericRangeText(effectiveNumericRange) : '无有效交集'}</code></section></div>}
-      {enumCompatibility.kind !== 'none' && <div className={`enum-compatibility is-${profileId ? 'profile' : enumCompatibility.kind}`} role="status"><header><strong>枚举值域检查（ENUM DOMAIN）</strong><span>{profileId ? `由 Profile ${profileId} 转换` : enumCompatibility.kind === 'exact' ? '完全一致，可直接映射' : enumCompatibility.kind === 'normalized' ? '仅格式差异，可自动对齐' : enumCompatibility.kind === 'partial' ? enumPartialLabel : '语义不一致，需要 Profile'}</span></header><div className="enum-domain-comparison"><section><small>{enumSourceLabel}</small><div>{enumCompatibility.source.map((item) => <code key={item}>{item}</code>)}</div></section><i>→</i><section><small>{enumTargetLabel}</small><div>{enumCompatibility.target.map((item) => <code key={item}>{item}</code>)}</div></section></div><div className="enum-pair-list">{enumCompatibility.pairs.map((item) => <span key={`${item.source}/${item.target}`}><code>{item.source}</code> → <code>{item.target}</code></span>)}</div>{!profileId && enumCompatibility.targetOnly.length > 0 && <p>{enumTargetOnlyLabel}：<code>{enumCompatibility.targetOnly.join(' / ')}</code>；{enumTargetOnlyHint}</p>}{!profileId && enumCompatibility.sourceOnly.length > 0 && <p>无法自动对齐：<code>{enumCompatibility.sourceOnly.join(' / ')}</code>；请选择枚举转换 Profile 后保存。</p>}</div>}
+      {enumCompatibility.kind !== 'none' && <div className={`enum-compatibility is-${profileId ? 'profile' : enumCompatibility.kind}`} role="status"><header><strong>枚举值域检查（ENUM DOMAIN）</strong><span>{profileId ? `由 Profile ${profileId} 转换` : enumCompatibility.kind === 'exact' ? '完全一致，可直接映射' : enumCompatibility.kind === 'normalized' ? '仅格式差异，可自动对齐' : enumCompatibility.kind === 'partial' ? enumPartialLabel : '语义不一致，需要 Profile'}</span></header><div className="enum-domain-comparison"><section><small>{enumSourceLabel}</small><div>{enumCompatibility.source.map((item) => <code key={item}>{item}</code>)}</div></section><i>→</i><section><small>{enumTargetLabel}</small><div>{enumCompatibility.target.map((item) => <code key={item}>{item}</code>)}</div></section></div><div className="enum-pair-list">{enumCompatibility.pairs.map((item) => <span key={`${item.source}/${item.target}`}><code>{item.source}</code> → <code>{item.target}</code></span>)}</div>{!profileId && enumCompatibility.targetOnly.length > 0 && <p>{enumTargetOnlyLabel}：<code>{enumCompatibility.targetOnly.join(' / ')}</code>；{enumTargetOnlyHint}</p>}{!profileId && enumCompatibility.sourceOnly.length > 0 && <p>无法自动对齐：<code>{enumCompatibility.sourceOnly.join(' / ')}</code>；请选择枚举转换 Profile 后保存。</p>}{showProfileJump && <div className="mapping-profile-jump"><button type="button" className="add-button" onClick={openProfileForCurrentMismatch}>去配置转换 Profile</button><small>将按当前两端类型与枚举值预填草稿，并在新标签打开转换配置页。</small></div>}</div>}
     </div>
-    <div className="mapping-route-list"><div className="command-heading"><h3>当前设备路由</h3><span>{visibleDefaultProviderRoutes.length > 0 ? `${visibleDefaultProviderRoutes.length} 条模型默认 · ` : ''}数据库覆盖 · {targetId && consumerDeviceId ? `${targetId} / ${consumerDeviceId}` : `${device.providerId} / ${device.id}`}</span></div>{stage === 'provider' && <p className="mapping-route-priority">优先级：手工数据库路由覆盖相同目标的模型默认路由；同一来源可以保留多条指向不同模型属性的路由。</p>}{visibleDefaultProviderRoutes.map((item) => <article key={`default-${item.key}`} className="is-default"><span className="route-stage is-default">模型默认（DEFAULT）</span><div><strong>{item.source.deviceName}</strong><code>{item.source.endpointId}.{item.source.capabilityId}.{item.source.propertyId} → {item.model.path.endpointId}.{item.model.path.capabilityId}.{item.model.path.propertyId}</code><small>{deviceTypeLabel(item.source.deviceType)} · 恒等转换（identity）· 目标未被手工路由占用时生效</small></div><div><button aria-label={`编辑默认映射 ${item.source.propertyId}`} onClick={() => editDefault(item)}>编辑覆盖</button></div></article>)}{bindings.map((item) => <article key={item.id} className={item.enabled ? '' : 'is-disabled'}><span className={`route-stage is-${item.stage}`}>{item.stage === 'provider' ? '数据库覆盖（P → M）' : '模型 →消费端（M → C）'}</span><div><strong>{item.targetId && item.consumerDeviceId ? `${item.targetId} / ${item.consumerDeviceId}` : `${item.providerId} / ${item.deviceId}`}</strong><code>{item.stage === 'provider' ? `${item.endpointId}.${item.capabilityId}.${item.propertyId}` : `${item.modelEndpointId}.${item.modelCapabilityId}.${item.modelPropertyId}`} → {item.stage === 'provider' ? `${item.modelEndpointId}.${item.modelCapabilityId}.${item.modelPropertyId}` : `${item.consumerId}.${item.consumerProperty}`}</code><small>{item.deviceType ? deviceTypeLabel(item.deviceType) : '设备类型未指定'} · {item.profileId || '恒等转换（identity）'} · {item.enabled ? '实时生效' : '已停用'}</small></div><div><button aria-label={`编辑映射路由 ${item.id}`} onClick={() => edit(item)}>编辑</button><button onClick={() => void toggle(item)}>{item.enabled ? '停用' : '启用'}</button><button className="danger-link" onClick={() => void remove(item)}>删除</button></div></article>)}{bindings.length === 0 && visibleDefaultProviderRoutes.length === 0 && <p className="mapping-route-empty">当前设备没有可自动匹配的默认路由，请从上方选择来源属性和统一模型属性后保存。</p>}</div>
+    <div className="mapping-route-list"><div className="command-heading"><h3>当前设备路由</h3><span>{visibleDefaultProviderRoutes.length > 0 ? `${visibleDefaultProviderRoutes.length} 条模型默认 · ` : ''}数据库覆盖 · {targetId && consumerDeviceId ? `${targetId} / ${consumerDeviceId}` : `${device.providerId} / ${device.id}`}</span></div>{stage === 'provider' && <p className="mapping-route-priority">优先级：手工数据库路由覆盖相同目标的模型默认路由；同一来源可以保留多条指向不同模型属性的路由。</p>}{visibleDefaultProviderRoutes.map((item) => <article key={`default-${item.key}`} className="is-default"><span className="route-stage is-default">模型默认（DEFAULT）</span><div><strong>{item.source.deviceName}</strong><code>{item.source.endpointId}.{item.source.capabilityId}.{item.source.propertyId} → {item.model.path.endpointId}.{item.model.path.capabilityId}.{item.model.path.propertyId}</code><small>{deviceTypeLabel(item.source.deviceType)} · 恒等转换（identity）· 目标未被手工路由占用时生效</small></div><div><button aria-label={`编辑默认映射 ${item.source.propertyId}`} onClick={() => editDefault(item)}>编辑覆盖</button></div></article>)}{listedBindings.map((item) => <article key={item.id} className={item.enabled ? '' : 'is-disabled'}><span className={`route-stage is-${item.stage}`}>{item.stage === 'provider' ? '数据库覆盖（P → M）' : '模型 →消费端（M → C）'}</span><div><strong>{item.targetId && item.consumerDeviceId ? `${item.targetId} / ${item.consumerDeviceId}` : `${item.providerId} / ${item.deviceId}`}</strong><code>{item.stage === 'provider' ? `${item.endpointId}.${item.capabilityId}.${item.propertyId}` : `${item.modelEndpointId}.${item.modelCapabilityId}.${item.modelPropertyId}`} → {item.stage === 'provider' ? `${item.modelEndpointId}.${item.modelCapabilityId}.${item.modelPropertyId}` : `${item.consumerId}.${item.consumerProperty}`}</code><small>{item.deviceType ? deviceTypeLabel(item.deviceType) : '设备类型未指定'} · {item.profileId || '恒等转换（identity）'} · {item.enabled ? '实时生效' : '已停用'}</small></div><div><button aria-label={`编辑映射路由 ${item.id}`} onClick={() => edit(item)}>编辑</button><button onClick={() => void toggle(item)}>{item.enabled ? '停用' : '启用'}</button><button className="danger-link" onClick={() => void remove(item)}>删除</button></div></article>)}{listedBindings.length === 0 && visibleDefaultProviderRoutes.length === 0 && <p className="mapping-route-empty">当前设备没有可自动匹配的默认路由，请从上方选择来源属性和统一模型属性后保存。</p>}</div>
   </section>
 }

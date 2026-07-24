@@ -4,6 +4,9 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Device } from '../types/device'
 import type { MappingBinding } from '../types/mapping'
 import { BindingManager } from './BindingManager'
+import { openProfileWorkbench } from '../profileDraft'
+
+vi.mock('../profileDraft', () => ({ openProfileWorkbench: vi.fn() }))
 
 const device: Device = {
   schemaVersion: 1, id: 'virtual-switch-1', providerId: 'virtual-main', name: 'Virtual Switch', type: 'switch', availability: 'online', online: true, lastUpdateAt: new Date().toISOString(),
@@ -174,6 +177,26 @@ describe('BindingManager', () => {
     expect(screen.queryByRole('option', { name: /target-map/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('option', { name: /number-map/ })).not.toBeInTheDocument()
     await waitFor(() => expect(screen.getByRole('button', { name: /保存第.*一.*段路由/ })).toBeEnabled())
+  })
+
+
+  it('marks unified model parameters that already have a publisher binding during consumer mapping', async () => {
+    const api = {
+      listBindings: vi.fn(async () => [{
+        id: 'provider-power', stage: 'provider' as const, enabled: true,
+        providerId: 'virtual-main', deviceId: 'virtual-switch-1',
+        endpointId: 'main', capabilityId: 'switch', propertyId: 'power',
+        modelEndpointId: 'main', modelCapabilityId: 'switch', modelPropertyId: 'power',
+      }]),
+      listProfiles: vi.fn(async () => []),
+      create: vi.fn(), update: vi.fn(), remove: vi.fn(), catalog,
+    }
+    render(<BindingManager device={device} api={api} initialStage="consumer" consumerOnly consumerId="homekit" targetId="apple-main" consumerDeviceId="living-switch" />)
+    const mark = await screen.findByText('已绑定发布者')
+    expect(mark).toBeInTheDocument()
+    expect(mark.closest('button')?.className).toContain('is-publisher-bound')
+    // Provider routes stay hidden in the consumer-only route list.
+    expect(screen.queryByText('数据库覆盖（P → M）')).not.toBeInTheDocument()
   })
 
   it('creates Consumer routes for one concrete device', async () => {
@@ -445,5 +468,36 @@ describe('BindingManager', () => {
     expect(container.querySelector('.mapping-route-actions')).not.toBeNull()
     expect(container.querySelector('.mapping-route-actions .enum-compatibility')).toBeNull()
     expect(compatibility.compareDocumentPosition(consumerList) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy()
+  })
+
+  it('offers a quick jump to the profile workbench when enum domains require conversion', async () => {
+    const airConditioner: Device = { schemaVersion: 1, id: 'xiaomi-ac', providerId: 'xiaomi-main', name: '空调', type: 'air-conditioner', availability: 'online', online: true, lastUpdateAt: new Date().toISOString(), endpoints: [] }
+    const source = { ...airConditioner, endpoints: [{ id: 'miot-3', name: 'Fan', type: 'fan', capabilities: [{ id: 'service-3', type: 'fan', properties: [{ definition: { id: 'property-1', name: 'Fan Level', type: 'enum' as const, enum: ['Automatic', 'Silent'], readable: true, writable: true, notifiable: true }, value: { type: 'enum' as const, string: 'Silent' } }] }] }], catalog: { complete: true, source: 'miot-spec-cache' } }
+    const enumCatalog = vi.fn(async () => ({ providers: [source], models: [{ deviceType: 'air-conditioner' as const, version: 2, builtIn: true, custom: { publisher: { level: 'custom' as const, behavior: 'preserve' }, consumer: { level: 'custom' as const, behavior: 'explicit' } }, parameters: [{ path: { endpointId: 'main', capabilityId: 'air-conditioner', propertyId: 'fan-speed' }, name: '风速档位', level: 'optional' as const, type: 'enum' as const, enum: ['auto', 'low', 'medium', 'high'], readable: true, writable: true, notifiable: true, publisher: { level: 'optional' as const, behavior: 'may-publish' }, consumer: { level: 'optional' as const, behavior: 'may-map' } }] }], consumers: [] }))
+    const api = { listBindings: vi.fn(async () => []), listProfiles: vi.fn(async () => []), create: vi.fn(), update: vi.fn(), remove: vi.fn(), catalog: enumCatalog }
+    render(<BindingManager device={airConditioner} api={api} providerOnly />)
+    await screen.findByRole('status')
+    await userEvent.click(screen.getByRole('button', { name: '去配置转换 Profile' }))
+    expect(openProfileWorkbench).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'provider', inputType: 'enum', outputType: 'enum',
+      sourceEnum: ['Automatic', 'Silent'], targetEnum: ['auto', 'low', 'medium', 'high'],
+    }))
+  })
+
+  it('refreshes the profile select list without leaving the mapping editor', async () => {
+    const api = {
+      listBindings: vi.fn(async () => []),
+      listProfiles: vi.fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ schemaVersion: 1 as const, id: 'fresh-enum-map', version: 1, kind: 'provider' as const, inputType: 'bool' as const, outputType: 'bool' as const, transforms: [{ type: 'invert' as const }], builtIn: false }]),
+      create: vi.fn(), update: vi.fn(), remove: vi.fn(),
+      catalog,
+    }
+    render(<BindingManager device={device} api={api} providerOnly />)
+    await screen.findByLabelText('映射转换 Profile')
+    expect(screen.queryByRole('option', { name: /fresh-enum-map/ })).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '刷新转换配置列表' }))
+    expect(await screen.findByRole('option', { name: /fresh-enum-map/ })).toBeInTheDocument()
+    expect(api.listProfiles).toHaveBeenCalledTimes(2)
   })
 })

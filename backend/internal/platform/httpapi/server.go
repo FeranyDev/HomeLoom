@@ -503,6 +503,35 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 	e.GET("/api/v1/mapping/consumers", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"data": mapping.BuiltInConsumerCatalogs()})
 	})
+	e.GET("/api/v1/device-models/enum-overrides", func(c echo.Context) error {
+		if server.profiles == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "model enum overrides are unavailable")
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": server.profiles.ListModelEnumOverrides()})
+	})
+	e.PUT("/api/v1/device-models/enum-overrides", func(c echo.Context) error {
+		if server.profiles == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "model enum overrides are unavailable")
+		}
+		var item mapping.ModelEnumOverride
+		if err := c.Bind(&item); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid model enum override")
+		}
+		updated, err := server.profiles.UpsertModelEnumOverride(c.Request().Context(), item)
+		if err != nil {
+			return profileHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": updated})
+	})
+	e.DELETE("/api/v1/device-models/enum-overrides/:id", func(c echo.Context) error {
+		if server.profiles == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "model enum overrides are unavailable")
+		}
+		if err := server.profiles.DeleteModelEnumOverride(c.Request().Context(), c.Param("id")); err != nil {
+			return profileHTTPError(err)
+		}
+		return c.NoContent(http.StatusNoContent)
+	})
 	e.GET("/api/v1/device-models/custom-properties", func(c echo.Context) error {
 		if server.profiles == nil {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "custom model properties are unavailable")
@@ -1640,10 +1669,10 @@ func profileHTTPError(err error) error {
 	if errors.Is(err, application.ErrBindingNotFound) {
 		return echo.NewHTTPError(http.StatusNotFound, "mapping binding not found")
 	}
-	if errors.Is(err, application.ErrCustomModelPropertyNotFound) || errors.Is(err, application.ErrCustomModelNotFound) {
+	if errors.Is(err, application.ErrCustomModelPropertyNotFound) || errors.Is(err, application.ErrCustomModelNotFound) || errors.Is(err, application.ErrModelEnumOverrideNotFound) {
 		return echo.NewHTTPError(http.StatusNotFound, "custom model property not found")
 	}
-	if errors.Is(err, application.ErrProfileExists) || errors.Is(err, application.ErrProfileBuiltIn) || errors.Is(err, application.ErrProfileInUse) || errors.Is(err, application.ErrBindingExists) || errors.Is(err, application.ErrCustomModelPropertyExists) || errors.Is(err, application.ErrCustomModelExists) {
+	if errors.Is(err, application.ErrProfileExists) || errors.Is(err, application.ErrProfileBuiltIn) || errors.Is(err, application.ErrProfileInUse) || errors.Is(err, application.ErrBindingExists) || errors.Is(err, application.ErrCustomModelPropertyExists) || errors.Is(err, application.ErrCustomModelExists) || errors.Is(err, application.ErrModelEnumOverrideExists) {
 		return echo.NewHTTPError(http.StatusConflict, err.Error())
 	}
 	var validation *application.ValidationError

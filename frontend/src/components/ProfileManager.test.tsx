@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { ProfileManager } from './ProfileManager'
+import { storeProfileDraft } from '../profileDraft'
 
 const builtIn = { schemaVersion: 1 as const, id: 'builtin-active-low', version: 1, kind: 'provider' as const, inputType: 'bool' as const, outputType: 'bool' as const, transforms: [{ type: 'invert' as const }], builtIn: true }
 const custom = { schemaVersion: 1 as const, id: 'custom-map', version: 1, kind: 'capability' as const, inputType: 'number' as const, outputType: 'number' as const, transforms: [{ type: 'scale' as const, factor: 2 }], builtIn: false }
@@ -56,5 +57,23 @@ describe('ProfileManager', () => {
     await userEvent.click(screen.getByRole('button', { name: '导入 JSON' }))
     await userEvent.click(screen.getByRole('button', { name: '验证并导入' }))
     expect(api.importMany).toHaveBeenCalledWith([expect.objectContaining({ id: 'custom-profile', version: 1 })])
+  })
+
+  it('opens a prefilled draft when arriving from a mapping mismatch jump', async () => {
+    const api = { list: vi.fn().mockResolvedValue([]), create: vi.fn(), update: vi.fn(), remove: vi.fn(), importMany: vi.fn() }
+    storeProfileDraft({
+      stage: 'provider',
+      inputType: 'enum',
+      outputType: 'enum',
+      sourceEnum: ['Automatic', 'Silent'],
+      targetEnum: ['auto', 'low'],
+      sourceLabel: 'fan-level',
+      targetLabel: 'fan-speed',
+    })
+    render(<ProfileManager api={api} />)
+    expect(await screen.findByLabelText('第 1 步来源值 1')).toHaveValue('Automatic')
+    expect(screen.getByLabelText('第 1 步目标值 1')).toHaveValue('auto')
+    expect(screen.getByLabelText('第 1 步来源值 2')).toHaveValue('Silent')
+    expect(screen.getByLabelText('第 1 步目标值 2')).toHaveValue('low')
   })
 })

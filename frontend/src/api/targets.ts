@@ -19,9 +19,25 @@ function ids(value: unknown): string[] { return Array.isArray(value) ? value.fil
 export function normalizeTarget(value: unknown): Target {
 	const raw = record(value)
 	const type = raw.type === 'matter' ? 'matter' : 'apple-hap'
+	const issues = Array.isArray(raw.issues)
+		? raw.issues.map((item) => {
+			const issue = record(item)
+			return {
+				deviceId: string(issue.deviceId),
+				deviceName: string(issue.deviceName),
+				deviceType: string(issue.deviceType),
+				stage: string(issue.stage) ?? 'unknown',
+				message: string(issue.message) ?? '',
+			}
+		}).filter((item) => item.message)
+		: undefined
+	const diagnosticsRaw = record(raw.diagnostics)
+	const diagnostics = Object.keys(diagnosticsRaw).length > 0
+		? Object.fromEntries(Object.entries(diagnosticsRaw).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+		: undefined
 	const common = {
 		id: string(raw.id) ?? '', type, consumerId: string(raw.consumerId), name: string(raw.name) ?? '', enabled: boolean(raw.enabled) ?? false,
-		status: status(raw.status), deviceIds: ids(raw.deviceIds), devices: targetDevices(raw.devices), error: string(raw.error), removed: boolean(raw.removed) ?? false,
+		status: status(raw.status), deviceIds: ids(raw.deviceIds), devices: targetDevices(raw.devices), error: string(raw.error), issues, diagnostics, removed: boolean(raw.removed) ?? false,
 	}
 	const config = record(raw.config)
 	if (type === 'apple-hap') {

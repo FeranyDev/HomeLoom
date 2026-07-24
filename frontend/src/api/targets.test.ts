@@ -31,6 +31,18 @@ describe('Target API boundary', () => {
 		expect(body).not.toHaveProperty('setupId')
 	})
 
+	it('normalizes bridge issues and diagnostics', () => {
+		const target = normalizeTarget({
+			id: 'apple-main', type: 'apple-hap', name: 'Home', enabled: true, status: 'running',
+			deviceIds: [], devices: [], error: '1 台设备未能发布到桥',
+			diagnostics: { skippedAccessories: '1', publishedAccessories: '2' },
+			issues: [{ deviceId: 'broken-switch', deviceName: '坏掉的开关', deviceType: 'switch', stage: 'consumer-contract', message: 'requires parameter main/switch/power' }],
+		})
+		expect(target.error).toContain('未能发布到桥')
+		expect(target.diagnostics).toEqual({ skippedAccessories: '1', publishedAccessories: '2' })
+		expect(target.issues).toEqual([{ deviceId: 'broken-switch', deviceName: '坏掉的开关', deviceType: 'switch', stage: 'consumer-contract', message: 'requires parameter main/switch/power' }])
+	})
+
 	it('keeps legacy HAP fields confined to the compatibility serializer', async () => {
 		const fetchMock = vi.fn().mockResolvedValue(response({ id: 'apple-main', type: 'apple-hap', name: 'Home', enabled: true, status: 'running', deviceIds: [], devices: [] }))
 		vi.stubGlobal('fetch', fetchMock)

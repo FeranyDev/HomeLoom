@@ -13,6 +13,7 @@ import {
   type MatterProtocolAdapter,
 } from "./adapter.js";
 import { createMatterJsDriver } from "./matter-js-driver.js";
+import { configureMatterJsLogging, configureMatterJsLoggingOnce } from "./matter-js-logging.js";
 
 export interface LoadedMatterJs {
   readonly main: typeof import("@matter/main");
@@ -157,7 +158,18 @@ export class MatterJsAdapter implements MatterProtocolAdapter {
 }
 
 export async function loadPinnedMatterJs(): Promise<LoadedMatterJs> {
+  // Seed quieter defaults before the Node.js platform boots, then re-apply after
+  // Environment.default is installed so destination writers survive the reload.
+  const general = await import("@matter/general");
+  const loggingApi = {
+    Logger: general.Logger as never,
+    LogLevel: general.LogLevel as never,
+    LogFormat: general.LogFormat as never,
+    Environment: general.Environment,
+  };
+  configureMatterJsLoggingOnce(loggingApi);
   await import("@matter/main/platform");
+  configureMatterJsLogging(loggingApi);
   const [
     main,
     protocol,

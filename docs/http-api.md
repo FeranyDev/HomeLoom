@@ -94,6 +94,8 @@ Web 管理面只有这一个管理员身份，不实现普通用户、角色或�
 
 命令确认超时由 `system_settings.command_timeout_seconds` 保存，允许范围为 1–300 秒，默认 5 秒；历史上限由 `command_history_limit` 保存，允许 100–10000 条，默认 1000 条。两项设置通过同一事务保存并实时应用。新超时只用于之后创建的命令；降低历史上限会立即清理最旧的终态记录，但不删除执行中的命令。
 
+Target 列表/保存响应可包含 `error`、`issues` 与 `diagnostics`：当桥仍在运行但部分设备因消费端投影或契约校验失败被跳过时，`issues` 会逐设备给出 `deviceId`/`deviceName`/`deviceType`/`stage`/`message`，`diagnostics.skippedAccessories`/`publishedAccessories` 给出计数摘要，便于排查桥异常而不依赖日志。
+
 HomeKit 桥返回 `paired` 表示 HAP 身份目录中是否已有控制器配对。已配对后，列表响应不再返回仅用于首次配对的 PIN、Setup ID 和 Setup URI，二维码入口也不再可用；普通编辑会在服务端保留这些原始参数。HomeKit 桥提供两个独立高风险入口：未配对时，`POST /api/v1/targets/{id}/pairing/regenerate` 要求 `REGENERATE {id}` 并更换 PIN 与 Setup ID；已配对时该操作会被拒绝。`DELETE /api/v1/targets/{id}/pairing-identity` 要求 `CLEAR {id}`，会先停止对应桥、拒绝符号链接或越界身份路径、清除 HAP 密钥及控制器配对文件，再按原配置重建桥。删除普通 Target 配置仍默认保留身份目录。
 
 Provider 上报时间与接收时间相差超过 5 分钟时，Core 会记录时钟漂移指标，并将 State Store 的 `observedAt` 钳制为接收时间，避免错误的未来时间戳长期阻止正常状态合并。原始设备快照时间仍保留用于排查。
@@ -172,3 +174,6 @@ Provider 配置仍以完整值保存在所选数据库中，但管理 API 会递
 HomeKit PIN 在数据库中使用 AES-256-GCM 加密，主密钥保存到 `storage.master_key` / `HOMELOOM_MASTER_KEY` 指定的文件并强制使用 `0600` 权限。已有明文 PIN 会在首次启动时自动加密；数据库包含密文但密钥缺失时服务会拒绝启动。Web 完整备份把数据库中立逻辑快照和配套密钥封装为一个 ZIP；该文件可解密 Provider 凭据与桥 PIN，必须按敏感文件保管。HAP 控制器配对目录不在数据库备份中。
 
 HomeLoom 不直接管理 PostgreSQL 数据目录权限；生产环境应由 PostgreSQL 服务和卷策略负责访问控制。HomeLoom 主密钥为 `0600`。HomeKit 身份目录由安全 Store 管理：目录为 `0700`、身份与配对文件为 `0600`，启动时会修复已有权限并拒绝身份目录中的符号链接。
+
+
+统一模型枚举属性可通过 `PUT /api/v1/device-models/enum-overrides` 覆盖选项列表，并在配置导出中以 `modelEnumOverrides` 返回。

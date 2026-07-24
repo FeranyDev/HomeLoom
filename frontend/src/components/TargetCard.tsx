@@ -36,6 +36,7 @@ export function TargetCard({ target, onEdit, onDelete, onRegeneratePairing, onCl
 				{target.type === 'apple-hap' ? <>
 					<div><dt>HAP 监听地址</dt><dd>{target.config.address || '自动分配'}</dd></div>
 					<div><dt>HomeKit 状态</dt><dd>{target.pairing.paired ? '已配对至 Apple Home' : '等待配对'}</dd></div>
+					<div><dt>运行时</dt><dd>{statusLabels[target.status]}{target.error ? ` · ${target.error}` : ''}</dd></div>
 				</> : <>
 					<div><dt>运行时</dt><dd>{statusLabels[target.status]}{target.error ? ` · ${target.error}` : ''}</dd></div>
 					<div><dt>配网状态</dt><dd>{commissioningLabels[target.commissioning.state]}{target.commissioning.windowExpiresAt ? ` · 截止 ${new Date(target.commissioning.windowExpiresAt).toLocaleString('zh-CN')}` : ''}</dd></div>
@@ -45,6 +46,16 @@ export function TargetCard({ target, onEdit, onDelete, onRegeneratePairing, onCl
 					<div><dt>认证状态</dt><dd><span className={target.certification === 'certified' ? 'target-security-label is-certified' : 'target-security-label'}>{target.certification === 'certified' ? '已认证设备' : '测试设备 · 未认证'}</span></dd></div>
 				</>}
 			</dl>
+			{(target.error || (target.issues && target.issues.length > 0)) && <div className="provider-error target-error" role="alert">
+				{target.error && <p className="inline-error">{target.error}</p>}
+				{target.diagnostics?.skippedAccessories && <small>已跳过配件 {target.diagnostics.skippedAccessories}{target.diagnostics.publishedAccessories ? ` · 已发布 ${target.diagnostics.publishedAccessories}` : ''}</small>}
+				{target.issues && target.issues.length > 0 && <ul className="target-issue-list">
+					{target.issues.map((issue, index) => {
+						const label = issue.deviceName || issue.deviceId || issue.deviceType || `问题 ${index + 1}`
+						return <li key={`${issue.deviceId ?? 'device'}-${issue.stage}-${index}`}><strong>{label}</strong><span>{issue.stage}</span><code>{issue.message}</code></li>
+					})}
+				</ul>}
+			</div>}
 			<div className="target-actions">
 				<button onClick={() => onEdit(target)}>编辑配置</button><button onClick={() => onManageDevices(target)}>配置消费端设备</button>
 				{target.type === 'apple-hap' && !target.pairing.paired && <button onClick={() => onRegeneratePairing(target)}>重新生成 HomeKit 配对参数</button>}

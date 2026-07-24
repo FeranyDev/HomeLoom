@@ -9,6 +9,7 @@ vi.mock('./MappingPreview', () => ({ MappingPreview: () => <div>转换预览内�
 
 describe('MappingWorkspace', () => {
   it('uses unified models as the primary page and keeps conversion tools secondary', async () => {
+    window.location.hash = '#/mapping'
     render(<MappingWorkspace />)
     expect(screen.getByText('统一模型目录内容')).toBeInTheDocument()
     expect(screen.queryByText('转换配置管理内容')).not.toBeInTheDocument()
@@ -19,5 +20,12 @@ describe('MappingWorkspace', () => {
     expect(screen.getByRole('list', { name: '转换配置使用流程' })).toHaveTextContent(/识别差异.*编排规则.*绑定设备/)
     expect(screen.getByRole('complementary', { name: '转换配置应用位置' })).toHaveTextContent(/设备中心.*桥接中心/)
     expect(screen.getByRole('region', { name: '验证数据库中的 Profile' })).toBeInTheDocument()
+  })
+
+  it('opens the profile workbench when deep-linked to /mapping/profiles', () => {
+    window.location.hash = '#/mapping/profiles'
+    render(<MappingWorkspace />)
+    expect(screen.getByText('转换配置管理内容')).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /转换配置/ })).toHaveAttribute('aria-selected', 'true')
   })
 })

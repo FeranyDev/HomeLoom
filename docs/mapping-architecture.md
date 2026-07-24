@@ -31,7 +31,7 @@ Provider Manager 只校验快照的结构、稳定 ID、值类型和约束，不
 
 ## 统一模型边界
 
-内置模型目录定义 required 和 optional 参数。数据库表 `custom_model_properties` 保存 custom 参数，内容包含设备类型、三级路径、显示名称、值类型、单位、最小值、最大值、步长、枚举及 R/W/N 权限。自定义路径不能覆盖标准路径，正在被路由使用时不能删除。
+内置模型目录定义 required 和 optional 参数。数据库表 `custom_model_properties` 保存 custom 参数，内容包含设备类型、三级路径、显示名称、值类型、单位、最小值、最大值、步长、枚举及 R/W/N 权限。自定义路径不能覆盖标准路径，正在被路由使用时不能删除。标准或自定义属性的 `enum` 选项可通过数据库表 `model_enum_overrides` 覆盖，仅替换枚举列表，不改变路径、类型与参数分级；删除覆盖后恢复原始定义。
 
 设备注册表和设备中心详情只接收命中该模型目录的三级属性：内置 required/optional 属性，以及已登记的 custom 属性。未命中模型目录的 Provider 原始 Property、Action 和 Event 不会再被自动标记为 custom 混入设备详情，仍完整保留在对应设备的“配置映射”来源目录中。
 

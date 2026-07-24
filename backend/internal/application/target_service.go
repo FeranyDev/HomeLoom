@@ -23,6 +23,17 @@ import (
 
 var ErrTargetNotFound = errors.New("target not found")
 
+// TargetIssue captures a device-level bridge projection or contract problem that
+// prevented an accessory/endpoint from being published. Targets may still run
+// with a partial accessory graph when issues are present.
+type TargetIssue struct {
+	DeviceID   string `json:"deviceId,omitempty"`
+	DeviceName string `json:"deviceName,omitempty"`
+	DeviceType string `json:"deviceType,omitempty"`
+	Stage      string `json:"stage"`
+	Message    string `json:"message"`
+}
+
 type TargetInfo struct {
 	ID                           string                       `json:"id"`
 	Type                         string                       `json:"type"`
@@ -38,6 +49,8 @@ type TargetInfo struct {
 	DeviceIDs                    []string                     `json:"deviceIds"`
 	Devices                      []domaintarget.VirtualDevice `json:"devices"`
 	Error                        string                       `json:"error,omitempty"`
+	Issues                       []TargetIssue                `json:"issues,omitempty"`
+	Diagnostics                  map[string]string            `json:"diagnostics,omitempty"`
 	NetworkInterface             string                       `json:"networkInterface,omitempty"`
 	UDPPort                      uint16                       `json:"udpPort,omitempty"`
 	Discriminator                uint16                       `json:"discriminator,omitempty"`

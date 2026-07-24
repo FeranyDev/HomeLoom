@@ -93,6 +93,19 @@ paths:
                 required: [data]
                 properties:
                   data: { type: array, items: { $ref: "#/components/schemas/DeviceModelContract" } }
+  /api/v1/device-models/enum-overrides:
+    get:
+      operationId: listModelEnumOverrides
+      responses: { "200": { description: Database-backed enum option overrides for unified-model properties, content: { application/json: { schema: { type: object, required: [data], properties: { data: { type: array, items: { $ref: "#/components/schemas/ModelEnumOverride" } } } } } } } }
+    put:
+      operationId: upsertModelEnumOverride
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ModelEnumOverride" } } } }
+      responses: { "200": { description: Enum override persisted and applied to model contracts }, "400": { $ref: "#/components/responses/BadRequest" }, "409": { description: Override path or ID already exists } }
+  /api/v1/device-models/enum-overrides/{overrideId}:
+    parameters: [{ name: overrideId, in: path, required: true, schema: { type: string } }]
+    delete:
+      operationId: deleteModelEnumOverride
+      responses: { "204": { description: Enum override deleted and built-in or custom definition restored }, "404": { $ref: "#/components/responses/NotFound" } }
   /api/v1/device-models/custom-properties:
     get:
       operationId: listCustomModelProperties
@@ -648,6 +661,19 @@ components:
             ready: { type: boolean }
             database: { type: string, enum: [ok, unavailable] }
             error: { type: string }
+    TargetIssue:
+      type: object
+      required: [stage, message]
+      properties:
+        deviceId: { type: string }
+        deviceName: { type: string }
+        deviceType: { type: string }
+        stage: { type: string, description: Projection stage such as consumer-projection, consumer-contract, or unsupported-type. }
+        message: { type: string }
+    TargetDiagnostics:
+      type: object
+      additionalProperties: { type: string }
+      description: Sanitized bridge diagnostics, for example skippedAccessories and publishedAccessories counts.
     ObjectResponse:
       type: object
       required: [data]
@@ -685,7 +711,7 @@ components:
         devices: { type: array, items: { $ref: "#/components/schemas/TargetVirtualDevice" } }
     ConfigurationExport:
       type: object
-      required: [formatVersion, generatedAt, providers, targets, settings, profiles, bindings, customModelProperties]
+      required: [formatVersion, generatedAt, providers, targets, settings, profiles, bindings, customModelProperties, modelEnumOverrides]
       properties:
         formatVersion: { type: integer, enum: [1] }
         generatedAt: { type: string, format: date-time }
@@ -695,6 +721,7 @@ components:
         profiles: { type: array, items: { $ref: "#/components/schemas/MappingProfileInfo" } }
         bindings: { type: array, items: { $ref: "#/components/schemas/MappingBinding" } }
         customModelProperties: { type: array, items: { $ref: "#/components/schemas/CustomModelProperty" } }
+        modelEnumOverrides: { type: array, items: { $ref: "#/components/schemas/ModelEnumOverride" } }
     DiagnosticBundle:
       type: object
       required: [formatVersion, generatedAt, build, metrics, configuration, recentAudit]
@@ -923,6 +950,16 @@ components:
         capabilityId: { type: string }
         capabilityType: { type: string }
         definition: { type: object, additionalProperties: true }
+    ModelEnumOverride:
+      type: object
+      required: [deviceType, endpointId, capabilityId, propertyId, enum]
+      properties:
+        id: { type: string, description: Stable override ID. Generated as enum-{deviceType}-{endpoint}-{capability}-{property} when omitted. }
+        deviceType: { type: string }
+        endpointId: { type: string }
+        capabilityId: { type: string }
+        propertyId: { type: string }
+        enum: { type: array, items: { type: string }, minItems: 1, uniqueItems: true, description: Replacement enum options for the unified-model property. }
     ConsumerProperty:
       type: object
       required: [id, name, deviceType, defaultModelPath, level, type, readable, writable, notifiable]

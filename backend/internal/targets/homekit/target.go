@@ -43,16 +43,29 @@ type PairingInfo struct {
 	Devices  []string
 }
 
+// ProjectionIssue records a device that could not be projected into HomeKit.
+// The bridge may still start with the remaining accessories.
+type ProjectionIssue struct {
+	DeviceID   string
+	DeviceName string
+	DeviceType device.Type
+	Stage      string
+	Message    string
+}
+
 type Target struct {
-	server             *hap.Server
-	logger             *slog.Logger
-	pin                string
-	id                 string
-	pairing            PairingInfo
-	cancelSubscription func()
+	server                  *hap.Server
+	logger                  *slog.Logger
+	pin                     string
+	id                      string
+	pairing                 PairingInfo
+	issueSnapshot           []ProjectionIssue
+	publishedAccessoryCount int
+	cancelSubscription      func()
 }
 
 type accessoryBindings struct {
+	issues          []ProjectionIssue
 	accessories     []*accessory.A
 	switches        map[string]*characteristic.On
 	temperatures    map[string]*characteristic.CurrentTemperature
@@ -126,9 +139,20 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 		}
 		consumerContract, supported := homeKitModelContract(item.Type)
 		if !supported {
+			issue := ProjectionIssue{
+				DeviceID: item.ID, DeviceName: item.Name, DeviceType: item.Type,
+				Stage: "unsupported-type", Message: fmt.Sprintf("HomeKit does not support device type %q", item.Type),
+			}
+			bindings.issues = append(bindings.issues, issue)
+			logger.Error("device type is unsupported by HomeKit consumer", "device_id", item.ID, "device_type", item.Type)
 			continue
 		}
 		if _, err := device.ProjectForConsumer(item, consumerContract); err != nil {
+			issue := ProjectionIssue{
+				DeviceID: item.ID, DeviceName: item.Name, DeviceType: item.Type,
+				Stage: "consumer-contract", Message: err.Error(),
+			}
+			bindings.issues = append(bindings.issues, issue)
 			logger.Error("device does not satisfy HomeKit consumer contract", "device_id", item.ID, "device_type", item.Type, "error", err)
 			continue
 		}
@@ -331,17 +355,8 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 		case device.TypeAirPurifier:
 			a := accessory.NewAirPurifier(info)
 			a.A.Id = accessoryIDs[item.ID]
-			fault, speed := characteristic.NewStatusFault(), characteristic.NewRotationSpeed()
+			fault := characteristic.NewStatusFault()
 			a.AirPurifier.AddC(fault.C)
-			a.AirPurifier.AddC(speed.C)
-			filter := service.NewFilterMaintenance()
-			life, reset := characteristic.NewFilterLifeLevel(), characteristic.NewResetFilterIndication()
-			filterFault := characteristic.NewStatusFault()
-			filter.AddC(life.C)
-			filter.AddC(reset.C)
-			filter.AddC(filterFault.C)
-			a.AirPurifier.AddS(filter.S)
-			a.A.AddS(filter.S)
 			deviceID := sourceID(item.ID)
 			a.AirPurifier.Active.OnSetRemoteValue(func(value int) error {
 				return writeHomeKitProperty(devices, logger, deviceID, route, "air-purifier", "active", device.BoolValue(value == characteristic.ActiveActive))
@@ -349,9 +364,14 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 			a.AirPurifier.TargetAirPurifierState.OnSetRemoteValue(func(value int) error {
 				return writeHomeKitProperty(devices, logger, deviceID, route, "air-purifier", "target-state", device.EnumValue(airTargetName(value)))
 			})
-			speed.OnSetRemoteValue(func(value float64) error {
-				return writeHomeKitProperty(devices, logger, deviceID, route, "air-purifier", "rotation-speed", device.NumberValue(value))
-			})
+			if _, found := item.Property("main", "air-purifier", "rotation-speed"); found {
+				speed := characteristic.NewRotationSpeed()
+				speed.OnSetRemoteValue(func(value float64) error {
+					return writeHomeKitProperty(devices, logger, deviceID, route, "air-purifier", "rotation-speed", device.NumberValue(value))
+				})
+				a.AirPurifier.AddC(speed.C)
+				bindings.speeds[item.ID] = speed
+			}
 			if _, found := item.Property("main", "air-purifier", "swing-mode"); found {
 				current := characteristic.NewSwingMode()
 				current.OnSetRemoteValue(func(value int) error {
@@ -367,6 +387,48 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 				})
 				a.AirPurifier.AddC(current.C)
 				bindings.controlLocks[item.ID] = current
+			}
+			_, hasFilterLife := item.Property("main", "filter", "life-level")
+			_, hasFilterChange := item.Property("main", "filter", "change-indication")
+			hasFilterReset := false
+			for _, endpoint := range item.Endpoints {
+				if endpoint.ID != "main" {
+					continue
+				}
+				for _, capability := range endpoint.Capabilities {
+					if capability.ID != "filter" {
+						continue
+					}
+					for _, command := range capability.Commands {
+						if command.ID == "reset-filter" {
+							hasFilterReset = true
+						}
+					}
+				}
+			}
+			if hasFilterLife || hasFilterChange || hasFilterReset {
+				filter := service.NewFilterMaintenance()
+				filterFault := characteristic.NewStatusFault()
+				filter.AddC(filterFault.C)
+				if hasFilterLife {
+					life := characteristic.NewFilterLifeLevel()
+					filter.AddC(life.C)
+					bindings.filterLife[item.ID] = life
+				}
+				if hasFilterChange {
+					bindings.filterChange[item.ID] = filter.FilterChangeIndication
+				}
+				if hasFilterReset {
+					reset := characteristic.NewResetFilterIndication()
+					reset.OnSetRemoteValue(func(int) error {
+						return executeHomeKitCommand(devices, logger, providersdk.CommandRequest{DeviceID: deviceID, EndpointID: "main", CapabilityID: "filter", CommandID: "reset-filter"})
+					})
+					filter.AddC(reset.C)
+					bindings.filterResets[item.ID] = reset
+				}
+				a.AirPurifier.AddS(filter.S)
+				a.A.AddS(filter.S)
+				bindings.extraFaults[item.ID] = append(bindings.extraFaults[item.ID], filterFault)
 			}
 			if _, found := item.Property("main", "air-quality", "current-air-quality"); found {
 				quality := service.NewAirQualitySensor()
@@ -387,12 +449,7 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 				bindings.airQualities[item.ID] = quality.AirQuality
 				bindings.extraFaults[item.ID] = append(bindings.extraFaults[item.ID], qualityFault)
 			}
-			reset.OnSetRemoteValue(func(int) error {
-				return executeHomeKitCommand(devices, logger, providersdk.CommandRequest{DeviceID: deviceID, EndpointID: "main", CapabilityID: "filter", CommandID: "reset-filter"})
-			})
-			bindings.actives[item.ID], bindings.airCurrent[item.ID], bindings.airTargets[item.ID], bindings.speeds[item.ID], bindings.filterLife[item.ID], bindings.filterChange[item.ID], bindings.faults[item.ID] = a.AirPurifier.Active, a.AirPurifier.CurrentAirPurifierState, a.AirPurifier.TargetAirPurifierState, speed, life, filter.FilterChangeIndication, fault
-			bindings.extraFaults[item.ID] = append(bindings.extraFaults[item.ID], filterFault)
-			bindings.filterResets[item.ID] = reset
+			bindings.actives[item.ID], bindings.airCurrent[item.ID], bindings.airTargets[item.ID], bindings.faults[item.ID] = a.AirPurifier.Active, a.AirPurifier.CurrentAirPurifierState, a.AirPurifier.TargetAirPurifierState, fault
 			bindings.accessories = append(bindings.accessories, a.A)
 			created = a.A
 		case device.TypeAirConditioner:
@@ -1021,10 +1078,16 @@ func New(ctx context.Context, config Config, devices *application.DeviceService,
 	}
 	projectedSources := make(map[string]device.Device, len(sourceItems))
 	rawSources := make(map[string]device.Device, len(sourceItems))
+	var projectionIssues []ProjectionIssue
 	for index := range sourceItems {
 		rawSources[sourceItems[index].ID] = sourceItems[index]
 		projected, projectErr := devices.ProjectForConsumer("homekit", sourceItems[index])
 		if projectErr != nil {
+			issue := ProjectionIssue{
+				DeviceID: sourceItems[index].ID, DeviceName: sourceItems[index].Name, DeviceType: sourceItems[index].Type,
+				Stage: "consumer-projection", Message: projectErr.Error(),
+			}
+			projectionIssues = append(projectionIssues, issue)
 			logger.Error("HomeKit consumer projection failed", "device_id", sourceItems[index].ID, "error", projectErr)
 			continue
 		}
@@ -1083,6 +1146,8 @@ func New(ctx context.Context, config Config, devices *application.DeviceService,
 		Manufacturer: "HomeLoom", Model: "HomeLoom Demo", Firmware: "0.0.1",
 	})
 	bindings := newAccessoryBindings(items, selected, accessoryIDs, devices, logger, routes)
+	issues := append([]ProjectionIssue{}, projectionIssues...)
+	issues = append(issues, bindings.issues...)
 	if config.IdentityStore != nil {
 		for deviceID, current := range bindings.byDevice {
 			if err := assignPersistentIIDs(ctx, config.ID, deviceID, current, config.IdentityStore); err != nil {
@@ -1117,7 +1182,9 @@ func New(ctx context.Context, config Config, devices *application.DeviceService,
 
 	target := &Target{
 		server: server, logger: logger, pin: config.Pin, id: config.ID,
-		pairing: PairingInfo{Code: formatPin(config.Pin), SetupURI: setupURI, QR: qr, Devices: virtualDeviceIDs(config, items)},
+		pairing:                 PairingInfo{Code: formatPin(config.Pin), SetupURI: setupURI, QR: qr, Devices: virtualDeviceIDs(config, items)},
+		issueSnapshot:           append([]ProjectionIssue(nil), issues...),
+		publishedAccessoryCount: len(bindings.accessories),
 	}
 	target.cancelSubscription = devices.Subscribe(func(item device.Device) {
 		if len(config.Devices) == 0 {
@@ -1183,6 +1250,20 @@ func CheckAddressAvailable(address string) error {
 func (t *Target) ID() string { return t.id }
 
 func (t *Target) PairingInfo() PairingInfo { return t.pairing }
+
+func (t *Target) Issues() []ProjectionIssue {
+	if t == nil || len(t.issueSnapshot) == 0 {
+		return nil
+	}
+	return append([]ProjectionIssue(nil), t.issueSnapshot...)
+}
+
+func (t *Target) PublishedAccessoryCount() int {
+	if t == nil {
+		return 0
+	}
+	return t.publishedAccessoryCount
+}
 
 func (t *Target) IsPaired() bool { return t.server.IsPaired() }
 

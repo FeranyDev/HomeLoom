@@ -13,6 +13,14 @@ export interface TargetVirtualDevice {
 /** Fields shared by every bridge protocol. Protocol configuration deliberately
  * lives in the discriminated branch below: Matter must never inherit HAP's
  * listener, Setup ID, or PIN fields. */
+export interface TargetIssue {
+	deviceId?: string
+	deviceName?: string
+	deviceType?: string
+	stage: string
+	message: string
+}
+
 export interface TargetBase {
 	id: string
 	type: TargetType
@@ -23,6 +31,8 @@ export interface TargetBase {
 	deviceIds: string[]
 	devices: TargetVirtualDevice[]
 	error?: string
+	issues?: TargetIssue[]
+	diagnostics?: Record<string, string>
 	/** Present on the SSE tombstone emitted after a target is deleted. */
 	removed?: boolean
 }

@@ -1,11 +1,12 @@
-import { useState } from 'react'
 import { MappingPreview } from './MappingPreview'
 import { ProfileManager } from './ProfileManager'
 import { UnifiedModelManager } from './UnifiedModelManager'
+import { useMappingSection } from '../routing'
+import { useState } from 'react'
 
 export function MappingWorkspace() {
   const [profileRevision, setProfileRevision] = useState(0)
-  const [section, setSection] = useState<'models' | 'profiles'>('models')
+  const [section, setSection] = useMappingSection()
   return <section className="mapping-page">
     <div className="mapping-page-tabs" role="tablist" aria-label="统一模型配置页面">
       <button className={section === 'models' ? 'is-active' : ''} aria-selected={section === 'models'} role="tab" onClick={() => setSection('models')}><span>统一模型</span><small>设备类型与三级属性字段</small></button>

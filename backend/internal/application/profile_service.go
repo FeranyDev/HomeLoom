@@ -32,6 +32,9 @@ type ProfileStore interface {
 	ListCustomModelProperties(context.Context) ([]mapping.CustomModelProperty, error)
 	SaveCustomModelProperty(context.Context, mapping.CustomModelProperty) error
 	DeleteCustomModelProperty(context.Context, string) error
+	ListModelEnumOverrides(context.Context) ([]mapping.ModelEnumOverride, error)
+	SaveModelEnumOverride(context.Context, mapping.ModelEnumOverride) error
+	DeleteModelEnumOverride(context.Context, string) error
 	ListCustomModels(context.Context) ([]mapping.CustomModel, error)
 	SaveCustomModel(context.Context, mapping.CustomModel) error
 	DeleteCustomModel(context.Context, string) error
@@ -50,13 +53,14 @@ type ProfileService struct {
 	bindingsByKey    map[string][]string
 	bindingsByModel  map[string]string
 	customProperties map[string]mapping.CustomModelProperty
+	enumOverrides    map[string]mapping.ModelEnumOverride
 	customModels     map[device.Type]mapping.CustomModel
 	store            ProfileStore
 	changeHandler    func(context.Context)
 }
 
 func NewProfileService(ctx context.Context, store ProfileStore) (*ProfileService, error) {
-	service := &ProfileService{profiles: make(map[string]mapping.Profile), builtIns: make(map[string]mapping.Profile), bindings: make(map[string]mapping.Binding), bindingsByKey: make(map[string][]string), bindingsByModel: make(map[string]string), customProperties: make(map[string]mapping.CustomModelProperty), customModels: make(map[device.Type]mapping.CustomModel), store: store}
+	service := &ProfileService{profiles: make(map[string]mapping.Profile), builtIns: make(map[string]mapping.Profile), bindings: make(map[string]mapping.Binding), bindingsByKey: make(map[string][]string), bindingsByModel: make(map[string]string), customProperties: make(map[string]mapping.CustomModelProperty), enumOverrides: make(map[string]mapping.ModelEnumOverride), customModels: make(map[device.Type]mapping.CustomModel), store: store}
 	for _, item := range BuiltInProfiles() {
 		if err := mapping.Validate(item); err != nil {
 			return nil, fmt.Errorf("validate built-in mapping profile %q: %w", item.ID, err)
@@ -106,6 +110,25 @@ func NewProfileService(ctx context.Context, store ProfileStore) (*ProfileService
 			}
 		}
 		service.customProperties[item.Key()] = item
+	}
+
+	enumOverrides, err := store.ListModelEnumOverrides(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range enumOverrides {
+		if err := mapping.ValidateModelEnumOverride(item); err != nil {
+			return nil, fmt.Errorf("validate stored model enum override %q: %w", item.ID, err)
+		}
+		if _, duplicate := service.enumOverrides[item.Key()]; duplicate {
+			return nil, fmt.Errorf("stored model enum override %q duplicates path %s", item.ID, item.Path())
+		}
+		if _, builtIn := device.ModelContractFor(item.DeviceType); !builtIn {
+			if _, custom := service.customModels[item.DeviceType]; !custom {
+				return nil, fmt.Errorf("stored model enum override %q references unknown model %q", item.ID, item.DeviceType)
+			}
+		}
+		service.enumOverrides[item.Key()] = item
 	}
 	bindings, err := store.ListMappingBindings(ctx)
 	if err != nil {

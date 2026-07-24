@@ -507,18 +507,29 @@ func (s *ProfileService) modelParameterLocked(deviceType device.Type, path devic
 	if deviceType == "" {
 		return device.ModelParameter{}, false
 	}
+	var parameter device.ModelParameter
+	found := false
 	contract, ok := device.ModelContractFor(deviceType)
 	if ok {
-		for _, parameter := range contract.Parameters {
-			if parameter.Path == path {
-				return parameter, true
+		for _, candidate := range contract.Parameters {
+			if candidate.Path == path {
+				parameter, found = candidate, true
+				break
 			}
 		}
 	}
-	if item, exists := s.customProperties[string(deviceType)+"\x00"+path.Key()]; exists {
-		return mapping.CustomModelParameter(item), true
+	if !found {
+		if item, exists := s.customProperties[string(deviceType)+"\x00"+path.Key()]; exists {
+			parameter, found = mapping.CustomModelParameter(item), true
+		}
 	}
-	return device.ModelParameter{}, false
+	if !found {
+		return device.ModelParameter{}, false
+	}
+	if override, exists := s.enumOverrides[string(deviceType)+"\x00"+path.Key()]; exists && parameter.Type == device.ValueTypeEnum {
+		parameter.Enum = append([]string(nil), override.Enum...)
+	}
+	return parameter, true
 }
 
 func validateRuntimeProfile(profile mapping.Profile, stages ...mapping.BindingStage) error {

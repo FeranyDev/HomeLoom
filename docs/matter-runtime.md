@@ -18,6 +18,29 @@ Matter 消费端设备类型只发布当前协议中的标准 Device Type。Home
 
 Go 默认从当前目录、当前目录的上一级，以及可执行文件目录附近查找 `matter-runtime/dist/src/cli.js`，因此从仓库根目录、`backend/` 或默认的 `backend/bin/` 启动均可发现 sidecar。其他部署布局必须设置 `HOMELOOM_MATTER_RUNTIME` 为绝对路径。`HOMELOOM_MATTER_ADAPTER=fake` 只允许 IPC 自动测试；真实部署必须使用 `matter-js`，且 driver 不可用时应 fail closed。
 
+## 日志
+
+matter.js 默认会输出大量 DEBUG 级别的 ANSI 控制台日志，且会混入 Go 主服务的 JSON `slog` 输出。sidecar 在加载 `@matter/main` 时会统一改写官方 Logger：
+
+- 默认级别：`NOTICE`（比 SDK 默认的 `DEBUG` 安静得多）
+- 默认格式：JSON 行，写入 **stderr**，字段为 `time` / `level` / `msg` / `component=matter-js` / `facility`
+- 对 Endpoint、mDNS、Session、Exchange 等常见噪声 facility 额外压到 `WARN`（仅在默认 `NOTICE` 及以上生效）
+
+可用环境变量覆盖：
+
+| 变量 | 说明 | 示例 |
+| --- | --- | --- |
+| `HOMELOOM_MATTER_LOG_LEVEL` | 优先于 `MATTER_LOG_LEVEL` | `debug` / `info` / `notice` / `warn` / `error` / `fatal` |
+| `HOMELOOM_MATTER_LOG_FORMAT` | 优先于 `MATTER_LOG_FORMAT` | `json`（默认）/ `plain` / `ansi` |
+| `MATTER_LOG_LEVEL` / `MATTER_LOG_FORMAT` | matter.js 官方环境变量兼容入口 | 同上 |
+
+排障时可将级别临时打开：
+
+```bash
+HOMELOOM_MATTER_LOG_LEVEL=debug HOMELOOM_MATTER_LOG_FORMAT=plain ./scripts/dev-env.sh sh -c 'cd backend && go run ./cmd/homeloom'
+```
+
+
 `@matter/main` 0.17.6 的在线 factory reset 会在进程内重建 `ServerNode`，但该版本可能保留旧一代 shared mDNS 引用。sidecar 在 reset RPC 成功返回后会主动正常退出，由 Go Target supervisor 启动全新进程并执行握手与全量重放；这是身份轮换的一部分，不应被监控系统当作整套 HomeLoom 服务故障。
 
 ## IPC 与状态恢复

@@ -257,13 +257,26 @@ type customUnifiedModelRow struct {
 
 func (customUnifiedModelRow) TableName() string { return "custom_unified_models" }
 
+type modelEnumOverrideRow struct {
+	ID           string       `gorm:"column:id;primaryKey"`
+	DeviceType   string       `gorm:"column:device_type;not null;uniqueIndex:model_enum_override_path,priority:1;index:model_enum_overrides_device_type_idx,priority:1"`
+	EndpointID   string       `gorm:"column:endpoint_id;not null;uniqueIndex:model_enum_override_path,priority:2;index:model_enum_overrides_device_type_idx,priority:2"`
+	CapabilityID string       `gorm:"column:capability_id;not null;uniqueIndex:model_enum_override_path,priority:3;index:model_enum_overrides_device_type_idx,priority:3"`
+	PropertyID   string       `gorm:"column:property_id;not null;uniqueIndex:model_enum_override_path,priority:4;index:model_enum_overrides_device_type_idx,priority:4"`
+	DocumentJSON jsonDocument `gorm:"column:document_json;not null"`
+	CreatedAt    int64        `gorm:"column:created_at;not null"`
+	UpdatedAt    int64        `gorm:"column:updated_at;not null"`
+}
+
+func (modelEnumOverrideRow) TableName() string { return "model_enum_overrides" }
+
 func currentModels() []any {
 	return []any{
 		&providerRow{}, &targetRow{}, &targetVirtualDeviceRow{},
 		&matterRuntimeKVRow{}, &matterEndpointIdentityRow{},
 		&homeKitAccessoryIDRow{}, &homeKitIIDRow{}, &systemSettingRow{},
 		&devicePreferenceRow{}, &auditEventRow{}, &mappingProfileRow{},
-		&mappingBindingRow{}, &customModelPropertyRow{}, &adminUserRow{},
+		&mappingBindingRow{}, &customModelPropertyRow{}, &modelEnumOverrideRow{}, &adminUserRow{},
 		&adminSessionRow{}, &miotSpecCacheRow{}, &customUnifiedModelRow{},
 	}
 }

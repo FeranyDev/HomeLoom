@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { createCustomModel, deleteCustomModel, listModelContracts } from '../api/mapping'
+import { createCustomModel, deleteCustomModel, deleteModelEnumOverride, listModelContracts, listModelEnumOverrides, upsertModelEnumOverride } from '../api/mapping'
 import { bilingual, deviceTypeLabel, parameterLevelLabel, permissionLabel, propertyDisplayLabel, resourceLabel, unitLabel, valueTypeLabel } from '../presentationLabels'
 import type { DeviceType, ParameterLevel } from '../types/device'
-import type { ModelContract, ModelParameter } from '../types/mapping'
+import type { ModelContract, ModelEnumOverride, ModelParameter } from '../types/mapping'
 import { CustomModelPropertyManager } from './CustomModelPropertyManager'
 
 type LevelFilter = 'all' | ParameterLevel
@@ -39,11 +39,15 @@ export function UnifiedModelManager({ onModelCountChange }: { onModelCountChange
   const [customCreateRevision, setCustomCreateRevision] = useState(0)
   const [creatingModel, setCreatingModel] = useState(false)
   const [modelDraft, setModelDraft] = useState({ deviceType: '', name: '', version: 1 })
+  const [enumOverrides, setEnumOverrides] = useState<ModelEnumOverride[]>([])
+  const [editingEnum, setEditingEnum] = useState<{ parameter: ModelParameter; text: string; original?: ModelEnumOverride } | null>(null)
+  const [enumSaving, setEnumSaving] = useState(false)
 
   const refresh = useCallback(async () => {
     try {
-      const result = await listModelContracts()
+      const [result, overrides] = await Promise.all([listModelContracts(), listModelEnumOverrides().catch(() => [])])
       setModels(result)
+      setEnumOverrides(overrides)
       onModelCountChange?.(result.length)
       window.dispatchEvent(new CustomEvent<number>('homeloom:model-count', { detail: result.length }))
       setSelectedType((current) => current && result.some((model) => model.deviceType === current) ? current : result[0]?.deviceType ?? null)
@@ -68,6 +72,55 @@ export function UnifiedModelManager({ onModelCountChange }: { onModelCountChange
   const removeModel = async (model: ModelContract) => {
     if (!window.confirm(`删除统一模型 ${modelLabel(model)}？`)) return
     try { await deleteCustomModel(model.deviceType); await refresh() } catch (cause) { setError(cause instanceof Error ? cause.message : '删除统一模型失败') }
+  }
+
+  const overrideFor = (parameter: ModelParameter) => enumOverrides.find((item) => item.deviceType === selectedType && item.endpointId === parameter.path.endpointId && item.capabilityId === parameter.path.capabilityId && item.propertyId === parameter.path.propertyId)
+  const openEnumEditor = (parameter: ModelParameter) => {
+    const original = overrideFor(parameter)
+    setEditingEnum({ parameter, text: (parameter.enum ?? []).join(', '), original })
+    setError('')
+  }
+  const saveEnumEditor = async () => {
+    if (!editingEnum || !selectedType) return
+    const values = editingEnum.text.split(',').map((item) => item.trim()).filter(Boolean)
+    if (values.length === 0) {
+      setError('枚举值不能为空')
+      return
+    }
+    setEnumSaving(true)
+    try {
+      await upsertModelEnumOverride({
+        id: editingEnum.original?.id,
+        deviceType: selectedType,
+        endpointId: editingEnum.parameter.path.endpointId,
+        capabilityId: editingEnum.parameter.path.capabilityId,
+        propertyId: editingEnum.parameter.path.propertyId,
+        enum: values,
+      })
+      setEditingEnum(null)
+      await refresh()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '保存枚举覆盖失败')
+    } finally {
+      setEnumSaving(false)
+    }
+  }
+  const resetEnumEditor = async () => {
+    if (!editingEnum?.original?.id) {
+      setEditingEnum(null)
+      return
+    }
+    if (!window.confirm('恢复该属性的内置/原始枚举定义？')) return
+    setEnumSaving(true)
+    try {
+      await deleteModelEnumOverride(editingEnum.original.id)
+      setEditingEnum(null)
+      await refresh()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '恢复枚举定义失败')
+    } finally {
+      setEnumSaving(false)
+    }
   }
   const selected = models.find((model) => model.deviceType === selectedType)
   const visibleParameters = useMemo(() => {
@@ -140,7 +193,7 @@ export function UnifiedModelManager({ onModelCountChange }: { onModelCountChange
             {[...capabilities].map(([capabilityId, parameters]) => <section className="model-capability" key={capabilityId}>
               <header><span>第二级 · 能力（Capability）</span><strong>{resourceLabel(capabilityId)}</strong><code>{endpointId} / {capabilityId}</code></header>
               <div>{parameters.map((parameter) => <article className="model-property-card" key={`${endpointId}/${capabilityId}/${parameter.path.propertyId}`}>
-                <div className="model-property-title"><span className={`parameter-level is-${parameter.level}`}>{parameterLevelLabel(parameter.level)}</span><div><small>第三级 · 属性（Property）</small><strong>{propertyDisplayLabel(parameter.name, parameter.path.propertyId)}</strong><code>{endpointId} / {capabilityId} / {parameter.path.propertyId}</code></div><em>{parameter.level === 'custom' ? '数据库可配置' : '内置只读'}</em></div>
+                <div className="model-property-title"><span className={`parameter-level is-${parameter.level}`}>{parameterLevelLabel(parameter.level)}</span><div><small>第三级 · 属性（Property）</small><strong>{propertyDisplayLabel(parameter.name, parameter.path.propertyId)}</strong><code>{endpointId} / {capabilityId} / {parameter.path.propertyId}</code></div><div className="model-property-actions"><em>{parameter.type === 'enum' ? (overrideFor(parameter) ? '枚举已覆盖' : (parameter.level === 'custom' ? '自定义可改枚举' : '内置可覆盖枚举')) : (parameter.level === 'custom' ? '数据库可配置' : '内置只读')}</em>{parameter.type === 'enum' && <button onClick={() => openEnumEditor(parameter)}>编辑枚举</button>}</div></div>
                 <dl>
                   <div><dt>值类型（type）</dt><dd>{valueTypeLabel(parameter.type)}</dd></div>
                   <div><dt>单位（unit）</dt><dd>{parameter.unit ? unitLabel(parameter.unit) : '无（none）'}</dd></div>
@@ -157,7 +210,45 @@ export function UnifiedModelManager({ onModelCountChange }: { onModelCountChange
           </section>)}
           {visibleParameters.length === 0 && <div className="empty-state">没有符合当前筛选条件的属性字段。</div>}
         </div>
+
+
       </div>}
     </div>
-  </section>
+  {editingEnum && <div className="modal-backdrop is-enum-editor" onClick={() => !enumSaving && setEditingEnum(null)}>
+    <div className="model-enum-dialog" role="dialog" aria-modal="true" aria-label="编辑统一模型枚举" onClick={(event) => event.stopPropagation()}>
+      <div className="form-heading">
+        <div>
+          <p className="eyebrow">ENUM OVERRIDE</p>
+          <h3>编辑枚举值 · {propertyDisplayLabel(editingEnum.parameter.name, editingEnum.parameter.path.propertyId)}</h3>
+          <code>{editingEnum.parameter.path.endpointId} / {editingEnum.parameter.path.capabilityId} / {editingEnum.parameter.path.propertyId}</code>
+        </div>
+        <button onClick={() => !enumSaving && setEditingEnum(null)}>关闭</button>
+      </div>
+      <label>枚举值（enum，逗号分隔）
+        <input
+          aria-label="统一模型枚举值"
+          autoFocus
+          value={editingEnum.text}
+          onChange={(event) => setEditingEnum({ ...editingEnum, text: event.target.value })}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.preventDefault()
+              if (!enumSaving) setEditingEnum(null)
+            }
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              void saveEnumEditor()
+            }
+          }}
+          placeholder="auto, manual, sleep"
+        />
+      </label>
+      <p className="model-enum-hint">修改后会覆盖统一模型该属性的枚举列表，并立即作用于校验、映射目录与运行时定义；可随时恢复原始定义。</p>
+      <div className="model-enum-actions">
+        <button className="add-button" disabled={enumSaving} onClick={() => void saveEnumEditor()}>{enumSaving ? '保存中…' : '保存枚举覆盖'}</button>
+        {editingEnum.original?.id && <button className="danger-link" disabled={enumSaving} onClick={() => void resetEnumEditor()}>恢复原始枚举</button>}
+      </div>
+    </div>
+  </div>}
+</section>
 }

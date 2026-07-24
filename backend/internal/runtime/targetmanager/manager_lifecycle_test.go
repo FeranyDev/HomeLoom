@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -311,5 +312,40 @@ func TestMatterTargetRefusesStartupWithoutPersistentStorage(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("Matter target started without persistent storage")
+	}
+}
+
+type diagnosticHomeKitTarget struct {
+	issues    []homekit.ProjectionIssue
+	published int
+}
+
+func (t *diagnosticHomeKitTarget) Start(context.Context) error { return nil }
+func (t *diagnosticHomeKitTarget) PairingInfo() homekit.PairingInfo {
+	return homekit.PairingInfo{Code: "123-45-678", SetupURI: "X-HM://test", QR: []byte("qr")}
+}
+func (t *diagnosticHomeKitTarget) IsPaired() bool { return false }
+func (t *diagnosticHomeKitTarget) Issues() []homekit.ProjectionIssue {
+	return append([]homekit.ProjectionIssue(nil), t.issues...)
+}
+func (t *diagnosticHomeKitTarget) PublishedAccessoryCount() int { return t.published }
+
+func TestApplySurfacesHomeKitProjectionDiagnostics(t *testing.T) {
+	info := application.TargetInfo{ID: "apple-main", Type: "apple-hap", Name: "主桥", Status: "running"}
+	applyTargetDiagnostics(&info, &diagnosticHomeKitTarget{
+		published: 1,
+		issues: []homekit.ProjectionIssue{{
+			DeviceID: "broken-switch", DeviceName: "坏掉的开关", DeviceType: device.TypeSwitch,
+			Stage: "consumer-contract", Message: `consumer "homekit" requires parameter main/switch/power`,
+		}},
+	})
+	if info.Error == "" || len(info.Issues) != 1 {
+		t.Fatalf("info = %#v", info)
+	}
+	if info.Issues[0].DeviceID != "broken-switch" || info.Diagnostics["skippedAccessories"] != "1" || info.Diagnostics["publishedAccessories"] != "1" {
+		t.Fatalf("diagnostics = %#v issues=%#v", info.Diagnostics, info.Issues)
+	}
+	if !strings.Contains(info.Error, "坏掉的开关") || !strings.Contains(info.Error, "requires parameter") {
+		t.Fatalf("error summary = %q", info.Error)
 	}
 }

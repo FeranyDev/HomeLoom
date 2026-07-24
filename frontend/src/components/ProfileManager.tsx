@@ -4,6 +4,7 @@ import type { MappingProfile, MappingProfileInfo } from '../types/mapping'
 import { ApiError } from '../api/client'
 import { profileKindLabel, transformTypeLabel, valueTypeLabel } from '../presentationLabels'
 import { ProfileVisualEditor } from './ProfileVisualEditor'
+import { consumeProfileDraft } from '../profileDraft'
 
 interface ProfileAPI {
   list: () => Promise<MappingProfileInfo[]>
@@ -47,6 +48,14 @@ export function ProfileManager({ api = defaultAPI, onChanged }: { api?: ProfileA
   ), [profiles])
   const refresh = useCallback(async () => { try { setProfiles(await api.list()); setError(null) } catch (cause) { setError(errorText(cause, '加载 Profile 失败')) } }, [api])
   useEffect(() => { void refresh() }, [refresh])
+  useEffect(() => {
+    const draftFromRoute = consumeProfileDraft()
+    if (!draftFromRoute) return
+    setEditingID(null)
+    setMode('profile')
+    setDraft(draftFromRoute)
+    setError(null)
+  }, [])
   const openNew = () => { setEditingID(null); setMode('profile'); setDraft(starterProfile); setError(null) }
   const openEdit = (item: MappingProfileInfo) => { setEditingID(item.id); setMode('profile'); setDraft(editableProfile(item)); setError(null) }
   const openImport = () => { setEditingID(null); setMode('import'); setDocument(JSON.stringify({ profiles: [starterProfile] }, null, 2)); setError(null) }

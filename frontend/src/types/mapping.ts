@@ -85,6 +85,14 @@ export interface CustomModelProperty {
   id: string; deviceType: DeviceType; endpointId: string; endpointName: string; endpointType: string
   capabilityId: string; capabilityType: string; definition: PropertyDefinition
 }
+export interface ModelEnumOverride {
+  id?: string
+  deviceType: DeviceType
+  endpointId: string
+  capabilityId: string
+  propertyId: string
+  enum: string[]
+}
 
 export interface MappingPreviewRequest { profileId?: string; profile?: MappingProfile; direction: MappingDirection; value: PropertyValue | null }
 export interface MappingStep { index: number; transform: string; input: PropertyValue | null; output: PropertyValue }

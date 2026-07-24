@@ -19,11 +19,11 @@ HomeKit Target 只读取统一 Device Model，不依赖具体 Provider。Virtual
 | `fan` | `fan` | `rotation-speed` | number 0–100，R/W/N | Rotation Speed |
 | `air-purifier` | `air-purifier` | `active` | bool，R/W/N | Active |
 | `air-purifier` | `air-purifier` | `current-state` | enum `inactive/idle/purifying-air`，R/N | Current Air Purifier State |
-| `air-purifier` | `air-purifier` | `target-state` | enum `manual/auto`，R/W/N | Target Air Purifier State |
-| `air-purifier` | `air-purifier` | `rotation-speed` | number 0–100，R/W/N | Rotation Speed |
-| `air-purifier` | `filter` | `life-level` | number 0–100，R/N | Filter Life Level |
-| `air-purifier` | `filter` | `change-indication` | bool，R/N | Filter Change Indication |
-| `air-purifier` | `filter` | `reset-filter` | 幂等 Command | Reset Filter Indication |
+| `air-purifier` | `air-purifier` | `target-state` | enum `manual/auto`，可选 R/W/N | Target Air Purifier State |
+| `air-purifier` | `air-purifier` | `rotation-speed` | number 0–100，可选 R/W/N | Rotation Speed |
+| `air-purifier` | `filter` | `life-level` | number 0–100，可选 R/N | Filter Life Level |
+| `air-purifier` | `filter` | `change-indication` | bool，可选 R/N | Filter Change Indication |
+| `air-purifier` | `filter` | `reset-filter` | 可选幂等 Command | Reset Filter Indication |
 | `window-covering` | `window-covering` | `current-position` | int 0–100，R/N | Current Position |
 | `window-covering` | `window-covering` | `target-position` | int 0–100，R/W/N | Target Position |
 | `window-covering` | `window-covering` | `position-state` | enum `decreasing/increasing/stopped`，R/N | Position State |
@@ -32,4 +32,4 @@ HomeKit Target 只读取统一 Device Model，不依赖具体 Provider。Virtual
 
 `R/W/N` 分别表示 readable、writable、notifiable。Virtual Provider 会即时完成位置变化，并把窗帘状态归并为 `stopped`；真实 Provider 可以依次上报移动状态和最终位置。
 
-每个 HAP Service 都包含 Status Fault。设备为 `offline` 或 `unknown` 时只更新故障状态，不用缓存值伪装实时数据；恢复在线后重新推送完整属性。空气净化器的 Filter Maintenance 是链接服务，拥有独立故障状态和稳定 IID。
+每个 HAP Service 都包含 Status Fault。设备为 `offline` 或 `unknown` 时只更新故障状态，不用缓存值伪装实时数据；恢复在线后重新推送完整属性。空气净化器的 Filter Maintenance / Air Quality Sensor 仅在统一模型提供对应属性时作为链接服务发布，拥有独立故障状态和稳定 IID。
