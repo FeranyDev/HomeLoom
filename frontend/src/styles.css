@@ -34,7 +34,16 @@ h1, h2, h3, .wordmark, .summary span, .temperature strong, .dual-sensor strong, 
 }
 
 button, input, select, textarea { border-radius: 6px; }
-button { transition: border-color .18s ease, background .18s ease, color .18s ease, transform .18s ease; }
+button {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+  font: inherit;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: border-color .18s ease, background .18s ease, color .18s ease, box-shadow .18s ease, transform .18s ease;
+}
+button:disabled { opacity: .5; cursor: not-allowed; }
 button:not(:disabled):active { transform: translateY(1px); }
 
 .top-nav {
@@ -140,7 +149,7 @@ button:not(:disabled):active { transform: translateY(1px); }
 .section-heading .eyebrow { display: none; }
 .section-heading h2 { font-size: 25px; font-weight: 500; letter-spacing: .06em; }
 .heading-actions { gap: 14px; }
-.add-button { padding: 10px 16px; border: 1px solid var(--moss); border-radius: 6px; background: var(--moss); font-size: 13px; }
+.add-button { padding: 10px 16px; border: 1px solid var(--moss-deep); border-radius: 6px; background: var(--moss); color: #fff; font-size: 13px; }
 .refresh-button { padding: 8px 4px; border: 0; border-radius: 0; color: #3f453d; }
 .refresh-button::before { content: '↻'; margin-right: 7px; font-size: 18px; vertical-align: -1px; }
 
@@ -239,8 +248,345 @@ button:not(:disabled):active { transform: translateY(1px); }
 .profile-heading a, .profile-list button, .artifact-actions a,
 .maintenance-actions button, .target-device-manager button,
 .xiaomi-device-manager button, .mqtt-device-manager button, .mapping-page-tabs button,
-.model-field-toolbar button, .mapping-stage-tabs button {
+.model-field-toolbar button, .mapping-stage-tabs button,
+.mapping-route-list article button, .custom-property-list article button,
+.mapping-route-actions button, .settings-card > button, .form-actions button,
+.model-catalog-loading button, .fatal-error button, .provider-overview button {
   border-radius: 6px;
+}
+
+.ui-button,
+.form-actions button,
+.settings-card > button,
+.mapping-route-list article button,
+.custom-property-list article button,
+.mapping-route-actions button:not(.add-button),
+.model-catalog-loading button,
+.fatal-error button,
+.provider-overview button,
+.mapping-form > button,
+.provider-card__actions button,
+.target-actions button,
+.profile-heading button,
+.profile-list button,
+.maintenance-actions button,
+.target-device-manager button,
+.xiaomi-device-manager > header button,
+.xiaomi-device-manager__status button,
+.mqtt-device-manager > header button,
+.mqtt-device-manager__status button,
+.xiaomi-device-binding__heading button,
+.xiaomi-hub-device-list button,
+.model-catalog-summary .add-button,
+.auth-card button,
+.example-button,
+.simulation-actions button,
+.property-control button,
+.command-control button,
+.target-virtual-device-list button,
+.profile-editor-actions button,
+.model-contract-actions button,
+.model-property-actions button,
+.config-editor .example-button {
+  min-height: 36px;
+  padding: 8px 13px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, .55);
+  color: #4f544c;
+  font: inherit;
+  cursor: pointer;
+}
+
+.ui-button:hover:not(:disabled),
+.form-actions button:hover:not(:disabled),
+.settings-card > button:hover:not(:disabled),
+.mapping-route-list article button:hover:not(:disabled),
+.custom-property-list article button:hover:not(:disabled),
+.mapping-route-actions button:not(.add-button):hover:not(:disabled),
+.model-catalog-loading button:hover:not(:disabled),
+.fatal-error button:hover:not(:disabled),
+.provider-overview button:hover:not(:disabled),
+.mapping-form > button:hover:not(:disabled),
+.provider-card__actions button:hover:not(:disabled),
+.target-actions button:hover:not(:disabled),
+.profile-heading button:hover:not(:disabled),
+.profile-list button:hover:not(:disabled),
+.maintenance-actions button:hover:not(:disabled),
+.target-device-manager button:hover:not(:disabled),
+.xiaomi-device-manager > header button:hover:not(:disabled),
+.xiaomi-device-manager__status button:hover:not(:disabled),
+.mqtt-device-manager > header button:hover:not(:disabled),
+.mqtt-device-manager__status button:hover:not(:disabled),
+.xiaomi-device-binding__heading button:hover:not(:disabled),
+.xiaomi-hub-device-list button:hover:not(:disabled),
+.simulation-actions button:hover:not(:disabled),
+.property-control button:hover:not(:disabled),
+.command-control button:hover:not(:disabled),
+.target-virtual-device-list button:hover:not(:disabled),
+.profile-editor-actions button:hover:not(:disabled),
+.model-property-actions button:hover:not(:disabled),
+.config-editor .example-button:hover:not(:disabled),
+.example-button:hover:not(:disabled) {
+  border-color: #aeb4a8;
+  background: #fff;
+  color: var(--ink);
+}
+
+.form-actions .primary,
+.form-actions .add-button,
+button.primary,
+.add-button,
+.auth-card button,
+.model-contract-actions button,
+.xiaomi-oauth-callback button,
+.mapping-route-actions .add-button {
+  border-color: var(--moss-deep);
+  background: linear-gradient(135deg, #688363, var(--moss));
+  color: #fff;
+  box-shadow: 0 1px 0 rgba(255,255,255,.18) inset;
+}
+
+.form-actions .primary:hover:not(:disabled),
+.form-actions .add-button:hover:not(:disabled),
+button.primary:hover:not(:disabled),
+.add-button:hover:not(:disabled),
+.auth-card button:hover:not(:disabled),
+.model-contract-actions button:hover:not(:disabled),
+.xiaomi-oauth-callback button:hover:not(:disabled),
+.mapping-route-actions .add-button:hover:not(:disabled) {
+  border-color: #355338;
+  background: linear-gradient(135deg, #5f7b5b, var(--moss-deep));
+  color: #fff;
+}
+
+.danger-link,
+button.is-danger,
+.provider-card__actions .is-danger,
+.target-actions .is-danger,
+.maintenance-actions button.is-danger,
+.xiaomi-hub-device-list button.is-danger,
+.mqtt-route-list button.is-danger {
+  border-color: #d2b3aa;
+  background: rgba(255, 248, 246, .72);
+  color: var(--danger);
+}
+
+.danger-link:hover:not(:disabled),
+button.is-danger:hover:not(:disabled),
+.provider-card__actions .is-danger:hover:not(:disabled),
+.target-actions .is-danger:hover:not(:disabled),
+.maintenance-actions button.is-danger:hover:not(:disabled),
+.xiaomi-hub-device-list button.is-danger:hover:not(:disabled),
+.mqtt-route-list button.is-danger:hover:not(:disabled) {
+  border-color: #b98b80;
+  background: #f7ebe7;
+  color: #7d4337;
+}
+
+
+.simulation-actions button,
+.property-control button,
+.command-control button,
+.model-property-actions button {
+  min-height: 30px;
+  padding: 6px 9px;
+  font-size: 11px;
+}
+
+.profile-heading a,
+.artifact-actions a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 8px 13px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, .55);
+  color: #4f544c;
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.profile-heading a:hover,
+.artifact-actions a:hover {
+  border-color: #aeb4a8;
+  background: #fff;
+  color: var(--ink);
+}
+
+.mapping-route-list article > div:last-child,
+.custom-property-list article > div:last-child {
+  gap: 8px;
+}
+
+.settings-card > button {
+  min-width: 148px;
+  margin-top: 4px;
+}
+
+.system-dashboard .queue-card,
+.system-dashboard .command-section {
+  border-color: var(--line);
+  border-radius: 9px;
+  background: var(--paper-raised);
+  box-shadow: 0 5px 16px rgba(50, 45, 36, .04);
+}
+
+.system-dashboard .settings-card > button.primary,
+.system-dashboard .maintenance-actions button.primary,
+.artifact-actions a.is-primary,
+.artifact-actions a.ui-button.is-primary {
+  border-color: var(--moss-deep);
+  background: linear-gradient(135deg, #688363, var(--moss));
+  color: #fff;
+  box-shadow: 0 1px 0 rgba(255,255,255,.18) inset;
+}
+
+.system-dashboard .settings-card > button.primary:hover:not(:disabled),
+.system-dashboard .maintenance-actions button.primary:hover:not(:disabled),
+.artifact-actions a.is-primary:hover,
+.artifact-actions a.ui-button.is-primary:hover {
+  border-color: #355338;
+  background: linear-gradient(135deg, #5f7b5b, var(--moss-deep));
+  color: #fff;
+}
+
+.system-dashboard .settings-card {
+  gap: 16px;
+}
+
+.system-dashboard .settings-card label {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 140px;
+  align-items: center;
+  gap: 18px;
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .34);
+  color: #565b53;
+  font-size: 13px;
+}
+
+.system-dashboard .settings-card input {
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, .82);
+  color: #343931;
+  font: 14px ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-align: right;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.system-dashboard .settings-card input::-webkit-outer-spin-button,
+.system-dashboard .settings-card input::-webkit-inner-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+}
+
+.system-dashboard .settings-card input:hover {
+  border-color: #b2b7ae;
+  background: #fff;
+}
+
+.system-dashboard .settings-card input:focus {
+  outline: none;
+  border-color: #7f947b;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(88, 116, 82, .16);
+}
+
+.system-dashboard .maintenance-actions button,
+.system-dashboard .artifact-actions a,
+.system-dashboard .settings-card > button {
+  min-height: 38px;
+  padding: 9px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.system-dashboard .maintenance-actions {
+  align-items: stretch;
+  gap: 12px;
+}
+
+.system-dashboard .maintenance-actions .file-picker {
+  position: relative;
+  display: grid;
+  gap: 6px;
+  min-width: min(280px, 100%);
+  color: #6f746b;
+  font-size: 11px;
+}
+
+.system-dashboard .maintenance-actions .file-picker span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 38px;
+  padding: 9px 14px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 6px;
+  background: rgba(255,255,255,.55);
+  color: #4f544c;
+  font-size: 13px;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: border-color .18s ease, background .18s ease, color .18s ease;
+}
+
+.system-dashboard .maintenance-actions .file-picker:hover span {
+  border-color: #aeb4a8;
+  background: #fff;
+  color: var(--ink);
+}
+
+.system-dashboard .maintenance-actions .file-picker input[type="file"] {
+  position: absolute;
+  inset: 18px 0 0;
+  width: 100%;
+  height: 38px;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.system-dashboard .artifact-actions a.ui-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  padding: 9px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: rgba(255,255,255,.55);
+  color: #4f544c;
+  font: inherit;
+  text-decoration: none;
+}
+
+.system-dashboard .artifact-actions a.ui-button:hover {
+  border-color: #aeb4a8;
+  background: #fff;
+  color: var(--ink);
+}
+
+.system-dashboard .maintenance-actions button.is-danger {
+  border-color: #d2b3aa;
+  background: rgba(255, 248, 246, .72);
+  color: var(--danger);
+}
+
+.system-dashboard .maintenance-actions button.is-danger:hover:not(:disabled) {
+  border-color: #b98b80;
+  background: #f7ebe7;
+  color: #7d4337;
 }
 .provider-status-grid > div { background: rgba(247,245,239,.42); }
 .provider-status-grid strong.is-ready { color: var(--moss-deep); }
@@ -253,7 +599,21 @@ button:not(:disabled):active { transform: translateY(1px); }
 .modal-backdrop.is-mapping .device-mapping-dialog { width: min(1260px, calc(100vw - 48px)); max-height: calc(100vh - 48px); border-radius: 14px; animation: mapping-dialog-in .2s ease-out; }
 @keyframes mapping-dialog-in { from { opacity: 0; transform: translateY(12px) scale(.99); } to { opacity: 1; transform: translateY(0) scale(1); } }
 .form-heading { position: sticky; z-index: 2; top: -32px; padding: 4px 0 18px; background: #f7f4ed; border-bottom: 1px solid var(--line); }
-.form-heading button { padding: 7px 10px; border: 1px solid var(--line); }
+.form-heading button {
+  min-height: 34px;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(255,255,255,.55);
+  color: var(--muted);
+  cursor: pointer;
+}
+.form-heading button:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: #fff;
+  color: var(--ink);
+}
+
 .mapping-lane, .mapping-route-toolbar, .custom-property-editor, .profile-editor { border-radius: 7px; }
 .mapping-lane.is-model { box-shadow: inset 0 3px var(--moss); }
 
@@ -522,10 +882,27 @@ button:not(:disabled):active { transform: translateY(1px); }
   .profile-transform-picker button { width: 100%; }
 }
 
+
+.top-nav .nav-links button,
+.top-nav .logout-button,
+.refresh-button,
+.power-button,
+.toast button,
+.profile-editor > div button,
+.device-card footer .device-card__disable,
+.mapping-node-list button,
+.model-type-list button,
+.mapping-page-tabs button,
+.mapping-stage-tabs button,
+.profile-editor-modes button,
+.profile-direction-toggle button {
+  box-shadow: none;
+}
+
 @layer legacy {
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--paper); }
-button { font: inherit; }
+button { appearance: none; -webkit-appearance: none; font: inherit; cursor: pointer; }
 :focus-visible { outline: 3px solid #4f7256; outline-offset: 3px; }
 .skip-link { position: fixed; z-index: 100; top: 12px; left: 12px; padding: 10px 14px; color: white; background: #242722; transform: translateY(-160%); transition: transform .15s ease; }
 .skip-link:focus { transform: translateY(0); }
@@ -557,7 +934,7 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .auth-card form { display: grid; gap: 15px; margin-top: 30px; }
 .auth-card label { display: grid; gap: 7px; color: #6e736a; font-size: 12px; }
 .auth-card input { width: 100%; padding: 13px 14px; border: 1px solid #c6c5bd; background: #fbfaf6; color: #343831; font: inherit; }
-.auth-card button { justify-self: start; padding: 11px 18px; border: 0; background: #343931; color: #fff; cursor: pointer; }
+.auth-card button { justify-self: start; padding: 11px 18px; border: 1px solid #3f6040; border-radius: 6px; background: linear-gradient(135deg, #688363, #587452); color: #fff; cursor: pointer; }
 .auth-card button:disabled { opacity: .55; cursor: wait; }
 .auth-card small { display: block; margin-top: 22px; color: #90938c; line-height: 1.6; }
 .hero { display: flex; justify-content: space-between; align-items: end; padding: 0 0 72px; border-bottom: 1px solid #c9c7be; }
@@ -572,7 +949,7 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .section-heading .eyebrow { margin-bottom: 8px; }
 .refresh-button { border: 0; border-bottom: 1px solid #777c72; padding: 8px 0; color: #565a52; background: transparent; cursor: pointer; }
 .heading-actions { display: flex; align-items: center; gap: 20px; }
-.add-button { padding: 10px 16px; border: 0; border-radius: 2px; background: #343931; color: white; cursor: pointer; }
+.add-button { padding: 10px 16px; border: 1px solid #3f6040; border-radius: 6px; background: linear-gradient(135deg, #688363, #587452); color: white; cursor: pointer; }
 .device-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
 .device-card { min-height: 320px; padding: 28px; border: 1px solid #d2d0c7; border-radius: 3px; background: rgba(250, 249, 245, .72); box-shadow: 0 18px 50px rgba(46, 50, 43, .06); }
 .device-card__topline { display: flex; align-items: center; gap: 8px; color: #7b8077; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
@@ -693,13 +1070,16 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .queue-card small, .command-heading span { color: #898d85; font-size: 11px; }
 .artifact-card p { margin: 0; color: #686b65; line-height: 1.6; }
 .artifact-actions { display: flex; flex-wrap: wrap; gap: 10px; }
-.artifact-actions a { padding: 10px 14px; border: 1px solid #747970; color: #343931; text-decoration: none; }
+.artifact-actions a { display: inline-flex; align-items: center; min-height: 38px; padding: 9px 14px; border: 1px solid var(--line-strong); border-radius: 6px; background: rgba(255,255,255,.55); color: #4f544c; text-decoration: none; }
 .maintenance-card p { margin: 0; color: #686b65; line-height: 1.65; }
 .maintenance-actions { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
 .maintenance-actions label { display: grid; gap: 6px; color: #777b73; font-size: 11px; }
-.maintenance-actions input { max-width: 280px; padding: 8px; border: 1px solid #c5c6be; background: #f8f7f1; }
-.maintenance-actions button { padding: 10px 14px; border: 1px solid #747970; background: transparent; color: #343931; cursor: pointer; }
-.maintenance-actions button.is-danger { border-color: #aa786c; color: #8a4d40; }
+.maintenance-actions input { max-width: 280px; padding: 8px; border: 1px solid #c5c6be; border-radius: 6px; background: #f8f7f1; }
+.maintenance-actions .file-picker { position: relative; display: grid; gap: 6px; }
+.maintenance-actions .file-picker span { display: inline-flex; align-items: center; min-height: 38px; padding: 9px 14px; border: 1px dashed #c4c5bd; border-radius: 6px; background: rgba(255,255,255,.55); color: #4f544c; font-size: 13px; }
+.maintenance-actions .file-picker input[type="file"] { position: absolute; inset: 18px 0 0; opacity: 0; cursor: pointer; }
+.maintenance-actions button { min-height: 38px; padding: 9px 14px; border: 1px solid var(--line-strong); border-radius: 6px; background: rgba(255,255,255,.55); color: #4f544c; cursor: pointer; }
+.maintenance-actions button.is-danger { border-color: #d2b3aa; background: rgba(255, 248, 246, .72); color: var(--danger); }
 .maintenance-actions button:disabled { opacity: .5; cursor: not-allowed; }
 .maintenance-message { color: #52705a !important; }
 .mapping-preview { display: grid; gap: 18px; }
@@ -866,6 +1246,9 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .mapping-route-toolbar.is-editing { border-color: #7e8c7a; background: #e6ebe3; box-shadow: inset 4px 0 #657365; }
 .mapping-route-toolbar label { display: grid; gap: 6px; color: #6f746c; font-size: 11px; }
 .mapping-route-toolbar > .mapping-route-actions { display: flex; align-items: center; gap: 12px; }
+.mapping-route-actions button { min-height: 36px; padding: 8px 13px; border: 1px solid #c4c5bd; border-radius: 6px; background: rgba(255,255,255,.55); color: #4f544c; font: inherit; cursor: pointer; }
+.mapping-route-actions .add-button { border-color: #3f6040; background: linear-gradient(135deg, #688363, #587452); color: #fff; }
+
 .mapping-route-toolbar small { color: #777c74; }
 .enum-domain-inline { overflow-wrap: anywhere; color: #5f6e5e !important; font-family: ui-monospace, monospace; }
 .enum-compatibility { display: grid; grid-column: 1 / -1; gap: 11px; align-items: stretch; padding: 14px; border: 1px solid #b8beb4; background: rgba(255,255,255,.55); }
@@ -898,8 +1281,10 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .mapping-route-list article.is-disabled { opacity: .5; }
 .mapping-route-list article.is-default { margin: 0 -10px; padding-right: 10px; padding-left: 10px; border: 1px dashed #aeb8aa; background: rgba(230, 235, 227, .52); }
 .mapping-route-list article > div { display: grid; gap: 3px; }
-.mapping-route-list article > div:last-child { display: flex; }
+.mapping-route-list article > div:last-child { display: flex; flex-wrap: wrap; gap: 8px; }
+.mapping-route-list article button { min-height: 32px; padding: 7px 11px; border: 1px solid #c4c5bd; border-radius: 6px; background: rgba(255,255,255,.55); color: #4f544c; font: inherit; cursor: pointer; }
 .mapping-route-list code, .mapping-route-list small { color: #777c74; }
+
 .route-stage { padding: 5px 8px; background: #dfe5dc; color: #566456; font: 10px ui-monospace, monospace; }
 .route-stage.is-default { border: 1px solid #8d9c89; background: transparent; color: #526450; }
 .route-stage.is-consumer { background: #e4dfeb; color: #625674; }
@@ -907,7 +1292,8 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .custom-property-list { display: grid; gap: 8px; }
 .custom-property-list article { display: grid; grid-template-columns: auto 1fr auto; gap: 14px; align-items: center; padding: 16px 20px; border: 1px solid #d2d0c7; background: rgba(250, 249, 245, .72); }
 .custom-property-list article > div { display: grid; gap: 4px; }
-.custom-property-list article > div:last-child { display: flex; }
+.custom-property-list article > div:last-child { display: flex; flex-wrap: wrap; gap: 8px; }
+.custom-property-list article button { min-height: 32px; padding: 7px 11px; border: 1px solid #c4c5bd; border-radius: 6px; background: rgba(255,255,255,.55); color: #4f544c; font: inherit; cursor: pointer; }
 .custom-property-list code, .custom-property-list small { color: #777c74; }
 .custom-property-editor { display: grid; gap: 18px; padding: 24px; border: 1px solid #8c948a; background: #eceee8; }
 .custom-property-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
@@ -975,8 +1361,35 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .mapping-steps span, .mapping-steps small { overflow-wrap: anywhere; }
 .mapping-steps small { color: #8a8e86; }
 .settings-card label { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: 12px; color: #5f625d; }
-.settings-card input { width: 120px; }
-.settings-card > button { justify-self: start; }
+.settings-card input {
+  width: 132px;
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, .72);
+  color: #3f443d;
+  font: inherit;
+  text-align: right;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+.settings-card input::-webkit-outer-spin-button,
+.settings-card input::-webkit-inner-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+}
+.settings-card input:hover {
+  border-color: #b2b7ae;
+  background: #fff;
+}
+.settings-card input:focus {
+  outline: none;
+  border-color: #7f947b;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(88, 116, 82, .16);
+}
+.settings-card > button { justify-self: start; min-height: 36px; padding: 9px 14px; border: 1px solid #bfc1b8; border-radius: 6px; background: rgba(255,255,255,.5); color: #4f544c; cursor: pointer; }
 .queue-track { height: 7px; overflow: hidden; background: #dedfd8; }
 .queue-track span { display: block; height: 100%; background: #66806a; }
 .command-section { border: 1px solid #d2d0c7; background: rgba(250, 249, 245, .72); }
@@ -992,6 +1405,82 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .command-filters input, .command-filters select { padding: 10px 12px; border: 1px solid #cac9c1; background: rgba(250,249,245,.72); color: #4f534c; font: inherit; }
 .command-filters span { color: #898d85; font: 11px ui-monospace, monospace; }
 .command-empty { padding: 38px 24px; color: #969991; }
+
+.list-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 18px;
+  padding: 14px 24px 18px;
+  border-top: 1px solid #e3e1d9;
+  background: rgba(248, 247, 242, .72);
+}
+
+.list-pagination__size {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #6f746b;
+  font-size: 12px;
+}
+
+.list-pagination__size select {
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, .72);
+  color: #3f443d;
+  font: inherit;
+}
+
+.list-pagination__summary {
+  color: #777b73;
+  font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.list-pagination__controls {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.list-pagination__controls button {
+  min-height: 34px;
+  padding: 7px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, .55);
+  color: #4f544c;
+  font: inherit;
+  cursor: pointer;
+}
+
+.list-pagination__controls button:hover:not(:disabled) {
+  border-color: #aeb4a8;
+  background: #fff;
+  color: var(--ink);
+}
+
+.list-pagination__controls button:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+@media (max-width: 720px) {
+  .list-pagination {
+    align-items: stretch;
+  }
+
+  .list-pagination__controls {
+    width: 100%;
+  }
+
+  .list-pagination__controls button {
+    flex: 1;
+  }
+}
+
 .command-row { display: grid; grid-template-columns: 2fr .7fr 1fr 1.2fr; gap: 14px; align-items: center; padding: 15px 24px; border-bottom: 1px solid #e0dfd8; font-size: 12px; }
 .command-row:last-child { border-bottom: 0; }
 .command-row > span { display: grid; gap: 3px; }
@@ -1099,8 +1588,8 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .target-form fieldset label { display: grid; grid-template-columns: 22px 1fr auto; align-items: center; padding: 8px; background: #ebe9e1; }
 .target-form fieldset small { color: #92958e; font-family: ui-monospace, monospace; }
 .form-actions { display: flex; justify-content: end; gap: 10px; margin-top: 24px; }
-.form-actions button { padding: 11px 18px; border: 1px solid #bfc1b8; background: transparent; cursor: pointer; }
-.form-actions .primary { border-color: #343931; background: #343931; color: white; }
+.form-actions button { padding: 11px 18px; border: 1px solid #bfc1b8; background: rgba(255,255,255,.45); color: #4f544c; cursor: pointer; }
+.form-actions .primary { border-color: #3f6040; background: linear-gradient(135deg, #688363, #587452); color: white; }
 
 .provider-workspace { display: grid; gap: 22px; }
 .provider-overview { display: grid; grid-template-columns: 1fr auto; gap: 30px; align-items: end; padding: 34px; border: 1px solid #d2d0c7; background: linear-gradient(135deg, rgba(250,249,245,.88), rgba(235,232,222,.78)); }
@@ -1145,7 +1634,7 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .xiaomi-oauth-callback strong { color: #454a42; font-size: 14px; }
 .xiaomi-oauth-callback ol { display: grid; gap: 6px; margin: 0; padding-left: 20px; color: #747970; font-size: 12px; line-height: 1.5; }
 .xiaomi-oauth-callback code { overflow-wrap: anywhere; color: #596158; font-size: 11px; }
-.xiaomi-oauth-callback button { justify-self: start; padding: 9px 13px; border: 1px solid #343931; background: #343931; color: white; cursor: pointer; }
+.xiaomi-oauth-callback button { justify-self: start; padding: 9px 13px; border: 1px solid #3f6040; border-radius: 6px; background: linear-gradient(135deg, #688363, #587452); color: white; cursor: pointer; }
 .xiaomi-oauth-callback button:disabled { opacity: .5; cursor: not-allowed; }
 .xiaomi-device-binding { display: grid; gap: 14px; padding: 18px; border: 1px solid #c9c8bf; background: rgba(246,245,239,.82); }
 .xiaomi-device-binding__heading { display: flex; align-items: start; justify-content: space-between; gap: 18px; }
