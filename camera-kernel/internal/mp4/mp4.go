@@ -14,7 +14,7 @@ import (
 	"github.com/AlexxIT/go2rtc/internal/streams"
 	"github.com/AlexxIT/go2rtc/pkg/core"
 	"github.com/AlexxIT/go2rtc/pkg/mp4"
-	"github.com/rs/zerolog"
+	"go.uber.org/zap"
 )
 
 func Init() {
@@ -27,7 +27,7 @@ func Init() {
 	api.HandleFunc("api/stream.mp4", handlerMP4)
 }
 
-var log zerolog.Logger
+var log = zap.NewNop()
 
 func handlerKeyframe(w http.ResponseWriter, r *http.Request) {
 	// Chrome 105 does two requests: without Range and with `Range: bytes=0-`
@@ -51,7 +51,7 @@ func handlerKeyframe(w http.ResponseWriter, r *http.Request) {
 	cons := mp4.NewKeyframe(mp4.ParseQuery(query))
 
 	if err := stream.AddConsumer(cons); err != nil {
-		log.Error().Err(err).Caller().Send()
+		log.WithOptions(zap.AddCaller()).Error("failed to add keyframe consumer", zap.Error(err))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -72,7 +72,7 @@ func handlerKeyframe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := once.WriteTo(w); err != nil {
-		log.Error().Err(err).Caller().Send()
+		log.WithOptions(zap.AddCaller()).Error("failed to write keyframe", zap.Error(err))
 	}
 }
 
@@ -99,7 +99,7 @@ func captureKeyframe(ctx context.Context, session keyframeSession, destination i
 }
 
 func handlerMP4(w http.ResponseWriter, r *http.Request) {
-	log.Trace().Msgf("[mp4] %s %+v", r.Method, r.Header)
+	log.Debug("MP4 request received", zap.String("method", r.Method), zap.Any("headers", r.Header))
 
 	query := r.URL.Query()
 
@@ -128,7 +128,7 @@ func handlerMP4(w http.ResponseWriter, r *http.Request) {
 	cons.WithRequest(r)
 
 	if err := stream.AddConsumer(cons); err != nil {
-		log.Error().Err(err).Caller().Send()
+		log.WithOptions(zap.AddCaller()).Error("failed to add MP4 consumer", zap.Error(err))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

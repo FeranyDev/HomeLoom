@@ -1,6 +1,7 @@
 package go2rtc
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -8,6 +9,23 @@ import (
 	"sync"
 	"testing"
 )
+
+func TestPublisherDiagnosticLogMirrorsCollectedOutput(t *testing.T) {
+	var mirror bytes.Buffer
+	log, err := openPublisherDiagnosticLog(t.TempDir(), &mirror)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	_, _ = log.Write([]byte("{\"level\":\"info\",\"msg\":\"publisher ready\",\"stream_id\":\"camera-1\"}\n"))
+	if !strings.Contains(mirror.String(), "publisher ready") || !strings.Contains(mirror.String(), "camera-1") {
+		t.Fatalf("mirror = %q", mirror.String())
+	}
+	log.Event("info", "core lifecycle", nil)
+	if strings.Contains(mirror.String(), "core lifecycle") {
+		t.Fatal("Core lifecycle event leaked into the child-process collector")
+	}
+}
 
 func TestPublisherDiagnosticLogRotatesAndSecuresFiles(t *testing.T) {
 	path := filepath.Join(t.TempDir(), publisherLogFilename)
@@ -89,14 +107,17 @@ func TestPublisherDiagnosticLogSerializesConcurrentCoreEvents(t *testing.T) {
 
 func TestPublisherConfigCapturesDetailedRedactedDiagnostics(t *testing.T) {
 	config := publisherTestConfig(t.TempDir())
+	config.LogLevel = "debug"
 	text := publisherYAML(config)
 	required := []string{
 		"log:\n",
 		"  output: stdout\n",
 		"  format: json\n",
 		"  level: debug\n",
-		"  time: UNIXMS\n",
-		"  ffmpeg: info\n",
+		"  time: ISO8601\n",
+		"  homekit: debug\n",
+		"  ffmpeg: debug\n",
+		"  exec: debug\n",
 		"  global: \"-hide_banner -nostats\"\n",
 		"${HOMELOOM_CAMERA_SOURCE_CAMERA_MAIN}",
 		"${HOMELOOM_HAP_PIN_CAMERA_MAIN}",
@@ -118,8 +139,8 @@ func TestPublisherConfigCapturesDetailedRedactedDiagnostics(t *testing.T) {
 	}
 
 	legacy := "app:\n  modules: [api, rtsp, srtp, homekit, xiaomi, streams]\nlog:\n  output: stderr\n  level: info\napi:\n  allow_paths: [/pair-setup, /pair-verify]\nstreams:\n"
-	upgraded := applyPublisherLogConfig(legacy)
-	upgraded = applyPublisherLogConfig(upgraded)
+	upgraded := applyPublisherLogConfig(legacy, "debug")
+	upgraded = applyPublisherLogConfig(upgraded, "debug")
 	if strings.Count(upgraded, "\nlog:\n") != 1 || strings.Count(upgraded, "  level: debug\n") != 1 {
 		t.Fatalf("publisher diagnostic upgrade is not idempotent:\n%s", upgraded)
 	}

@@ -134,6 +134,26 @@ paths:
       responses:
         "200": { description: Settings persisted and applied without restart, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/RuntimeSettings" } } } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
+  /api/v1/system/subprocess-logs:
+    get:
+      operationId: listSubprocessLogs
+      description: Returns the bounded, redacted in-memory stdout/stderr stream collected from Camera Kernel and Matter sidecar processes.
+      parameters:
+        - { name: after, in: query, schema: { type: integer, minimum: 0, default: 0 }, description: Return entries with a sequence greater than this cursor. }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 2000, default: 500 } }
+      responses:
+        "200":
+          description: Redacted child-process log entries
+          headers:
+            Cache-Control: { schema: { type: string, enum: [no-store] } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties: { data: { type: array, items: { $ref: "#/components/schemas/SubprocessLogEntry" } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "503": { $ref: "#/components/responses/Unavailable" }
   /api/v1/system/config-export:
     get:
       operationId: exportConfiguration
@@ -696,6 +716,21 @@ components:
       properties:
         commandTimeoutSeconds: { type: integer, minimum: 1, maximum: 300, description: Applied only to commands created after the update. }
         commandHistoryLimit: { type: integer, minimum: 100, maximum: 10000, description: Maximum in-memory command records; lowering it immediately removes the oldest terminal records. }
+    SubprocessLogEntry:
+      type: object
+      required: [sequence, time, process, instance, message]
+      properties:
+        sequence: { type: integer, minimum: 1 }
+        time: { type: string, format: date-time }
+        process: { type: string, enum: [camera-kernel, matter] }
+        instance: { type: string }
+        component: { type: string, description: Structured logger component name. }
+        module: { type: string, description: Structured logger module name. }
+        facility: { type: string, description: Matter.js facility when present. }
+        subsystem: { type: string, description: Classified child subsystem such as homekit or ffmpeg. }
+        level: { type: string }
+        message: { type: string, description: Redacted child-process message. }
+        error: { type: string, description: Redacted structured error text. }
     ExportTargetConfig:
       type: object
       required: [id, type, name, enabled, deviceIds, devices]

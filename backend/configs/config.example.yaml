@@ -6,6 +6,11 @@ storage:
   # SQLite alternative: "sqlite://./data/homeloom.db"
   master_key: "./data/homeloom.key"
 
+logging:
+  # Camera Kernel and Matter sidecar logs are collected by Core and shown in
+  # the Web system page. Core's own level is set with the -log-level flag.
+  child_level: "info"
+
 media:
   # Core directly owns media lifecycle and authorization. Only the constrained
   # per-camera kernel and FFmpeg remain external executables.

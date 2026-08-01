@@ -25,6 +25,20 @@ export interface Diagnostics {
 export interface SystemVersion { version: string; commit: string; buildTime: string; goVersion: string }
 export interface RuntimeSettings { commandTimeoutSeconds: number; commandHistoryLimit: number }
 
+export interface SubprocessLogEntry {
+	sequence: number
+	time: string
+	process: string
+	instance: string
+	component?: string
+	module?: string
+	facility?: string
+	subsystem?: string
+	level?: string
+	message: string
+	error?: string
+}
+
 interface CommandValue { type: string; bool?: boolean; int?: number; number?: number; string?: string }
 export interface DeviceCommand {
   id: string; kind?: 'property' | 'action'; deviceId: string; endpointId: string; capabilityId: string; propertyId?: string; commandId?: string

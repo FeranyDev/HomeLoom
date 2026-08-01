@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"path/filepath"
 	"sync"
 	"time"
@@ -28,6 +29,8 @@ type Config struct {
 	Authorize          AuthorizeFunc
 	OnPairing          func(PairingOutput)
 	OnError            func(error)
+	ChildLogLevel      string
+	ChildLogWriter     func(string, string) io.Writer
 }
 
 type PairingOutput struct {
@@ -126,7 +129,8 @@ func Start(config Config) (*Runtime, error) {
 				})
 			}
 		},
-		OnError: config.OnError,
+		OnError:  config.OnError,
+		LogLevel: config.ChildLogLevel, LogWriter: config.ChildLogWriter,
 	})
 	if err != nil {
 		return nil, err

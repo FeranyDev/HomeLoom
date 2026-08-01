@@ -14,6 +14,7 @@ import (
 	"github.com/AlexxIT/go2rtc/pkg/hap"
 	"github.com/AlexxIT/go2rtc/pkg/homekit"
 	"github.com/AlexxIT/go2rtc/pkg/mdns"
+	"go.uber.org/zap"
 )
 
 func apiDiscovery(w http.ResponseWriter, r *http.Request) {
@@ -134,7 +135,7 @@ func discovery() ([]*api.Source, error) {
 
 	// 1. Get streams from Discovery
 	err := mdns.Discovery(mdns.ServiceHAP, func(entry *mdns.ServiceEntry) bool {
-		log.Trace().Msgf("[homekit] mdns=%s", entry)
+		log.Debug("mDNS service discovered", zap.Stringer("mdns", entry))
 
 		category := entry.Info[hap.TXTCategory]
 		if entry.Complete() && (category == hap.CategoryCamera || category == hap.CategoryDoorbell) {

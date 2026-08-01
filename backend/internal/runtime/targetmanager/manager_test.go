@@ -2,8 +2,7 @@ package targetmanager_test
 
 import (
 	"context"
-	"io"
-	"log/slog"
+	"go.uber.org/zap"
 	"sync"
 	"testing"
 
@@ -53,7 +52,7 @@ func (s *cameraPublicationRuntimeStub) ResetHomeKitCamera(_ context.Context, tar
 func TestDisabledTargetLifecycleDoesNotStartHAP(t *testing.T) {
 	devices := application.NewDeviceService(virtual.NewProvider())
 	defer devices.Close()
-	manager := targetmanager.New(context.Background(), devices, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	manager := targetmanager.New(context.Background(), devices, zap.NewNop())
 	registration, err := manager.Apply(context.Background(), target.Config{ID: "disabled", Type: "apple-hap", Name: "Disabled"})
 	if err != nil {
 		t.Fatalf("Apply() error = %v", err)
@@ -72,7 +71,7 @@ func TestDisabledTargetLifecycleDoesNotStartHAP(t *testing.T) {
 func TestUnsupportedEnabledTargetReturnsError(t *testing.T) {
 	devices := application.NewDeviceService(virtual.NewProvider())
 	defer devices.Close()
-	manager := targetmanager.New(context.Background(), devices, slog.Default())
+	manager := targetmanager.New(context.Background(), devices, zap.NewNop())
 	_, err := manager.Apply(context.Background(), target.Config{ID: "matter", Type: "matter", Name: "Matter", Enabled: true})
 	if err == nil {
 		t.Fatal("Apply() accepted an unsupported runtime")
@@ -83,7 +82,7 @@ func TestHomeKitCameraTargetUsesIndependentPublicationRuntime(t *testing.T) {
 	devices := application.NewDeviceService(virtual.NewProvider())
 	defer devices.Close()
 	cameraRuntime := &cameraPublicationRuntimeStub{}
-	manager := targetmanager.New(context.Background(), devices, slog.New(slog.NewTextHandler(io.Discard, nil)), cameraRuntime)
+	manager := targetmanager.New(context.Background(), devices, zap.NewNop(), cameraRuntime)
 	config := target.Config{
 		ID: "camera-homekit-1", Type: "homekit-camera", Name: "客厅摄像头", Enabled: true,
 		Devices: []target.VirtualDevice{{

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"time"
@@ -19,6 +18,7 @@ import (
 	"github.com/brutella/hap/service"
 	"github.com/brutella/hap/tlv8"
 	homekitqr "github.com/kradalby/homekit-qr"
+	"go.uber.org/zap"
 )
 
 const (
@@ -58,10 +58,10 @@ type CameraPublisher struct {
 	server   *hap.Server
 	camera   *accessory.Camera
 	pairing  PairingInfo
-	logger   *slog.Logger
+	logger   *zap.Logger
 }
 
-func NewCameraPublisher(config CameraPublisherConfig, media CameraMedia, logger *slog.Logger) (*CameraPublisher, error) {
+func NewCameraPublisher(config CameraPublisherConfig, media CameraMedia, logger *zap.Logger) (*CameraPublisher, error) {
 	if config.ID == "" || config.DeviceID == "" {
 		return nil, errors.New("HomeKit camera publisher and device IDs are required")
 	}
@@ -69,8 +69,9 @@ func NewCameraPublisher(config CameraPublisherConfig, media CameraMedia, logger 
 		return nil, errors.New("HomeKit camera name, address, eight-digit PIN, and four-character setup ID are required")
 	}
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
+	logger = logger.With(zap.String("module", "homekit-camera"))
 	store := config.Store
 	if store == nil {
 		if config.StorePath == "" {
@@ -131,9 +132,9 @@ func (p *CameraPublisher) IsPaired() bool           { return p.server.IsPaired()
 func (p *CameraPublisher) Start(ctx context.Context) error {
 	p.logger.Info(
 		"standalone HomeKit camera publisher started",
-		"publisher_id", p.id,
-		"device_id", p.deviceID,
-		"address", p.server.Addr,
+		zap.String("publisher_id", p.id),
+		zap.String("device_id", p.deviceID),
+		zap.String("address", p.server.Addr),
 	)
 	err := p.server.ListenAndServe(ctx)
 	if ctx.Err() != nil {

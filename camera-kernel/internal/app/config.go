@@ -9,12 +9,13 @@ import (
 
 	"github.com/AlexxIT/go2rtc/pkg/creds"
 	"github.com/AlexxIT/go2rtc/pkg/yaml"
+	"go.uber.org/zap"
 )
 
 func LoadConfig(v any) {
 	for _, data := range configs {
 		if err := yaml.Unmarshal(data, v); err != nil {
-			Logger.Warn().Err(err).Send()
+			Logger.Warn("configuration fragment rejected", zap.Error(err))
 		}
 	}
 }

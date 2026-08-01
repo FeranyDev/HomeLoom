@@ -7,13 +7,15 @@ import (
 	"testing"
 
 	"github.com/AlexxIT/go2rtc/pkg/hap/camera"
-	"github.com/rs/zerolog"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func TestCharacteristicWriteDiagnosticDoesNotLogValue(t *testing.T) {
 	var output bytes.Buffer
 	previous := log
-	log = zerolog.New(&output).Level(zerolog.DebugLevel)
+	encoder := zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig())
+	log = zap.New(zapcore.NewCore(encoder, zapcore.AddSync(&output), zapcore.DebugLevel))
 	t.Cleanup(func() { log = previous })
 
 	accessory := camera.NewAccessory("HomeLoom", "Camera Kernel", "Test", "-", "test")
@@ -33,7 +35,7 @@ func TestCharacteristicWriteDiagnosticDoesNotLogValue(t *testing.T) {
 		`"characteristic":"active"`,
 		`"characteristic_type":"B0"`,
 		`"value_length":` + strconv.Itoa(len(canary)),
-		`"[homekit] characteristic write"`,
+		`"msg":"characteristic write"`,
 	} {
 		if !strings.Contains(diagnostic, required) {
 			t.Fatalf("HomeKit diagnostic missing %q: %s", required, diagnostic)

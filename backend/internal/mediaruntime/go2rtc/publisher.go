@@ -86,6 +86,8 @@ type PublisherConfig struct {
 	// stream without a Target still runs for Device Center preview, but must
 	// not advertise or allocate a HomeKit accessory identity.
 	PublishHomeKit bool
+	LogLevel       string
+	LogOutput      io.Writer
 
 	StartupTimeout time.Duration
 	StopTimeout    time.Duration
@@ -152,7 +154,7 @@ func StartPublisher(ctx context.Context, config PublisherConfig) (*PublisherKern
 	if err := os.Chmod(directory, 0o700); err != nil {
 		return nil, fmt.Errorf("secure publisher runtime directory: %w", err)
 	}
-	diagnostics, err := openPublisherDiagnosticLog(directory)
+	diagnostics, err := openPublisherDiagnosticLog(directory, config.LogOutput)
 	if err != nil {
 		return nil, err
 	}
@@ -416,6 +418,9 @@ func waitForPublisherMediaReady(ctx context.Context, client publisherHTTPClient,
 }
 
 func (c PublisherConfig) withDefaults() PublisherConfig {
+	if c.LogLevel == "" {
+		c.LogLevel = "info"
+	}
 	if c.Binary == "" {
 		c.Binary = "homeloom-camera-kernel"
 	}
@@ -439,6 +444,11 @@ func (c PublisherConfig) withDefaults() PublisherConfig {
 
 func (c PublisherConfig) validate() error {
 	c = c.withDefaults()
+	switch c.LogLevel {
+	case "debug", "info", "warn", "error":
+	default:
+		return fmt.Errorf("%w: invalid camera kernel log level", ErrInvalidConfig)
+	}
 	sourceURI := c.SourceURI
 	if sourceURI == "" {
 		sourceURI = c.Xiaomi.URI()
@@ -764,7 +774,7 @@ func publisherYAML(config PublisherConfig) string {
 	streamURI := "${" + sourceEnv(config) + "}"
 	var builder strings.Builder
 	builder.WriteString("app:\n  modules: [" + publisherModules(config.PublishHomeKit) + "]\n")
-	builder.WriteString(publisherLogConfig())
+	builder.WriteString(publisherLogConfig(config.LogLevel))
 	builder.WriteString("api:\n  listen: \"\"\n")
 	builder.WriteString("  unix_listen: " + yamlString(config.MediaUnixSocket) + "\n")
 	if config.PublishHomeKit {
@@ -814,7 +824,7 @@ func upgradePublisherConfig(path string, config PublisherConfig) error {
 		return fmt.Errorf("read publisher config: %w", err)
 	}
 	updated := applyPublisherModules(string(content), config.PublishHomeKit)
-	updated = applyPublisherLogConfig(updated)
+	updated = applyPublisherLogConfig(updated, config.LogLevel)
 	apiPrefix := "api:\n"
 	if index := strings.Index(updated, apiPrefix); index >= 0 {
 		blockEnd := len(updated)
@@ -899,14 +909,13 @@ func applyPublisherModules(content string, publishHomeKit bool) string {
 	return content
 }
 
-func publisherLogConfig() string {
-	// Keep the global level at debug for media lifecycle diagnostics, while
-	// bounding the normally noisy HomeKit characteristic/session logger to warn.
-	// FFmpeg's own verbosity is separately bounded to info.
-	return "log:\n  output: stdout\n  format: json\n  level: debug\n  time: UNIXMS\n  homekit: warn\n  ffmpeg: info\n"
+func publisherLogConfig(level string) string {
+	// Apply the configured child level to every camera-kernel subsystem. In
+	// particular, exec carries FFmpeg stderr and must not silently remain debug.
+	return "log:\n  output: stdout\n  format: json\n  level: " + level + "\n  time: ISO8601\n  homekit: " + level + "\n  ffmpeg: " + level + "\n  exec: " + level + "\n"
 }
 
-func applyPublisherLogConfig(content string) string {
+func applyPublisherLogConfig(content, level string) string {
 	lines := strings.Split(content, "\n")
 	filtered := make([]string, 0, len(lines))
 	for index := 0; index < len(lines); {
@@ -922,9 +931,9 @@ func applyPublisherLogConfig(content string) string {
 	}
 	content = strings.Join(filtered, "\n")
 	if marker := strings.Index(content, "api:\n"); marker >= 0 {
-		return content[:marker] + publisherLogConfig() + content[marker:]
+		return content[:marker] + publisherLogConfig(level) + content[marker:]
 	}
-	return strings.TrimRight(content, "\n") + "\n" + publisherLogConfig()
+	return strings.TrimRight(content, "\n") + "\n" + publisherLogConfig(level)
 }
 
 func transcodeURI(streamID string) string {

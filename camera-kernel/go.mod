@@ -12,11 +12,11 @@ require (
 	github.com/pion/sdp/v3 v3.0.17
 	github.com/pion/srtp/v3 v3.0.10
 	github.com/pion/webrtc/v4 v4.2.3
-	github.com/rs/zerolog v1.34.0
 	github.com/sigurn/crc16 v0.0.0-20240131213347-83fcde1e29d1
 	github.com/sigurn/crc8 v0.0.0-20220107193325-2243fe600f9f
 	github.com/stretchr/testify v1.11.1
 	github.com/tadglines/go-pkgs v0.0.0-20210623144937-b983b20f54f9
+	go.uber.org/zap v1.27.0
 	golang.org/x/crypto v0.47.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -24,7 +24,6 @@ require (
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/pion/datachannel v1.6.0 // indirect
 	github.com/pion/dtls/v3 v3.0.10 // indirect
 	github.com/pion/ice/v4 v4.2.0 // indirect
@@ -37,6 +36,7 @@ require (
 	github.com/pion/turn/v4 v4.1.4 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
+	go.uber.org/multierr v1.10.0 // indirect
 	golang.org/x/mod v0.32.0 // indirect
 	golang.org/x/net v0.49.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect

@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 
 	"github.com/AlexxIT/go2rtc/pkg/core"
+	"go.uber.org/zap"
 )
 
 type Stream struct {
@@ -32,7 +33,7 @@ func NewStream(source any) *Stream {
 		for _, src := range source {
 			str, ok := src.(string)
 			if !ok {
-				log.Error().Msgf("[stream] NewStream: Expected string, got %v", src)
+				log.Error("invalid stream source type", zap.Any("source", src))
 				continue
 			}
 			s.producers = append(s.producers, NewProducer(str))
@@ -96,7 +97,7 @@ func (s *Stream) RemoveProducer(prod core.Producer) {
 
 func (s *Stream) stopProducers() {
 	if s.pending.Load() > 0 {
-		log.Trace().Msg("[streams] skip stop pending producer")
+		log.Debug("skipping producer stop while consumer is pending")
 		return
 	}
 

@@ -5,115 +5,181 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/AlexxIT/go2rtc/pkg/creds"
 	"github.com/mattn/go-isatty"
-	"github.com/rs/zerolog"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
+
+const logComponent = "camera-kernel"
 
 var MemoryLog = newBuffer()
 
-func GetLogger(module string) zerolog.Logger {
-	Logger.Trace().Str("module", module).Msgf("[log] init")
+var (
+	Logger = zap.NewNop()
 
-	if s, ok := modules[module]; ok {
-		lvl, err := zerolog.ParseLevel(s)
-		if err == nil {
-			return Logger.Level(lvl)
-		}
-		Logger.Warn().Err(err).Caller().Send()
+	logMu      sync.RWMutex
+	logEncoder zapcore.Encoder
+	logOutput  zapcore.WriteSyncer
+	logLevels  = make(map[string]zap.AtomicLevel)
+)
+
+// GetLogger returns a structured logger for module. Every entry contains the
+// stable component and module fields used by the parent process log collector.
+func GetLogger(module string) *zap.Logger {
+	level := GetLogLevel(module)
+
+	logMu.RLock()
+	encoder, output := logEncoder, logOutput
+	logMu.RUnlock()
+	if encoder == nil || output == nil {
+		return zap.NewNop()
 	}
 
-	return Logger
+	return zap.New(zapcore.NewCore(encoder.Clone(), output, level)).With(
+		zap.String("component", logComponent),
+		zap.String("module", module),
+	)
 }
 
-// initLogger support:
-// - output: empty (only to memory), stderr, stdout
+// GetLogLevel returns the atomic level controlling a module. A module without
+// an explicit setting inherits log.level at the time its logger is created.
+func GetLogLevel(module string) zap.AtomicLevel {
+	logMu.Lock()
+	defer logMu.Unlock()
+	if level, ok := logLevels[module]; ok {
+		return level
+	}
+
+	value := modules[module]
+	if value == "" {
+		value = modules["level"]
+	}
+	level := zap.NewAtomicLevelAt(parseLogLevel(value))
+	logLevels[module] = level
+	return level
+}
+
+// LogEnabled reports whether module emits entries at level.
+func LogEnabled(module string, level zapcore.Level) bool {
+	return GetLogLevel(module).Enabled(level)
+}
+
+func parseLogLevel(value string) zapcore.Level {
+	switch strings.ToLower(value) {
+	case "trace", "debug":
+		return zap.DebugLevel
+	case "", "info":
+		return zap.InfoLevel
+	case "warn", "warning":
+		return zap.WarnLevel
+	case "error":
+		return zap.ErrorLevel
+	case "dpanic":
+		return zap.DPanicLevel
+	case "panic":
+		return zap.PanicLevel
+	case "fatal":
+		return zap.FatalLevel
+	case "disabled", "quiet":
+		return zapcore.Level(127)
+	default:
+		return zap.InfoLevel
+	}
+}
+
+// initLogger supports:
+// - output: empty (only to memory), stderr, stdout, file[:path]
 // - format: empty (autodetect color support), color, json, text
-// - time:   empty (disable timestamp), UNIXMS, UNIXMICRO, UNIXNANO
+// - time:   empty (disable timestamp), ISO8601, UNIXMS, UNIXMICRO, UNIXNANO
 // - level:  disabled, trace, debug, info, warn, error...
 func initLogger() {
 	var cfg struct {
 		Mod map[string]string `yaml:"log"`
 	}
 
-	cfg.Mod = modules // defaults
-
+	cfg.Mod = modules
 	LoadConfig(&cfg)
 
 	var writer io.Writer
-
+	var terminal bool
 	switch output, path, _ := strings.Cut(modules["output"], ":"); output {
 	case "stderr":
-		writer = os.Stderr
+		writer, terminal = os.Stderr, isatty.IsTerminal(os.Stderr.Fd())
 	case "stdout":
-		writer = os.Stdout
+		writer, terminal = os.Stdout, isatty.IsTerminal(os.Stdout.Fd())
 	case "file":
 		if path == "" {
 			path = "go2rtc.log"
 		}
-		// if fail - only MemoryLog will be available
 		writer, _ = os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	}
 
-	timeFormat := modules["time"]
-
 	if writer != nil {
-		if format := modules["format"]; format != "json" {
-			console := &zerolog.ConsoleWriter{Out: writer}
-
-			switch format {
-			case "text":
-				console.NoColor = true
-			case "color":
-				console.NoColor = false // useless, but anyway
-			default:
-				// autodetection if output support color
-				// go-isatty - dependency for go-colorable - dependency for ConsoleWriter
-				console.NoColor = !isatty.IsTerminal(writer.(*os.File).Fd())
-			}
-
-			if timeFormat != "" {
-				console.TimeFormat = "15:04:05.000"
-			} else {
-				console.PartsOrder = []string{
-					zerolog.LevelFieldName,
-					zerolog.CallerFieldName,
-					zerolog.MessageFieldName,
-				}
-			}
-
-			writer = console
-		}
-
-		writer = zerolog.MultiLevelWriter(writer, MemoryLog)
+		writer = io.MultiWriter(writer, MemoryLog)
 	} else {
 		writer = MemoryLog
 	}
-
 	writer = creds.SecretWriter(writer)
 
-	lvl, _ := zerolog.ParseLevel(modules["level"])
-	Logger = zerolog.New(writer).Level(lvl)
+	encoderConfig := zapcore.EncoderConfig{
+		MessageKey:     "msg",
+		LevelKey:       "level",
+		TimeKey:        "time",
+		CallerKey:      "caller",
+		EncodeLevel:    zapcore.LowercaseLevelEncoder,
+		EncodeTime:     logTimeEncoder(modules["time"]),
+		EncodeDuration: zapcore.StringDurationEncoder,
+		EncodeCaller:   zapcore.ShortCallerEncoder,
+	}
+	if modules["time"] == "" {
+		encoderConfig.TimeKey = ""
+	}
 
-	if timeFormat != "" {
-		zerolog.TimeFieldFormat = timeFormat
-		Logger = Logger.With().Timestamp().Logger()
+	var encoder zapcore.Encoder
+	if format := modules["format"]; format == "json" {
+		encoder = zapcore.NewJSONEncoder(encoderConfig)
+	} else {
+		if format == "color" || (format == "" && terminal) {
+			encoderConfig.EncodeLevel = zapcore.LowercaseColorLevelEncoder
+		}
+		encoder = zapcore.NewConsoleEncoder(encoderConfig)
+	}
+
+	logMu.Lock()
+	logEncoder = encoder
+	logOutput = zapcore.AddSync(writer)
+	logLevels = make(map[string]zap.AtomicLevel)
+	logMu.Unlock()
+
+	Logger = GetLogger("app")
+}
+
+func logTimeEncoder(format string) zapcore.TimeEncoder {
+	switch strings.ToUpper(format) {
+	case "UNIXMICRO":
+		return func(t time.Time, enc zapcore.PrimitiveArrayEncoder) { enc.AppendInt64(t.UnixMicro()) }
+	case "UNIXNANO":
+		return zapcore.EpochNanosTimeEncoder
+	case "ISO8601":
+		return zapcore.ISO8601TimeEncoder
+	default: // Keep the historical Camera Kernel default: UNIXMS.
+		return zapcore.EpochMillisTimeEncoder
 	}
 }
 
-var Logger zerolog.Logger
-
-// modules log levels
+// modules contains log output settings and optional per-module levels.
 var modules = map[string]string{
-	"format": "", // useless, but anyway
+	"format": "",
 	"level":  "info",
 	// HomeKit negotiation is useful when diagnosing pairing/media failures,
 	// but its normal characteristic and session traffic is too noisy for the
 	// per-camera diagnostic log. It can still be overridden with log.homekit.
 	"homekit": "warn",
-	"output":  "stdout", // TODO: change to stderr someday
-	"time":    zerolog.TimeFormatUnixMs,
+	"output":  "stdout",
+	"time":    "UNIXMS",
 }
 
 const (
@@ -129,38 +195,28 @@ type circularBuffer struct {
 
 func newBuffer() *circularBuffer {
 	b := &circularBuffer{chunks: make([][]byte, 0, chunkCount)}
-	// create first chunk
 	b.chunks = append(b.chunks, make([]byte, 0, chunkSize))
 	return b
 }
 
 func (b *circularBuffer) Write(p []byte) (n int, err error) {
 	n = len(p)
-
 	b.mu.Lock()
-	// check if chunk has size
 	if len(b.chunks[b.w])+n > chunkSize {
-		// increase write chunk index
 		if b.w++; b.w == chunkCount {
 			b.w = 0
 		}
-		// check overflow
 		if b.r == b.w {
-			// increase read chunk index
 			if b.r++; b.r == chunkCount {
 				b.r = 0
 			}
 		}
-		// check if current chunk exists
 		if b.w == len(b.chunks) {
-			// allocate new chunk
 			b.chunks = append(b.chunks, make([]byte, 0, chunkSize))
 		} else {
-			// reset len of current chunk
 			b.chunks[b.w] = b.chunks[b.w][:0]
 		}
 	}
-
 	b.chunks[b.w] = append(b.chunks[b.w], p...)
 	b.mu.Unlock()
 	return
@@ -168,8 +224,6 @@ func (b *circularBuffer) Write(p []byte) (n int, err error) {
 
 func (b *circularBuffer) WriteTo(w io.Writer) (n int64, err error) {
 	buf := make([]byte, 0, chunkCount*chunkSize)
-
-	// use temp buffer inside mutex because w.Write can take some time
 	b.mu.Lock()
 	for i := b.r; ; {
 		buf = append(buf, b.chunks[i]...)
@@ -181,7 +235,6 @@ func (b *circularBuffer) WriteTo(w io.Writer) (n int64, err error) {
 		}
 	}
 	b.mu.Unlock()
-
 	nn, err := w.Write(buf)
 	return int64(nn), err
 }

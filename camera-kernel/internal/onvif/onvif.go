@@ -16,7 +16,7 @@ import (
 	"github.com/AlexxIT/go2rtc/internal/streams"
 	"github.com/AlexxIT/go2rtc/pkg/core"
 	"github.com/AlexxIT/go2rtc/pkg/onvif"
-	"github.com/rs/zerolog"
+	"go.uber.org/zap"
 )
 
 func Init() {
@@ -28,7 +28,7 @@ func Init() {
 	streams.HandleFunc("onvif", streamOnvif)
 }
 
-var log zerolog.Logger
+var log = zap.NewNop()
 
 func streamOnvif(rawURL string) (core.Producer, error) {
 	client, err := onvif.NewClient(rawURL)
@@ -46,7 +46,7 @@ func streamOnvif(rawURL string) (core.Producer, error) {
 		uri += rawURL[i:]
 	}
 
-	log.Debug().Msgf("[onvif] new uri=%s", uri)
+	log.Debug("stream URI resolved", zap.String("uri", uri))
 
 	if err = streams.Validate(uri); err != nil {
 		return nil, err
@@ -68,7 +68,11 @@ func onvifDeviceService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Trace().Msgf("[onvif] server request %s %s:\n%s", r.Method, r.RequestURI, b)
+	log.Debug("server request received",
+		zap.String("method", r.Method),
+		zap.String("request_uri", r.RequestURI),
+		zap.ByteString("body", b),
+	)
 
 	switch operation {
 	case onvif.ServiceGetServiceCapabilities, // important for Hass
@@ -142,16 +146,16 @@ func onvifDeviceService(w http.ResponseWriter, r *http.Request) {
 
 	default:
 		http.Error(w, "unsupported operation", http.StatusBadRequest)
-		log.Warn().Msgf("[onvif] unsupported operation: %s", operation)
-		log.Debug().Msgf("[onvif] unsupported request:\n%s", b)
+		log.Warn("unsupported operation", zap.String("operation", operation))
+		log.Debug("unsupported request", zap.ByteString("body", b))
 		return
 	}
 
-	log.Trace().Msgf("[onvif] server response:\n%s", b)
+	log.Debug("server response sent", zap.ByteString("body", b))
 
 	w.Header().Set("Content-Type", "application/soap+xml; charset=utf-8")
 	if _, err = w.Write(b); err != nil {
-		log.Error().Err(err).Caller().Send()
+		log.WithOptions(zap.AddCaller()).Error("failed to write server response", zap.Error(err))
 	}
 }
 
@@ -170,12 +174,12 @@ func apiOnvif(w http.ResponseWriter, r *http.Request) {
 		for _, device := range devices {
 			u, err := url.Parse(device.URL)
 			if err != nil {
-				log.Warn().Str("url", device.URL).Msg("[onvif] broken")
+				log.Warn("discovered device has an invalid URL", zap.String("url", device.URL), zap.Error(err))
 				continue
 			}
 
 			if u.Scheme != "http" {
-				log.Warn().Str("url", device.URL).Msg("[onvif] unsupported")
+				log.Warn("discovered device uses an unsupported scheme", zap.String("url", device.URL), zap.String("scheme", u.Scheme))
 				continue
 			}
 
@@ -199,9 +203,9 @@ func apiOnvif(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if l := log.Trace(); l.Enabled() {
+		if log.Core().Enabled(zap.DebugLevel) {
 			b, _ := client.MediaRequest(onvif.MediaGetProfiles)
-			l.Msgf("[onvif] src=%s profiles:\n%s", src, b)
+			log.Debug("media profiles received", zap.String("source", src), zap.ByteString("profiles", b))
 		}
 
 		name, err := client.GetName()

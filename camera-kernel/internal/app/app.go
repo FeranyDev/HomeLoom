@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"runtime"
 	"runtime/debug"
+
+	"go.uber.org/zap"
 )
 
 var (
@@ -71,11 +73,15 @@ func Init() {
 	initLogger()
 
 	platform := fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)
-	Logger.Info().Str("version", Version).Str("platform", platform).Str("revision", revision).Msg("go2rtc")
-	Logger.Debug().Str("version", runtime.Version()).Str("vcs.time", vcsTime).Msg("build")
+	Logger.Info("camera kernel started",
+		zap.String("version", Version),
+		zap.String("platform", platform),
+		zap.String("revision", revision),
+	)
+	Logger.Debug("build metadata", zap.String("go_version", runtime.Version()), zap.String("vcs_time", vcsTime))
 
 	if ConfigPath != "" {
-		Logger.Info().Str("path", ConfigPath).Msg("config")
+		Logger.Info("configuration loaded", zap.String("path", ConfigPath))
 	}
 
 	var cfg struct {

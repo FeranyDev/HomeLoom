@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +16,7 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/domain/target"
 	"github.com/feranydev/homeloom/backend/internal/targets/homekit"
 	mattertarget "github.com/feranydev/homeloom/backend/internal/targets/matter"
+	"go.uber.org/zap"
 )
 
 type runningTarget struct {
@@ -36,8 +37,8 @@ type readyTarget interface {
 	Ready() <-chan struct{}
 }
 
-type targetFactory func(context.Context, homekit.Config, *application.DeviceService, *slog.Logger) (managedTarget, error)
-type matterFactory func(context.Context, mattertarget.Config, *application.DeviceService, mattertarget.Storage, *slog.Logger) (managedTarget, error)
+type targetFactory func(context.Context, homekit.Config, *application.DeviceService, *zap.Logger) (managedTarget, error)
+type matterFactory func(context.Context, mattertarget.Config, *application.DeviceService, mattertarget.Storage, *zap.Logger) (managedTarget, error)
 
 type CameraPublicationRuntime interface {
 	EnableHomeKitCamera(context.Context, string, string, string) (homekit.PairingInfo, bool, string, error)
@@ -50,10 +51,15 @@ type MatterCameraRuntime interface {
 	mattertarget.CameraMediaRuntime
 }
 
+type SubprocessLogging struct {
+	Level  string
+	Writer func(string, string) io.Writer
+}
+
 type Manager struct {
 	root          context.Context
 	devices       *application.DeviceService
-	logger        *slog.Logger
+	logger        *zap.Logger
 	mu            sync.Mutex
 	running       map[string]runningTarget
 	onStatus      func(string, string)
@@ -63,16 +69,21 @@ type Manager struct {
 	matterFactory matterFactory
 	cameraRuntime CameraPublicationRuntime
 	matterCamera  MatterCameraRuntime
+	childLogging  SubprocessLogging
 	startGrace    time.Duration
 }
 
-func New(root context.Context, devices *application.DeviceService, logger *slog.Logger, dependencies ...any) *Manager {
+func New(root context.Context, devices *application.DeviceService, logger *zap.Logger, dependencies ...any) *Manager {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	logger = logger.With(zap.String("module", "target-manager"))
 	manager := &Manager{
 		root: root, devices: devices, logger: logger, running: make(map[string]runningTarget),
-		factory: func(ctx context.Context, config homekit.Config, devices *application.DeviceService, logger *slog.Logger) (managedTarget, error) {
+		factory: func(ctx context.Context, config homekit.Config, devices *application.DeviceService, logger *zap.Logger) (managedTarget, error) {
 			return homekit.New(ctx, config, devices, logger)
 		},
-		matterFactory: func(_ context.Context, config mattertarget.Config, devices *application.DeviceService, storage mattertarget.Storage, logger *slog.Logger) (managedTarget, error) {
+		matterFactory: func(_ context.Context, config mattertarget.Config, devices *application.DeviceService, storage mattertarget.Storage, logger *zap.Logger) (managedTarget, error) {
 			created, err := mattertarget.New(config, devices, storage, logger)
 			if err != nil {
 				return nil, err
@@ -93,6 +104,9 @@ func New(root context.Context, devices *application.DeviceService, logger *slog.
 		}
 		if runtime, ok := dependency.(MatterCameraRuntime); ok && manager.matterCamera == nil {
 			manager.matterCamera = runtime
+		}
+		if logging, ok := dependency.(SubprocessLogging); ok {
+			manager.childLogging = logging
 		}
 	}
 	return manager
@@ -156,6 +170,8 @@ func (m *Manager) Apply(ctx context.Context, config target.Config) (application.
 			ID: config.ID, Name: config.Name, NodeKind: matterNodeKind(config.Type), Matter: *config.MatterConfig, Devices: config.Devices,
 			OnStatus:    func() { m.setStatus(config.ID, "running") },
 			CameraMedia: m.matterCamera,
+			LogLevel:    m.childLogging.Level,
+			LogWriter:   childWriter(m.childLogging.Writer, "matter", config.ID),
 		}, m.devices, m.matterStore, m.logger)
 	case "homekit-camera":
 		if m.cameraRuntime == nil {
@@ -206,7 +222,7 @@ func (m *Manager) Apply(ctx context.Context, config target.Config) (application.
 				delete(m.running, config.ID)
 			}
 			m.mu.Unlock()
-			m.logger.Error("target runtime exited", "target_id", config.ID, "error", err)
+			m.logger.Error("target runtime exited", zap.String("target_id", config.ID), zap.Error(err))
 			m.setStatus(config.ID, "error")
 		}
 	}()
@@ -249,6 +265,13 @@ func (m *Manager) Apply(ctx context.Context, config target.Config) (application.
 		info.PairingCode, info.SetupURI = pairing.Code, pairing.SetupURI
 	}
 	return application.TargetRegistration{Info: info, QR: pairing.QR}, nil
+}
+
+func childWriter(factory func(string, string) io.Writer, process, instance string) io.Writer {
+	if factory == nil {
+		return nil
+	}
+	return factory(process, instance)
 }
 
 type managedCameraPublication struct {
@@ -300,7 +323,7 @@ func (m *Manager) IsPaired(config target.Config) bool {
 	}
 	paired, err := homekit.HasPairings(config.StorePath)
 	if err != nil {
-		m.logger.Warn("inspect HomeKit pairing state failed", "target_id", config.ID, "error", err)
+		m.logger.Warn("inspect HomeKit pairing state failed", zap.String("target_id", config.ID), zap.Error(err))
 		return false
 	}
 	return paired

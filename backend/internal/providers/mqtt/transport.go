@@ -4,8 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"io"
-	"log/slog"
 	"net/url"
 	"sort"
 	"sync"
@@ -15,10 +13,12 @@ import (
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/autopaho/queue/memory"
 	"github.com/eclipse/paho.golang/paho"
+	"github.com/feranydev/homeloom/backend/internal/platform/logging"
 	mochimqtt "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/hooks/auth"
 	"github.com/mochi-mqtt/server/v2/listeners"
 	"github.com/mochi-mqtt/server/v2/packets"
+	"go.uber.org/zap"
 )
 
 type transportHandlers struct {
@@ -284,8 +284,8 @@ func (t *brokerTransport) Start(lifecycle, initialContext context.Context, _ tim
 		return initialContext.Err()
 	default:
 	}
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	server := mochimqtt.New(&mochimqtt.Options{InlineClient: true, Logger: logger})
+	logger := zap.L().With(zap.String("module", "mqtt-broker"))
+	server := mochimqtt.New(&mochimqtt.Options{InlineClient: true, Logger: logging.SlogAdapter(logger)})
 	ledger := brokerAuthLedger(t.config, t.subscriptions)
 	if err := server.AddHook(new(auth.Hook), &auth.Options{Ledger: ledger}); err != nil {
 		return fmt.Errorf("configure embedded mqtt authentication: %w", err)

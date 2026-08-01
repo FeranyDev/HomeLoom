@@ -37,7 +37,7 @@ func TestPublisherConfigUsesProtectedPlaceholdersAndRetainsPairings(t *testing.T
 			t.Fatalf("publisher config contains a secret: %q", secret)
 		}
 	}
-	for _, required := range []string{"modules: [api, rtsp, srtp, homekit, xiaomi, streams, mp4, exec, ffmpeg]", "homekit: warn", "allow_paths: [/pair-setup, /pair-verify, /api/stream.mp4, /api/frame.mp4, /api/frame.jpeg, /api/homekit/session, /api/matter/webrtc]", "exec:\n  allow_paths: [\"/opt/homeloom/ffmpeg\"]", "ffmpeg:\n  bin: \"/opt/homeloom/ffmpeg\"", "  global: \"-hide_banner -nostats\"", "ffmpeg:camera-main#video=h264", "${HOMELOOM_CAMERA_SOURCE_CAMERA_MAIN}"} {
+	for _, required := range []string{"modules: [api, rtsp, srtp, homekit, xiaomi, streams, mp4, exec, ffmpeg]", "homekit: info", "ffmpeg: info", "exec: info", "allow_paths: [/pair-setup, /pair-verify, /api/stream.mp4, /api/frame.mp4, /api/frame.jpeg, /api/homekit/session, /api/matter/webrtc]", "exec:\n  allow_paths: [\"/opt/homeloom/ffmpeg\"]", "ffmpeg:\n  bin: \"/opt/homeloom/ffmpeg\"", "  global: \"-hide_banner -nostats\"", "ffmpeg:camera-main#video=h264", "${HOMELOOM_CAMERA_SOURCE_CAMERA_MAIN}"} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("publisher config missing %q:\n%s", required, text)
 		}

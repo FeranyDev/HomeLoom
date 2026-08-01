@@ -4,8 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-	"io"
-	"log/slog"
+	"go.uber.org/zap"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -93,7 +92,7 @@ func TestStandaloneCameraPublisherConfiguresRTPAndStableIdentity(t *testing.T) {
 		ID: "camera-publisher-1", DeviceID: "camera-1", Name: "Camera",
 		Address: "127.0.0.1:0", Pin: "12345678", SetupID: "CAM1", Store: store,
 	}
-	publisher, err := NewCameraPublisher(config, media, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	publisher, err := NewCameraPublisher(config, media, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +109,7 @@ func TestStandaloneCameraPublisherConfiguresRTPAndStableIdentity(t *testing.T) {
 	if err != nil || len(firstUUID) == 0 {
 		t.Fatalf("first camera identity UUID = %q, %v", firstUUID, err)
 	}
-	if _, err := NewCameraPublisher(config, media, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
+	if _, err := NewCameraPublisher(config, media, zap.NewNop()); err != nil {
 		t.Fatal(err)
 	}
 	secondUUID, err := store.Get("uuid")
@@ -199,7 +198,7 @@ func TestCameraPublisherWithoutMediaIsExplicitlyUnavailable(t *testing.T) {
 	publisher, err := NewCameraPublisher(CameraPublisherConfig{
 		ID: "camera-publisher-unavailable", DeviceID: "camera-unavailable", Name: "Camera",
 		Address: "127.0.0.1:0", Pin: "12345678", SetupID: "CAM2", Store: hap.NewMemStore(),
-	}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	}, nil, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +221,7 @@ func TestCameraPublisherRejectsMalformedSRTPMaterialBeforeForwarding(t *testing.
 	publisher, err := NewCameraPublisher(CameraPublisherConfig{
 		ID: "camera-publisher-invalid-srtp", DeviceID: "camera-invalid-srtp", Name: "Camera",
 		Address: "127.0.0.1:0", Pin: "12345678", SetupID: "CAM3", Store: hap.NewMemStore(),
-	}, media, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	}, media, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1409,6 +1409,23 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .command-filters input, .command-filters select { padding: 10px 12px; border: 1px solid #cac9c1; background: rgba(250,249,245,.72); color: #4f534c; font: inherit; }
 .command-filters span { color: #898d85; font: 11px ui-monospace, monospace; }
 .command-empty { padding: 38px 24px; color: #969991; }
+.subprocess-log-launcher { gap: 14px; }
+.subprocess-log-launcher p { margin: 0; color: #6f746b; line-height: 1.65; }
+.subprocess-log-launcher > button { justify-self: start; min-height: 38px; padding: 9px 14px; border: 1px solid var(--moss-deep); border-radius: 6px; background: linear-gradient(135deg, #688363, var(--moss)); color: #fff; cursor: pointer; }
+.subprocess-log-backdrop { z-index: 30; overflow: hidden; }
+.subprocess-log-dialog { display: grid; grid-template-rows: auto auto minmax(0, 1fr); width: min(1180px, calc(100vw - 48px)); height: min(780px, calc(100vh - 48px)); overflow: hidden; border: 1px solid #8f968b; border-radius: 12px; background: #f5f3ec; box-shadow: 0 30px 100px rgba(0,0,0,.38); }
+.subprocess-log-dialog .command-heading > div:first-child { display: grid; gap: 3px; }
+.subprocess-log-dialog .command-heading h3, .subprocess-log-dialog .command-heading p { margin: 0; }
+.subprocess-log-heading-actions { display: flex; align-items: center; gap: 18px; color: #81867d; font-size: 11px; }
+.subprocess-log-heading-actions button { min-height: 34px; padding: 7px 12px; border: 1px solid #b8bbb3; border-radius: 5px; background: rgba(255,255,255,.65); color: #4e544c; cursor: pointer; }
+.subprocess-log-view { min-height: 0; overflow: auto; padding: 10px 0; background: #20241f; color: #e5eadf; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.subprocess-log-view > div { display: grid; grid-template-columns: 82px 54px minmax(140px, .35fr) minmax(0, 1fr); gap: 10px; padding: 5px 14px; border-bottom: 1px solid rgba(255,255,255,.045); }
+.subprocess-log-view time, .subprocess-log-view span { color: #929b8d; }
+.subprocess-log-view b { color: #b9c5b1; font-weight: 600; text-transform: uppercase; }
+.subprocess-log-view b.is-error { color: #ef9a87; }
+.subprocess-log-view b.is-warn, .subprocess-log-view b.is-warning { color: #e7c879; }
+.subprocess-log-view code { color: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 720px) { .subprocess-log-backdrop { padding: 0; } .subprocess-log-dialog { width: 100vw; height: 100vh; border: 0; border-radius: 0; } .subprocess-log-dialog .command-heading { align-items: start; padding: 18px; } .subprocess-log-heading-actions { align-items: end; flex-direction: column-reverse; gap: 8px; } .subprocess-log-view > div { grid-template-columns: 76px 50px 1fr; } .subprocess-log-view code { grid-column: 1 / -1; } }
 
 .list-pagination {
   display: flex;

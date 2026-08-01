@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -25,6 +25,7 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	domaintarget "github.com/feranydev/homeloom/backend/internal/domain/target"
 	"github.com/feranydev/homeloom/backend/internal/mapping"
+	"go.uber.org/zap"
 )
 
 const protocolVersion = "1.1"
@@ -90,6 +91,8 @@ type Config struct {
 	RestartWait time.Duration
 	OnStatus    func()
 	CameraMedia CameraMediaRuntime
+	LogLevel    string
+	LogWriter   io.Writer
 }
 
 type CommissioningState struct {
@@ -113,7 +116,7 @@ type Target struct {
 	config  Config
 	devices *application.DeviceService
 	storage Storage
-	logger  *slog.Logger
+	logger  *zap.Logger
 
 	mu            sync.RWMutex
 	client        *Client
@@ -128,7 +131,7 @@ type Target struct {
 	lastSnapshots []deviceSnapshot
 }
 
-func New(config Config, devices *application.DeviceService, storage Storage, logger *slog.Logger) (*Target, error) {
+func New(config Config, devices *application.DeviceService, storage Storage, logger *zap.Logger) (*Target, error) {
 	if config.ID == "" || config.Matter.Discriminator == nil {
 		return nil, errors.New("Matter target ID and discriminator are required")
 	}
@@ -150,8 +153,9 @@ func New(config Config, devices *application.DeviceService, storage Storage, log
 		return nil, errors.New("Matter camera node requires a media runtime")
 	}
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
+	logger = logger.With(zap.String("module", "matter-target"))
 	if config.Executable == "" {
 		config.Executable = "node"
 	}
@@ -200,7 +204,7 @@ func (t *Target) Start(ctx context.Context) error {
 		if !started {
 			return err
 		}
-		t.logger.Error("Matter runtime disconnected; restarting", "target_id", t.config.ID, "error", err)
+		t.logger.Error("Matter runtime disconnected; restarting", zap.String("target_id", t.config.ID), zap.Error(err))
 		select {
 		case <-ctx.Done():
 			return nil
@@ -215,9 +219,7 @@ func (t *Target) runOnce(ctx context.Context) (bool, error) {
 	}
 	childCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	command := exec.CommandContext(childCtx, t.config.Executable, t.config.ScriptPath,
-		"--socket", t.config.SocketPath, "--target", t.config.ID, "--identity-namespace", t.config.ID)
-	command.Stdout, command.Stderr = os.Stdout, os.Stderr
+	command := t.runtimeCommand(childCtx)
 	if err := command.Start(); err != nil {
 		return false, fmt.Errorf("start Matter runtime: %w", err)
 	}
@@ -258,6 +260,20 @@ func (t *Target) runOnce(ctx context.Context) (bool, error) {
 		<-processDone
 		return true, ErrClosed
 	}
+}
+
+func (t *Target) runtimeCommand(ctx context.Context) *exec.Cmd {
+	command := exec.CommandContext(ctx, t.config.Executable, t.config.ScriptPath,
+		"--socket", t.config.SocketPath, "--target", t.config.ID, "--identity-namespace", t.config.ID)
+	if t.config.LogLevel != "" {
+		command.Env = append(os.Environ(), "HOMELOOM_MATTER_LOG_LEVEL="+t.config.LogLevel, "HOMELOOM_MATTER_LOG_FORMAT=json")
+	}
+	if t.config.LogWriter != nil {
+		command.Stdout, command.Stderr = t.config.LogWriter, t.config.LogWriter
+	} else {
+		command.Stdout, command.Stderr = io.Discard, io.Discard
+	}
+	return command
 }
 
 func (t *Target) connect(ctx context.Context, processDone <-chan error) (*Client, error) {
@@ -503,7 +519,7 @@ func (t *Target) syncLoop(ctx context.Context) {
 				err = t.synchronizeSnapshots(ctx, client, snapshots)
 			}
 			if err != nil && ctx.Err() == nil {
-				t.logger.Warn("synchronize Matter device state failed", "target_id", t.config.ID, "error", err)
+				t.logger.Warn("synchronize Matter device state failed", zap.String("target_id", t.config.ID), zap.Error(err))
 			}
 		case <-ctx.Done():
 			return
@@ -773,7 +789,7 @@ func (t *Target) handleNotification(method string, params json.RawMessage) {
 			Message string `json:"message"`
 		}
 		if json.Unmarshal(params, &event) == nil && event.Level == "error" {
-			t.logger.Error("Matter runtime diagnostic", "target_id", t.config.ID, "code", event.Code, "message", event.Message)
+			t.logger.Error("Matter runtime diagnostic", zap.String("target_id", t.config.ID), zap.String("code", event.Code), zap.String("diagnostic_message", event.Message))
 		}
 	}
 	if changed && t.config.OnStatus != nil {

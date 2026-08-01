@@ -13,7 +13,7 @@ import (
 	"github.com/AlexxIT/go2rtc/internal/app"
 	"github.com/AlexxIT/go2rtc/pkg/core"
 	"github.com/gorilla/websocket"
-	"github.com/rs/zerolog"
+	"go.uber.org/zap"
 )
 
 func Init() {
@@ -32,7 +32,7 @@ func Init() {
 	api.HandleFunc("api/ws", apiWS)
 }
 
-var log zerolog.Logger
+var log = zap.NewNop()
 
 // Message - struct for data exchange in Web API
 type Message struct {
@@ -84,7 +84,7 @@ func initWS(origin string) {
 			if o.Host == r.Host {
 				return true
 			}
-			log.Trace().Msgf("[api] ws origin=%s, host=%s", o.Host, r.Host)
+			log.Debug("WebSocket origin rejected", zap.String("origin", o.Host), zap.String("host", r.Host))
 			// https://github.com/AlexxIT/go2rtc/issues/118
 			if i := strings.IndexByte(o.Host, ':'); i > 0 {
 				return o.Host[:i] == r.Host
@@ -103,7 +103,8 @@ func apiWS(w http.ResponseWriter, r *http.Request) {
 	ws, err := wsUp.Upgrade(w, r, nil)
 	if err != nil {
 		origin := r.Header.Get("Origin")
-		log.Error().Err(err).Caller().Msgf("host=%s origin=%s", r.Host, origin)
+		log.WithOptions(zap.AddCaller()).Error("WebSocket upgrade failed",
+			zap.Error(err), zap.String("host", r.Host), zap.String("origin", origin))
 		return
 	}
 
@@ -122,13 +123,13 @@ func apiWS(w http.ResponseWriter, r *http.Request) {
 		msg := new(Message)
 		if err = ws.ReadJSON(msg); err != nil {
 			if !websocket.IsCloseError(err, websocket.CloseNoStatusReceived) {
-				log.Trace().Err(err).Caller().Send()
+				log.WithOptions(zap.AddCaller()).Debug("WebSocket read failed", zap.Error(err))
 			}
 			_ = ws.Close()
 			break
 		}
 
-		log.Trace().Str("type", msg.Type).Msg("[api] ws msg")
+		log.Debug("WebSocket message received", zap.String("message_type", msg.Type))
 
 		if handler := wsHandlers[msg.Type]; handler != nil {
 			go func() {

@@ -1,13 +1,12 @@
 package homekit
 
 import (
-	"log/slog"
-
 	"github.com/brutella/hap/accessory"
 	"github.com/brutella/hap/characteristic"
 	"github.com/brutella/hap/service"
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
+	"go.uber.org/zap"
 )
 
 type extendedUpdate func(device.Device) uint64
@@ -111,7 +110,7 @@ func (b *accessoryBindings) addOptionalTamper(item device.Device, primary *servi
 	b.tampered[item.ID] = current
 }
 
-func (b *accessoryBindings) newExtendedAccessory(item device.Device, accessoryID uint64, devices *application.DeviceService, logger *slog.Logger, route accessoryRoute, sourceDeviceID string) *accessory.A {
+func (b *accessoryBindings) newExtendedAccessory(item device.Device, accessoryID uint64, devices *application.DeviceService, logger *zap.Logger, route accessoryRoute, sourceDeviceID string) *accessory.A {
 	write := func(capabilityID, propertyID string, value device.PropertyValue) error {
 		return writeHomeKitProperty(devices, logger, sourceDeviceID, route, capabilityID, propertyID, value)
 	}

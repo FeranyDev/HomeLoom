@@ -3,8 +3,7 @@ package targetmanager
 import (
 	"context"
 	"errors"
-	"io"
-	"log/slog"
+	"go.uber.org/zap"
 	"strings"
 	"sync"
 	"testing"
@@ -92,7 +91,7 @@ type lifecycleFactory struct {
 	configs []homekit.Config
 }
 
-func (f *lifecycleFactory) create(_ context.Context, config homekit.Config, _ *application.DeviceService, _ *slog.Logger) (managedTarget, error) {
+func (f *lifecycleFactory) create(_ context.Context, config homekit.Config, _ *application.DeviceService, _ *zap.Logger) (managedTarget, error) {
 	created := newLifecycleTarget(config.ID)
 	f.mu.Lock()
 	f.items[config.ID] = append(f.items[config.ID], created)
@@ -112,7 +111,7 @@ func newLifecycleManager(t *testing.T) (*Manager, *lifecycleFactory) {
 	devices := application.NewDeviceService(virtual.NewProvider())
 	t.Cleanup(func() { _ = devices.Close() })
 	factory := &lifecycleFactory{items: make(map[string][]*lifecycleTarget)}
-	manager := New(context.Background(), devices, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	manager := New(context.Background(), devices, zap.NewNop())
 	manager.factory = factory.create
 	manager.startGrace = time.Millisecond
 	t.Cleanup(func() {
@@ -229,10 +228,10 @@ func TestRuntimeFailureAfterStartupPublishesErrorStatus(t *testing.T) {
 func TestMatterTargetUsesIndependentRuntimeFactory(t *testing.T) {
 	devices := application.NewDeviceService(virtual.NewProvider())
 	defer devices.Close()
-	manager := New(context.Background(), devices, slog.New(slog.NewTextHandler(io.Discard, nil)), lifecycleMatterStore{})
+	manager := New(context.Background(), devices, zap.NewNop(), lifecycleMatterStore{})
 	created := newLifecycleTarget("matter-one")
 	var received mattertarget.Config
-	manager.matterFactory = func(_ context.Context, config mattertarget.Config, _ *application.DeviceService, _ mattertarget.Storage, _ *slog.Logger) (managedTarget, error) {
+	manager.matterFactory = func(_ context.Context, config mattertarget.Config, _ *application.DeviceService, _ mattertarget.Storage, _ *zap.Logger) (managedTarget, error) {
 		received = config
 		return created, nil
 	}
@@ -263,10 +262,10 @@ func TestMatterTargetUsesIndependentRuntimeFactory(t *testing.T) {
 func TestMatterCameraTargetUsesDedicatedCameraNode(t *testing.T) {
 	devices := application.NewDeviceService(virtual.NewProvider())
 	defer devices.Close()
-	manager := New(context.Background(), devices, slog.New(slog.NewTextHandler(io.Discard, nil)), lifecycleMatterStore{})
+	manager := New(context.Background(), devices, zap.NewNop(), lifecycleMatterStore{})
 	created := newLifecycleTarget("matter-camera-one")
 	var received mattertarget.Config
-	manager.matterFactory = func(_ context.Context, config mattertarget.Config, _ *application.DeviceService, _ mattertarget.Storage, _ *slog.Logger) (managedTarget, error) {
+	manager.matterFactory = func(_ context.Context, config mattertarget.Config, _ *application.DeviceService, _ mattertarget.Storage, _ *zap.Logger) (managedTarget, error) {
 		received = config
 		return created, nil
 	}
@@ -300,9 +299,9 @@ func TestMatterCameraTargetUsesDedicatedCameraNode(t *testing.T) {
 func TestMatterApplyWaitsForAuthenticatedRuntimeReadiness(t *testing.T) {
 	devices := application.NewDeviceService(virtual.NewProvider())
 	defer devices.Close()
-	manager := New(context.Background(), devices, slog.New(slog.NewTextHandler(io.Discard, nil)), lifecycleMatterStore{})
+	manager := New(context.Background(), devices, zap.NewNop(), lifecycleMatterStore{})
 	created := &readyLifecycleTarget{lifecycleTarget: newLifecycleTarget("matter-ready"), ready: make(chan struct{})}
-	manager.matterFactory = func(_ context.Context, _ mattertarget.Config, _ *application.DeviceService, _ mattertarget.Storage, _ *slog.Logger) (managedTarget, error) {
+	manager.matterFactory = func(_ context.Context, _ mattertarget.Config, _ *application.DeviceService, _ mattertarget.Storage, _ *zap.Logger) (managedTarget, error) {
 		return created, nil
 	}
 	manager.startGrace = time.Millisecond
@@ -341,7 +340,7 @@ func TestMatterApplyWaitsForAuthenticatedRuntimeReadiness(t *testing.T) {
 func TestMatterTargetRefusesStartupWithoutPersistentStorage(t *testing.T) {
 	devices := application.NewDeviceService(virtual.NewProvider())
 	defer devices.Close()
-	manager := New(context.Background(), devices, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	manager := New(context.Background(), devices, zap.NewNop())
 	discriminator := uint16(1)
 	_, err := manager.Apply(context.Background(), target.Config{
 		ID: "matter", Type: "matter", Enabled: true,

@@ -3,7 +3,6 @@ package homekit
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"math"
 	"net"
 	"time"
@@ -17,6 +16,7 @@ import (
 	domaintarget "github.com/feranydev/homeloom/backend/internal/domain/target"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	homekitqr "github.com/kradalby/homekit-qr"
+	"go.uber.org/zap"
 )
 
 type Config struct {
@@ -55,7 +55,7 @@ type ProjectionIssue struct {
 
 type Target struct {
 	server                  *hap.Server
-	logger                  *slog.Logger
+	logger                  *zap.Logger
 	pin                     string
 	id                      string
 	pairing                 PairingInfo
@@ -117,7 +117,7 @@ type accessoryRoute struct {
 	consumerDeviceID string
 }
 
-func newAccessoryBindings(items []device.Device, selected map[string]bool, accessoryIDs map[string]uint64, devices *application.DeviceService, logger *slog.Logger, routeMaps ...map[string]accessoryRoute) *accessoryBindings {
+func newAccessoryBindings(items []device.Device, selected map[string]bool, accessoryIDs map[string]uint64, devices *application.DeviceService, logger *zap.Logger, routeMaps ...map[string]accessoryRoute) *accessoryBindings {
 	routes := map[string]accessoryRoute{}
 	if len(routeMaps) > 0 {
 		routes = routeMaps[0]
@@ -144,7 +144,7 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 				Stage: "unsupported-type", Message: fmt.Sprintf("HomeKit does not support device type %q", item.Type),
 			}
 			bindings.issues = append(bindings.issues, issue)
-			logger.Error("device type is unsupported by HomeKit consumer", "device_id", item.ID, "device_type", item.Type)
+			logger.Error("device type is unsupported by HomeKit consumer", zap.String("device_id", item.ID), zap.String("device_type", string(item.Type)))
 			continue
 		}
 		if _, err := device.ProjectForConsumer(item, consumerContract); err != nil {
@@ -153,7 +153,7 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 				Stage: "consumer-contract", Message: err.Error(),
 			}
 			bindings.issues = append(bindings.issues, issue)
-			logger.Error("device does not satisfy HomeKit consumer contract", "device_id", item.ID, "device_type", item.Type, "error", err)
+			logger.Error("device does not satisfy HomeKit consumer contract", zap.String("device_id", item.ID), zap.String("device_type", string(item.Type)), zap.Error(err))
 			continue
 		}
 		info := accessory.Info{Name: item.Name, SerialNumber: item.ID, Manufacturer: "HomeLoom", Model: string(item.Type), Firmware: "0.0.1"}
@@ -192,7 +192,7 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 			if property, found := item.Property("main", "light", "color-temperature"); found {
 				current := characteristic.NewColorTemperature()
 				if !configureColorTemperatureRange(current, property.Definition) {
-					logger.Warn("device color temperature range does not overlap HomeKit", "device_id", item.ID, "min", property.Definition.Min, "max", property.Definition.Max)
+					logger.Warn("device color temperature range does not overlap HomeKit", zap.String("device_id", item.ID), zap.Any("min", property.Definition.Min), zap.Any("max", property.Definition.Max))
 				} else {
 					current.OnSetRemoteValue(func(value int) error {
 						return writeHomeKitProperty(devices, logger, deviceID, route, "light", "color-temperature", device.IntValue(int64(value)))
@@ -884,7 +884,7 @@ func configureColorTemperatureRange(current *characteristic.ColorTemperature, de
 	return true
 }
 
-func writeHomeKitProperty(devices *application.DeviceService, logger *slog.Logger, deviceID string, route accessoryRoute, capabilityID, propertyID string, value device.PropertyValue) error {
+func writeHomeKitProperty(devices *application.DeviceService, logger *zap.Logger, deviceID string, route accessoryRoute, capabilityID, propertyID string, value device.PropertyValue) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var err error
@@ -898,17 +898,17 @@ func writeHomeKitProperty(devices *application.DeviceService, logger *slog.Logge
 		_, _, err = devices.ExecuteConsumerProperty(ctx, "homekit", deviceID, "main", capabilityID, propertyID, value)
 	}
 	if err != nil {
-		logger.Error("HomeKit property write failed", "device_id", deviceID, "capability_id", capabilityID, "property_id", propertyID, "error", err)
+		logger.Error("HomeKit property write failed", zap.String("device_id", deviceID), zap.String("capability_id", capabilityID), zap.String("property_id", propertyID), zap.Error(err))
 		return err
 	}
 	return nil
 }
 
-func executeHomeKitCommand(devices *application.DeviceService, logger *slog.Logger, request providersdk.CommandRequest) error {
+func executeHomeKitCommand(devices *application.DeviceService, logger *zap.Logger, request providersdk.CommandRequest) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if _, _, err := devices.ExecuteCommand(ctx, request); err != nil {
-		logger.Error("HomeKit command failed", "device_id", request.DeviceID, "command_id", request.CommandID, "error", err)
+		logger.Error("HomeKit command failed", zap.String("device_id", request.DeviceID), zap.String("command_id", request.CommandID), zap.Error(err))
 		return err
 	}
 	return nil
@@ -1071,7 +1071,11 @@ func assignPersistentIIDs(ctx context.Context, targetID, deviceID string, a *acc
 	return nil
 }
 
-func New(ctx context.Context, config Config, devices *application.DeviceService, logger *slog.Logger) (*Target, error) {
+func New(ctx context.Context, config Config, devices *application.DeviceService, logger *zap.Logger) (*Target, error) {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	logger = logger.With(zap.String("module", "homekit-target"))
 	sourceItems, err := devices.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list devices: %w", err)
@@ -1088,7 +1092,7 @@ func New(ctx context.Context, config Config, devices *application.DeviceService,
 				Stage: "consumer-projection", Message: projectErr.Error(),
 			}
 			projectionIssues = append(projectionIssues, issue)
-			logger.Error("HomeKit consumer projection failed", "device_id", sourceItems[index].ID, "error", projectErr)
+			logger.Error("HomeKit consumer projection failed", zap.String("device_id", sourceItems[index].ID), zap.Error(projectErr))
 			continue
 		}
 		projectedSources[sourceItems[index].ID] = projected
@@ -1196,7 +1200,7 @@ func New(ctx context.Context, config Config, devices *application.DeviceService,
 			}
 			projected, projectErr := devices.ProjectForConsumer("homekit", item)
 			if projectErr != nil {
-				logger.Error("HomeKit consumer projection failed", "device_id", item.ID, "error", projectErr)
+				logger.Error("HomeKit consumer projection failed", zap.String("device_id", item.ID), zap.Error(projectErr))
 				return
 			}
 			devices.RecordHomeKitPushes(bindings.update(projected))
@@ -1212,7 +1216,7 @@ func New(ctx context.Context, config Config, devices *application.DeviceService,
 			}
 			scoped, scopedErr := devices.ProjectSourcesForConsumerInstance("homekit", config.ID, virtual.ID, targetType, virtual.SourceDeviceIDs())
 			if scopedErr != nil {
-				logger.Error("HomeKit scoped consumer projection failed", "target_id", config.ID, "consumer_device_id", virtual.ID, "device_id", item.ID, "error", scopedErr)
+				logger.Error("HomeKit scoped consumer projection failed", zap.String("target_id", config.ID), zap.String("consumer_device_id", virtual.ID), zap.String("device_id", item.ID), zap.Error(scopedErr))
 				continue
 			}
 			scoped.ID, scoped.Name = virtual.ID, virtual.Name
@@ -1274,7 +1278,7 @@ func (t *Target) PublishedAccessoryCount() int {
 func (t *Target) IsPaired() bool { return t.server.IsPaired() }
 
 func (t *Target) Start(ctx context.Context) error {
-	t.logger.Info("HomeKit target started", "address", t.server.Addr, "pairing_pin", formatPin(t.pin))
+	t.logger.Info("HomeKit target started", zap.String("address", t.server.Addr), zap.String("pairing_pin", formatPin(t.pin)))
 	err := t.server.ListenAndServe(ctx)
 	t.cancelSubscription()
 	if ctx.Err() != nil {

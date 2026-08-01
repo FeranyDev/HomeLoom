@@ -1,13 +1,13 @@
 package homekit
 
 import (
-	"log/slog"
 	"math"
 
 	"github.com/brutella/hap/accessory"
 	"github.com/brutella/hap/characteristic"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	"github.com/feranydev/homeloom/backend/internal/mapping"
+	"go.uber.org/zap"
 )
 
 var homeKitTargetCharacteristicTypes = map[string][]string{
@@ -52,7 +52,7 @@ var homeKitTargetCharacteristicTypes = map[string][]string{
 	"Speaker.Volume":                                 {characteristic.TypeVolume},
 }
 
-func configureAccessoryNumericRanges(item *accessory.A, source device.Device, logger *slog.Logger) {
+func configureAccessoryNumericRanges(item *accessory.A, source device.Device, logger *zap.Logger) {
 	contract, found := mapping.HomeKitConsumerContract(source.Type)
 	if !found {
 		return
@@ -78,8 +78,8 @@ func configureAccessoryNumericRanges(item *accessory.A, source device.Device, lo
 					continue
 				}
 				logger.Warn("device numeric range does not overlap HomeKit; characteristic omitted",
-					"device_id", source.ID, "property", parameter.Source.Key(), "characteristic", parameter.Target,
-					"min", property.Definition.Min, "max", property.Definition.Max)
+					zap.String("device_id", source.ID), zap.String("property", parameter.Source.Key()), zap.String("characteristic", parameter.Target),
+					zap.Any("min", property.Definition.Min), zap.Any("max", property.Definition.Max))
 			}
 			service.Cs = filtered
 		}

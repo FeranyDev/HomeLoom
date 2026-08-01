@@ -4,8 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"log/slog"
+	"go.uber.org/zap"
 	"net"
 	"net/http"
 	"os"
@@ -134,7 +133,7 @@ func TestAccessoryBindingsUpdateTemperatureAndOfflineFault(t *testing.T) {
 	service := application.NewDeviceService(virtual.NewProvider())
 	defer service.Close()
 	items, _ := service.List(context.Background())
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := zap.NewNop()
 	bindings := newAccessoryBindings(items, map[string]bool{}, map[string]uint64{"virtual-switch-1": 7, "virtual-temperature-1": 11}, service, logger)
 	if len(bindings.accessories) != 2 || len(bindings.switches) != 1 || len(bindings.temperatures) != 1 || len(bindings.faults) != 2 {
 		t.Fatalf("bindings = %#v", bindings)
@@ -180,7 +179,7 @@ func TestAccessoryBindingsHonorSelectedDevices(t *testing.T) {
 	service := application.NewDeviceService(virtual.NewProvider())
 	defer service.Close()
 	items, _ := service.List(context.Background())
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := zap.NewNop()
 	bindings := newAccessoryBindings(items, map[string]bool{"virtual-switch-1": true}, nil, service, logger)
 	if len(bindings.accessories) != 1 || bindings.switches["virtual-switch-1"] == nil || bindings.temperatures["virtual-temperature-1"] != nil {
 		t.Fatalf("selected bindings = %#v", bindings)
@@ -190,7 +189,7 @@ func TestAccessoryBindingsHonorSelectedDevices(t *testing.T) {
 func TestTargetBuildsConsumerOwnedVirtualAccessoryIdentity(t *testing.T) {
 	service := application.NewDeviceService(virtual.NewProvider())
 	defer service.Close()
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := zap.NewNop()
 	target, err := New(context.Background(), Config{ID: "bridge", Name: "Bridge", Address: "127.0.0.1:0", Pin: "12345678", SetupID: "TEST", StorePath: t.TempDir(), Devices: []domaintarget.VirtualDevice{{ID: "living-switch", Name: "客厅虚拟开关", Type: device.TypeSwitch, SourceDeviceID: "virtual-switch-1", Enabled: true}}}, service, logger)
 	if err != nil {
 		t.Fatal(err)
@@ -203,7 +202,7 @@ func TestTargetBuildsConsumerOwnedVirtualAccessoryIdentity(t *testing.T) {
 func TestEmptyTargetPublishesNoAccessories(t *testing.T) {
 	service := application.NewDeviceService(virtual.NewProvider())
 	defer service.Close()
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := zap.NewNop()
 	target, err := New(context.Background(), Config{
 		ID: "empty-bridge", Name: "Empty Bridge", Address: "127.0.0.1:0",
 		Pin: "12345678", SetupID: "NONE", StorePath: t.TempDir(),
@@ -222,7 +221,7 @@ func TestEmptyTargetPublishesNoAccessories(t *testing.T) {
 func TestLegacyDeviceIDsStillSelectAccessories(t *testing.T) {
 	service := application.NewDeviceService(virtual.NewProvider())
 	defer service.Close()
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := zap.NewNop()
 	target, err := New(context.Background(), Config{
 		ID: "legacy-bridge", Name: "Legacy Bridge", Address: "127.0.0.1:0",
 		Pin: "12345678", SetupID: "OLD1", StorePath: t.TempDir(),
@@ -243,7 +242,7 @@ func TestPersistentIIDsSurviveAccessoryRebuildAndNewCharacteristic(t *testing.T)
 	service := application.NewDeviceService(virtual.NewProvider())
 	defer service.Close()
 	items, _ := service.List(context.Background())
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := zap.NewNop()
 	identities := &memoryIdentityStore{values: make(map[string]uint64), next: make(map[string]uint64)}
 	first := newAccessoryBindings(items, map[string]bool{"virtual-switch-1": true}, map[string]uint64{"virtual-switch-1": 2}, service, logger).byDevice["virtual-switch-1"]
 	if err := assignPersistentIIDs(context.Background(), "bridge", "virtual-switch-1", first, identities); err != nil {
@@ -285,7 +284,7 @@ func TestAccessoryBindingsMapSupportedDeviceTypes(t *testing.T) {
 	service := application.NewDeviceService(provider)
 	defer service.Close()
 	items, _ := service.List(context.Background())
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := zap.NewNop()
 	bindings := newAccessoryBindings(items, map[string]bool{}, nil, service, logger)
 	if len(bindings.accessories) != 8 || len(bindings.switches) != 3 || len(bindings.outletInUse) != 1 || len(bindings.temperatures) != 2 || len(bindings.humidities) != 2 || len(bindings.contacts) != 1 || len(bindings.motions) != 1 || len(bindings.brightness) != 1 || len(bindings.colorTemps) != 1 || len(bindings.hues) != 1 || len(bindings.saturations) != 1 || len(bindings.batteryLevels) != 5 || len(bindings.lowBatteries) != 5 || len(bindings.tampered) != 2 {
 		t.Fatalf("bindings = %#v", bindings)
@@ -360,7 +359,7 @@ func TestColorTemperaturePublishesDeviceRangeAndClampsUpdates(t *testing.T) {
 			}
 		}
 	}
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := zap.NewNop()
 	bindings := newAccessoryBindings([]device.Device{*lamp}, map[string]bool{}, nil, service, logger)
 	current := bindings.colorTemps[lamp.ID]
 	if current == nil {
@@ -388,7 +387,7 @@ func TestAccessoryBindingsMapAndWriteAdvancedDeviceTypes(t *testing.T) {
 	service := application.NewDeviceService(provider)
 	defer service.Close()
 	items, _ := service.List(context.Background())
-	bindings := newAccessoryBindings(items, map[string]bool{}, nil, service, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	bindings := newAccessoryBindings(items, map[string]bool{}, nil, service, zap.NewNop())
 	if len(bindings.accessories) != 3 || len(bindings.actives) != 2 || len(bindings.fanCurrent) != 1 || len(bindings.airCurrent) != 1 || len(bindings.filterLife) != 1 || len(bindings.positions) != 1 || len(bindings.swingModes) != 2 || len(bindings.directions) != 1 || len(bindings.controlLocks) != 2 || len(bindings.airQualities) != 1 || len(bindings.pm25) != 1 || len(bindings.voc) != 1 || len(bindings.obstructions) != 1 {
 		t.Fatalf("advanced bindings = %#v", bindings)
 	}
@@ -451,7 +450,7 @@ func TestAccessoryBindingsMapAndWriteAirConditioner(t *testing.T) {
 			t.Errorf("HomeKit projection for %q failed: %v", item.Type, projectErr)
 		}
 	}
-	bindings := newAccessoryBindings(items, map[string]bool{}, nil, service, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	bindings := newAccessoryBindings(items, map[string]bool{}, nil, service, zap.NewNop())
 	if len(bindings.accessories) != 1 || bindings.actives["ac"] == nil || bindings.heaterCurrent["ac"] == nil || bindings.heaterTargets["ac"] == nil || bindings.temperatures["ac"] == nil || bindings.coolingTargets["ac"] == nil || bindings.heatingTargets["ac"] == nil || bindings.speeds["ac"] == nil || bindings.swingModes["ac"] == nil || bindings.humidities["ac"] == nil || bindings.filterLife["ac"] == nil || bindings.filterChange["ac"] == nil || findHomeKitCharacteristic(bindings.byDevice["ac"], characteristic.TypeTemperatureDisplayUnits) == nil {
 		t.Fatalf("air-conditioner bindings = %#v", bindings)
 	}
@@ -518,7 +517,7 @@ func TestAccessoryBindingsBuildAllExtendedHomeKitDeviceTypes(t *testing.T) {
 			t.Errorf("HomeKit projection for %q failed: %v", item.Type, projectErr)
 		}
 	}
-	bindings := newAccessoryBindings(items, map[string]bool{}, nil, service, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	bindings := newAccessoryBindings(items, map[string]bool{}, nil, service, zap.NewNop())
 	if len(bindings.accessories) != len(types) {
 		t.Fatalf("extended HomeKit accessories = %d, want %d", len(bindings.accessories), len(types))
 	}
@@ -609,7 +608,7 @@ func TestAccessoryBindingsPublishMinimalAirPurifierWithoutFilter(t *testing.T) {
 	if _, err := device.ProjectForConsumer(*purifier, contract); err != nil {
 		t.Fatalf("minimal purifier should project to HomeKit: %v", err)
 	}
-	bindings := newAccessoryBindings(items, map[string]bool{"purifier": true}, nil, service, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	bindings := newAccessoryBindings(items, map[string]bool{"purifier": true}, nil, service, zap.NewNop())
 	if len(bindings.accessories) != 1 || bindings.actives["purifier"] == nil || bindings.airCurrent["purifier"] == nil || bindings.airTargets["purifier"] == nil {
 		t.Fatalf("minimal purifier bindings = %#v", bindings)
 	}
@@ -649,7 +648,7 @@ func TestAccessoryBindingsHandleOneHundredAccessoriesAndBurstUpdates(t *testing.
 	service := application.NewDeviceService(provider)
 	defer service.Close()
 	items, _ := service.List(context.Background())
-	bindings := newAccessoryBindings(items, map[string]bool{}, nil, service, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	bindings := newAccessoryBindings(items, map[string]bool{}, nil, service, zap.NewNop())
 	if len(bindings.accessories) != 100 || len(bindings.faults) != 100 {
 		t.Fatalf("accessories=%d faults=%d", len(bindings.accessories), len(bindings.faults))
 	}
@@ -704,7 +703,7 @@ func TestTargetReportsProjectionIssuesForIncompleteDevices(t *testing.T) {
 	}
 	service := application.NewDeviceService(&incompleteSwitchProvider{inner: inner})
 	defer service.Close()
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := zap.NewNop()
 	target, err := New(context.Background(), Config{
 		ID: "bridge", Name: "Bridge", Address: "127.0.0.1:0", Pin: "12345678", SetupID: "TEST",
 		StorePath: t.TempDir(), DeviceIDs: []string{"ok-switch", "broken-switch"},

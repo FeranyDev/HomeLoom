@@ -111,7 +111,7 @@ Apple Home 写入后可以短暂显示乐观值，但必须等待 Provider 上�
 | 配置 | PostgreSQL 或 SQLite；YAML 仅用于进程启动参数 |
 | 数据库 | GORM AutoMigrate；PostgreSQL 17 + pgx，或纯 Go SQLite gormlite |
 | MQTT | Eclipse Paho `autopaho`（客户端）+ Mochi MQTT（内嵌服务端） |
-| 日志 | `log/slog` |
+| 日志 | `go.uber.org/zap` |
 | 指标 | Prometheus Client |
 | Apple HAP | 阶段 0 PoC 后确定库和封装边界 |
 | 测试 | Go testing，按需使用 Testify |

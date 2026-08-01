@@ -81,10 +81,21 @@ func TestDefaultOnlyListensOnLoopback(t *testing.T) {
 	if defaults.Storage.DatabaseURL != "postgres://homeloom:homeloom-dev@127.0.0.1:54329/homeloom?sslmode=disable" || defaults.Storage.MasterKey != "./data/homeloom.key" {
 		t.Fatalf("default storage = %#v", defaults.Storage)
 	}
+	if defaults.Logging.ChildLevel != "info" {
+		t.Fatalf("default logging = %#v", defaults.Logging)
+	}
 	if defaults.Media.CameraKernelBinary != "homeloom-camera-kernel" ||
 		defaults.Media.RuntimeDir != "./data/media/publishers" ||
 		defaults.Media.HAPHost != "0.0.0.0" {
 		t.Fatalf("default media = %#v", defaults.Media)
+	}
+}
+
+func TestValidateRejectsInvalidChildLogLevel(t *testing.T) {
+	config := Default()
+	config.Logging.ChildLevel = "trace"
+	if err := config.Validate(); err == nil {
+		t.Fatal("Validate() accepted an invalid child log level")
 	}
 }
 

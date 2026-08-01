@@ -8,6 +8,7 @@ import (
 	"github.com/AlexxIT/go2rtc/internal/streams"
 	"github.com/AlexxIT/go2rtc/pkg/core"
 	"github.com/AlexxIT/go2rtc/pkg/mp4"
+	"go.uber.org/zap"
 )
 
 func handlerWSMSE(tr *ws.Transport, msg *ws.Message) error {
@@ -18,7 +19,7 @@ func handlerWSMSE(tr *ws.Transport, msg *ws.Message) error {
 
 	var medias []*core.Media
 	if codecs := msg.String(); codecs != "" {
-		log.Trace().Str("codecs", codecs).Msgf("[mp4] new WS/MSE consumer")
+		log.Debug("WebSocket MSE consumer created", zap.String("codecs", codecs))
 		medias = mp4.ParseCodecs(codecs, true)
 	}
 
@@ -27,7 +28,7 @@ func handlerWSMSE(tr *ws.Transport, msg *ws.Message) error {
 	cons.WithRequest(tr.Request)
 
 	if err := stream.AddConsumer(cons); err != nil {
-		log.Debug().Err(err).Msg("[mp4] add consumer")
+		log.Debug("failed to add WebSocket MSE consumer", zap.Error(err))
 		return err
 	}
 
@@ -50,7 +51,7 @@ func handlerWSMP4(tr *ws.Transport, msg *ws.Message) error {
 
 	var medias []*core.Media
 	if codecs := msg.String(); codecs != "" {
-		log.Trace().Str("codecs", codecs).Msgf("[mp4] new WS/MP4 consumer")
+		log.Debug("WebSocket MP4 consumer created", zap.String("codecs", codecs))
 		medias = mp4.ParseCodecs(codecs, false)
 	}
 
@@ -58,7 +59,7 @@ func handlerWSMP4(tr *ws.Transport, msg *ws.Message) error {
 	cons.WithRequest(tr.Request)
 
 	if err := stream.AddConsumer(cons); err != nil {
-		log.Error().Err(err).Caller().Send()
+		log.WithOptions(zap.AddCaller()).Error("failed to add WebSocket MP4 consumer", zap.Error(err))
 		return err
 	}
 

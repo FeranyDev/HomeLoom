@@ -2,35 +2,64 @@ package safelog
 
 import (
 	"fmt"
-	"log/slog"
 	"regexp"
 	"strings"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 const replacement = "********"
 
 var assignedSecret = regexp.MustCompile(`(?i)(password|passphrase|passwd|pwd|secret|token|api[_-]?key|private[_-]?key|credential|authorization|pairing[_-]?code|setup[_-]?uri|pin)(["']?\s*[:=]\s*["']?)([^"',\s&}]+)`)
 
-// ReplaceAttr is suitable for slog.HandlerOptions.ReplaceAttr. It redacts
-// sensitive keys and best-effort secret assignments embedded in errors/URLs.
-func ReplaceAttr(_ []string, attr slog.Attr) slog.Attr {
-	if sensitiveKey(attr.Key) {
-		return slog.String(attr.Key, replacement)
-	}
-	value := attr.Value.Resolve()
-	switch value.Kind() {
-	case slog.KindString:
-		attr.Value = slog.StringValue(RedactText(value.String()))
-	case slog.KindAny:
-		if err, ok := value.Any().(error); ok {
-			attr.Value = slog.StringValue(RedactText(err.Error()))
-		}
-	}
-	return attr
-}
-
 func RedactText(value string) string {
 	return assignedSecret.ReplaceAllString(value, fmt.Sprintf("$1$2%s", replacement))
+}
+
+// NewCore wraps a Zap core so messages and structured fields are redacted
+// before they reach any encoder or sink.
+func NewCore(core zapcore.Core) zapcore.Core { return &redactingCore{Core: core} }
+
+type redactingCore struct{ zapcore.Core }
+
+func (c *redactingCore) With(fields []zapcore.Field) zapcore.Core {
+	return &redactingCore{Core: c.Core.With(redactFields(fields))}
+}
+
+func (c *redactingCore) Check(entry zapcore.Entry, checked *zapcore.CheckedEntry) *zapcore.CheckedEntry {
+	if c.Enabled(entry.Level) {
+		return checked.AddCore(entry, c)
+	}
+	return checked
+}
+
+func (c *redactingCore) Write(entry zapcore.Entry, fields []zapcore.Field) error {
+	entry.Message = RedactText(entry.Message)
+	return c.Core.Write(entry, redactFields(fields))
+}
+
+func redactFields(fields []zapcore.Field) []zapcore.Field {
+	redacted := make([]zapcore.Field, len(fields))
+	for index, field := range fields {
+		redacted[index] = redactField(field)
+	}
+	return redacted
+}
+
+func redactField(field zapcore.Field) zapcore.Field {
+	if sensitiveKey(field.Key) {
+		return zap.String(field.Key, replacement)
+	}
+	switch field.Type {
+	case zapcore.StringType:
+		field.String = RedactText(field.String)
+	case zapcore.ErrorType:
+		if err, ok := field.Interface.(error); ok {
+			return zap.String(field.Key, RedactText(err.Error()))
+		}
+	}
+	return field
 }
 
 func sensitiveKey(key string) bool {

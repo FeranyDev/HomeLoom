@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
 	domainmedia "github.com/feranydev/homeloom/backend/internal/domain/media"
 	mediaruntime "github.com/feranydev/homeloom/backend/internal/mediaruntime"
+	"go.uber.org/zap"
 )
 
 type directMediaAuthorizer interface {
@@ -21,7 +22,7 @@ type directMediaAuthorizer interface {
 type embeddedMediaRuntime struct {
 	runtime *mediaruntime.Runtime
 	store   mediaReplayStore
-	logger  *slog.Logger
+	logger  *zap.Logger
 	auth    directMediaAuthorizer
 }
 
@@ -32,9 +33,15 @@ type embeddedMediaConfig struct {
 	HAPPortBase        int
 	RTSPPortBase       int
 	SRTPPortBase       int
+	ChildLogLevel      string
+	ChildLogWriter     func(string, string) io.Writer
 }
 
-func newEmbeddedMediaRuntime(ctx context.Context, store mediaReplayStore, auth directMediaAuthorizer, config embeddedMediaConfig, logger *slog.Logger) (*embeddedMediaRuntime, error) {
+func newEmbeddedMediaRuntime(ctx context.Context, store mediaReplayStore, auth directMediaAuthorizer, config embeddedMediaConfig, logger *zap.Logger) (*embeddedMediaRuntime, error) {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	logger = logger.With(zap.String("module", "media-runtime"))
 	if store == nil || auth == nil {
 		return nil, errors.New("embedded media runtime dependencies are required")
 	}
@@ -43,6 +50,7 @@ func newEmbeddedMediaRuntime(ctx context.Context, store mediaReplayStore, auth d
 		CameraKernelBinary: binary, RuntimeDir: config.RuntimeDir,
 		HAPHost: config.HAPHost, HAPPort: config.HAPPortBase,
 		RTSPPort: config.RTSPPortBase, SRTPPort: config.SRTPPortBase,
+		ChildLogLevel: config.ChildLogLevel, ChildLogWriter: config.ChildLogWriter,
 		Authorize: func(ctx context.Context, request mediaruntime.AuthorizationRequest) (mediaruntime.AuthorizationResponse, error) {
 			response, err := auth.AcquireMediaAuthorization(ctx, domainmedia.AuthorizationRequest{
 				SchemaVersion: domainmedia.SchemaVersion,
@@ -74,10 +82,10 @@ func newEmbeddedMediaRuntime(ctx context.Context, store mediaReplayStore, auth d
 			}, nil
 		},
 		OnPairing: func(output mediaruntime.PairingOutput) {
-			logger.Info("HomeKit camera ready", "name", output.Name, "stream_id", output.StreamID, "pin", output.PIN, "hap_address", output.HAPHost, "log_path", output.LogPath)
+			logger.Info("HomeKit camera ready", zap.String("name", output.Name), zap.String("stream_id", output.StreamID), zap.String("pin", output.PIN), zap.String("hap_address", output.HAPHost), zap.String("log_path", output.LogPath))
 		},
 		OnError: func(err error) {
-			logger.Error("camera publisher failed", "error", err)
+			logger.Error("camera publisher failed", zap.Error(err))
 		},
 	})
 	if err != nil {

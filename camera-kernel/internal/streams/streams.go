@@ -8,7 +8,7 @@ import (
 
 	"github.com/AlexxIT/go2rtc/internal/api"
 	"github.com/AlexxIT/go2rtc/internal/app"
-	"github.com/rs/zerolog"
+	"go.uber.org/zap"
 )
 
 func Init() {
@@ -44,7 +44,7 @@ func Init() {
 		}
 		for name, rawQuery := range cfg.Preload {
 			if err := AddPreload(name, rawQuery); err != nil {
-				log.Error().Err(err).Caller().Send()
+				log.Error("preload failed", zap.Error(err), zap.String("stream", name))
 			}
 		}
 	})
@@ -136,7 +136,7 @@ func GetOrPatch(query url.Values) (*Stream, error) {
 	return Patch(source, source)
 }
 
-var log zerolog.Logger
+var log = zap.NewNop()
 
 // streams map
 

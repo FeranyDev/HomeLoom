@@ -1,6 +1,10 @@
 package streams
 
-import "time"
+import (
+	"time"
+
+	"go.uber.org/zap"
+)
 
 func (s *Stream) Publish(url string) error {
 	cons, run, err := GetConsumer(url)
@@ -28,7 +32,7 @@ func Publish(stream *Stream, destination any) {
 	switch v := destination.(type) {
 	case string:
 		if err := stream.Publish(v); err != nil {
-			log.Error().Err(err).Caller().Send()
+			log.Error("publish failed", zap.Error(err))
 		}
 	case []any:
 		for _, v := range v {

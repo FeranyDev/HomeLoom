@@ -14,7 +14,7 @@ import (
 	"github.com/AlexxIT/go2rtc/internal/streams"
 	"github.com/AlexxIT/go2rtc/pkg/core"
 	"github.com/AlexxIT/go2rtc/pkg/ffmpeg"
-	"github.com/rs/zerolog"
+	"go.uber.org/zap"
 )
 
 func Init() {
@@ -32,7 +32,7 @@ func Init() {
 
 	log = app.GetLogger("ffmpeg")
 
-	// zerolog levels: trace debug         info warn    error fatal panic disabled
+	// Camera Kernel levels: trace/debug, info, warn, error, fatal, panic, disabled.
 	// FFmpeg  levels: trace debug verbose info warning error fatal panic quiet
 	if cfg.Log.Level == "warn" {
 		cfg.Log.Level = "warning"
@@ -162,7 +162,7 @@ var defaults = map[string]string{
 	"h265/videotoolbox": "-c:v hevc_videotoolbox -g 50 -bf 0 -profile:v main -level:v 5.1",
 }
 
-var log zerolog.Logger
+var log = zap.NewNop()
 
 // configTemplate - return template from config (defaults) if exist or return raw template
 func configTemplate(template string) string {

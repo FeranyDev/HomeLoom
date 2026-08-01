@@ -3,8 +3,6 @@ package xiaomi
 import (
 	"context"
 	"errors"
-	"io"
-	"log/slog"
 	"net"
 	"net/url"
 	"reflect"
@@ -13,9 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/feranydev/homeloom/backend/internal/platform/logging"
 	mochimqtt "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/listeners"
 	"github.com/mochi-mqtt/server/v2/packets"
+	"go.uber.org/zap"
 )
 
 type brokerCredential struct {
@@ -100,8 +100,7 @@ func (h *cloudMIPSBrokerHook) snapshot() (int, []brokerCredential, [][]string) {
 func startCloudMIPSTestBroker(t *testing.T, password string) (*mochimqtt.Server, *cloudMIPSBrokerHook, string) {
 	t.Helper()
 	address := availableCloudMIPSTestAddress(t)
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	server := mochimqtt.New(&mochimqtt.Options{InlineClient: true, Logger: logger})
+	server := mochimqtt.New(&mochimqtt.Options{InlineClient: true, Logger: logging.SlogAdapter(zap.NewNop())})
 	hook := newCloudMIPSBrokerHook(password)
 	if err := server.AddHook(hook, nil); err != nil {
 		t.Fatal(err)

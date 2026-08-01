@@ -12,7 +12,8 @@ import (
 	"github.com/AlexxIT/go2rtc/pkg/core"
 	"github.com/AlexxIT/go2rtc/pkg/rtsp"
 	"github.com/AlexxIT/go2rtc/pkg/tcp"
-	"github.com/rs/zerolog"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func Init() {
@@ -48,13 +49,13 @@ func Init() {
 
 	ln, err := net.Listen("tcp", address)
 	if err != nil {
-		log.Error().Err(err).Msg("[rtsp] listen")
+		log.Error("listen failed", zap.Error(err), zap.String("addr", address))
 		return
 	}
 
 	_, Port, _ = net.SplitHostPort(address)
 
-	log.Info().Str("addr", address).Msg("[rtsp] listen")
+	log.Info("listening", zap.String("addr", address))
 
 	if query, err := url.ParseQuery(conf.Mod.DefaultQuery); err == nil {
 		defaultMedias = ParseQuery(query)
@@ -88,7 +89,7 @@ var Port string
 
 // internal
 
-var log zerolog.Logger
+var log = zap.NewNop()
 var handlers []Handler
 var defaultMedias []*core.Media
 
@@ -107,15 +108,15 @@ func rtspHandler(rawURL string) (core.Producer, error) {
 		conn.Transport = query.Get("transport")
 	}
 
-	if log.Trace().Enabled() {
+	if log.Core().Enabled(zap.DebugLevel) {
 		conn.Listen(func(msg any) {
 			switch msg := msg.(type) {
 			case *tcp.Request:
-				log.Trace().Msgf("[rtsp] client request:\n%s", msg)
+				log.Debug("client request", zap.Stringer("request", msg))
 			case *tcp.Response:
-				log.Trace().Msgf("[rtsp] client response:\n%s", msg)
+				log.Debug("client response", zap.Stringer("response", msg))
 			case string:
-				log.Trace().Msgf("[rtsp] client msg: %s", msg)
+				log.Debug("client message", zap.String("message", msg))
 			}
 		})
 	}
@@ -128,7 +129,7 @@ func rtspHandler(rawURL string) (core.Producer, error) {
 		if !conn.Backchannel {
 			return nil, err
 		}
-		log.Trace().Msgf("[rtsp] describe (backchannel=%t) err: %v", conn.Backchannel, err)
+		log.Debug("describe failed", zap.Bool("backchannel", conn.Backchannel), zap.Error(err))
 
 		// second try without backchannel, we need to reconnect
 		conn.Backchannel = false
@@ -147,23 +148,23 @@ func tcpHandler(conn *rtsp.Conn) {
 	var name string
 	var closer func()
 
-	trace := log.Trace().Enabled()
-	level := zerolog.WarnLevel
+	trace := log.Core().Enabled(zap.DebugLevel)
+	level := zapcore.WarnLevel
 
 	conn.Listen(func(msg any) {
 		if trace {
 			switch msg := msg.(type) {
 			case *tcp.Request:
-				log.Trace().Msgf("[rtsp] server request:\n%s", msg)
+				log.Debug("server request", zap.Stringer("request", msg))
 			case *tcp.Response:
-				log.Trace().Msgf("[rtsp] server response:\n%s", msg)
+				log.Debug("server response", zap.Stringer("response", msg))
 			}
 		}
 
 		switch msg {
 		case rtsp.MethodDescribe:
 			if len(conn.URL.Path) == 0 {
-				log.Warn().Msg("[rtsp] server empty URL on DESCRIBE")
+				log.Warn("server received DESCRIBE with empty URL")
 				return
 			}
 
@@ -174,7 +175,7 @@ func tcpHandler(conn *rtsp.Conn) {
 				return
 			}
 
-			log.Debug().Str("stream", name).Msg("[rtsp] new consumer")
+			log.Debug("new consumer", zap.String("stream", name))
 
 			conn.SessionName = app.UserAgent
 
@@ -210,8 +211,11 @@ func tcpHandler(conn *rtsp.Conn) {
 
 			// param name like ffmpeg style https://ffmpeg.org/ffmpeg-protocols.html
 			if s := query.Get("log_level"); s != "" {
-				if lvl, err := zerolog.ParseLevel(s); err == nil {
-					level = lvl
+				var parsed zapcore.Level
+				if strings.EqualFold(s, "trace") {
+					level = zapcore.DebugLevel
+				} else if err := parsed.Set(s); err == nil {
+					level = parsed
 				}
 			}
 
@@ -219,7 +223,9 @@ func tcpHandler(conn *rtsp.Conn) {
 			conn.Connection.Source = query.Get("source")
 
 			if err := stream.AddConsumer(conn); err != nil {
-				log.WithLevel(level).Err(err).Str("stream", name).Msg("[rtsp]")
+				if checked := log.Check(level, "consumer setup failed"); checked != nil {
+					checked.Write(zap.Error(err), zap.String("stream", name))
+				}
 				return
 			}
 
@@ -229,7 +235,7 @@ func tcpHandler(conn *rtsp.Conn) {
 
 		case rtsp.MethodAnnounce:
 			if len(conn.URL.Path) == 0 {
-				log.Warn().Msg("[rtsp] server empty URL on ANNOUNCE")
+				log.Warn("server received ANNOUNCE with empty URL")
 				return
 			}
 
@@ -245,7 +251,7 @@ func tcpHandler(conn *rtsp.Conn) {
 				conn.Timeout = core.Atoi(s)
 			}
 
-			log.Debug().Str("stream", name).Msg("[rtsp] new producer")
+			log.Debug("new producer", zap.String("stream", name))
 
 			stream.AddProducer(conn)
 
@@ -257,9 +263,11 @@ func tcpHandler(conn *rtsp.Conn) {
 
 	if err := conn.Accept(); err != nil {
 		if errors.Is(err, rtsp.FailedAuth) {
-			log.Warn().Str("remote_addr", conn.Connection.RemoteAddr).Msg("[rtsp] failed authentication")
+			log.Warn("authentication failed", zap.String("remote_addr", conn.Connection.RemoteAddr))
 		} else if err != io.EOF {
-			log.WithLevel(level).Err(err).Caller().Send()
+			if checked := log.Check(level, "connection failed"); checked != nil {
+				checked.Write(zap.Error(err), zap.String("remote_addr", conn.Connection.RemoteAddr))
+			}
 		}
 		if closer != nil {
 			closer()
@@ -276,12 +284,12 @@ func tcpHandler(conn *rtsp.Conn) {
 
 	if closer != nil {
 		if err := conn.Handle(); err != nil {
-			log.Debug().Err(err).Msg("[rtsp] handle")
+			log.Debug("connection handling failed", zap.Error(err), zap.String("stream", name))
 		}
 
 		closer()
 
-		log.Debug().Str("stream", name).Msg("[rtsp] disconnect")
+		log.Debug("disconnected", zap.String("stream", name))
 	}
 
 	_ = conn.Close()

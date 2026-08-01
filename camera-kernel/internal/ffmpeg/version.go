@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/AlexxIT/go2rtc/pkg/ffmpeg"
+	"go.uber.org/zap"
 )
 
 var verMu sync.Mutex
@@ -40,7 +41,7 @@ func Version() (string, error) {
 		verErr = errors.New("ffmpeg: unsupported version: " + verFF)
 	}
 
-	log.Debug().Str("version", verFF).Str("libavformat", verAV).Msgf("[ffmpeg] bin")
+	log.Debug("FFmpeg binary detected", zap.String("version", verFF), zap.String("libavformat", verAV))
 
 	return verFF, verErr
 }

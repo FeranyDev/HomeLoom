@@ -23,7 +23,7 @@ import (
 	"github.com/AlexxIT/go2rtc/pkg/pcm"
 	pkg "github.com/AlexxIT/go2rtc/pkg/rtsp"
 	"github.com/AlexxIT/go2rtc/pkg/shell"
-	"github.com/rs/zerolog"
+	"go.uber.org/zap"
 )
 
 func Init() {
@@ -82,9 +82,13 @@ func execHandle(rawURL string) (prod core.Producer, err error) {
 	}
 
 	cmd := shell.NewCommand(rawURL[5:]) // remove `exec:`
+	logSource := executableLogSource(cmd.Args[0])
+	processLog := app.GetLogger(logSource)
 	writer := &logWriter{
-		buf:   make([]byte, 512),
-		debug: log.Debug().Enabled(),
+		buf:     make([]byte, 512),
+		enabled: processLog.Core().Enabled(zap.InfoLevel),
+		logger:  processLog,
+		source:  logSource,
 	}
 	cmd.Stderr = writer
 
@@ -96,13 +100,13 @@ func execHandle(rawURL string) (prod core.Producer, err error) {
 	if s := query.Get("killsignal"); s != "" {
 		sig := syscall.Signal(core.Atoi(s))
 		cmd.Cancel = func() error {
-			log.Debug().Msgf("[exec] kill with signal=%d", sig)
+			log.Debug("process signal sent", zap.Int("signal", int(sig)))
 			return cmd.Process.Signal(sig)
 		}
 	}
 	if usesHardwareAccel(cmd.Args) {
 		writer.onHardwareFailure = func() {
-			log.Warn().Msg("[exec] hardware acceleration failed; stopping process for software fallback")
+			log.Warn("hardware acceleration failed; stopping process for software fallback")
 			_ = cmd.Close()
 		}
 	}
@@ -151,7 +155,7 @@ func handlePipe(source string, cmd *shell.Command) (core.Producer, error) {
 		cmd,
 	}
 
-	log.Debug().Strs("args", cmd.Args).Msg("[exec] run pipe")
+	log.Debug("pipe process starting", zap.Strings("args", cmd.Args))
 
 	ts := time.Now()
 
@@ -169,13 +173,13 @@ func handlePipe(source string, cmd *shell.Command) (core.Producer, error) {
 		setRemoteInfo(info, source, cmd.Args)
 	}
 
-	log.Debug().Stringer("launch", time.Since(ts)).Msg("[exec] run pipe")
+	log.Debug("pipe process started", zap.Duration("launch_duration", time.Since(ts)))
 
 	return prod, nil
 }
 
 func handleRTSP(source string, cmd *shell.Command, path string, timeout time.Duration) (core.Producer, error) {
-	if log.Trace().Enabled() {
+	if log.Core().Enabled(zap.DebugLevel) {
 		cmd.Stdout = os.Stdout
 	}
 
@@ -191,12 +195,12 @@ func handleRTSP(source string, cmd *shell.Command, path string, timeout time.Dur
 		waitersMu.Unlock()
 	}()
 
-	log.Debug().Strs("args", cmd.Args).Msg("[exec] run rtsp")
+	log.Debug("RTSP process starting", zap.Strings("args", cmd.Args))
 
 	ts := time.Now()
 
 	if err := cmd.Start(); err != nil {
-		log.Error().Err(err).Str("source", source).Msg("[exec]")
+		log.Error("RTSP process failed to start", zap.Error(err), zap.String("source", source))
 		return nil, err
 	}
 
@@ -206,14 +210,14 @@ func handleRTSP(source string, cmd *shell.Command, path string, timeout time.Dur
 	select {
 	case <-timer.C:
 		// haven't received data from app in timeout
-		log.Error().Str("source", source).Msg("[exec] timeout")
+		log.Error("RTSP process startup timed out", zap.String("source", source), zap.Duration("timeout", timeout))
 		return nil, errors.New("exec: timeout")
 	case <-cmd.Done():
 		// app fail before we receive any data
 		return nil, fmt.Errorf("exec/rtsp\n%s", cmd.Stderr)
 	case prod := <-waiter:
 		// app started successfully
-		log.Debug().Stringer("launch", time.Since(ts)).Msg("[exec] run rtsp")
+		log.Debug("RTSP process started", zap.Duration("launch_duration", time.Since(ts)))
 		setRemoteInfo(prod, source, cmd.Args)
 		prod.OnClose = cmd.Close
 		return prod, nil
@@ -223,18 +227,20 @@ func handleRTSP(source string, cmd *shell.Command, path string, timeout time.Dur
 // internal
 
 var (
-	log       zerolog.Logger
+	log       = zap.NewNop()
 	waiters   = make(map[string]chan *pkg.Conn)
 	waitersMu sync.Mutex
 )
 
 type logWriter struct {
-	buf                 []byte
-	debug               bool
-	n                   int
-	hardwareFailures    int
-	onHardwareFailure   func()
-	hardwareKillArmed   bool
+	buf               []byte
+	enabled           bool
+	logger            *zap.Logger
+	source            string
+	n                 int
+	hardwareFailures  int
+	onHardwareFailure func()
+	hardwareKillArmed bool
 }
 
 func (l *logWriter) String() string {
@@ -250,8 +256,8 @@ func (l *logWriter) Write(p []byte) (n int, err error) {
 	}
 	n = len(p)
 	line := trimSpace(p)
-	if l.debug && line != nil {
-		log.Debug().Msgf("[exec] %s", line)
+	if l.enabled && line != nil {
+		l.logger.Info(string(line), zap.String("output_stream", "stderr"))
 	}
 	if l.onHardwareFailure != nil && !l.hardwareKillArmed && isHardwareAccelFailure(line) {
 		l.hardwareFailures++
@@ -261,6 +267,14 @@ func (l *logWriter) Write(p []byte) (n int, err error) {
 		}
 	}
 	return
+}
+
+func executableLogSource(path string) string {
+	path = strings.ToLower(path)
+	if strings.Contains(path, "ffmpeg") {
+		return "ffmpeg"
+	}
+	return "exec"
 }
 
 func usesHardwareAccel(args []string) bool {

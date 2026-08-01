@@ -5,8 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
-	"log/slog"
+	"go.uber.org/zap"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +16,7 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	"github.com/feranydev/homeloom/backend/internal/persistence/gormstore"
+	"github.com/feranydev/homeloom/backend/internal/platform/subprocesslog"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
 	"github.com/feranydev/homeloom/backend/internal/runtime/providermanager"
@@ -267,7 +267,7 @@ func TestTrustedProxyControlsClientIPAndSecureCookies(t *testing.T) {
 }
 
 func newTestServerWithProvider(provider providersdk.Provider) *Server {
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := zap.NewNop()
 	targets := application.NewTargetService([]application.TargetRegistration{{
 		Info: application.TargetInfo{ID: "apple-main", Type: "apple-hap", Name: "Main", Enabled: true, Status: "running"},
 		QR:   []byte("png-data"),
@@ -305,7 +305,7 @@ func TestTargetCRUDAPIPersistsConfiguration(t *testing.T) {
 	targets := application.NewTargetService(nil, store)
 	devices := application.NewDeviceService(virtual.NewProvider())
 	defer devices.Close()
-	server := NewServer(":0", devices, targets, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := NewServer(":0", devices, targets, zap.NewNop())
 
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/targets", bytes.NewBufferString(`{"id":"api-bridge","type":"apple-hap","name":"API Bridge","enabled":true,"address":":51827","pin":"23456789","setupId":"API1"}`))
 	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
@@ -363,7 +363,7 @@ func TestMatterTargetAPIAcceptsProtocolConfigWithoutLeakingPasscode(t *testing.T
 	targets := application.NewTargetService(nil, store)
 	devices := application.NewDeviceService(virtual.NewProvider())
 	defer devices.Close()
-	server := NewServer(":0", devices, targets, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := NewServer(":0", devices, targets, zap.NewNop())
 
 	body := `{"id":"matter-api","type":"matter","name":"Matter API","enabled":false,"matterConfig":{"networkInterface":"en0","udpPort":5540,"discriminator":1234,"passcode":"20202021","vendorId":65521,"productId":32768,"productName":"HomeLoom","serialNumber":"matter-api","commissioningWindowSeconds":300}}`
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/targets", bytes.NewBufferString(body))
@@ -397,7 +397,7 @@ func TestMatterDangerousAPIsRequireExactConfirmation(t *testing.T) {
 	targets := application.NewTargetService(nil, nil)
 	devices := application.NewDeviceService(virtual.NewProvider())
 	defer devices.Close()
-	server := NewServer(":0", devices, targets, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := NewServer(":0", devices, targets, zap.NewNop())
 	tests := []struct {
 		method string
 		path   string
@@ -431,7 +431,7 @@ func TestDeviceEnabledAPIIsPersisted(t *testing.T) {
 	if err := service.LoadDevicePreferences(ctx); err != nil {
 		t.Fatal(err)
 	}
-	server := NewServer(":0", service, application.NewTargetService(nil, nil), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := NewServer(":0", service, application.NewTargetService(nil, nil), zap.NewNop())
 	disable := httptest.NewRequest(http.MethodPut, "/api/v1/devices/virtual-switch-1/enabled", bytes.NewBufferString(`{"enabled":false}`))
 	disable.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	response := httptest.NewRecorder()
@@ -461,7 +461,7 @@ func TestMutationAuditAndCommandCorrelationID(t *testing.T) {
 	defer store.Close()
 	devices := application.NewDeviceService(virtual.NewProvider(), store)
 	defer devices.Close()
-	server := NewServer(":0", devices, application.NewTargetService(nil, nil), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := NewServer(":0", devices, application.NewTargetService(nil, nil), zap.NewNop())
 	server.SetAuditService(application.NewAuditService(store))
 
 	write := httptest.NewRequest(http.MethodPut, "/api/v1/devices/virtual-switch-1/endpoints/main/capabilities/switch/properties/power", bytes.NewBufferString(`{"type":"bool","bool":true}`))
@@ -508,7 +508,7 @@ func TestSystemArtifactsAreDownloadsAndDoNotExposeSecrets(t *testing.T) {
 	defer devices.Close()
 	providers := application.NewProviderService([]providerconfig.Config{{ID: "mqtt-main", Type: "mqtt", Name: "MQTT", Config: json.RawMessage(`{"password":"provider-secret"}`)}}, nil, nil, nil)
 	targets := application.NewTargetService([]application.TargetRegistration{{Info: application.TargetInfo{ID: "apple-main", Type: "apple-hap", Name: "Bridge", PairingCode: "111-22-333", SetupURI: "X-HM://secret"}}}, nil)
-	server := NewServer(":0", devices, targets, slog.New(slog.NewTextHandler(io.Discard, nil)), providers)
+	server := NewServer(":0", devices, targets, zap.NewNop(), providers)
 	server.SetExportService(application.NewExportService(devices, providers, targets, nil, nil))
 
 	for _, path := range []string{"/api/v1/system/config-export", "/api/v1/system/diagnostic-bundle"} {
@@ -603,8 +603,33 @@ func TestRuntimeSettingsAPIUpdatesWithoutRestart(t *testing.T) {
 	}
 }
 
+func TestSubprocessLogsAPIUsesCursorAndDisablesCaching(t *testing.T) {
+	devices := application.NewDeviceService(nil, nil)
+	server := NewServer(":0", devices, application.NewTargetService(nil, nil), zap.NewNop())
+	logs := subprocesslog.New(10)
+	logs.Append("matter", "matter-main", []byte("ready"))
+	logs.Append("camera-kernel", "camera-1", []byte("streaming"))
+	server.SetSubprocessLogs(logs)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/system/subprocess-logs?after=1&limit=5", nil)
+	recorder := httptest.NewRecorder()
+	server.echo.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || recorder.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("response = %d, cache = %q, body = %s", recorder.Code, recorder.Header().Get("Cache-Control"), recorder.Body.String())
+	}
+	var response struct {
+		Data []subprocesslog.Entry `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Data) != 1 || response.Data[0].Message != "streaming" || response.Data[0].Sequence != 2 {
+		t.Fatalf("logs = %#v", response.Data)
+	}
+}
+
 func TestReadinessReflectsDatabaseHealth(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := zap.NewNop()
 	targets := application.NewTargetService(nil, nil)
 	healthy := NewServer(":0", application.NewDeviceService(virtual.NewProvider()), targets, logger)
 	request := httptest.NewRequest(http.MethodGet, "/ready", nil)
@@ -671,7 +696,7 @@ func newProviderManagementTestServer(t *testing.T) *Server {
 	devices := application.NewDeviceService(manager)
 	t.Cleanup(func() { _ = devices.Close() })
 	providers := application.NewProviderService([]providerconfig.Config{config}, &apiProviderStore{items: map[string]providerconfig.Config{config.ID: config}}, factory, manager)
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := zap.NewNop()
 	targets := application.NewTargetService(nil, nil)
 	return NewServer(":0", devices, targets, logger, providers)
 }
@@ -1010,7 +1035,7 @@ func TestMappingProfileCRUDHotReloadAndExport(t *testing.T) {
 	}
 	devices := application.NewDeviceService(virtual.NewProvider(), store)
 	defer devices.Close()
-	server := NewServer(":0", devices, application.NewTargetService(nil, nil), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := NewServer(":0", devices, application.NewTargetService(nil, nil), zap.NewNop())
 	server.SetProfileService(profiles)
 
 	create := httptest.NewRequest(http.MethodPost, "/api/v1/mapping/profiles", bytes.NewBufferString(`{"schemaVersion":1,"id":"custom-invert","version":1,"kind":"provider","inputType":"bool","outputType":"bool","transforms":[{"type":"invert"}]}`))
@@ -1115,7 +1140,7 @@ func TestMappingCatalogCustomPropertyAndConsumerRouteAPI(t *testing.T) {
 	}
 	devices := application.NewDeviceService(virtual.NewProvider(), profiles)
 	defer devices.Close()
-	server := NewServer(":0", devices, application.NewTargetService(nil, nil), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := NewServer(":0", devices, application.NewTargetService(nil, nil), zap.NewNop())
 	server.SetProfileService(profiles)
 
 	create := httptest.NewRequest(http.MethodPost, "/api/v1/device-models/custom-properties", bytes.NewBufferString(`{"id":"switch-led-pattern","deviceType":"switch","endpointId":"main","endpointName":"Main","endpointType":"main","capabilityId":"vendor-acme","capabilityType":"vendor-acme","definition":{"id":"led-pattern","name":"LED Pattern","type":"enum","enum":["off","pulse"],"readable":true,"writable":true,"notifiable":true}}`))
@@ -1165,7 +1190,7 @@ func TestCustomUnifiedModelAPI(t *testing.T) {
 	}
 	devices := application.NewDeviceService(virtual.NewProvider(), profiles)
 	defer devices.Close()
-	server := NewServer(":0", devices, application.NewTargetService(nil, nil), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := NewServer(":0", devices, application.NewTargetService(nil, nil), zap.NewNop())
 	server.SetProfileService(profiles)
 
 	create := httptest.NewRequest(http.MethodPost, "/api/v1/device-models/custom-models", bytes.NewBufferString(`{"deviceType":"air-quality-monitor","name":"空气质量监测器","version":1}`))
@@ -1502,7 +1527,7 @@ func TestUnifiedEventStreamPublishesPersistedAuditMutation(t *testing.T) {
 	defer store.Close()
 	devices := application.NewDeviceService(virtual.NewProvider(), store)
 	defer devices.Close()
-	server := NewServer(":0", devices, application.NewTargetService(nil, nil), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := NewServer(":0", devices, application.NewTargetService(nil, nil), zap.NewNop())
 	server.SetAuditService(application.NewAuditService(store))
 	httpServer := httptest.NewServer(server.Handler())
 	defer httpServer.Close()
@@ -1580,7 +1605,7 @@ func TestUnifiedEventStreamPublishesStateQualityChanges(t *testing.T) {
 }
 
 func TestUnifiedEventStreamPublishesTargetRuntimeStatus(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := zap.NewNop()
 	devices := application.NewDeviceService(virtual.NewProvider())
 	defer devices.Close()
 	targets := application.NewTargetService([]application.TargetRegistration{{Info: application.TargetInfo{ID: "bridge", Name: "Bridge", Status: "running"}}}, nil)
@@ -1629,7 +1654,7 @@ func TestRestartProviderEndpoint(t *testing.T) {
 	defer devices.Close()
 	store := &apiProviderStore{items: map[string]providerconfig.Config{config.ID: config}}
 	providers := application.NewProviderService([]providerconfig.Config{config}, store, factory, manager)
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := zap.NewNop()
 	targets := application.NewTargetService(nil, nil)
 	server := NewServer(":0", devices, targets, logger, providers)
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/providers/virtual-main/restart", nil)

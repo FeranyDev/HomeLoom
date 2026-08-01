@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/url"
 	"os"
@@ -29,6 +30,8 @@ type PublisherProducerConfig struct {
 	HomeKitPIN   string
 	OnPairing    func(PublisherOutput)
 	OnError      func(error)
+	LogLevel     string
+	LogWriter    func(string, string) io.Writer
 }
 
 type PublisherProducer struct {
@@ -78,6 +81,8 @@ func (p *PublisherProducer) Start(ctx context.Context, stream contract.StreamSpe
 		Secrets:        PublisherSecrets{HomeKitPIN: p.config.HomeKitPIN},
 		HomeKit:        HomeKitPublisher{Name: stream.DeviceID},
 		PublishHomeKit: publishHomeKit,
+		LogLevel:       p.config.LogLevel,
+		LogOutput:      childLogWriter(p.config.LogWriter, "camera-kernel", stream.ID),
 	})
 	if err != nil {
 		release()
@@ -92,6 +97,13 @@ func (p *PublisherProducer) Start(ctx context.Context, stream contract.StreamSpe
 		p.config.OnPairing(publisher.Output())
 	}
 	return &publisherSession{publisher: publisher, release: release}, nil
+}
+
+func childLogWriter(factory func(string, string) io.Writer, process, instance string) io.Writer {
+	if factory == nil {
+		return nil
+	}
+	return factory(process, instance)
 }
 
 func (p *PublisherProducer) fail(reason error) (adapter.Session, error) {

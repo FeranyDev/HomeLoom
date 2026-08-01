@@ -28,6 +28,7 @@ import (
 	"github.com/AlexxIT/go2rtc/pkg/homekit"
 	"github.com/AlexxIT/go2rtc/pkg/magic"
 	"github.com/AlexxIT/go2rtc/pkg/mdns"
+	"go.uber.org/zap"
 )
 
 const initialControllerRTCPWait = 250 * time.Millisecond
@@ -74,7 +75,7 @@ func (s *server) MarshalJSON() ([]byte, error) {
 func (s *server) Handle(w http.ResponseWriter, r *http.Request) {
 	conn, rw, err := w.(http.Hijacker).Hijack()
 	if err != nil {
-		log.Warn().Err(err).Str("stream", s.stream).Msg("[homekit] HAP connection hijack failed")
+		log.Warn("HAP connection hijack failed", zap.Error(err), zap.String("stream", s.stream))
 		return
 	}
 
@@ -85,32 +86,31 @@ func (s *server) Handle(w http.ResponseWriter, r *http.Request) {
 
 	switch r.RequestURI {
 	case hap.PathPairSetup:
-		log.Debug().Str("stream", s.stream).Msg("[homekit] pair setup requested")
+		log.Debug("pair setup requested", zap.String("stream", s.stream))
 		id, key, err := s.hap.PairSetup(r, rw)
 		if err != nil {
-			log.Warn().Err(err).Str("stream", s.stream).Msg("[homekit] pair setup failed")
+			log.Warn("pair setup failed", zap.Error(err), zap.String("stream", s.stream))
 			return
 		}
 
 		s.AddPair(id, key, hap.PermissionAdmin)
-		log.Info().Str("stream", s.stream).Msg("[homekit] pair setup completed")
+		log.Info("pair setup completed", zap.String("stream", s.stream))
 
 	case hap.PathPairVerify:
 		id, key, err := s.hap.PairVerify(r, rw)
 		if err != nil {
-			log.Debug().Err(err).Str("stream", s.stream).Msg("[homekit] pair verify failed")
+			log.Debug("pair verify failed", zap.Error(err), zap.String("stream", s.stream))
 			return
 		}
 
-		log.Debug().
-			Str("stream", s.stream).
-			Str("client_id", id).
-			Str("remote_address", conn.RemoteAddr().String()).
-			Msg("[homekit] pair verify succeeded")
+		log.Debug("pair verify succeeded",
+			zap.String("stream", s.stream),
+			zap.String("client_id", id),
+			zap.String("remote_address", conn.RemoteAddr().String()))
 
 		controller, err := hap.NewConn(conn, rw, key, false)
 		if err != nil {
-			log.Warn().Err(err).Str("stream", s.stream).Msg("[homekit] encrypted HAP session initialization failed")
+			log.Warn("encrypted HAP session initialization failed", zap.Error(err), zap.String("stream", s.stream))
 			return
 		}
 
@@ -127,7 +127,7 @@ func (s *server) Handle(w http.ResponseWriter, r *http.Request) {
 		case s.proxyURL != "":
 			client, err := hap.Dial(s.proxyURL)
 			if err != nil {
-				log.Error().Err(err).Caller().Send()
+				log.Error("HAP proxy dial failed", zap.Error(err), zap.String("stream", s.stream))
 				return
 			}
 			handler = homekit.ProxyHandler(s, client.Conn)
@@ -135,18 +135,12 @@ func (s *server) Handle(w http.ResponseWriter, r *http.Request) {
 
 		started := time.Now()
 		if err = handler(controller); err != nil && !expectedHAPConnectionClose(err) {
-			log.Warn().
-				Err(err).
-				Str("stream", s.stream).
-				Dur("connected_for", time.Since(started)).
-				Msg("[homekit] encrypted HAP session ended with error")
+			log.Warn("encrypted HAP session ended with error", zap.Error(err),
+				zap.String("stream", s.stream), zap.Duration("connected_for", time.Since(started)))
 			return
 		}
-		log.Debug().
-			Err(err).
-			Str("stream", s.stream).
-			Dur("connected_for", time.Since(started)).
-			Msg("[homekit] encrypted HAP session peer closed")
+		log.Debug("encrypted HAP session peer closed", zap.Error(err),
+			zap.String("stream", s.stream), zap.Duration("connected_for", time.Since(started)))
 	}
 }
 
@@ -176,14 +170,14 @@ func (l logger) String() string {
 }
 
 func (s *server) AddConn(v any) {
-	log.Trace().Str("stream", s.stream).Msgf("[homekit] add conn %s", logger{v})
+	log.Debug("connection added", zap.String("stream", s.stream), zap.Stringer("connection", logger{v}))
 	s.mu.Lock()
 	s.conns = append(s.conns, v)
 	s.mu.Unlock()
 }
 
 func (s *server) DelConn(v any) {
-	log.Trace().Str("stream", s.stream).Msgf("[homekit] del conn %s", logger{v})
+	log.Debug("connection removed", zap.String("stream", s.stream), zap.Stringer("connection", logger{v}))
 	s.mu.Lock()
 	if i := slices.Index(s.conns, v); i >= 0 {
 		s.conns = slices.Delete(s.conns, i, i+1)
@@ -223,7 +217,8 @@ func (s *server) GetPair(id string) []byte {
 }
 
 func (s *server) AddPair(id string, public []byte, permissions byte) {
-	log.Debug().Str("stream", s.stream).Msgf("[homekit] add pair id=%s public=%x perm=%d", id, public, permissions)
+	log.Debug("pair added", zap.String("stream", s.stream), zap.String("client_id", id),
+		zap.Uint8("permissions", permissions))
 
 	s.mu.Lock()
 	if s.pairIndex(id) < 0 {
@@ -237,7 +232,7 @@ func (s *server) AddPair(id string, public []byte, permissions byte) {
 }
 
 func (s *server) DelPair(id string) {
-	log.Debug().Str("stream", s.stream).Msgf("[homekit] del pair id=%s", id)
+	log.Debug("pair removed", zap.String("stream", s.stream), zap.String("client_id", id))
 
 	s.mu.Lock()
 	if i := s.pairIndex(id); i >= 0 {
@@ -250,38 +245,24 @@ func (s *server) DelPair(id string) {
 
 func (s *server) PatchConfig() {
 	if err := persistDurablePairings(s.stream, s.pairings); err != nil {
-		log.Error().Err(err).Msgf(
-			"[homekit] can't save %s pairings=%v", s.stream, s.pairings,
-		)
+		log.Error("cannot save pairings", zap.Error(err), zap.String("stream", s.stream), zap.Int("pairing_count", len(s.pairings)))
 	}
 }
 
 func (s *server) GetAccessories(_ net.Conn) []*hap.Accessory {
-	log.Debug().
-		Str("stream", s.stream).
-		Int("service_count", len(s.accessory.Services)).
-		Str("config_number", accessoryConfigNumber).
-		Msg("[homekit] accessory database requested")
+	log.Debug("accessory database requested", zap.String("stream", s.stream),
+		zap.Int("service_count", len(s.accessory.Services)), zap.String("config_number", accessoryConfigNumber))
 	return []*hap.Accessory{s.accessory}
 }
 
 func (s *server) GetCharacteristic(conn net.Conn, aid uint8, iid uint64) any {
 	char := s.accessory.GetCharacterByID(iid)
 	if char == nil {
-		log.Warn().
-			Str("stream", s.stream).
-			Uint8("aid", aid).
-			Uint64("iid", iid).
-			Msg("[homekit] unknown characteristic read")
+		log.Warn("unknown characteristic read", zap.String("stream", s.stream), zap.Uint8("aid", aid), zap.Uint64("iid", iid))
 		return nil
 	}
-	log.Debug().
-		Str("stream", s.stream).
-		Uint8("aid", aid).
-		Uint64("iid", iid).
-		Str("characteristic", diagnosticCharacteristicName(char.Type)).
-		Str("characteristic_type", char.Type).
-		Msg("[homekit] characteristic read")
+	log.Debug("characteristic read", zap.String("stream", s.stream), zap.Uint8("aid", aid), zap.Uint64("iid", iid),
+		zap.String("characteristic", diagnosticCharacteristicName(char.Type)), zap.String("characteristic_type", char.Type))
 
 	switch char.Type {
 	case camera.TypeSetupEndpoints:
@@ -293,21 +274,13 @@ func (s *server) GetCharacteristic(conn net.Conn, aid uint8, iid uint64) any {
 		// Session ID check.
 		var answer camera.SetupEndpointsResponse
 		if err := tlv8.UnmarshalBase64(char.Value, &answer); err != nil {
-			log.Debug().
-				Str("stream", s.stream).
-				Err(err).
-				Msg("[homekit] SetupEndpoints read has no decodable stored answer")
+			log.Debug("SetupEndpoints read has no decodable stored answer", zap.String("stream", s.stream), zap.Error(err))
 			return char.Value
 		}
 		slot, _ := s.streamSlotForCharacteristic(char)
-		log.Info().
-			Str("stream", s.stream).
-			Uint64("stream_slot", slot).
-			Uint8("status", answer.Status).
-			Str("accessory_address", answer.Address.IPAddr).
-			Uint16("video_port", answer.Address.VideoRTPPort).
-			Uint16("audio_port", answer.Address.AudioRTPPort).
-			Msg("[homekit] SetupEndpoints answer read")
+		log.Info("SetupEndpoints answer read", zap.String("stream", s.stream), zap.Uint64("stream_slot", slot),
+			zap.Uint8("status", answer.Status), zap.String("accessory_address", answer.Address.IPAddr),
+			zap.Uint16("video_port", answer.Address.VideoRTPPort), zap.Uint16("audio_port", answer.Address.AudioRTPPort))
 		return char.Value
 	}
 
@@ -317,41 +290,24 @@ func (s *server) GetCharacteristic(conn net.Conn, aid uint8, iid uint64) any {
 func (s *server) SetCharacteristic(conn net.Conn, aid uint8, iid uint64, value any, writeResponse bool) any {
 	char := s.accessory.GetCharacterByID(iid)
 	if char == nil {
-		log.Warn().
-			Str("stream", s.stream).
-			Uint8("aid", aid).
-			Uint64("iid", iid).
-			Bool("write_response", writeResponse).
-			Int("value_length", diagnosticValueLength(value)).
-			Msg("[homekit] unknown characteristic write")
+		log.Warn("unknown characteristic write", zap.String("stream", s.stream), zap.Uint8("aid", aid), zap.Uint64("iid", iid),
+			zap.Bool("write_response", writeResponse), zap.Int("value_length", diagnosticValueLength(value)))
 		return nil
 	}
-	log.Debug().
-		Str("stream", s.stream).
-		Uint8("aid", aid).
-		Uint64("iid", iid).
-		Str("characteristic", diagnosticCharacteristicName(char.Type)).
-		Str("characteristic_type", char.Type).
-		Bool("write_response", writeResponse).
-		Int("value_length", diagnosticValueLength(value)).
-		Msg("[homekit] characteristic write")
+	log.Debug("characteristic write", zap.String("stream", s.stream), zap.Uint8("aid", aid), zap.Uint64("iid", iid),
+		zap.String("characteristic", diagnosticCharacteristicName(char.Type)), zap.String("characteristic_type", char.Type),
+		zap.Bool("write_response", writeResponse), zap.Int("value_length", diagnosticValueLength(value)))
 
 	switch char.Type {
 	case "B0", "11A":
 		if err := char.Write(value); err != nil {
-			log.Warn().
-				Err(err).
-				Str("stream", s.stream).
-				Str("characteristic", diagnosticCharacteristicName(char.Type)).
-				Msg("[homekit] scalar characteristic write rejected")
+			log.Warn("scalar characteristic write rejected", zap.Error(err), zap.String("stream", s.stream),
+				zap.String("characteristic", diagnosticCharacteristicName(char.Type)))
 			return nil
 		}
 		if err := char.NotifyListeners(conn); err != nil {
-			log.Debug().
-				Err(err).
-				Str("stream", s.stream).
-				Str("characteristic", diagnosticCharacteristicName(char.Type)).
-				Msg("[homekit] scalar characteristic event delivery failed")
+			log.Debug("scalar characteristic event delivery failed", zap.Error(err), zap.String("stream", s.stream),
+				zap.String("characteristic", diagnosticCharacteristicName(char.Type)))
 		}
 		if writeResponse {
 			return char.Value
@@ -361,22 +317,18 @@ func (s *server) SetCharacteristic(conn net.Conn, aid uint8, iid uint64, value a
 	case camera.TypeSetupEndpoints:
 		var offer camera.SetupEndpointsRequest
 		if err := tlv8.UnmarshalBase64(value, &offer); err != nil {
-			log.Warn().Err(err).Str("stream", s.stream).Msg("[homekit] rejected malformed SetupEndpoints")
+			log.Warn("rejected malformed SetupEndpoints", zap.Error(err), zap.String("stream", s.stream))
 			s.rememberSessionStatus(homekit.SessionStatus{State: "setup-invalid"})
 			return nil
 		}
 		slot, ok := s.streamSlotForCharacteristic(char)
 		if !ok {
-			log.Warn().Str("stream", s.stream).Uint64("iid", iid).
-				Msg("[homekit] SetupEndpoints is not owned by an RTP stream service")
+			log.Warn("SetupEndpoints is not owned by an RTP stream service", zap.String("stream", s.stream), zap.Uint64("iid", iid))
 			return nil
 		}
 
 		if current := s.consumerForSlot(slot); current != nil && !current.Stopped() {
-			log.Info().
-				Str("stream", s.stream).
-				Uint64("stream_slot", slot).
-				Msg("[homekit] SetupEndpoints rejected because its stream slot is busy")
+			log.Info("SetupEndpoints rejected because its stream slot is busy", zap.String("stream", s.stream), zap.Uint64("stream_slot", slot))
 			busy, err := tlv8.MarshalBase64(camera.SetupEndpointsResponse{
 				SessionID: offer.SessionID,
 				Status:    camera.SetupEndpointsStatusBusy,
@@ -395,11 +347,10 @@ func (s *server) SetCharacteristic(conn net.Conn, aid uint8, iid uint64, value a
 		consumer.SetOffer(&offer)
 		s.setConsumer(slot, consumer)
 		s.setStreamingStatusOn(char, camera.StreamingStatusInUse)
-		log.Info().Str("stream", s.stream).Uint64("stream_slot", slot).Msgf(
-			"[homekit] RTP endpoints offered controller=%s video_port=%d audio_port=%d ip_version=%d media_bind=%s",
-			offer.Address.IPAddr, offer.Address.VideoRTPPort, offer.Address.AudioRTPPort, offer.Address.IPVersion,
-			consumer.SRTPBindMode(),
-		)
+		log.Info("RTP endpoints offered", zap.String("stream", s.stream), zap.Uint64("stream_slot", slot),
+			zap.String("controller", offer.Address.IPAddr), zap.Uint16("video_port", offer.Address.VideoRTPPort),
+			zap.Uint16("audio_port", offer.Address.AudioRTPPort), zap.Uint8("ip_version", offer.Address.IPVersion),
+			zap.String("media_bind", consumer.SRTPBindMode()))
 
 		// Persist the answer for the standard follow-up GET. A controller that
 		// explicitly requests a write response can still receive it inline.
@@ -422,23 +373,18 @@ func (s *server) SetCharacteristic(conn net.Conn, aid uint8, iid uint64, value a
 	case camera.TypeSelectedStreamConfiguration:
 		var conf camera.SelectedStreamConfiguration
 		if err := tlv8.UnmarshalBase64(value, &conf); err != nil {
-			log.Warn().Err(err).Str("stream", s.stream).Msg("[homekit] rejected malformed selected stream configuration")
+			log.Warn("rejected malformed selected stream configuration", zap.Error(err), zap.String("stream", s.stream))
 			s.rememberSessionStatus(homekit.SessionStatus{State: "selected-invalid"})
 			return nil
 		}
 		slot, ok := s.streamSlotForCharacteristic(char)
 		if !ok {
-			log.Warn().Str("stream", s.stream).Uint64("iid", iid).
-				Msg("[homekit] selected stream configuration is not owned by an RTP stream service")
+			log.Warn("selected stream configuration is not owned by an RTP stream service", zap.String("stream", s.stream), zap.Uint64("iid", iid))
 			return nil
 		}
 
-		log.Debug().
-			Str("stream", s.stream).
-			Uint64("stream_slot", slot).
-			Uint8("command", conf.Control.Command).
-			Str("command_name", diagnosticSessionCommandName(conf.Control.Command)).
-			Msg("[homekit] selected stream command received")
+		log.Debug("selected stream command received", zap.String("stream", s.stream), zap.Uint64("stream_slot", slot),
+			zap.Uint8("command", conf.Control.Command), zap.String("command_name", diagnosticSessionCommandName(conf.Control.Command)))
 
 		switch conf.Control.Command {
 		case camera.SessionCommandEnd:
@@ -461,48 +407,39 @@ func (s *server) SetCharacteristic(conn net.Conn, aid uint8, iid uint64, value a
 		case camera.SessionCommandStart:
 			consumer := s.consumerForSlot(slot)
 			if consumer == nil {
-				log.Warn().
-					Str("stream", s.stream).
-					Uint64("stream_slot", slot).
-					Msg("[homekit] START has no prepared session in its stream slot")
+				log.Warn("START has no prepared session in its stream slot", zap.String("stream", s.stream), zap.Uint64("stream_slot", slot))
 				return nil
 			}
 			if consumer.SessionID() != conf.Control.SessionID {
-				log.Warn().
-					Str("stream", s.stream).
-					Uint64("stream_slot", slot).
-					Msg("[homekit] START session does not match its stream slot")
+				log.Warn("START session does not match its stream slot", zap.String("stream", s.stream), zap.Uint64("stream_slot", slot))
 				return nil
 			}
 
 			if !consumer.SetConfig(&conf) {
-				log.Warn().Str("stream", s.stream).Uint64("stream_slot", slot).Msgf(
-					"[homekit] rejected selected stream configuration video_type=%d video_params=%v video_attrs=%v video_rtp=%d audio_type=%d audio_rtp=%d",
-					conf.VideoCodec.CodecType, conf.VideoCodec.CodecParams, conf.VideoCodec.VideoAttrs,
-					len(conf.VideoCodec.RTPParams), conf.AudioCodec.CodecType, len(conf.AudioCodec.RTPParams),
-				)
+				log.Warn("rejected selected stream configuration", zap.String("stream", s.stream), zap.Uint64("stream_slot", slot),
+					zap.Uint8("video_type", conf.VideoCodec.CodecType), zap.Any("video_params", conf.VideoCodec.CodecParams),
+					zap.Any("video_attrs", conf.VideoCodec.VideoAttrs), zap.Int("video_rtp_count", len(conf.VideoCodec.RTPParams)),
+					zap.Uint8("audio_type", conf.AudioCodec.CodecType), zap.Int("audio_rtp_count", len(conf.AudioCodec.RTPParams)))
 				_ = consumer.Stop()
 				s.clearConsumer(consumer)
 				return nil
 			}
 
-			selected := log.Info().
-				Str("stream", s.stream).
-				Uint64("stream_slot", slot).
-				Uint8("video_payload_type", conf.VideoCodec.RTPParams[0].PayloadType).
-				Uint16("video_bitrate_kbps", conf.VideoCodec.RTPParams[0].MaxBitrate).
-				Str("video_profile", homeKitH264Profile(conf.VideoCodec.CodecParams[0].ProfileID[0])).
-				Str("video_level", homeKitH264Level(conf.VideoCodec.CodecParams[0].Level[0])).
-				Int("audio_sample_rate_hz", consumer.VideoSelection().AudioSampleRate).
-				Uint8("audio_packet_time_ms", conf.AudioCodec.CodecParams[0].RTPTime[0]).
-				Uint16("audio_bitrate_kbps", conf.AudioCodec.RTPParams[0].MaxBitrate)
-			if len(conf.VideoCodec.VideoAttrs) > 0 {
-				selected = selected.
-					Uint16("width", conf.VideoCodec.VideoAttrs[0].Width).
-					Uint16("height", conf.VideoCodec.VideoAttrs[0].Height).
-					Uint8("fps", conf.VideoCodec.VideoAttrs[0].Framerate)
+			fields := []zap.Field{
+				zap.String("stream", s.stream), zap.Uint64("stream_slot", slot),
+				zap.Uint8("video_payload_type", conf.VideoCodec.RTPParams[0].PayloadType),
+				zap.Uint16("video_bitrate_kbps", conf.VideoCodec.RTPParams[0].MaxBitrate),
+				zap.String("video_profile", homeKitH264Profile(conf.VideoCodec.CodecParams[0].ProfileID[0])),
+				zap.String("video_level", homeKitH264Level(conf.VideoCodec.CodecParams[0].Level[0])),
+				zap.Int("audio_sample_rate_hz", consumer.VideoSelection().AudioSampleRate),
+				zap.Uint8("audio_packet_time_ms", conf.AudioCodec.CodecParams[0].RTPTime[0]),
+				zap.Uint16("audio_bitrate_kbps", conf.AudioCodec.RTPParams[0].MaxBitrate),
 			}
-			selected.Msg("[homekit] selected live stream configuration")
+			if len(conf.VideoCodec.VideoAttrs) > 0 {
+				fields = append(fields, zap.Uint16("width", conf.VideoCodec.VideoAttrs[0].Width),
+					zap.Uint16("height", conf.VideoCodec.VideoAttrs[0].Height), zap.Uint8("fps", conf.VideoCodec.VideoAttrs[0].Framerate))
+			}
+			log.Info("selected live stream configuration", fields...)
 
 			s.AddConn(consumer)
 			// Match Scrypted's callback ordering: acknowledge the HAP START write
@@ -519,22 +456,13 @@ func (s *server) SetCharacteristic(conn net.Conn, aid uint8, iid uint64, value a
 func (s *server) SetCharacteristicEvent(conn net.Conn, aid uint8, iid uint64, enabled bool) {
 	char := s.accessory.GetCharacterByID(iid)
 	if char == nil {
-		log.Warn().
-			Str("stream", s.stream).
-			Uint8("aid", aid).
-			Uint64("iid", iid).
-			Bool("enabled", enabled).
-			Msg("[homekit] unknown characteristic event subscription")
+		log.Warn("unknown characteristic event subscription", zap.String("stream", s.stream), zap.Uint8("aid", aid),
+			zap.Uint64("iid", iid), zap.Bool("enabled", enabled))
 		return
 	}
 	if !slices.Contains(char.Perms, "ev") {
-		log.Warn().
-			Str("stream", s.stream).
-			Uint8("aid", aid).
-			Uint64("iid", iid).
-			Str("characteristic", diagnosticCharacteristicName(char.Type)).
-			Bool("enabled", enabled).
-			Msg("[homekit] unsupported characteristic event subscription")
+		log.Warn("unsupported characteristic event subscription", zap.String("stream", s.stream), zap.Uint8("aid", aid),
+			zap.Uint64("iid", iid), zap.String("characteristic", diagnosticCharacteristicName(char.Type)), zap.Bool("enabled", enabled))
 		return
 	}
 	if enabled {
@@ -542,13 +470,8 @@ func (s *server) SetCharacteristicEvent(conn net.Conn, aid uint8, iid uint64, en
 	} else {
 		char.RemoveListener(conn)
 	}
-	log.Debug().
-		Str("stream", s.stream).
-		Uint8("aid", aid).
-		Uint64("iid", iid).
-		Str("characteristic", diagnosticCharacteristicName(char.Type)).
-		Bool("enabled", enabled).
-		Msg("[homekit] characteristic event subscription")
+	log.Debug("characteristic event subscription", zap.String("stream", s.stream), zap.Uint8("aid", aid), zap.Uint64("iid", iid),
+		zap.String("characteristic", diagnosticCharacteristicName(char.Type)), zap.Bool("enabled", enabled))
 }
 
 func (s *server) removeEventSubscriptions(conn net.Conn) {
@@ -561,8 +484,7 @@ func (s *server) removeEventSubscriptions(conn net.Conn) {
 
 func (s *server) runConsumer(slot uint64, consumer *homekit.Consumer) {
 	if streams.Get(s.stream) == nil {
-		log.Warn().Str("stream", s.stream).Uint64("stream_slot", slot).
-			Msg("[homekit] start live stream missing source")
+		log.Warn("start live stream missing source", zap.String("stream", s.stream), zap.Uint64("stream_slot", slot))
 		_ = consumer.Stop()
 		s.rememberSessionStatus(consumer.Status())
 		s.DelConn(consumer)
@@ -571,19 +493,12 @@ func (s *server) runConsumer(slot uint64, consumer *homekit.Consumer) {
 	}
 
 	selection := consumer.VideoSelection()
-	log.Info().
-		Str("stream", s.stream).
-		Uint64("stream_slot", slot).
-		Uint16("video_width", selection.Width).
-		Uint16("video_height", selection.Height).
-		Uint8("video_framerate", selection.Framerate).
-		Uint16("video_max_bitrate_kbps", selection.MaxBitrate).
-		Str("video_profile", homeKitH264Profile(selection.ProfileID)).
-		Str("video_level", homeKitH264Level(selection.Level)).
-		Int("audio_sample_rate_hz", selection.AudioSampleRate).
-		Uint8("audio_packet_time_ms", selection.AudioPacketTime).
-		Uint16("audio_max_bitrate_kbps", selection.AudioMaxBitrate).
-		Msg("[homekit] applying controller media selection")
+	log.Info("applying controller media selection", zap.String("stream", s.stream), zap.Uint64("stream_slot", slot),
+		zap.Uint16("video_width", selection.Width), zap.Uint16("video_height", selection.Height),
+		zap.Uint8("video_framerate", selection.Framerate), zap.Uint16("video_max_bitrate_kbps", selection.MaxBitrate),
+		zap.String("video_profile", homeKitH264Profile(selection.ProfileID)), zap.String("video_level", homeKitH264Level(selection.Level)),
+		zap.Int("audio_sample_rate_hz", selection.AudioSampleRate), zap.Uint8("audio_packet_time_ms", selection.AudioPacketTime),
+		zap.Uint16("audio_max_bitrate_kbps", selection.AudioMaxBitrate))
 	// Session-local software transcode matching the controller selection
 	// (width/height/bitrate). The always-on shared 720p stream is for preload
 	// only: feeding 720p@CRF into a 360p@132K HomeKit session causes FIR storms
@@ -600,37 +515,20 @@ func (s *server) runConsumer(slot uint64, consumer *homekit.Consumer) {
 		s.rememberSessionStatus(status)
 		s.DelConn(consumer)
 		s.clearConsumer(consumer)
-		log.Info().
-			Str("stream", s.stream).
-			Uint64("stream_slot", slot).
-			Str("state", status.State).
-			Uint64("video_packets", status.VideoPackets).
-			Uint64("video_bytes", status.VideoBytes).
-			Uint64("video_write_errors", status.VideoWriteErrors).
-			Uint32("video_ssrc", status.VideoSSRC).
-			Uint64("video_rtcp_datagrams", status.VideoRTCPDatagrams).
-			Uint64("video_rtcp_packets", status.VideoRTCPPackets).
-			Uint64("video_rtcp_failures", status.VideoRTCPFailures).
-			Uint64("video_rtcp_parse_errors", status.VideoRTCPParseErrors).
-			Uint64("video_rtcp_receiver_reports", status.VideoRTCPReceiverReports).
-			Uint64("video_rtcp_report_blocks", status.VideoRTCPReportBlocks).
-			Uint64("video_rtcp_matched_reports", status.VideoRTCPMatchedReports).
-			Uint32("video_rtcp_reported_ssrc", status.VideoRTCPReportedSSRC).
-			Uint32("video_rtcp_fraction_lost", status.VideoRTCPFractionLost).
-			Uint32("video_rtcp_total_lost", status.VideoRTCPTotalLost).
-			Uint32("video_rtcp_last_sequence", status.VideoRTCPLastSequence).
-			Uint32("video_rtcp_jitter", status.VideoRTCPJitter).
-			Uint32("video_rtcp_last_sender_report", status.VideoRTCPLastSenderReport).
-			Uint64("video_rtcp_pli", status.VideoRTCPPLI).
-			Uint64("video_rtcp_fir", status.VideoRTCPFIR).
-			Uint64("video_rtcp_nack", status.VideoRTCPNACK).
-			Uint64("video_sps_units", status.VideoSPSUnits).
-			Uint64("video_pps_units", status.VideoPPSUnits).
-			Uint64("video_idr_units", status.VideoIDRUnits).
-			Uint64("video_stap_a_units", status.VideoSTAPAUnits).
-			Uint64("video_stap_a_zero_nri", status.VideoSTAPAZeroNRI).
-			Uint32("video_max_datagram_bytes", status.VideoMaxDatagram).
-			Msg("[homekit] live stream consumer ended")
+		log.Info("live stream consumer ended", zap.String("stream", s.stream), zap.Uint64("stream_slot", slot),
+			zap.String("state", status.State), zap.Uint64("video_packets", status.VideoPackets), zap.Uint64("video_bytes", status.VideoBytes),
+			zap.Uint64("video_write_errors", status.VideoWriteErrors), zap.Uint32("video_ssrc", status.VideoSSRC),
+			zap.Uint64("video_rtcp_datagrams", status.VideoRTCPDatagrams), zap.Uint64("video_rtcp_packets", status.VideoRTCPPackets),
+			zap.Uint64("video_rtcp_failures", status.VideoRTCPFailures), zap.Uint64("video_rtcp_parse_errors", status.VideoRTCPParseErrors),
+			zap.Uint64("video_rtcp_receiver_reports", status.VideoRTCPReceiverReports), zap.Uint64("video_rtcp_report_blocks", status.VideoRTCPReportBlocks),
+			zap.Uint64("video_rtcp_matched_reports", status.VideoRTCPMatchedReports), zap.Uint32("video_rtcp_reported_ssrc", status.VideoRTCPReportedSSRC),
+			zap.Uint32("video_rtcp_fraction_lost", status.VideoRTCPFractionLost), zap.Uint32("video_rtcp_total_lost", status.VideoRTCPTotalLost),
+			zap.Uint32("video_rtcp_last_sequence", status.VideoRTCPLastSequence), zap.Uint32("video_rtcp_jitter", status.VideoRTCPJitter),
+			zap.Uint32("video_rtcp_last_sender_report", status.VideoRTCPLastSenderReport), zap.Uint64("video_rtcp_pli", status.VideoRTCPPLI),
+			zap.Uint64("video_rtcp_fir", status.VideoRTCPFIR), zap.Uint64("video_rtcp_nack", status.VideoRTCPNACK),
+			zap.Uint64("video_sps_units", status.VideoSPSUnits), zap.Uint64("video_pps_units", status.VideoPPSUnits),
+			zap.Uint64("video_idr_units", status.VideoIDRUnits), zap.Uint64("video_stap_a_units", status.VideoSTAPAUnits),
+			zap.Uint64("video_stap_a_zero_nri", status.VideoSTAPAZeroNRI), zap.Uint32("video_max_datagram_bytes", status.VideoMaxDatagram))
 	}()
 
 	rtcpWaitStarted := time.Now()
@@ -638,23 +536,17 @@ func (s *server) runConsumer(slot uint64, consumer *homekit.Consumer) {
 	if consumer.Stopped() {
 		return
 	}
-	log.Info().
-		Str("stream", s.stream).
-		Uint64("stream_slot", slot).
-		Bool("initial_rtcp", rtcpReady).
-		Int64("initial_rtcp_wait_ms", time.Since(rtcpWaitStarted).Milliseconds()).
-		Msg("[homekit] controller UDP return path checked")
+	log.Info("controller UDP return path checked", zap.String("stream", s.stream), zap.Uint64("stream_slot", slot),
+		zap.Bool("initial_rtcp", rtcpReady), zap.Int64("initial_rtcp_wait_ms", time.Since(rtcpWaitStarted).Milliseconds()))
 
 	if err := stream.AddConsumer(consumer); err != nil {
-		log.Warn().Err(err).Str("stream", s.stream).Uint64("stream_slot", slot).
-			Msg("[homekit] start live stream consumer failed")
+		log.Warn("start live stream consumer failed", zap.Error(err), zap.String("stream", s.stream), zap.Uint64("stream_slot", slot))
 		return
 	}
 	attached = true
 	startStatus := consumer.Status()
-	log.Info().Str("stream", s.stream).Uint64("stream_slot", slot).
-		Bool("rtcp_before_media", startStatus.VideoRTCPDatagrams > 0).
-		Msg("[homekit] live stream consumer started")
+	log.Info("live stream consumer started", zap.String("stream", s.stream), zap.Uint64("stream_slot", slot),
+		zap.Bool("rtcp_before_media", startStatus.VideoRTCPDatagrams > 0))
 
 	_, _ = consumer.WriteTo(nil)
 }
@@ -727,32 +619,23 @@ func homeKitSessionSources(streamID string, selection homekit.VideoSelection) []
 	}
 	framerate := selection.Framerate
 	if framerate > maxHomeKitVideoFramerate {
-		log.Debug().
-			Str("stream", streamID).
-			Uint8("requested_fps", selection.Framerate).
-			Uint8("applied_fps", maxHomeKitVideoFramerate).
-			Msg("[homekit] clamped controller framerate to accessory cap")
+		log.Debug("clamped controller framerate to accessory cap", zap.String("stream", streamID),
+			zap.Uint8("requested_fps", selection.Framerate), zap.Uint8("applied_fps", maxHomeKitVideoFramerate))
 		framerate = maxHomeKitVideoFramerate
 	}
 	bitrate := selection.MaxBitrate
 	if bitrate > 0 {
 		if minBitrate := homeKitMinimumVideoBitrateKbps(int(selection.Width), int(selection.Height)); uint16(minBitrate) > bitrate {
-			log.Debug().
-				Str("stream", streamID).
-				Uint16("requested_bitrate_kbps", selection.MaxBitrate).
-				Uint16("applied_bitrate_kbps", uint16(minBitrate)).
-				Msg("[homekit] raised controller bitrate to accessory floor")
+			log.Debug("raised controller bitrate to accessory floor", zap.String("stream", streamID),
+				zap.Uint16("requested_bitrate_kbps", selection.MaxBitrate), zap.Uint16("applied_bitrate_kbps", uint16(minBitrate)))
 			bitrate = uint16(minBitrate)
 		}
 	}
 	audioBitrate := selection.AudioMaxBitrate
 	if audioBitrate > 0 {
 		if minBitrate := homeKitMinimumAudioBitrateKbps(int(selection.Width), int(selection.Height)); uint16(minBitrate) > audioBitrate {
-			log.Debug().
-				Str("stream", streamID).
-				Uint16("requested_audio_bitrate_kbps", selection.AudioMaxBitrate).
-				Uint16("applied_audio_bitrate_kbps", uint16(minBitrate)).
-				Msg("[homekit] raised controller audio bitrate to accessory floor")
+			log.Debug("raised controller audio bitrate to accessory floor", zap.String("stream", streamID),
+				zap.Uint16("requested_audio_bitrate_kbps", selection.AudioMaxBitrate), zap.Uint16("applied_audio_bitrate_kbps", uint16(minBitrate)))
 			audioBitrate = uint16(minBitrate)
 		}
 	}
@@ -997,11 +880,7 @@ func (s *server) setStreamingStatusForSlot(slot uint64, status byte) {
 			return
 		}
 		if err := character.Set(camera.StreamingStatus{Status: status}); err != nil {
-			log.Debug().
-				Err(err).
-				Str("stream", s.stream).
-				Uint64("stream_slot", slot).
-				Msg("[homekit] streaming status event delivery failed")
+			log.Debug("streaming status event delivery failed", zap.Error(err), zap.String("stream", s.stream), zap.Uint64("stream_slot", slot))
 		}
 		return
 	}
@@ -1025,11 +904,7 @@ func sessionStateRank(state string) int {
 }
 
 func (s *server) GetImage(conn net.Conn, width, height int) []byte {
-	log.Debug().
-		Str("stream", s.stream).
-		Int("width", width).
-		Int("height", height).
-		Msg("[homekit] snapshot requested")
+	log.Debug("snapshot requested", zap.String("stream", s.stream), zap.Int("width", width), zap.Int("height", height))
 
 	stream := streams.Get(s.stream)
 	cons := magic.NewKeyframe()

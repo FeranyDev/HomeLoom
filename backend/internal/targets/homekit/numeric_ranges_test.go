@@ -1,8 +1,7 @@
 package homekit
 
 import (
-	"io"
-	"log/slog"
+	"go.uber.org/zap"
 	"testing"
 
 	"github.com/brutella/hap/accessory"
@@ -49,7 +48,7 @@ func TestConfigureAccessoryNumericRangesOmitsNonOverlappingCharacteristic(t *tes
 			Value:      device.NumberValue(-20),
 		}}}}}},
 	}
-	configureAccessoryNumericRanges(item.A, source, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	configureAccessoryNumericRanges(item.A, source, zap.NewNop())
 	if findCharacteristicInService(item.TempSensor.S, characteristic.TypeCurrentTemperature) != nil {
 		t.Fatal("non-overlapping HomeKit characteristic was still published")
 	}

@@ -26,6 +26,12 @@ docs/      项目计划与设计文档
 ./scripts/dev-env.sh sh -c 'cd backend && go run ./cmd/homeloom'
 ```
 
+主程序日志只输出到启动终端，默认 `info`，可用运行参数调整：
+
+```bash
+./scripts/dev-env.sh sh -c 'cd backend && go run ./cmd/homeloom -log-level debug'
+```
+
 首次体验时可以选择为当前支持的每种模型各生成一个虚拟设备：
 
 ```bash
@@ -58,12 +64,20 @@ Web 端只有这个管理员账户，用于接入、桥接、映射、诊断和�
 
 前端“桥接中心”会显示所有 Target 的类型、状态、设备范围和按需加载的二维码。二维码来自后端生成的标准 HomeKit Setup URI；桥完成配对后，一次性 PIN、Setup ID 和二维码会被隐藏。
 
-后端支持 `-config configs/config.example.yaml`。YAML 只包含进程启动所需的 HTTP 地址、可信代理范围、数据库 URL 和主密钥路径，也可以使用以下环境变量覆盖：
+后端支持 `-config configs/config.example.yaml`。YAML 只包含进程启动所需的 HTTP 地址、可信代理范围、数据库 URL、主密钥路径、子程序日志等级和媒体运行参数，也可以使用以下环境变量覆盖：
 
 - `HOMELOOM_HTTP_ADDRESS`
 - `HOMELOOM_DATABASE_URL`
 - `HOMELOOM_MASTER_KEY`
 - `HOMELOOM_TRUSTED_PROXIES`（逗号分隔的代理 IP/CIDR；未配置时完全忽略转发来源头）
+
+Camera Kernel 与 Matter sidecar 的 stdout/stderr 由主程序统一采集，不会混入主程序终端。子程序日志等级通过 YAML 的 `logging.child_level` 配置，可选 `debug`、`info`、`warn`、`error`；修改后需重启主程序。网页“系统”页展示最近 2000 条内存日志，接口为：
+
+```text
+GET /api/v1/system/subprocess-logs?after=<sequence>&limit=500
+```
+
+该接口受管理员 Session 保护、禁止浏览器缓存，返回内容沿用统一敏感信息脱敏规则。主程序日志等级不写入 YAML，只接受 `-log-level` 运行参数。统一字段、等级和安全要求见[日志规范](docs/logging.md)。
 
 持久层统一使用 GORM，并根据 URL 自动选择数据库：
 
@@ -182,7 +196,7 @@ GET /metrics
 ```
 
 日志合并 Core 发布生命周期、Camera Kernel、HomeKit/SRTP、输入协议和 FFmpeg 输出，采用
-JSON Debug 级别；当前文件及四份轮转文件均为 `0600`，单份上限 8 MiB。源地址中的账号、
+JSON 格式并遵循 `logging.child_level`；当前文件及四份轮转文件均为 `0600`，单份上限 8 MiB。源地址中的账号、
 Token、HomeKit PIN、SRTP/附件私钥在 Camera Kernel 写出前统一脱敏。历史文件依次为
 `camera.log.1` 到 `camera.log.4`。
 

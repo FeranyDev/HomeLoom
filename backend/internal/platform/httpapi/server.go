@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -28,11 +27,13 @@ import (
 	domainstate "github.com/feranydev/homeloom/backend/internal/domain/state"
 	domaintarget "github.com/feranydev/homeloom/backend/internal/domain/target"
 	"github.com/feranydev/homeloom/backend/internal/mapping"
+	"github.com/feranydev/homeloom/backend/internal/platform/subprocesslog"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	"github.com/feranydev/homeloom/backend/internal/providers/xiaomi"
 	"github.com/feranydev/homeloom/backend/internal/webui"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"go.uber.org/zap"
 )
 
 type Server struct {
@@ -52,6 +53,7 @@ type Server struct {
 	logins                     *loginLimiter
 	cloudLogins                *xiaomi.CloudLoginService
 	trustedProxies             []*net.IPNet
+	subprocessLogs             *subprocesslog.Store
 }
 
 func runtimeChanges(previousProviders, previousDiagnostics []byte, providers, diagnostics any) (map[string]any, []byte, []byte) {
@@ -245,7 +247,11 @@ func (r targetRequest) domain(id string) domaintarget.Config {
 	}
 }
 
-func NewServer(address string, devices *application.DeviceService, targets *application.TargetService, logger *slog.Logger, providerServices ...*application.ProviderService) *Server {
+func NewServer(address string, devices *application.DeviceService, targets *application.TargetService, logger *zap.Logger, providerServices ...*application.ProviderService) *Server {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	logger = logger.With(zap.String("module", "http-api"))
 	e := echo.New()
 	server := &Server{address: address, echo: e, devices: devices, logins: newLoginLimiter(), cloudLogins: xiaomi.NewCloudLoginService()}
 	e.IPExtractor = server.clientIP
@@ -275,7 +281,7 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 			requestID = c.Request().Header.Get(echo.HeaderXRequestID)
 		}
 		if writeErr := c.JSON(status, errorResponse{Code: errorCode(status), Message: message, RequestID: requestID, Fields: fields}); writeErr != nil {
-			logger.Error("http error response failed", "request_id", requestID, "error", writeErr)
+			logger.Error("http error response failed", zap.String("request_id", requestID), zap.Error(writeErr))
 		}
 	}
 	e.Use(middleware.RequestID())
@@ -301,7 +307,7 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		LogRequestID: true,
 		LogRemoteIP:  true,
 		LogValuesFunc: func(_ echo.Context, values middleware.RequestLoggerValues) error {
-			logger.Info("http request", "request_id", values.RequestID, "remote_ip", values.RemoteIP, "method", values.Method, "uri", values.URI, "status", values.Status, "error", values.Error)
+			logger.Info("http request", zap.String("request_id", values.RequestID), zap.String("remote_ip", values.RemoteIP), zap.String("method", values.Method), zap.String("uri", values.URI), zap.Int("status", values.Status), zap.Error(values.Error))
 			return nil
 		},
 	}))
@@ -368,7 +374,7 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 				Method: c.Request().Method, Route: route, Status: status, Outcome: outcome,
 			}
 			if _, auditErr := server.audit.Record(c.Request().Context(), event); auditErr != nil {
-				logger.Error("audit event persistence failed", "request_id", event.CorrelationID, "method", event.Method, "route", event.Route, "error", auditErr)
+				logger.Error("audit event persistence failed", zap.String("request_id", event.CorrelationID), zap.String("method", event.Method), zap.String("route", event.Route), zap.Error(auditErr))
 			}
 			return err
 		}
@@ -589,6 +595,29 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "runtime settings are unavailable")
 		}
 		return c.JSON(http.StatusOK, map[string]any{"data": server.settings.Get()})
+	})
+	e.GET("/api/v1/system/subprocess-logs", func(c echo.Context) error {
+		if server.subprocessLogs == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "subprocess logs are unavailable")
+		}
+		afterValue := c.QueryParam("after")
+		if afterValue == "" {
+			afterValue = "0"
+		}
+		after, err := strconv.ParseUint(afterValue, 10, 64)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "after must be an unsigned sequence")
+		}
+		limitValue := c.QueryParam("limit")
+		if limitValue == "" {
+			limitValue = "500"
+		}
+		limit, err := strconv.Atoi(limitValue)
+		if err != nil || limit < 1 || limit > subprocesslog.DefaultCapacity {
+			return echo.NewHTTPError(http.StatusBadRequest, "limit must be between 1 and 2000")
+		}
+		c.Response().Header().Set("Cache-Control", "no-store")
+		return c.JSON(http.StatusOK, map[string]any{"data": server.subprocessLogs.Snapshot(after, limit)})
 	})
 	e.PUT("/api/v1/system/settings", func(c echo.Context) error {
 		if server.settings == nil {
@@ -1595,6 +1624,8 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 }
 
 func (s *Server) SetSettingsService(settings *application.SettingsService) { s.settings = settings }
+
+func (s *Server) SetSubprocessLogs(logs *subprocesslog.Store) { s.subprocessLogs = logs }
 
 func (s *Server) SetAuditService(audit *application.AuditService) { s.audit = audit }
 

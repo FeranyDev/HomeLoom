@@ -2,16 +2,18 @@ package matter
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
@@ -19,6 +21,21 @@ import (
 	domaintarget "github.com/feranydev/homeloom/backend/internal/domain/target"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
 )
+
+func TestRuntimeCommandCollectsOutputAndSetsConfiguredLevel(t *testing.T) {
+	target, _ := newTestTarget(t, nil)
+	var output bytes.Buffer
+	target.config.LogLevel = "warn"
+	target.config.LogWriter = &output
+	command := target.runtimeCommand(context.Background())
+	if command.Stdout != &output || command.Stderr != &output {
+		t.Fatal("Matter output was not routed to the configured collector")
+	}
+	environment := strings.Join(command.Env, "\n")
+	if !strings.Contains(environment, "HOMELOOM_MATTER_LOG_LEVEL=warn") || !strings.Contains(environment, "HOMELOOM_MATTER_LOG_FORMAT=json") {
+		t.Fatalf("environment = %q", environment)
+	}
+}
 
 type memoryStorage struct {
 	next       uint16
@@ -118,7 +135,7 @@ func newTestTarget(t *testing.T, virtuals []domaintarget.VirtualDevice) (*Target
 			VendorID: 0xfff1, ProductID: 0x8000, ProductName: "HomeLoom", SerialNumber: "matter-test",
 			CommissioningWindowSeconds: 900,
 		},
-	}, devices, storage, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	}, devices, storage, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +191,7 @@ func TestCameraNodeUsesFixedEndpointAndMediaContractWithoutMappingAllocation(t *
 			SourceDeviceID: "virtual-camera-1", Enabled: true,
 		}},
 		CameraMedia: media,
-	}, devices, storage, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	}, devices, storage, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}

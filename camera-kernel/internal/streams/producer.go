@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/AlexxIT/go2rtc/pkg/core"
+	"go.uber.org/zap"
 )
 
 type state byte
@@ -149,7 +150,7 @@ func (p *Producer) start() {
 		return
 	}
 
-	log.Debug().Msgf("[streams] start producer url=%s", p.url)
+	log.Debug("starting producer", zap.String("url", p.url))
 
 	p.state = stateStart
 	p.workerID++
@@ -167,7 +168,7 @@ func (p *Producer) worker(conn core.Producer, workerID int) {
 			return
 		}
 
-		log.Warn().Err(err).Str("url", p.url).Caller().Send()
+		log.Warn("producer stopped with error", zap.Error(err), zap.String("url", p.url))
 	}
 
 	p.reconnect(workerID, 0)
@@ -178,22 +179,22 @@ func (p *Producer) reconnect(workerID, retry int) {
 	defer p.mu.Unlock()
 
 	if p.workerID != workerID {
-		log.Trace().Msgf("[streams] stop reconnect url=%s", p.url)
+		log.Debug("stopping stale producer reconnect", zap.String("url", p.url))
 		return
 	}
 
 	if demoted := demoteHardwareURL(p.url); demoted != p.url {
-		log.Warn().Str("from", p.url).Str("to", demoted).Msg("[streams] demote hardware producer to software")
+		log.Warn("demoting hardware producer to software", zap.String("from", p.url), zap.String("to", demoted))
 		p.url = demoted
 	}
 
-	log.Debug().Msgf("[streams] retry=%d to url=%s", retry, p.url)
+	log.Debug("retrying producer", zap.Int("retry", retry), zap.String("url", p.url))
 
 	conn, err := GetProducer(p.url)
 	if err != nil {
-		log.Debug().Msgf("[streams] producer=%s", err)
+		log.Debug("producer dial failed", zap.Error(err), zap.String("url", p.url))
 		if demoted := demoteHardwareURL(p.url); demoted != p.url {
-			log.Warn().Str("from", p.url).Str("to", demoted).Msg("[streams] dial failed; demote hardware producer")
+			log.Warn("producer dial failed; demoting hardware producer", zap.String("from", p.url), zap.String("to", demoted))
 			p.url = demoted
 			time.AfterFunc(time.Second, func() {
 				p.reconnect(workerID, retry+1)
@@ -261,16 +262,16 @@ func (p *Producer) stop() {
 
 	switch p.state {
 	case stateExternal:
-		log.Trace().Msgf("[streams] skip stop external producer")
+		log.Debug("skipping external producer stop")
 		return
 	case stateNone:
-		log.Trace().Msgf("[streams] skip stop none producer")
+		log.Debug("skipping empty producer stop")
 		return
 	case stateStart:
 		p.workerID++
 	}
 
-	log.Debug().Msgf("[streams] stop producer url=%s", p.url)
+	log.Debug("stopping producer", zap.String("url", p.url))
 
 	if p.conn != nil {
 		_ = p.conn.Stop()

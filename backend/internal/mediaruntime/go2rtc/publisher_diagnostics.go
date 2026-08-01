@@ -3,6 +3,7 @@ package go2rtc
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -16,10 +17,10 @@ const (
 	publisherLogBackups  = 4
 )
 
-// publisherDiagnosticLog is shared by the camera kernel's stdout/stderr copy
-// goroutines and Core lifecycle events. Write deliberately becomes a no-op
-// after a filesystem error so a full or unavailable log volume cannot break
-// the camera media process.
+// publisherDiagnosticLog stores both camera-kernel output and Core lifecycle
+// events in the per-stream file. Only Write input from the child is mirrored
+// to the Web collector, keeping Core logs on the terminal/file paths. Writes
+// become no-ops after a filesystem error so logging cannot break media.
 type publisherDiagnosticLog struct {
 	mu       sync.Mutex
 	path     string
@@ -28,14 +29,19 @@ type publisherDiagnosticLog struct {
 	file     *os.File
 	size     int64
 	closed   bool
+	mirror   io.Writer
 }
 
-func openPublisherDiagnosticLog(directory string) (*publisherDiagnosticLog, error) {
-	return openRotatingPublisherLog(
+func openPublisherDiagnosticLog(directory string, mirrors ...io.Writer) (*publisherDiagnosticLog, error) {
+	log, err := openRotatingPublisherLog(
 		filepath.Join(directory, publisherLogFilename),
 		publisherLogMaxBytes,
 		publisherLogBackups,
 	)
+	if err == nil && len(mirrors) > 0 {
+		log.mirror = mirrors[0]
+	}
+	return log, err
 }
 
 func openRotatingPublisherLog(path string, maxBytes int64, backups int) (*publisherDiagnosticLog, error) {
@@ -81,12 +87,22 @@ func (l *publisherDiagnosticLog) Path() string {
 }
 
 func (l *publisherDiagnosticLog) Write(payload []byte) (int, error) {
+	return l.write(payload, true)
+}
+
+func (l *publisherDiagnosticLog) write(payload []byte, mirror bool) (int, error) {
 	if l == nil {
 		return len(payload), nil
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.closed || l.file == nil {
+	if l.closed {
+		return len(payload), nil
+	}
+	if mirror && l.mirror != nil {
+		_, _ = l.mirror.Write(payload)
+	}
+	if l.file == nil {
 		return len(payload), nil
 	}
 	if l.size > 0 && l.size+int64(len(payload)) > l.maxBytes {
@@ -125,7 +141,7 @@ func (l *publisherDiagnosticLog) Event(level, message string, fields map[string]
 		return
 	}
 	encoded = append(encoded, '\n')
-	_, _ = l.Write(encoded)
+	_, _ = l.write(encoded, false)
 }
 
 func (l *publisherDiagnosticLog) rotateLocked() error {

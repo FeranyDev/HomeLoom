@@ -12,6 +12,7 @@ require (
 	github.com/mochi-mqtt/server/v2 v2.7.9
 	github.com/ncruces/go-sqlite3/gormlite v0.34.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
+	go.uber.org/zap v1.27.0
 	golang.org/x/crypto v0.53.0
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/driver/postgres v1.6.0
@@ -41,6 +42,7 @@ require (
 	github.com/vishvananda/netlink v1.2.1-beta.2 // indirect
 	github.com/vishvananda/netns v0.0.0-20200728191858-db3c7e526aae // indirect
 	github.com/xiam/to v0.0.0-20200126224905-d60d31e03561 // indirect
+	go.uber.org/multierr v1.10.0 // indirect
 	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect

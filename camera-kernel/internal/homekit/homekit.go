@@ -14,7 +14,7 @@ import (
 	"github.com/AlexxIT/go2rtc/pkg/hap/camera"
 	"github.com/AlexxIT/go2rtc/pkg/homekit"
 	"github.com/AlexxIT/go2rtc/pkg/mdns"
-	"github.com/rs/zerolog"
+	"go.uber.org/zap"
 )
 
 // Bump whenever the accessory service/characteristic database changes. Apple
@@ -51,7 +51,7 @@ func Init() {
 	for id, conf := range cfg.Mod {
 		stream := streams.Get(id)
 		if stream == nil {
-			log.Warn().Msgf("[homekit] missing stream: %s", id)
+			log.Warn("missing stream", zap.String("stream", id))
 			continue
 		}
 
@@ -61,10 +61,7 @@ func Init() {
 
 		pin, err := hap.SanitizePin(conf.Pin)
 		if err != nil {
-			log.Error().
-				Err(err).
-				Str("stream", id).
-				Msg("[homekit] publisher PIN initialization failed")
+			log.Error("publisher PIN initialization failed", zap.Error(err), zap.String("stream", id))
 			continue
 		}
 
@@ -110,7 +107,7 @@ func Init() {
 		hosts[host] = srv
 		servers[id] = srv
 
-		log.Trace().Msgf("[homekit] new server: %s", srv.mdns)
+		log.Debug("new server", zap.Stringer("mdns", srv.mdns))
 	}
 
 	api.HandleFunc(hap.PathPairSetup, hapHandler)
@@ -119,15 +116,12 @@ func Init() {
 
 	go func() {
 		if err := mdns.Serve(mdns.ServiceHAP, entries); err != nil {
-			log.Error().
-				Err(err).
-				Int("accessory_count", len(entries)).
-				Msg("[homekit] mDNS publisher stopped")
+			log.Error("mDNS publisher stopped", zap.Error(err), zap.Int("accessory_count", len(entries)))
 		}
 	}()
 }
 
-var log zerolog.Logger
+var log = zap.NewNop()
 var hosts map[string]*server
 var servers map[string]*server
 
@@ -166,7 +160,7 @@ func hapHandler(w http.ResponseWriter, r *http.Request) {
 	// because they don't send the host header in requests.
 	srv := resolve(r.Host)
 	if srv == nil {
-		log.Error().Msg("[homekit] unknown host: " + r.Host)
+		log.Error("unknown host", zap.String("host", r.Host))
 		return
 	}
 	srv.Handle(w, r)

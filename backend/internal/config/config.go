@@ -15,7 +15,12 @@ import (
 type Config struct {
 	Server  ServerConfig  `yaml:"server"`
 	Storage StorageConfig `yaml:"storage"`
+	Logging LoggingConfig `yaml:"logging"`
 	Media   MediaConfig   `yaml:"media"`
+}
+
+type LoggingConfig struct {
+	ChildLevel string `yaml:"child_level"`
 }
 
 type ServerConfig struct {
@@ -45,6 +50,7 @@ func Default() Config {
 			DatabaseURL: "postgres://homeloom:homeloom-dev@127.0.0.1:54329/homeloom?sslmode=disable",
 			MasterKey:   "./data/homeloom.key",
 		},
+		Logging: LoggingConfig{ChildLevel: "info"},
 		Media: MediaConfig{
 			Enabled:            true,
 			CameraKernelBinary: "homeloom-camera-kernel",
@@ -81,6 +87,11 @@ func Load(path string) (Config, error) {
 }
 
 func (c Config) Validate() error {
+	switch strings.ToLower(strings.TrimSpace(c.Logging.ChildLevel)) {
+	case "debug", "info", "warn", "error":
+	default:
+		return errors.New("logging.child_level must be debug, info, warn, or error")
+	}
 	if strings.TrimSpace(c.Server.Address) == "" {
 		return errors.New("server.address is required")
 	}

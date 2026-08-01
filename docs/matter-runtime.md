@@ -20,21 +20,21 @@ Go 默认从当前目录、当前目录的上一级，以及可执行文件目�
 
 ## 日志
 
-matter.js 默认会输出大量 DEBUG 级别的 ANSI 控制台日志，且会混入 Go 主服务的 JSON `slog` 输出。sidecar 在加载 `@matter/main` 时会统一改写官方 Logger：
+matter.js 默认会输出大量 DEBUG 级别的 ANSI 控制台日志。sidecar 在加载 `@matter/main` 时会统一改写官方 Logger，Go 主程序再集中采集其 stdout/stderr；子程序日志不会混入主程序终端，而是在网页“系统”页展示：
 
-- 默认级别：`NOTICE`（比 SDK 默认的 `DEBUG` 安静得多）
-- 默认格式：JSON 行，写入 **stderr**，字段为 `time` / `level` / `msg` / `component=matter-js` / `facility`
+- 默认级别：由 YAML `logging.child_level` 设置，项目默认 `info`
+- 默认格式：JSON 行，字段为 `time` / `level` / `msg` / `component=matter-js` / `facility`
 - 对 Endpoint、mDNS、Session、Exchange 等常见噪声 facility 额外压到 `WARN`（仅在默认 `NOTICE` 及以上生效）
 
-可用环境变量覆盖：
+Core 启动 sidecar 时会设置以下环境变量；直接调试 sidecar 时也可手动设置：
 
 | 变量 | 说明 | 示例 |
 | --- | --- | --- |
-| `HOMELOOM_MATTER_LOG_LEVEL` | 优先于 `MATTER_LOG_LEVEL` | `debug` / `info` / `notice` / `warn` / `error` / `fatal` |
+| `HOMELOOM_MATTER_LOG_LEVEL` | 由 `logging.child_level` 生成，优先于 `MATTER_LOG_LEVEL` | `debug` / `info` / `warn` / `error` |
 | `HOMELOOM_MATTER_LOG_FORMAT` | 优先于 `MATTER_LOG_FORMAT` | `json`（默认）/ `plain` / `ansi` |
 | `MATTER_LOG_LEVEL` / `MATTER_LOG_FORMAT` | matter.js 官方环境变量兼容入口 | 同上 |
 
-排障时可将级别临时打开：
+排障时可在 HomeLoom YAML 中将等级临时改成 `debug`；独立启动 sidecar 时也可直接设置环境变量：
 
 ```bash
 HOMELOOM_MATTER_LOG_LEVEL=debug HOMELOOM_MATTER_LOG_FORMAT=plain ./scripts/dev-env.sh sh -c 'cd backend && go run ./cmd/homeloom'

@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/AlexxIT/go2rtc/internal/app"
-	"github.com/rs/zerolog"
+	"go.uber.org/zap"
 )
 
 func Init() {
@@ -70,7 +70,7 @@ func Init() {
 		Handler = middlewareAuth(cfg.Mod.Username, cfg.Mod.Password, cfg.Mod.LocalAuth, Handler) // 2nd
 	}
 
-	if log.Trace().Enabled() {
+	if log.Core().Enabled(zap.DebugLevel) {
 		Handler = middlewareLog(Handler) // 1st
 	}
 
@@ -103,24 +103,24 @@ func listen(network, address string) {
 func listenHandler(network, address string, handler http.Handler) {
 	if network == "unix" {
 		if err := prepareUnixSocket(address); err != nil {
-			log.Error().Err(err).Msg("[api] prepare unix socket")
+			log.Error("failed to prepare unix socket", zap.Error(err), zap.String("address", address))
 			return
 		}
 	}
 	ln, err := net.Listen(network, address)
 	if err != nil {
-		log.Error().Err(err).Msg("[api] listen")
+		log.Error("failed to listen", zap.Error(err), zap.String("network", network), zap.String("address", address))
 		return
 	}
 
-	log.Info().Str("addr", address).Msg("[api] listen")
+	log.Info("server listening", zap.String("network", network), zap.String("address", address))
 
 	server := http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second, // Example: Set to 5 seconds
 	}
 	if err = server.Serve(ln); err != nil {
-		log.Fatal().Err(err).Msg("[api] serve")
+		log.Fatal("HTTP server stopped", zap.Error(err), zap.String("network", network), zap.String("address", address))
 	}
 }
 
@@ -135,17 +135,17 @@ func tlsListen(network, address, certFile, keyFile string) {
 		cert, err = tls.X509KeyPair([]byte(certFile), []byte(keyFile))
 	}
 	if err != nil {
-		log.Error().Err(err).Caller().Send()
+		log.WithOptions(zap.AddCaller()).Error("failed to load TLS certificate", zap.Error(err))
 		return
 	}
 
 	ln, err := net.Listen(network, address)
 	if err != nil {
-		log.Error().Err(err).Msg("[api] tls listen")
+		log.Error("failed to listen for TLS", zap.Error(err), zap.String("network", network), zap.String("address", address))
 		return
 	}
 
-	log.Info().Str("addr", address).Msg("[api] tls listen")
+	log.Info("TLS server listening", zap.String("network", network), zap.String("address", address))
 
 	server := &http.Server{
 		Handler:           Handler,
@@ -153,7 +153,7 @@ func tlsListen(network, address, certFile, keyFile string) {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	if err = server.ServeTLS(ln, "", ""); err != nil {
-		log.Fatal().Err(err).Msg("[api] tls serve")
+		log.Fatal("TLS server stopped", zap.Error(err), zap.String("network", network), zap.String("address", address))
 	}
 }
 
@@ -174,10 +174,10 @@ func HandleFunc(pattern string, handler http.HandlerFunc) {
 		pattern = basePath + "/" + pattern
 	}
 	if allowPaths != nil && !slices.Contains(allowPaths, pattern) {
-		log.Trace().Str("path", pattern).Msg("[api] ignore path not in allow_paths")
+		log.Debug("path ignored because it is not allowed", zap.String("path", pattern))
 		return
 	}
-	log.Trace().Str("path", pattern).Msg("[api] register path")
+	log.Debug("path registered", zap.String("path", pattern))
 	http.HandleFunc(pattern, handler)
 }
 
@@ -212,11 +212,15 @@ const StreamNotFound = "stream not found"
 
 var allowPaths []string
 var basePath string
-var log zerolog.Logger
+var log = zap.NewNop()
 
 func middlewareLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Trace().Msgf("[api] %s %s %s", r.Method, r.URL, r.RemoteAddr)
+		log.Debug("request received",
+			zap.String("method", r.Method),
+			zap.String("url", r.URL.String()),
+			zap.String("remote_addr", r.RemoteAddr),
+		)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -289,7 +293,7 @@ func restartHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Debug().Msgf("[api] restart %s", path)
+	log.Debug("process restart requested", zap.String("path", path))
 
 	go syscall.Exec(path, os.Args, os.Environ())
 }
@@ -331,7 +335,7 @@ func ResponseSources(w http.ResponseWriter, sources []*Source) {
 }
 
 func Error(w http.ResponseWriter, err error) {
-	log.Error().Err(err).Caller(1).Send()
+	log.WithOptions(zap.AddCaller(), zap.AddCallerSkip(1)).Error("request failed", zap.Error(err))
 
 	http.Error(w, err.Error(), http.StatusInsufficientStorage)
 }

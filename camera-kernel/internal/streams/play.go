@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/AlexxIT/go2rtc/pkg/core"
+	"go.uber.org/zap"
 )
 
 func (s *Stream) Play(urlOrProd any) error {
@@ -146,12 +147,12 @@ func matchMedia(prod core.Producer, cons core.Consumer) bool {
 
 			track, err := prod.GetTrack(prodMedia, prodCodec)
 			if err != nil {
-				log.Warn().Err(err).Msg("[streams] can't get track")
+				log.Warn("cannot get track", zap.Error(err))
 				continue
 			}
 
 			if err = cons.AddTrack(consMedia, consCodec, track); err != nil {
-				log.Warn().Err(err).Msg("[streams] can't add track")
+				log.Warn("cannot add track", zap.Error(err))
 				continue
 			}
 
