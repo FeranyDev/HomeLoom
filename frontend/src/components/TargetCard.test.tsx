@@ -18,7 +18,8 @@ describe('TargetCard', () => {
 		expect(screen.queryByRole('button', { name: '清除 HomeKit 配对身份' })).not.toBeInTheDocument()
     expect(screen.queryByRole('img', { name: /HomeKit 配对二维码/ })).not.toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '显示配对二维码' }))
-    expect(screen.getByRole('img', { name: /HomeKit 配对二维码/ })).toHaveAttribute('src', '/api/v1/targets/apple-main/pairing-qr')
+		expect(screen.getByRole('img', { name: /HomeKit 配对二维码/ })).toHaveAttribute('src', '/api/v1/targets/apple-main/pairing-qr')
+		expect(screen.getByText('备用 PIN：001-02-003')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '隐藏二维码' }))
     expect(screen.queryByRole('img', { name: /HomeKit 配对二维码/ })).not.toBeInTheDocument()
   })
@@ -74,10 +75,10 @@ describe('TargetCard', () => {
 		expect(screen.getByText(/已跳过配件 1/)).toBeInTheDocument()
 	})
 
-	it('shows a manual pairing code and opens device-center preview for an independent HomeKit Camera target', async () => {
+	it('shows a scan-ready QR and opens device-center preview for an independent HomeKit Camera target', async () => {
 		const camera: Target = {
 			id: 'camera-homekit-1', type: 'homekit-camera', name: '客厅摄像头', enabled: true, status: 'running',
-			config: { address: ':52431' }, pairing: { pairingCode: '123-45-678', paired: false },
+			config: { address: ':52431', setupId: 'CAM1' }, pairing: { pairingCode: '123-45-678', setupUri: 'X-HM://CAMERA', paired: false },
 			deviceIds: ['xiaomi-camera-1'],
 			devices: [{ id: 'xiaomi-camera-1', name: '客厅摄像头', type: 'camera', sourceDeviceId: 'xiaomi-camera-1', enabled: true }],
 		}
@@ -87,7 +88,11 @@ describe('TargetCard', () => {
 		}
 		const onPreviewCamera = vi.fn()
 		render(<TargetCard target={camera} sourceDevice={sourceDevice} onPreviewCamera={onPreviewCamera} {...callbacks()} />)
-		expect(screen.getByText('手动配对码：123-45-678')).toBeInTheDocument()
+		expect(screen.getByRole('button', { name: '显示配对二维码' })).toBeInTheDocument()
+		await userEvent.click(screen.getByRole('button', { name: '显示配对二维码' }))
+		expect(screen.getByRole('img', { name: /HomeKit 配对二维码/ })).toHaveAttribute('src', '/api/v1/targets/camera-homekit-1/pairing-qr')
+		expect(screen.getByText('使用“家庭”App 扫描')).toBeInTheDocument()
+		expect(screen.getByText('备用 PIN：123-45-678')).toBeInTheDocument()
 		expect(screen.getByText('客厅摄像头 · camera-30f90b')).toBeInTheDocument()
 		expect(screen.getByText('在线')).toBeInTheDocument()
 		expect(screen.getByRole('button', { name: '设备中心实时预览' })).toBeInTheDocument()

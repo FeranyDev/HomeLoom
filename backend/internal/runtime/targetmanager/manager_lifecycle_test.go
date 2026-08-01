@@ -251,7 +251,7 @@ func TestMatterTargetUsesIndependentRuntimeFactory(t *testing.T) {
 	if received.ID != config.ID || received.Matter.Passcode != config.MatterConfig.Passcode {
 		t.Fatalf("Matter factory config = %#v", received)
 	}
-	if registration.Info.Type != "matter" || registration.Info.ConsumerID != "matter" || registration.Info.ProtocolVersion != "1.4.1" {
+	if registration.Info.Type != "matter" || registration.Info.ConsumerID != "matter" || registration.Info.ProtocolVersion != "1.6.0" {
 		t.Fatalf("Matter registration = %#v", registration.Info)
 	}
 	if err := manager.Close(context.Background()); err != nil {

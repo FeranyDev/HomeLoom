@@ -49,7 +49,7 @@ test("official matter.js endpoints bridge commands, attributes, and host-owned i
   let driver = new MatterJsBridgeDriver(sdk, { startNetwork: false });
   testContext.after(async () => {
     await driver.stop();
-    // ServerNode.erase() reconstructs the node in place and matter.js 0.17.6
+    // ServerNode.erase() reconstructs the node in place and matter.js 0.17.7
     // retains the previous shared mDNS reference. This test owns the only node
     // in its process, so close that official shared service after assertions.
     await sdk.main.Environment.default

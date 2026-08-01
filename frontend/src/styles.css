@@ -1541,6 +1541,7 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .pairing-panel img { width: 210px; height: 210px; image-rendering: pixelated; mix-blend-mode: multiply; }
 .pairing-panel strong { margin-top: 12px; font-size: 14px; }
 .pairing-panel span { max-width: 220px; margin-top: 7px; color: #858980; font-size: 11px; line-height: 1.5; }
+.pairing-panel .pairing-pin { color: #4f564d; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; letter-spacing: .08em; }
 .pairing-panel small { max-width: 220px; margin-top: 10px; color: #8b7253; font-size: 10px; line-height: 1.5; }
 .matter-pairing-panel { background: linear-gradient(145deg, #e2e8df, #f0eee7); }
 .matter-pairing-panel.is-unavailable { background: repeating-linear-gradient(-45deg, #f3f1ea, #f3f1ea 8px, #ece9e1 8px, #ece9e1 16px); }

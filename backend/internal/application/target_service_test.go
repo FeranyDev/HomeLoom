@@ -733,6 +733,15 @@ func TestConfirmMatterEndpointDeviceTypeRejectsUnownedEndpoint(t *testing.T) {
 	}
 }
 
+func TestTargetInfoFromConfigReportsCurrentMatterSpecification(t *testing.T) {
+	info := TargetInfoFromConfig(target.Config{
+		ID: "matter-main", Type: "matter", MatterConfig: &target.MatterConfig{},
+	}, "stopped")
+	if info.ProtocolVersion != "1.6.0" {
+		t.Fatalf("Matter protocol version = %q, want 1.6.0", info.ProtocolVersion)
+	}
+}
+
 func TestConfirmMatterEndpointDeviceTypeKeepsPersistedConfigWhenRuntimeApplyFails(t *testing.T) {
 	discriminator := uint16(1234)
 	config := target.Config{

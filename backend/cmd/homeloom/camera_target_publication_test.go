@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -98,7 +99,7 @@ func TestCameraTargetPublicationEnablesAndDisablesIndependentPublisher(t *testin
 	if err := os.MkdirAll(streamDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(streamDir, "homekit-identity.json"), []byte(`{"schemaVersion":1,"pin":"12345678"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(streamDir, "homekit-identity.json"), []byte(`{"schemaVersion":1,"pin":"123-45-679"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(streamDir, "go2rtc.yaml"), []byte("homekit:\n  \""+stream.ID+"\":\n    pairings: []\n"), 0o600); err != nil {
@@ -110,7 +111,7 @@ func TestCameraTargetPublicationEnablesAndDisablesIndependentPublisher(t *testin
 	if err != nil {
 		t.Fatalf("EnableHomeKitCamera() error = %v", err)
 	}
-	if pairing.Code != "12345678" || paired || pairing.Devices[0] != deviceID || address == "" {
+	if pairing.Code != "123-45-679" || pairing.SetupID == "" || !strings.HasPrefix(pairing.SetupURI, "X-HM://") || len(pairing.QR) == 0 || paired || pairing.Devices[0] != deviceID || address == "" {
 		t.Fatalf("pairing = %#v, paired = %v, address = %q", pairing, paired, address)
 	}
 	if got := publisherOption(t, store, stream.ID); got != "apple-home" {
@@ -131,7 +132,7 @@ func TestCameraTargetPublicationReadsStructuredPairingState(t *testing.T) {
 	if err := os.MkdirAll(streamDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(streamDir, "homekit-identity.json"), []byte(`{"schemaVersion":1,"pin":"12345678"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(streamDir, "homekit-identity.json"), []byte(`{"schemaVersion":1,"pin":"123-45-679"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	config := "homekit:\n  \"" + streamID + "\":\n    pairings:\n      - client_id=controller&client_public=0011&permissions=1\n"
@@ -140,9 +141,12 @@ func TestCameraTargetPublicationReadsStructuredPairingState(t *testing.T) {
 	}
 	publication := newCameraTargetPublication(nil, nil, filepath.Dir(streamDir), 51826)
 
-	_, paired, _ := publication.InspectHomeKitCamera(deviceID)
+	pairing, paired, _ := publication.InspectHomeKitCamera(deviceID)
 	if !paired {
 		t.Fatal("structured Camera Kernel pairing was not detected")
+	}
+	if pairing.SetupID == "" || !strings.HasPrefix(pairing.SetupURI, "X-HM://") || len(pairing.QR) == 0 {
+		t.Fatalf("camera pairing QR was not reconstructed: %#v", pairing)
 	}
 }
 

@@ -26,7 +26,7 @@ func (s *cameraPublicationRuntimeStub) EnableHomeKitCamera(_ context.Context, ta
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.enabled = append(s.enabled, targetID+"/"+deviceID)
-	return homekit.PairingInfo{Code: "123-45-678", Devices: []string{deviceID}}, s.paired, ":52431", nil
+	return homekit.PairingInfo{Code: "123-45-678", SetupID: "CAM1", SetupURI: "X-HM://CAMERA", QR: []byte("camera-qr"), Devices: []string{deviceID}}, s.paired, ":52431", nil
 }
 
 func (s *cameraPublicationRuntimeStub) DisableHomeKitCamera(_ context.Context, targetID, deviceID string) error {
@@ -39,7 +39,7 @@ func (s *cameraPublicationRuntimeStub) DisableHomeKitCamera(_ context.Context, t
 func (s *cameraPublicationRuntimeStub) InspectHomeKitCamera(string) (homekit.PairingInfo, bool, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return homekit.PairingInfo{Code: "123-45-678"}, s.paired, ":52431"
+	return homekit.PairingInfo{Code: "123-45-678", SetupID: "CAM1", SetupURI: "X-HM://CAMERA", QR: []byte("camera-qr")}, s.paired, ":52431"
 }
 
 func (s *cameraPublicationRuntimeStub) ResetHomeKitCamera(_ context.Context, targetID, deviceID string) error {
@@ -95,7 +95,8 @@ func TestHomeKitCameraTargetUsesIndependentPublicationRuntime(t *testing.T) {
 		t.Fatalf("Apply() error = %v", err)
 	}
 	if registration.Info.Type != "homekit-camera" || registration.Info.Address != ":52431" ||
-		registration.Info.PairingCode != "123-45-678" || registration.Info.Status != "running" {
+		registration.Info.PairingCode != "123-45-678" || registration.Info.SetupID != "CAM1" ||
+		registration.Info.SetupURI != "X-HM://CAMERA" || string(registration.QR) != "camera-qr" || registration.Info.Status != "running" {
 		t.Fatalf("registration = %#v", registration)
 	}
 	cameraRuntime.mu.Lock()

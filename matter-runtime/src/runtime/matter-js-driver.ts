@@ -309,7 +309,7 @@ function decodeSegment(value: string): string {
 }
 
 /**
- * Concrete @matter/main 0.17.6 bridge implementation.
+ * Concrete @matter/main 0.17.7 bridge implementation.
  */
 export class MatterJsBridgeDriver implements MatterProtocolAdapter {
   readonly #sdk: LoadedMatterJs;
@@ -863,9 +863,6 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
         "Video",
         "Audio",
         "Snapshot",
-        // matter.js 0.17.6 incorrectly activates ImageControl choice "b" when
-        // composing CameraDevice without this feature.
-        "ImageControl",
       );
       const ProviderBase =
         this.#sdk.cameraDevice.CameraRequirements.WebRtcTransportProviderServer;
@@ -1869,7 +1866,7 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
       default:
         throw new AdapterOperationError(
           "device_type_unsupported",
-          `Matter device type ${device.deviceType} is not supported by the 0.17.6 bridge driver`,
+          `Matter device type ${device.deviceType} is not supported by the 0.17.7 bridge driver`,
         );
     }
   }

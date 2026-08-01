@@ -72,7 +72,7 @@ export type MatterJsLoader = () => Promise<LoadedMatterJs>;
 export type MatterJsDriverFactory = (sdk: LoadedMatterJs) => MatterProtocolAdapter;
 
 /**
- * Explicit SDK seam. The 0.17.6 dependency is pinned, while concrete Endpoint
+ * Explicit SDK seam. The 0.17.7 dependency is pinned, while concrete Endpoint
  * composition remains a separate driver concern so SDK upgrades cannot leak
  * into IPC or target lifecycle code.
  */
@@ -97,7 +97,7 @@ export class MatterJsAdapter implements MatterProtocolAdapter {
     if (this.#driverFactory === undefined) {
       throw new AdapterOperationError(
         "matter_js_driver_unavailable",
-        "matter.js 0.17.6 loaded, but the certified bridge driver is not wired; use --adapter fake for IPC development",
+        "matter.js 0.17.7 loaded, but the certified bridge driver is not wired; use --adapter fake for IPC development",
       );
     }
     const delegate = this.#driverFactory(sdk);

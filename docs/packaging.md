@@ -99,7 +99,7 @@ HOMELOOM_MATTER_RUNTIME=/opt/homeloom/matter-runtime/dist/src/cli.js \
 ./backend/bin/homeloom
 ```
 
-所有 npm、TypeScript 和 Matter Runtime 构建缓存都进入项目 `.cache/`。`@matter/main` 固定为 `0.17.6`，禁止自动漂移到 nightly。
+所有 npm、TypeScript 和 Matter Runtime 构建缓存都进入项目 `.cache/`。`@matter/main` 固定为 `0.17.7`，禁止自动漂移到 nightly。
 
 ## 容器镜像
 

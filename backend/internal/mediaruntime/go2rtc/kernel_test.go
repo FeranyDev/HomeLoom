@@ -584,6 +584,38 @@ func TestProtectedIdentityIsStableAndDoesNotLeakInPairingOutput(t *testing.T) {
 	}
 }
 
+func TestProtectedIdentityBackfillsCameraKernelSetupID(t *testing.T) {
+	directory := t.TempDir()
+	legacy, err := newIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy.SchemaVersion = 1
+	legacy.SetupID = ""
+	if err := writeIdentity(filepath.Join(directory, identityFilename), legacy); err != nil {
+		t.Fatal(err)
+	}
+	repaired, err := ensureIdentity(directory, "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repaired.SetupID != HomeKitSetupID(filepath.Base(directory)) {
+		t.Fatalf("setup ID = %q, want Camera Kernel derivation", repaired.SetupID)
+	}
+	if repaired.SchemaVersion != identitySchemaVersion {
+		t.Fatalf("identity schema = %d, want %d", repaired.SchemaVersion, identitySchemaVersion)
+	}
+	if repaired.PIN != legacy.PIN || repaired.DeviceID != legacy.DeviceID || repaired.DevicePrivate != legacy.DevicePrivate {
+		t.Fatalf("identity material changed during setup ID repair: before=%#v after=%#v", legacy, repaired)
+	}
+}
+
+func TestHomeKitSetupIDMatchesCameraKernel(t *testing.T) {
+	if got := HomeKitSetupID("camera-main"); got != "9DD5" {
+		t.Fatalf("HomeKitSetupID(camera-main) = %q, want 9DD5", got)
+	}
+}
+
 func TestHAPPINValidationMatchesUpstreamRejectedPatterns(t *testing.T) {
 	for _, pin := range []string{"000-00-000", "111-11-111", "222-22-222", "999-99-999", "123-45-678", "876-54-321", "12345678", "123-4-5678", "123-45-67A"} {
 		if validHAPPIN(pin) {

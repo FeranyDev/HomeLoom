@@ -21,8 +21,10 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	domainmedia "github.com/feranydev/homeloom/backend/internal/domain/media"
+	mediaruntimego2rtc "github.com/feranydev/homeloom/backend/internal/mediaruntime/go2rtc"
 	"github.com/feranydev/homeloom/backend/internal/targets/homekit"
 	mattertarget "github.com/feranydev/homeloom/backend/internal/targets/matter"
+	homekitqr "github.com/kradalby/homekit-qr"
 	"gopkg.in/yaml.v3"
 )
 
@@ -316,7 +318,8 @@ func (p *cameraTargetPublication) readIdentity(streamID, deviceID, _ string) (ho
 		return homekit.PairingInfo{}, false, p.address(streamID), false
 	}
 	var identity struct {
-		PIN string `json:"pin"`
+		PIN     string `json:"pin"`
+		SetupID string `json:"setupId"`
 	}
 	if json.Unmarshal(raw, &identity) != nil || identity.PIN == "" {
 		return homekit.PairingInfo{}, false, p.address(streamID), false
@@ -343,7 +346,24 @@ func (p *cameraTargetPublication) readIdentity(streamID, deviceID, _ string) (ho
 			}
 		}
 	}
-	return homekit.PairingInfo{Code: identity.PIN, Devices: []string{deviceID}}, paired, p.address(streamID), true
+	if identity.SetupID == "" {
+		// Backward compatibility for identities written before setupId was
+		// persisted. The next publisher start repairs the protected document.
+		identity.SetupID = mediaruntimego2rtc.HomeKitSetupID(streamID)
+	}
+	qrConfig := homekitqr.QRCodeConfig{SetupURIConfig: homekitqr.SetupURIConfig{
+		Category: homekitqr.CategoryIPCamera, Flag: 2,
+		PairingCode: strings.ReplaceAll(identity.PIN, "-", ""), SetupID: identity.SetupID,
+	}, Size: 320}
+	setupURI, uriErr := homekitqr.ComposeSetupURI(qrConfig.SetupURIConfig)
+	qr, qrErr := homekitqr.GenerateQRPNG(qrConfig)
+	if uriErr != nil || qrErr != nil {
+		return homekit.PairingInfo{Code: identity.PIN, SetupID: identity.SetupID, Devices: []string{deviceID}}, paired, p.address(streamID), true
+	}
+	return homekit.PairingInfo{
+		Code: identity.PIN, SetupID: identity.SetupID, SetupURI: setupURI,
+		QR: qr, Devices: []string{deviceID},
+	}, paired, p.address(streamID), true
 }
 
 func (p *cameraTargetPublication) address(streamID string) string {

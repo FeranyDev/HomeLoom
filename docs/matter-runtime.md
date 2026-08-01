@@ -4,7 +4,7 @@
 
 Matter 模式采用 Go 主服务加 Node.js 20+ sidecar。每个 Matter Target 拥有独立进程、Unix Domain Socket、UDP 端口、discriminator 和数据库身份命名空间。sidecar 崩溃只触发该 Target 的重启与全量状态重放，不阻塞 Device Service 或其他 Target。
 
-当前 `@matter/main` 固定为 `0.17.6`，其标准模型对应 Matter 1.4.1；管理界面的“协议版本”展示该规范版本。Go ↔ sidecar 的内部 IPC 合约另行固定为 `1.0`。开发、测试和构建统一通过 `scripts/dev-env.sh`，npm、Go、TypeScript 缓存全部写入项目 `.cache/`。
+当前 `@matter/main` 固定为 `0.17.7`，其标准模型对应 Matter 1.6.0；管理界面的“协议版本”展示该规范版本。Go ↔ sidecar 的内部 IPC 合约另行固定为 `1.0`。开发、测试和构建统一通过 `scripts/dev-env.sh`，npm、Go、TypeScript 缓存全部写入项目 `.cache/`。
 
 真实 driver 当前覆盖 22 类官方标准 Device Type：开关、插座、扩展彩灯、温度、湿度、接触、活动、占用、窗帘、风扇、恒温器、门锁、照度、气压、漏水、烟雾、一氧化碳、空气质量、阀门、水泵、空气净化器、扬声器。测试会直接读取 Go Matter Catalog，要求每个公开类型和 Cluster Attribute/Command 路径都能由官方 matter.js Endpoint 构造，避免管理端暴露运行时无法重放的类型。
 
@@ -41,7 +41,7 @@ HOMELOOM_MATTER_LOG_LEVEL=debug HOMELOOM_MATTER_LOG_FORMAT=plain ./scripts/dev-e
 ```
 
 
-`@matter/main` 0.17.6 的在线 factory reset 会在进程内重建 `ServerNode`，但该版本可能保留旧一代 shared mDNS 引用。sidecar 在 reset RPC 成功返回后会主动正常退出，由 Go Target supervisor 启动全新进程并执行握手与全量重放；这是身份轮换的一部分，不应被监控系统当作整套 HomeLoom 服务故障。
+`@matter/main` 0.17.7 的在线 factory reset 会在进程内重建 `ServerNode`，但该版本仍可能保留旧一代 shared mDNS 引用。sidecar 在 reset RPC 成功返回后会主动正常退出，由 Go Target supervisor 启动全新进程并执行握手与全量重放；这是身份轮换的一部分，不应被监控系统当作整套 HomeLoom 服务故障。
 
 ## IPC 与状态恢复
 

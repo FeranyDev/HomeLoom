@@ -34,12 +34,12 @@ HomeLoom 已实现独立的 `matter` Target、Matter Consumer Catalog 和真实 
 
 - [x] 建立独立的 `matter-runtime/` TypeScript 工程；
 - [x] 发布形态采用 Go 主服务与 Node.js sidecar 双制品，并在打包文档中声明边界；
-- [x] 固定 `@matter/main@0.17.6` 和 Node.js 20+；
+- [x] 固定 `@matter/main@0.17.7` 和 Node.js 20+；
 - [ ] 验证同一局域网内 on-network commissioning；
 - [ ] 验证 Apple Home、matter.js Controller 和 `chip-tool` 三种控制端；
 - [~] 已记录 IPv6、UDP、mDNS/Bonjour 在宿主机和容器中的要求，待 Apple Container、Docker 与目标 VLAN 实测；
 - [~] 已有双实例 IPC、端口、discriminator 和身份隔离测试，待两座真实网络桥并行验收；
-- [x] 记录 `@matter/main@0.17.6`、Matter 1.4.1 和 factory reset shared mDNS 引用等已知边界。
+- [x] 记录 `@matter/main@0.17.7`、Matter 1.6.0 和 factory reset shared mDNS 引用等已知边界。
 
 ## 3. Target 配置模型重构
 
@@ -213,7 +213,7 @@ Matter 不能只用 HomeKit 的 `paired: boolean` 表达运行状态。
 - [x] 桥卡片展示运行状态；
 - [x] 桥卡片展示 commissioning 状态；
 - [x] 桥卡片展示 Fabric 数和 Endpoint 数；
-- [x] 桥卡片展示实际 UDP 端口、网络接口和 Matter 1.4.1；
+- [x] 桥卡片展示实际 UDP 端口、网络接口和 Matter 1.6.0；
 - [x] 二维码默认隐藏，仅 commissioning window 打开时允许展示；
 - [x] 明确标注“测试设备/未认证”状态；
 - [x] 桥内虚拟设备继续复用家庭、房间和设备来源筛选；

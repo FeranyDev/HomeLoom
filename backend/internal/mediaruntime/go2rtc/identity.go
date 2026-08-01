@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -15,11 +16,15 @@ import (
 	"strings"
 )
 
-const identityFilename = "homekit-identity.json"
+const (
+	identityFilename      = "homekit-identity.json"
+	identitySchemaVersion = 2
+)
 
 type publisherIdentity struct {
 	SchemaVersion int    `json:"schemaVersion"`
 	PIN           string `json:"pin"`
+	SetupID       string `json:"setupId"`
 	DeviceID      string `json:"deviceId"`
 	DevicePrivate string `json:"devicePrivate"`
 }
@@ -36,6 +41,17 @@ func ensureIdentity(directory, pinOverride, deviceIDOverride, privateOverride st
 		if err != nil {
 			return publisherIdentity{}, err
 		}
+		changed = true
+	}
+	if identity.SchemaVersion == 1 {
+		identity.SchemaVersion = identitySchemaVersion
+		changed = true
+	}
+	// Camera Kernel derives the HAP setup hash from this deterministic ID. Keep
+	// it beside the PIN so Core can compose the exact same QR setup payload.
+	setupID := HomeKitSetupID(filepath.Base(directory))
+	if identity.SetupID != setupID {
+		identity.SetupID = setupID
 		changed = true
 	}
 	if pinOverride != "" {
@@ -117,7 +133,14 @@ func newIdentity() (publisherIdentity, error) {
 	if err != nil {
 		return publisherIdentity{}, err
 	}
-	return publisherIdentity{SchemaVersion: 1, PIN: pin, DeviceID: fmt.Sprintf("%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]), DevicePrivate: hex.EncodeToString(private)}, nil
+	return publisherIdentity{SchemaVersion: identitySchemaVersion, PIN: pin, DeviceID: fmt.Sprintf("%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]), DevicePrivate: hex.EncodeToString(private)}, nil
+}
+
+// HomeKitSetupID mirrors Camera Kernel's setup ID derivation. Both the QR
+// payload and the mDNS sh record must originate from the same four characters.
+func HomeKitSetupID(streamID string) string {
+	digest := sha512.Sum512([]byte(streamID))
+	return fmt.Sprintf("%02X%02X", digest[44], digest[46])
 }
 
 func randomPIN() (string, error) {
@@ -152,7 +175,7 @@ func validHAPPIN(pin string) bool {
 	return false
 }
 func validIdentity(value publisherIdentity) bool {
-	if value.SchemaVersion != 1 || !validHAPPIN(value.PIN) || !regexp.MustCompile(`^[0-9A-F]{2}(:[0-9A-F]{2}){5}$`).MatchString(value.DeviceID) {
+	if value.SchemaVersion != identitySchemaVersion || !validHAPPIN(value.PIN) || !regexp.MustCompile(`^[0-9A-F]{4}$`).MatchString(value.SetupID) || !regexp.MustCompile(`^[0-9A-F]{2}(:[0-9A-F]{2}){5}$`).MatchString(value.DeviceID) {
 		return false
 	}
 	private, err := hex.DecodeString(value.DevicePrivate)

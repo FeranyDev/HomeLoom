@@ -316,7 +316,7 @@ func applyMatterConfigInfo(info *TargetInfo, config domaintarget.Config) {
 	info.VendorID, info.ProductID = matter.VendorID, matter.ProductID
 	info.ProductName, info.SerialNumber = matter.ProductName, matter.SerialNumber
 	info.CommissioningWindowSeconds = matter.CommissioningWindowSeconds
-	info.ProtocolVersion, info.Certification = "1.4.1", "test"
+	info.ProtocolVersion, info.Certification = "1.6.0", "test"
 	if info.CommissioningState == "" {
 		info.CommissioningState = "uncommissioned"
 	}

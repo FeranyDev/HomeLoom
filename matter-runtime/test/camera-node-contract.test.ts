@@ -107,8 +107,8 @@ test("camera replay rejects bridge topology, mismatched media and transport secr
 
 test("official camera endpoint 0x0142 is a direct Node child with mandatory skeleton behaviors", async (context) => {
   // MC-2 deliberately verifies topology and mandatory cluster presence only.
-  // Video+ImageControl is the matter.js 0.17.6 constructible skeleton; MC-3
-  // must replace it with Video+Audio+Snapshot and real media command handlers.
+  // matter.js 0.17.7 correctly handles the ImageControl choice when the feature
+  // is absent, so the skeleton only enables the media features HomeLoom serves.
   const sdk = await loadPinnedMatterJs();
   const driver = new MatterJsBridgeDriver(sdk, { startNetwork: false });
   context.after(async () => {

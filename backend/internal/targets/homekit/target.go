@@ -38,6 +38,7 @@ type AccessoryIdentityStore interface {
 
 type PairingInfo struct {
 	Code     string
+	SetupID  string
 	SetupURI string
 	QR       []byte
 	Devices  []string
@@ -1189,7 +1190,7 @@ func New(ctx context.Context, config Config, devices *application.DeviceService,
 
 	target := &Target{
 		server: server, logger: logger, pin: config.Pin, id: config.ID,
-		pairing:                 PairingInfo{Code: formatPin(config.Pin), SetupURI: setupURI, QR: qr, Devices: virtualDeviceIDs(config, items)},
+		pairing:                 PairingInfo{Code: formatPin(config.Pin), SetupID: config.SetupID, SetupURI: setupURI, QR: qr, Devices: virtualDeviceIDs(config, items)},
 		issueSnapshot:           append([]ProjectionIssue(nil), issues...),
 		publishedAccessoryCount: len(bindings.accessories),
 	}

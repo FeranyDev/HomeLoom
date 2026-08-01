@@ -15,8 +15,8 @@
     "test:coverage": "npm run build && node --experimental-test-coverage --test --test-concurrency=1 dist/test/*.test.js"
   },
   "dependencies": {
-    "@matter/general": "0.17.6",
-    "@matter/main": "0.17.6"
+    "@matter/general": "0.17.7",
+    "@matter/main": "0.17.7"
   },
   "devDependencies": {
     "@types/node": "24.10.1",

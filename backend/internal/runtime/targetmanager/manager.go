@@ -263,6 +263,9 @@ func (m *Manager) Apply(ctx context.Context, config target.Config) (application.
 	applyTargetDiagnostics(&info, next)
 	if !info.Paired {
 		info.PairingCode, info.SetupURI = pairing.Code, pairing.SetupURI
+		if pairing.SetupID != "" {
+			info.SetupID = pairing.SetupID
+		}
 	}
 	return application.TargetRegistration{Info: info, QR: pairing.QR}, nil
 }
@@ -507,7 +510,7 @@ func infoFromConfig(config target.Config, status string) application.TargetInfo 
 		info.VendorID, info.ProductID = config.MatterConfig.VendorID, config.MatterConfig.ProductID
 		info.ProductName, info.SerialNumber = config.MatterConfig.ProductName, config.MatterConfig.SerialNumber
 		info.CommissioningWindowSeconds = config.MatterConfig.CommissioningWindowSeconds
-		info.ProtocolVersion, info.Certification = "1.4.1", "test"
+		info.ProtocolVersion, info.Certification = "1.6.0", "test"
 	}
 	return info
 }

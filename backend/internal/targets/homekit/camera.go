@@ -119,7 +119,7 @@ func NewCameraPublisher(config CameraPublisherConfig, media CameraMedia, logger 
 		id: config.ID, deviceID: config.DeviceID,
 		server: server, camera: camera, logger: logger,
 		pairing: PairingInfo{
-			Code: formatPin(config.Pin), SetupURI: setupURI, QR: qr,
+			Code: formatPin(config.Pin), SetupID: config.SetupID, SetupURI: setupURI, QR: qr,
 			Devices: []string{config.DeviceID},
 		},
 	}, nil
