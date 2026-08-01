@@ -187,6 +187,8 @@ func (b *accessoryBindings) newExtendedAccessory(item device.Device, accessoryID
 		return b.newValveAccessory(item, accessoryID, write)
 	case device.TypeSpeaker:
 		return b.newSpeakerAccessory(item, accessoryID, write)
+	case device.TypeTelevision:
+		return b.newTelevisionAccessory(item, accessoryID, write)
 	default:
 		return nil
 	}
@@ -461,6 +463,85 @@ func (b *accessoryBindings) newSpeakerAccessory(item device.Device, accessoryID 
 		b.addExtendedUpdate(item.ID, target.C, propertyValue("speaker", "target-media-state", enumIntValue(map[string]int{"play": characteristic.TargetMediaStatePlay, "pause": characteristic.TargetMediaStatePause, "stop": characteristic.TargetMediaStateStop}, characteristic.TargetMediaStateStop)))
 	}
 	return a
+}
+
+func (b *accessoryBindings) newTelevisionAccessory(item device.Device, accessoryID uint64, write func(string, string, device.PropertyValue) error) *accessory.A {
+	primary := service.NewTelevision()
+	fault := characteristic.NewStatusFault()
+	primary.AddC(fault.C)
+	a := accessory.New(extendedInfo(item), accessory.TypeTelevision)
+	a.Id = accessoryID
+	a.AddS(primary.S)
+	b.faults[item.ID] = fault
+	primary.Active.OnSetRemoteValue(func(value int) error {
+		return write("television", "active", device.BoolValue(value == characteristic.ActiveActive))
+	})
+	b.addExtendedUpdate(item.ID, primary.Active.C, propertyValue("television", "active", boolIntValue(characteristic.ActiveInactive, characteristic.ActiveActive)))
+	if _, found := item.Property("main", "television", "volume"); found {
+		volume := characteristic.NewVolume()
+		volume.OnSetRemoteValue(func(value int) error { return write("television", "volume", device.NumberValue(float64(value))) })
+		primary.AddC(volume.C)
+		b.addExtendedUpdate(item.ID, volume.C, propertyValue("television", "volume", func(value device.PropertyValue) (any, bool) {
+			if value.Number == nil {
+				return nil, false
+			}
+			return int(*value.Number), true
+		}))
+	}
+	if _, found := item.Property("main", "television", "current-media-state"); found {
+		current := characteristic.NewCurrentMediaState()
+		primary.AddC(current.C)
+		b.addExtendedUpdate(item.ID, current.C, propertyValue("television", "current-media-state", enumIntValue(map[string]int{"playing": characteristic.CurrentMediaStatePlay, "paused": characteristic.CurrentMediaStatePause, "stopped": characteristic.CurrentMediaStateStop, "loading": characteristic.CurrentMediaStateUnknown, "interrupted": characteristic.CurrentMediaStateUnknown}, characteristic.CurrentMediaStateUnknown)))
+	}
+	if _, found := item.Property("main", "television", "target-media-state"); found {
+		target := characteristic.NewTargetMediaState()
+		target.OnSetRemoteValue(func(value int) error {
+			return write("television", "target-media-state", device.EnumValue(mediaTargetName(value)))
+		})
+		primary.AddC(target.C)
+		b.addExtendedUpdate(item.ID, target.C, propertyValue("television", "target-media-state", enumIntValue(map[string]int{"play": characteristic.TargetMediaStatePlay, "pause": characteristic.TargetMediaStatePause, "stop": characteristic.TargetMediaStateStop}, characteristic.TargetMediaStateStop)))
+	}
+	if _, found := item.Property("main", "television", "remote-key"); found {
+		remote := characteristic.NewRemoteKey()
+		remote.OnSetRemoteValue(func(value int) error {
+			return write("television", "remote-key", device.EnumValue(televisionRemoteKeyName(value)))
+		})
+		primary.AddC(remote.C)
+	}
+	return a
+}
+
+func televisionRemoteKeyName(value int) string {
+	switch value {
+	case characteristic.RemoteKeyArrowUp:
+		return "up"
+	case characteristic.RemoteKeyArrowDown:
+		return "down"
+	case characteristic.RemoteKeyArrowLeft:
+		return "left"
+	case characteristic.RemoteKeyArrowRight:
+		return "right"
+	case characteristic.RemoteKeySelect:
+		return "select"
+	case characteristic.RemoteKeyExit:
+		return "exit"
+	case characteristic.RemoteKeyBack:
+		return "back"
+	case characteristic.RemoteKeyPlayPause:
+		return "play"
+	case characteristic.RemoteKeyRewind:
+		return "rewind"
+	case characteristic.RemoteKeyFastForward:
+		return "fast-forward"
+	case characteristic.RemoteKeyNextTrack:
+		return "next"
+	case characteristic.RemoteKeyPrevTrack:
+		return "previous"
+	case characteristic.RemoteKeyInfo:
+		return "info"
+	default:
+		return "select"
+	}
 }
 
 func thermostatTargetName(value int) string {

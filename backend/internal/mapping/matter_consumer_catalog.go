@@ -117,6 +117,10 @@ func MatterConsumerContracts() []device.ConsumerModelContract {
 			required("speaker", "mute", "OnOff.OnOff"),
 			required("speaker", "volume", "LevelControl.CurrentLevel"),
 		}},
+		{ConsumerID: "matter", DeviceType: device.TypeTelevision, Parameters: []device.ConsumerParameterMapping{
+			required("television", "active", "OnOff.OnOff"),
+			optional("television", "current-media-state", "MediaPlayback.CurrentState"),
+		}},
 	}
 }
 
@@ -151,6 +155,10 @@ func matterCommandProperties(contracts []device.ConsumerModelContract) []Consume
 		{device.TypeAirPurifier, path("air-purifier", "active"), "OnOff.Off", "停止净化器"},
 		{device.TypeSpeaker, path("speaker", "mute"), "OnOff.On", "取消静音"},
 		{device.TypeSpeaker, path("speaker", "mute"), "OnOff.Off", "静音"},
+		{device.TypeTelevision, path("television", "target-media-state"), "MediaPlayback.Play", "播放"},
+		{device.TypeTelevision, path("television", "target-media-state"), "MediaPlayback.Pause", "暂停"},
+		{device.TypeTelevision, path("television", "target-media-state"), "MediaPlayback.Stop", "停止"},
+		{device.TypeTelevision, path("television", "remote-key"), "KeypadInput.SendKey", "发送遥控按键"},
 	}
 	result := make([]ConsumerProperty, 0, len(definitions))
 	for _, definition := range definitions {

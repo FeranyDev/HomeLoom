@@ -4,8 +4,8 @@ import { defaultXiaomiMedia, inferXiaomiDeviceType, requiredXiaomiProperties, st
 describe('Xiaomi temperature/humidity mapping', () => {
 	it('offers every built-in model exactly once', () => {
 		const types = xiaomiDeviceTypes.map(([type]) => type)
-		expect(types).toHaveLength(37)
-		expect(new Set(types).size).toBe(37)
+		expect(types).toHaveLength(38)
+		expect(new Set(types).size).toBe(38)
 		expect(types).not.toContain('single-property-sensor')
 	})
 
@@ -66,6 +66,7 @@ describe('Xiaomi temperature/humidity mapping', () => {
 		expect(inferXiaomiDeviceType({ did: '9', name: '米家空调伴侣 Pro' })).toBe('air-conditioner')
 		expect(inferXiaomiDeviceType({ did: '10', name: '车库交流充电桩' })).toBe('ev-charger')
 		expect(inferXiaomiDeviceType({ did: '11', name: '花园土壤湿度计' })).toBe('soil-moisture-sensor')
+		expect(inferXiaomiDeviceType({ did: '12', name: '客厅智能电视' })).toBe('television')
 	})
 
 	it('creates every required path for an expanded model', () => {

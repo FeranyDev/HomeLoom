@@ -161,6 +161,21 @@ func TestProviderSupportsFanAirPurifierFilterAndWindowCovering(t *testing.T) {
 	}
 }
 
+func TestTelevisionVolumeCanBeAdjustedByRemoteKey(t *testing.T) {
+	provider, err := NewProviderFromConfig(providerconfig.Config{ID: "television", Config: []byte(`{"devices":[{"id":"tv","type":"television","volume":40}]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := provider.WriteProperty(context.Background(), providersdk.PropertyWriteRequest{DeviceID: "tv", EndpointID: "main", CapabilityID: "television", PropertyID: "remote-key", Value: device.EnumValue("volume-up")})
+	if err != nil || numberProperty(updated, "television", "volume") != 45 {
+		t.Fatalf("volume up = %#v, %v", updated, err)
+	}
+	updated, err = provider.WriteProperty(context.Background(), providersdk.PropertyWriteRequest{DeviceID: "tv", EndpointID: "main", CapabilityID: "television", PropertyID: "remote-key", Value: device.EnumValue("volume-down")})
+	if err != nil || numberProperty(updated, "television", "volume") != 40 {
+		t.Fatalf("volume down = %#v, %v", updated, err)
+	}
+}
+
 func TestAllModelDemoDevicesPublishCompleteStandardContracts(t *testing.T) {
 	raw, err := json.Marshal(Config{Devices: AllModelDeviceConfigs()})
 	if err != nil {

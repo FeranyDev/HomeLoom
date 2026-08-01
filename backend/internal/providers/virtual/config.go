@@ -32,6 +32,7 @@ type DeviceConfig struct {
 	LowBattery   *bool               `json:"lowBattery,omitempty"`
 	Tampered     *bool               `json:"tampered,omitempty"`
 	Active       *bool               `json:"active,omitempty"`
+	Volume       *float64            `json:"volume,omitempty"`
 	Speed        *float64            `json:"speed,omitempty"`
 	Mode         string              `json:"mode,omitempty"`
 	SwingMode    *bool               `json:"swingMode,omitempty"`
@@ -95,6 +96,7 @@ func AllModelDeviceConfigs() []DeviceConfig {
 		{ID: "virtual-power-meter-1", Name: "全屋电力计量", Type: "power-meter", Online: boolValue(true)},
 		{ID: "virtual-ev-charger-1", Name: "车库充电桩", Type: "ev-charger", Online: boolValue(true)},
 		{ID: "virtual-speaker-1", Name: "客厅扬声器", Type: "speaker", Online: boolValue(true)},
+		{ID: "virtual-television-1", Name: "客厅电视", Type: "television", Online: boolValue(true), Volume: numberValue(35)},
 		{ID: "virtual-camera-1", Name: "客厅摄像头", Type: "camera", Online: boolValue(true)},
 		{ID: "virtual-robot-vacuum-1", Name: "扫地机器人", Type: "robot-vacuum", Online: boolValue(true)},
 	}
@@ -290,6 +292,17 @@ func configuredDevice(providerID string, item DeviceConfig) (device.Device, erro
 			created, err := contractDevice(item.ID, providerID, item.Name, device.Type(item.Type), online)
 			if err != nil {
 				return device.Device{}, fmt.Errorf("device %q: %w", item.ID, err)
+			}
+			if item.Type == "television" {
+				if item.Active != nil {
+					created.SetProperty("main", "television", "active", device.BoolValue(*item.Active))
+				}
+				if item.Volume != nil {
+					if *item.Volume < 0 || *item.Volume > 100 {
+						return device.Device{}, fmt.Errorf("device %q volume is outside 0..100", item.ID)
+					}
+					created.SetProperty("main", "television", "volume", device.NumberValue(*item.Volume))
+				}
 			}
 			return finish(created), nil
 		}

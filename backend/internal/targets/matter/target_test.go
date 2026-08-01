@@ -560,6 +560,9 @@ func TestCommandsWithReadOnlyMatterAttributesRouteToWritableModelProperties(t *t
 		{"WindowCovering.StopMotion", "window-covering", "hold-position", true},
 		{"DoorLock.LockDoor", "lock", "target-state", "secured"},
 		{"DoorLock.UnlockDoor", "lock", "target-state", "unsecured"},
+		{"MediaPlayback.Play", "television", "target-media-state", "play"},
+		{"MediaPlayback.Pause", "television", "target-media-state", "pause"},
+		{"MediaPlayback.Stop", "television", "target-media-state", "stop"},
 	}
 	for _, test := range tests {
 		t.Run(test.command, func(t *testing.T) {

@@ -875,6 +875,17 @@ func (t *Target) writeModelProperty(ctx context.Context, virtual domaintarget.Vi
 }
 
 func (t *Target) executeClusterCommand(ctx context.Context, virtualID, path string, fields map[string]any) error {
+	if path == "KeypadInput.SendKey" {
+		virtual, found := t.virtualDevice(virtualID)
+		if !found {
+			return application.ErrDeviceNotFound
+		}
+		keyCode, ok := fields["keyCode"].(string)
+		if !ok || keyCode == "" {
+			return fmt.Errorf("Matter KeypadInput.SendKey keyCode %v is not a unified television key", fields["keyCode"])
+		}
+		return t.writeModelProperty(ctx, virtual, device.ParameterPath{EndpointID: "main", CapabilityID: "television", PropertyID: "remote-key"}, keyCode)
+	}
 	if modelPath, value, direct := directCommandModelWrite(path); direct {
 		virtual, found := t.virtualDevice(virtualID)
 		if !found {
@@ -927,6 +938,18 @@ func directCommandModelWrite(path string) (device.ParameterPath, any, bool) {
 		return device.ParameterPath{
 			EndpointID: "main", CapabilityID: "lock", PropertyID: "target-state",
 		}, "unsecured", true
+	case "MediaPlayback.Play":
+		return device.ParameterPath{
+			EndpointID: "main", CapabilityID: "television", PropertyID: "target-media-state",
+		}, "play", true
+	case "MediaPlayback.Pause":
+		return device.ParameterPath{
+			EndpointID: "main", CapabilityID: "television", PropertyID: "target-media-state",
+		}, "pause", true
+	case "MediaPlayback.Stop":
+		return device.ParameterPath{
+			EndpointID: "main", CapabilityID: "television", PropertyID: "target-media-state",
+		}, "stop", true
 	default:
 		return device.ParameterPath{}, nil, false
 	}

@@ -461,6 +461,13 @@ var modelContracts = map[Type]ModelContract{
 		optional("speaker", "shuffle", "随机播放", ValueTypeBool, "", true),
 		optionalEnum("speaker", "repeat", "循环模式", true, "off", "one", "all"),
 	}},
+	TypeTelevision: {DeviceType: TypeTelevision, Name: "电视", Version: 2, Parameters: []ModelParameter{
+		required("television", "active", "电源", ValueTypeBool, true),
+		requiredWritableMeasurement("television", "volume", "音量", "percent", 0, 100, 1),
+		requiredEnum("television", "target-media-state", "目标媒体状态", true, "play", "pause", "stop"),
+		requiredEnum("television", "remote-key", "遥控按键", true, "select", "up", "down", "left", "right", "exit", "back", "info", "play", "pause", "stop", "rewind", "fast-forward", "next", "previous", "power", "volume-up", "volume-down", "mute"),
+		optionalEnum("television", "current-media-state", "当前媒体状态", false, "playing", "paused", "stopped", "loading", "interrupted"),
+	}},
 	TypeCamera: {DeviceType: TypeCamera, Name: "摄像头", Version: 2, Parameters: append([]ModelParameter{
 		optional("camera", "privacy", "隐私模式", ValueTypeBool, "", true),
 		optional("camera", "indicator", "状态指示灯", ValueTypeBool, "", true),

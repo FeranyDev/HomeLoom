@@ -5,7 +5,7 @@ export const xiaomiDeviceTypes = [
 	['illuminance-sensor', '照度传感器'], ['occupancy-sensor', '占用传感器'], ['leak-sensor', '漏水传感器'], ['smoke-sensor', '烟雾传感器'],
 	['carbon-monoxide-sensor', '一氧化碳传感器'], ['carbon-dioxide-sensor', '二氧化碳传感器'], ['air-quality-sensor', '空气质量传感器'],
 	['thermostat', '恒温器'], ['air-conditioner', '空调'], ['heater-cooler', '冷暖设备'], ['humidifier-dehumidifier', '加湿除湿器'], ['lock', '门锁'], ['garage-door', '车库门'],
-	['security-system', '安防系统'], ['valve', '阀门'], ['pump', '水泵'], ['water-heater', '热水器'], ['power-meter', '电力计量器'], ['ev-charger', '电动汽车充电桩'], ['speaker', '扬声器'], ['robot-vacuum', '扫地机器人'],
+	['security-system', '安防系统'], ['valve', '阀门'], ['pump', '水泵'], ['water-heater', '热水器'], ['power-meter', '电力计量器'], ['ev-charger', '电动汽车充电桩'], ['speaker', '扬声器'], ['television', '电视'], ['robot-vacuum', '扫地机器人'],
 	['camera', '摄像头'],
 ] as const
 
@@ -45,6 +45,7 @@ export function inferXiaomiDeviceType(item: XiaomiHubDevice): string {
 	if (/power.?meter|energy.?meter|电表|电力计量/.test(hint)) return 'power-meter'
 	if (/ev.?charger|charging.?pile|充电桩/.test(hint)) return 'ev-charger'
 	if (/speaker|音箱|扬声器/.test(hint)) return 'speaker'
+	if (/television|smart.?tv|tv|电视/.test(hint)) return 'television'
 	if (/robot.?vacuum|vacuum|扫地|吸尘/.test(hint)) return 'robot-vacuum'
 	if (/fan|风扇/.test(hint)) return 'fan'
 	return 'switch'
@@ -86,6 +87,7 @@ export function requiredXiaomiProperties(type: string) {
 	case 'power-meter': return [property('electrical', 'current-power', '当前功率', 'number', 1, false)]
 	case 'ev-charger': return [property('ev-charger', 'active', '允许充电', 'bool', 1, true), property('ev-charger', 'current-state', '当前状态', 'enum', 2, false, { disconnected: 0, connected: 1, charging: 2, paused: 3, complete: 4, fault: 5 })]
 	case 'speaker': return [property('speaker', 'active', '启用', 'bool', 1, true), property('speaker', 'volume', '音量', 'number', 2, true), property('speaker', 'mute', '静音', 'bool', 3, true)]
+	case 'television': return [property('television', 'active', '电源', 'bool', 1, true), property('television', 'volume', '音量', 'number', 2, true), property('television', 'target-media-state', '目标媒体状态', 'enum', 3, true, { play: 0, pause: 1, stop: 2 }), property('television', 'remote-key', '遥控按键', 'enum', 4, true, { select: 0, up: 1, down: 2, left: 3, right: 4, exit: 13, back: 9, info: 53, play: 68, pause: 70, stop: 69, rewind: 72, 'fast-forward': 73, next: 47, previous: 50, power: 64, 'volume-up': 65, 'volume-down': 66, mute: 67 })]
 	case 'robot-vacuum': return [property('robot-vacuum', 'active', '启用', 'bool', 1, true), property('robot-vacuum', 'current-state', '当前工作状态', 'enum', 2, false, { idle: 0, cleaning: 1, paused: 2, returning: 3, charging: 4, error: 5 }), property('robot-vacuum', 'target-mode', '目标模式', 'enum', 3, true, { vacuum: 0, mop: 1, 'vacuum-and-mop': 2, spot: 3 })]
 	default: return [property('switch', 'power', '开关', 'bool', 1, true)]
 	}

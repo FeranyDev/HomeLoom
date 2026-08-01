@@ -40,6 +40,7 @@ export interface LoadedMatterJs {
   readonly pumpDevice: typeof import("@matter/main/devices/pump");
   readonly airPurifier: typeof import("@matter/main/devices/air-purifier");
   readonly speakerDevice: typeof import("@matter/main/devices/speaker");
+  readonly basicVideoPlayerDevice: typeof import("@matter/main/devices/basic-video-player");
   readonly cameraDevice: typeof import("@matter/main/devices/camera");
   readonly cameraAvStreamManagement: typeof import("@matter/main/behaviors/camera-av-stream-management");
   readonly onOff: typeof import("@matter/main/behaviors/on-off");
@@ -65,6 +66,8 @@ export interface LoadedMatterJs {
   readonly carbonMonoxideConcentrationMeasurement: typeof import("@matter/main/behaviors/carbon-monoxide-concentration-measurement");
   readonly valveConfigurationAndControl: typeof import("@matter/main/behaviors/valve-configuration-and-control");
   readonly pumpConfigurationAndControl: typeof import("@matter/main/behaviors/pump-configuration-and-control");
+  readonly mediaPlayback: typeof import("@matter/main/behaviors/media-playback");
+  readonly keypadInput: typeof import("@matter/main/behaviors/keypad-input");
   readonly bridgedDeviceBasicInformation: typeof import("@matter/main/behaviors/bridged-device-basic-information");
 }
 
@@ -197,6 +200,7 @@ export async function loadPinnedMatterJs(): Promise<LoadedMatterJs> {
     pumpDevice,
     airPurifier,
     speakerDevice,
+    basicVideoPlayerDevice,
     cameraDevice,
     cameraAvStreamManagement,
     onOff,
@@ -222,6 +226,8 @@ export async function loadPinnedMatterJs(): Promise<LoadedMatterJs> {
     carbonMonoxideConcentrationMeasurement,
     valveConfigurationAndControl,
     pumpConfigurationAndControl,
+    mediaPlayback,
+    keypadInput,
     bridgedDeviceBasicInformation,
   ] = await Promise.all([
     import("@matter/main"),
@@ -248,6 +254,7 @@ export async function loadPinnedMatterJs(): Promise<LoadedMatterJs> {
     import("@matter/main/devices/pump"),
     import("@matter/main/devices/air-purifier"),
     import("@matter/main/devices/speaker"),
+    import("@matter/main/devices/basic-video-player"),
     import("@matter/main/devices/camera"),
     import("@matter/main/behaviors/camera-av-stream-management"),
     import("@matter/main/behaviors/on-off"),
@@ -273,6 +280,8 @@ export async function loadPinnedMatterJs(): Promise<LoadedMatterJs> {
     import("@matter/main/behaviors/carbon-monoxide-concentration-measurement"),
     import("@matter/main/behaviors/valve-configuration-and-control"),
     import("@matter/main/behaviors/pump-configuration-and-control"),
+    import("@matter/main/behaviors/media-playback"),
+    import("@matter/main/behaviors/keypad-input"),
     import("@matter/main/behaviors/bridged-device-basic-information"),
   ]);
   return {
@@ -300,6 +309,7 @@ export async function loadPinnedMatterJs(): Promise<LoadedMatterJs> {
     pumpDevice,
     airPurifier,
     speakerDevice,
+    basicVideoPlayerDevice,
     cameraDevice,
     cameraAvStreamManagement,
     onOff,
@@ -325,6 +335,8 @@ export async function loadPinnedMatterJs(): Promise<LoadedMatterJs> {
     carbonMonoxideConcentrationMeasurement,
     valveConfigurationAndControl,
     pumpConfigurationAndControl,
+    mediaPlayback,
+    keypadInput,
     bridgedDeviceBasicInformation,
   };
 }

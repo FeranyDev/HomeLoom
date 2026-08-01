@@ -53,6 +53,7 @@ const (
 	TypePowerMeter                Type = "power-meter"
 	TypeEVCharger                 Type = "ev-charger"
 	TypeSpeaker                   Type = "speaker"
+	TypeTelevision                Type = "television"
 	TypeCamera                    Type = "camera"
 	TypeRobotVacuum               Type = "robot-vacuum"
 )

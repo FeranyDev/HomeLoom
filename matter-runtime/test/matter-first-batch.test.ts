@@ -105,7 +105,7 @@ test("all Catalog types construct official endpoints and bridge state", async (t
     devices: firstBatchDevices(),
   });
 
-  assert.equal(driver.diagnostics().deviceCount, 22);
+  assert.equal(driver.diagnostics().deviceCount, 23);
   for (const device of firstBatchDevices()) {
     const deviceTypeList = await driver.readAttributeForTest(
       device.id,
@@ -245,6 +245,10 @@ test("all Catalog types construct official endpoints and bridge state", async (t
     await driver.readAttributeForTest("speaker", "onOff", "onOff"),
     true,
   );
+  assert.equal(
+    await driver.readAttributeForTest("television", "mediaPlayback", "currentState"),
+    0,
+  );
 
   await driver.invokeCommandForTest("fan", "onOff", "off");
   await driver.invokeCommandForTest(
@@ -265,6 +269,18 @@ test("all Catalog types construct official endpoints and bridge state", async (t
   await driver.invokeCommandForTest("lock", "doorLock", "unlockDoor", {
     pinCode: null,
   });
+  await driver.invokeCommandForTest("television", "mediaPlayback", "play");
+  await driver.invokeCommandForTest("television", "mediaPlayback", "pause");
+  await driver.invokeCommandForTest("television", "mediaPlayback", "stop");
+  await driver.invokeCommandForTest("television", "keypadInput", "sendKey", {
+    keyCode: 1,
+  });
+  await driver.invokeCommandForTest("television", "keypadInput", "sendKey", {
+    keyCode: 65,
+  });
+  await driver.invokeCommandForTest("television", "keypadInput", "sendKey", {
+    keyCode: 66,
+  });
   assert.deepEqual(
     commands.map(({ path }) => path),
     [
@@ -274,9 +290,18 @@ test("all Catalog types construct official endpoints and bridge state", async (t
       "DoorLock.LockDoor",
       "ValveConfigurationAndControl.Close",
       "DoorLock.UnlockDoor",
+      "MediaPlayback.Play",
+      "MediaPlayback.Pause",
+      "MediaPlayback.Stop",
+      "KeypadInput.SendKey",
+      "KeypadInput.SendKey",
+      "KeypadInput.SendKey",
     ],
   );
   assert.equal(commands[1]?.fields.liftPercent100ths, 42.5);
+  assert.equal(commands[9]?.fields.keyCode, "up");
+  assert.equal(commands[10]?.fields.keyCode, "volume-up");
+  assert.equal(commands[11]?.fields.keyCode, "volume-down");
 
   await driver.writeAttributeForTest("fan", "FanControl.FanMode", 3);
   await driver.writeAttributeForTest("fan", "FanControl.PercentSetting", 42);
@@ -450,6 +475,10 @@ function firstBatchDevices(): DeviceSnapshot[] {
     snapshot("speaker", 23, "speaker", {
       "OnOff.OnOff": false,
       "LevelControl.CurrentLevel": 35,
+    }),
+    snapshot("television", 24, "television", {
+      "OnOff.OnOff": true,
+      "MediaPlayback.CurrentState": "playing",
     }),
   ];
 }

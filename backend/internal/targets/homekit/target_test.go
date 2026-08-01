@@ -484,7 +484,7 @@ func TestAccessoryBindingsMapAndWriteAirConditioner(t *testing.T) {
 func TestAccessoryBindingsBuildAllExtendedHomeKitDeviceTypes(t *testing.T) {
 	types := []string{
 		"illuminance-sensor", "occupancy-sensor", "leak-sensor", "smoke-sensor", "carbon-monoxide-sensor", "carbon-dioxide-sensor", "air-quality-sensor",
-		"thermostat", "heater-cooler", "humidifier-dehumidifier", "lock", "garage-door", "security-system", "valve", "speaker",
+		"thermostat", "heater-cooler", "humidifier-dehumidifier", "lock", "garage-door", "security-system", "valve", "speaker", "television",
 	}
 	definitions := make([]virtual.DeviceConfig, 0, len(types))
 	for _, deviceType := range types {
@@ -544,6 +544,10 @@ func TestAccessoryBindingsBuildAllExtendedHomeKitDeviceTypes(t *testing.T) {
 		{"speaker", characteristic.TypeMute, "speaker", "mute", true, device.BoolValue(true)},
 		{"speaker", characteristic.TypeVolume, "speaker", "volume", 55, device.NumberValue(55)},
 		{"speaker", characteristic.TypeTargetMediaState, "speaker", "target-media-state", characteristic.TargetMediaStatePause, device.EnumValue("pause")},
+		{"television", characteristic.TypeActive, "television", "active", characteristic.ActiveActive, device.BoolValue(true)},
+		{"television", characteristic.TypeVolume, "television", "volume", 55, device.NumberValue(55)},
+		{"television", characteristic.TypeTargetMediaState, "television", "target-media-state", characteristic.TargetMediaStatePause, device.EnumValue("pause")},
+		{"television", characteristic.TypeRemoteKey, "television", "remote-key", characteristic.RemoteKeyArrowUp, device.EnumValue("up")},
 	}
 	request := &http.Request{}
 	for _, test := range writes {

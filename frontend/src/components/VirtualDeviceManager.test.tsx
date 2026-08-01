@@ -46,4 +46,19 @@ describe('VirtualDeviceManager', () => {
 		expect(screen.getByRole('alert')).toHaveTextContent('已经存在')
 		expect(screen.getAllByText('桌面开关')).toHaveLength(1)
 	})
+
+	it('exposes television volume in the visual child-device editor', async () => {
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		render(<VirtualDeviceManager provider={provider} devices={[]} onClose={() => {}} onSave={onSave} />)
+
+		await userEvent.click(screen.getByRole('button', { name: '添加虚拟设备' }))
+		await userEvent.selectOptions(screen.getByLabelText('虚拟设备模型'), 'television')
+		expect(screen.getByLabelText('初始音量')).toBeInTheDocument()
+		await userEvent.clear(screen.getByLabelText('初始音量'))
+		await userEvent.type(screen.getByLabelText('初始音量'), '65')
+		await userEvent.click(screen.getByRole('button', { name: '加入虚拟设备' }))
+
+		await userEvent.click(screen.getByRole('button', { name: '保存子设备并应用' }))
+		expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ devices: [expect.objectContaining({ type: 'television', volume: 65 })] }) }), true)
+	})
 })

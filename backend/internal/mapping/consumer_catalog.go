@@ -363,6 +363,13 @@ func HomeKitConsumerContracts() []device.ConsumerModelContract {
 			optional(device.TypeSpeaker, "speaker", "current-media-state", "Speaker.CurrentMediaState"),
 			optional(device.TypeSpeaker, "speaker", "target-media-state", "Speaker.TargetMediaState"),
 		}},
+		{ConsumerID: "homekit", DeviceType: device.TypeTelevision, Parameters: []device.ConsumerParameterMapping{
+			required(device.TypeTelevision, "television", "active", "Television.Active"),
+			required(device.TypeTelevision, "television", "volume", "Television.Volume"),
+			required(device.TypeTelevision, "television", "target-media-state", "Television.TargetMediaState"),
+			required(device.TypeTelevision, "television", "remote-key", "Television.RemoteKey"),
+			optional(device.TypeTelevision, "television", "current-media-state", "Television.CurrentMediaState"),
+		}},
 	}
 	return contracts
 }

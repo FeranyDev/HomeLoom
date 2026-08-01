@@ -91,6 +91,8 @@ func virtualParameterValue(parameter device.ModelParameter) (device.PropertyValu
 			value = 50
 		case "speaker/volume":
 			value = 35
+		case "television/volume":
+			value = 35
 		case "air-conditioner/rotation-speed":
 			value = 40
 		case "humidifier-dehumidifier/water-level":

@@ -50,6 +50,7 @@ var homeKitTargetCharacteristicTypes = map[string][]string{
 	"Valve.SetDuration":                              {characteristic.TypeSetDuration},
 	"Valve.RemainingDuration":                        {characteristic.TypeRemainingDuration},
 	"Speaker.Volume":                                 {characteristic.TypeVolume},
+	"Television.Volume":                              {characteristic.TypeVolume},
 }
 
 func configureAccessoryNumericRanges(item *accessory.A, source device.Device, logger *zap.Logger) {

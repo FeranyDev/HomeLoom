@@ -115,8 +115,17 @@ func TestMatterCatalogPublishesCommandsSeparatelyFromAttributes(t *testing.T) {
 	if !found || attribute.Kind != "attribute" || !attribute.Readable || !attribute.Notifiable {
 		t.Fatalf("Matter lock attribute = %#v, found=%v", attribute, found)
 	}
+	for _, path := range []string{"MediaPlayback.Play", "MediaPlayback.Pause", "MediaPlayback.Stop", "KeypadInput.SendKey"} {
+		command, found := FindConsumerProperty("matter", device.TypeTelevision, path)
+		if !found || command.Kind != "command" || !command.Writable || command.Readable || command.Notifiable {
+			t.Fatalf("Matter television command %q = %#v, found=%v", path, command, found)
+		}
+	}
+	keyCommand, found := FindConsumerProperty("matter", device.TypeTelevision, "KeypadInput.SendKey")
+	if !found || len(keyCommand.Enum) == 0 || !containsString(keyCommand.Enum, "volume-up") || !containsString(keyCommand.Enum, "volume-down") {
+		t.Fatalf("Matter television volume keys = %#v, found=%v", keyCommand, found)
+	}
 }
-
 func TestMatterFirstDeviceBatchIsExplicitlySupported(t *testing.T) {
 	supported := []device.Type{
 		device.TypeSwitch, device.TypeOutlet, device.TypeLightbulb,
@@ -125,7 +134,7 @@ func TestMatterFirstDeviceBatchIsExplicitlySupported(t *testing.T) {
 		device.TypeWindowCovering, device.TypeFan, device.TypeThermostat, device.TypeLock,
 		device.TypeIlluminanceSensor, device.TypePressureSensor, device.TypeLeakSensor,
 		device.TypeSmokeSensor, device.TypeCarbonMonoxideSensor, device.TypeAirQualitySensor,
-		device.TypeValve, device.TypePump, device.TypeAirPurifier, device.TypeSpeaker,
+		device.TypeValve, device.TypePump, device.TypeAirPurifier, device.TypeSpeaker, device.TypeTelevision,
 	}
 	for _, deviceType := range supported {
 		known, ok := ConsumerModelSupport("matter", deviceType)

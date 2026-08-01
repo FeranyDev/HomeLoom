@@ -6,7 +6,7 @@ export const builtInDeviceTypes = [
   'carbon-monoxide-sensor', 'carbon-dioxide-sensor', 'air-quality-sensor',
   'thermostat', 'air-conditioner', 'heater-cooler', 'humidifier-dehumidifier', 'lock', 'garage-door',
   'security-system', 'valve', 'pump', 'water-heater', 'power-meter', 'ev-charger',
-  'speaker', 'robot-vacuum',
+  'speaker', 'television', 'robot-vacuum',
 ] as const
 type BuiltInDeviceType = typeof builtInDeviceTypes[number]
 export type DeviceType = BuiltInDeviceType | (string & {})

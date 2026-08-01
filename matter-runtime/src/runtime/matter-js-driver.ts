@@ -1750,6 +1750,51 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
       }
     }
 
+    const TelevisionMediaPlaybackBase = sdk.mediaPlayback.MediaPlaybackServer;
+    class HostTelevisionMediaPlaybackServer extends TelevisionMediaPlaybackBase {
+      async #command(path: string, state: number): Promise<{ status: 0 }> {
+        const result = await this.env.get(Runtime).command(this.endpoint.number, path, {});
+        if (!result.accepted) {
+          failure(result.message);
+        }
+        this.state.currentState = state;
+        return { status: 0 };
+      }
+
+      override async play(): Promise<{ status: 0 }> {
+        return this.#command("MediaPlayback.Play", 0);
+      }
+
+      override async pause(): Promise<{ status: 0 }> {
+        return this.#command("MediaPlayback.Pause", 1);
+      }
+
+      override async stop(): Promise<{ status: 0 }> {
+        return this.#command("MediaPlayback.Stop", 2);
+      }
+    }
+
+    const TelevisionKeypadInputBase = sdk.keypadInput.KeypadInputServer;
+    type TelevisionKeyRequest = Parameters<InstanceType<typeof TelevisionKeypadInputBase>["sendKey"]>[0];
+    class HostTelevisionKeypadInputServer extends TelevisionKeypadInputBase {
+      override async sendKey(request: TelevisionKeyRequest): Promise<{ status: 0 }> {
+        const keyCode = televisionKeyCodeToUnified(request.keyCode);
+        if (keyCode === undefined) {
+          failure(`unsupported Matter television key code ${request.keyCode}`);
+        }
+        const validatedKeyCode = keyCode ?? "";
+        const result = await this.env.get(Runtime).command(
+          this.endpoint.number,
+          "KeypadInput.SendKey",
+          { keyCode: validatedKeyCode },
+        );
+        if (!result.accepted) {
+          failure(result.message);
+        }
+        return { status: 0 };
+      }
+    }
+
     const SmokeCoBase = sdk.smokeCoAlarmBehavior.SmokeCoAlarmServer;
     const Pm25Server = sdk.pm25ConcentrationMeasurement.Pm25ConcentrationMeasurementServer.with(
       "NumericMeasurement",
@@ -1861,6 +1906,13 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
         return sdk.speakerDevice.SpeakerDevice.with(
           HostSpeakerOnOffServer,
           HostSpeakerLevelServer,
+          BridgeInfo,
+        ) as never;
+      case "television":
+        return sdk.basicVideoPlayerDevice.BasicVideoPlayerDevice.with(
+          HostGenericOnOffServer,
+          HostTelevisionMediaPlaybackServer,
+          HostTelevisionKeypadInputServer,
           BridgeInfo,
         ) as never;
       default:
@@ -2236,6 +2288,14 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
         maxLevel: 254,
       };
     }
+
+    if (deviceType === "television") {
+      state.mediaPlayback = {
+        currentState: unifiedTelevisionMediaStateToMatter(
+          device.attributes["MediaPlayback.CurrentState"] ?? "stopped",
+        ),
+      };
+    }
     return state;
   }
 
@@ -2286,6 +2346,11 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
         await endpoint.setStateOf("onOff", { onOff: isSpeaker ? !onOff : onOff });
         return;
       }
+      case "MediaPlayback.CurrentState":
+        await endpoint.setStateOf("mediaPlayback", {
+          currentState: unifiedTelevisionMediaStateToMatter(value),
+        });
+        return;
       case "LevelControl.CurrentLevel":
         await endpoint.setStateOf("levelControl", {
           currentLevel: percentToMatterLevel(numberValue(value)),
@@ -2802,6 +2867,7 @@ type NormalizedDeviceType =
   | "pump"
   | "air-purifier"
   | "speaker"
+  | "television"
   | "unsupported";
 
 function normalizeDeviceType(deviceType: string): NormalizedDeviceType {
@@ -2891,6 +2957,11 @@ function normalizeDeviceType(deviceType: string): NormalizedDeviceType {
       return "air-purifier";
     case "speaker":
       return "speaker";
+    case "television":
+    case "tv":
+    case "basic-video-player":
+    case "basicvideoplayer":
+      return "television";
     default:
       return "unsupported";
   }
@@ -2909,6 +2980,39 @@ function booleanValue(value: JsonValue, path: string): boolean {
     throw new AdapterOperationError("invalid_attribute_value", `${path} requires a boolean`);
   }
   return value;
+}
+
+function unifiedTelevisionMediaStateToMatter(value: JsonValue): number {
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 3) {
+    return value;
+  }
+  switch (String(value).trim().toLowerCase()) {
+    case "playing":
+    case "play":
+      return 0;
+    case "paused":
+    case "pause":
+      return 1;
+    case "loading":
+      return 3;
+    case "stopped":
+    case "stop":
+    case "interrupted":
+      return 2;
+    default:
+      throw new AdapterOperationError(
+        "invalid_attribute_value",
+        `MediaPlayback.CurrentState value ${String(value)} is unsupported`,
+      );
+  }
+}
+
+function televisionKeyCodeToUnified(value: number): string | undefined {
+  return {
+    0: "select", 1: "up", 2: "down", 3: "left", 4: "right", 9: "back", 13: "exit",
+    47: "next", 50: "previous", 53: "info", 64: "power", 65: "volume-up", 66: "volume-down", 67: "mute",
+    68: "play", 69: "stop", 70: "pause", 72: "rewind", 73: "fast-forward",
+  }[value];
 }
 
 function numberValue(value: JsonValue | undefined, fallback?: number): number {
@@ -3399,10 +3503,12 @@ export const MATTER_DRIVER_CATALOG_DEVICE_TYPE_CONSTANTS = [
   "Pump",
   "AirPurifier",
   "Speaker",
+  "Television",
 ] as const;
 
 export const MATTER_DRIVER_ATTRIBUTE_PATHS = [
   "OnOff.OnOff",
+  "MediaPlayback.CurrentState",
   "LevelControl.CurrentLevel",
   "ColorControl.ColorTemperatureMireds",
   "ColorControl.CurrentHue",
@@ -3453,4 +3559,8 @@ export const MATTER_DRIVER_COMMAND_PATHS = [
   "DoorLock.UnlockDoor",
   "ValveConfigurationAndControl.Open",
   "ValveConfigurationAndControl.Close",
+  "MediaPlayback.Play",
+  "MediaPlayback.Pause",
+  "MediaPlayback.Stop",
+  "KeypadInput.SendKey",
 ] as const;

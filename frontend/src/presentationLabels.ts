@@ -16,7 +16,7 @@ const deviceTypes: Record<DeviceType, string> = {
 	thermostat: '恒温器', 'air-conditioner': '空调', 'heater-cooler': '冷暖设备', 'humidifier-dehumidifier': '加湿除湿器',
 	lock: '门锁', 'garage-door': '车库门', 'security-system': '安防系统', valve: '阀门',
 	pump: '水泵', 'water-heater': '热水器', 'power-meter': '电力计量器', 'ev-charger': '电动汽车充电桩',
-	speaker: '扬声器', 'robot-vacuum': '扫地机器人',
+	speaker: '扬声器', television: '电视', 'robot-vacuum': '扫地机器人',
 }
 
 const valueTypes: Record<ValueType, string> = { bool: '布尔值', int: '整数', number: '数值', string: '文本', enum: '枚举' }
@@ -62,7 +62,7 @@ const resourceNames: Record<string, string> = {
 	'water-level': '水位', lock: '门锁', jammed: '锁舌卡住', 'garage-door': '车库门',
 	'security-system': '安防系统', 'alarm-type': '告警类型', valve: '阀门', 'valve-type': '阀门类型',
 	'set-duration': '设定时长', 'remaining-duration': '剩余时长', speaker: '扬声器', volume: '音量',
-	mute: '静音', 'current-media-state': '当前媒体状态', 'target-media-state': '目标媒体状态', 'input-source': '输入源',
+	mute: '静音', 'current-media-state': '当前媒体状态', 'target-media-state': '目标媒体状态', 'input-source': '输入源', television: '电视', 'remote-key': '遥控按键',
 	'robot-vacuum': '扫地机器人', 'cleaning-progress': '清洁进度', fault: '故障代码', charging: '正在充电',
 	camera: '摄像头', privacy: '隐私模式', indicator: '状态指示灯', 'night-vision': '夜视模式',
 	'motion-detection': '移动侦测', media: '媒体',
@@ -95,6 +95,7 @@ const matterClusterNames: Record<string, string> = {
 	OnOff: '开关', LevelControl: '亮度控制', ColorControl: '颜色控制', TemperatureMeasurement: '温度测量',
 	RelativeHumidityMeasurement: '相对湿度测量', BooleanState: '布尔状态', OccupancySensing: '占用感知',
 	WindowCovering: '窗帘控制', FanControl: '风扇控制', Thermostat: '恒温器', DoorLock: '门锁',
+	MediaPlayback: '媒体播放', KeypadInput: '遥控输入',
 	BridgedDeviceBasicInformation: '桥接设备基本信息', Descriptor: '设备描述',
 }
 
@@ -104,6 +105,7 @@ const matterMemberNames: Record<string, string> = {
 	CurrentPositionLiftPercent100ths: '当前位置', TargetPositionLiftPercent100ths: '目标位置', PercentSetting: '百分比设定',
 	FanMode: '风扇模式', PercentCurrent: '当前转速', OccupiedCoolingSetpoint: '制冷设定温度', OccupiedHeatingSetpoint: '制热设定温度',
 	LockState: '门锁状态', LockDoor: '上锁', UnlockDoor: '解锁', Reachable: '可达状态',
+	CurrentState: '当前播放状态', Play: '播放', Pause: '暂停', Stop: '停止', SendKey: '发送遥控按键',
 }
 
 export function bilingual(raw: string, translated?: string): string {

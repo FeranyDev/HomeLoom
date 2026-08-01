@@ -32,6 +32,7 @@ HomeLoom 只在 HAP 提供原生或语义一致的 Service 时发布设备。桥
 | `security-system` | Security System | 完整支持 |
 | `valve` | Valve | 支持通用、灌溉、淋浴和水龙头类别 |
 | `speaker` | Speaker | 支持启用、音量和静音 |
+| `television` | Television | 支持电源、音量、播放状态、播放控制和遥控按键 |
 | `window-covering` | Window Covering | 完整支持 |
 | `robot-vacuum` | 无原生 HAP Service | 明确不支持 |
 | `pressure-sensor` | 无原生 HAP Service | 明确不支持 |
@@ -50,5 +51,7 @@ HomeLoom 只在 HAP 提供原生或语义一致的 Service 时发布设备。桥
 - HomeKit Carbon Monoxide Level 的协议范围上限为 100；更高的统一模型读数在 HomeKit 特征值侧按协议范围截断。
 - HomeKit Valve 的 Set Duration 上限为 3600 秒；统一模型仍允许保存更大的设备原始范围。
 - 可选属性只有在具体设备的统一模型快照或显式 Consumer 映射中存在时才创建对应 Characteristic，避免发布无数据的控件。
+- Television 使用原生 Television Service；播放、暂停、停止和遥控按键会写回统一模型，Speaker 仍保持独立的 Speaker 语义。
+- Television 的音量通过 Television Service 的 Volume 特征双向同步。
 - Speaker Service 的展示方式取决于 Apple Home / Home Hub 版本；HomeLoom 不把扬声器伪装成 Television。
 - 气压、噪声、水位、土壤湿度、电力计量、水泵、热水器和充电桩仍可被 Web、API 和后续 Matter Consumer 使用；HomeKit 不会把它们降级伪装成开关。

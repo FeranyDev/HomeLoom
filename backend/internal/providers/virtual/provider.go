@@ -434,6 +434,30 @@ func reconcileVirtualState(item *device.Device, capabilityID, propertyID string)
 		if propertyID == "life-level" {
 			item.SetProperty("main", "filter", "change-indication", device.BoolValue(numberValue(*item, "filter", "life-level") <= 10))
 		}
+	case "television":
+		if propertyID != "remote-key" {
+			return
+		}
+		remote, found := item.Property("main", "television", "remote-key")
+		if !found || remote.Value.String == nil {
+			return
+		}
+		volume := numberValue(*item, "television", "volume")
+		switch *remote.Value.String {
+		case "volume-up":
+			volume += 5
+		case "volume-down":
+			volume -= 5
+		default:
+			return
+		}
+		if volume < 0 {
+			volume = 0
+		}
+		if volume > 100 {
+			volume = 100
+		}
+		item.SetProperty("main", "television", "volume", device.NumberValue(volume))
 	}
 }
 

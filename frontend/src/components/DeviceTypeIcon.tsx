@@ -10,6 +10,7 @@ export function DeviceTypeIcon({ type }: { type: DeviceType }) {
 				: type === 'motion-sensor' ? <><circle cx="24" cy="24" r="15" /><circle cx="24" cy="24" r="5" /><path d="M11 14c4 3 7 4 13 4s9-1 13-4" /></>
 				: type === 'window-covering' ? <><path d="M10 10h28M13 14h22v24H13zM18 14v24M30 14v24" /></>
 				: type === 'fan' ? <><circle cx="24" cy="24" r="4" /><path d="M24 20c-5-7-1-12 3-10 4 2 2 8-3 10ZM28 24c7-5 12-1 10 3-2 4-8 2-10-3ZM24 28c5 7 1 12-3 10-4-2-2-8 3-10ZM20 24c-7 5-12 1-10-3 2-4 8-2 10 3Z" /></>
+				: type === 'television' ? <><rect x="8" y="11" width="32" height="23" rx="3" /><path d="M18 40h12M24 34v6M16 7l8 4 8-4" /></>
 				: <><rect x="14" y="7" width="20" height="34" rx="8" /><circle cx="24" cy="17" r="2" /><path d="M18 27h12M18 31h12M19 35h10" /></>}
 		</svg>
 	</span>
