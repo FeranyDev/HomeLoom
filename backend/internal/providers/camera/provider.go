@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -488,6 +489,7 @@ func applyDefaults(entry *Entry) {
 		if entry.Xiaomi.Region == "" {
 			entry.Xiaomi.Region = "cn"
 		}
+		entry.Xiaomi.Subtype = strings.ToLower(strings.TrimSpace(entry.Xiaomi.Subtype))
 		if entry.Xiaomi.Subtype == "" {
 			entry.Xiaomi.Subtype = "hd"
 		}
@@ -555,6 +557,9 @@ func validateEntry(entry Entry) error {
 		if x.DID == "" || x.Model == "" {
 			return fmt.Errorf("camera %q requires Xiaomi did and model", entry.ID)
 		}
+		if !validXiaomiMISSSubtype(x.Subtype) {
+			return fmt.Errorf("camera %q Xiaomi MISS subtype must be auto, sd, hd, or a number from 0 to 5", entry.ID)
+		}
 		if x.CredentialProviderRef == "" {
 			if x.UserID == "" || x.PassToken == "" {
 				return fmt.Errorf("camera %q requires Xiaomi userId and passToken or credentialProviderRef", entry.ID)
@@ -570,6 +575,15 @@ func validateEntry(entry Entry) error {
 		return fmt.Errorf("camera %q uses unsupported driver %q", entry.ID, entry.Driver)
 	}
 	return nil
+}
+
+func validXiaomiMISSSubtype(value string) bool {
+	switch value {
+	case "auto", "sd", "hd":
+		return true
+	}
+	number, err := strconv.Atoi(value)
+	return err == nil && number >= 0 && number <= 5
 }
 
 func buildDevice(providerID string, entry Entry) device.Device {

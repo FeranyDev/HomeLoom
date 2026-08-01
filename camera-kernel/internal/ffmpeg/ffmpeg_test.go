@@ -238,27 +238,27 @@ func TestParseArgsHwVaapi(t *testing.T) {
 		{
 			name:   "[HTTP-MJPEG] video will be transcoded to H264",
 			source: "http:///example.com#video=h264#hardware=vaapi",
-			expect: `ffmpeg -hide_banner -hwaccel vaapi -hwaccel_output_format vaapi -hwaccel_flags allow_profile_mismatch -fflags nobuffer -flags low_delay -i http:///example.com -c:v h264_vaapi -g 50 -bf 0 -profile:v high -level:v 4.1 -sei:v 0 -an -vf "format=vaapi|nv12,hwupload,scale_vaapi=out_color_matrix=bt709:out_range=tv:format=nv12" -user_agent ffmpeg/go2rtc -rtsp_transport tcp -f rtsp {output}`,
+			expect: `ffmpeg -hide_banner -init_hw_device vaapi -hwaccel_output_format vaapi -hwaccel_flags allow_profile_mismatch -fflags nobuffer -flags low_delay -i http:///example.com -c:v h264_vaapi -g 50 -bf 0 -profile:v high -level:v 4.1 -sei:v 0 -an -vf "format=vaapi|nv12,hwupload,scale_vaapi=out_color_matrix=bt709:out_range=tv:format=nv12" -user_agent ffmpeg/go2rtc -rtsp_transport tcp -f rtsp {output}`,
 		},
 		{
 			name:   "[RTSP] video with rotation, should be transcoded, so select H264",
 			source: "rtsp://example.com#video=h264#rotate=180#hardware=vaapi",
-			expect: `ffmpeg -hide_banner -hwaccel vaapi -hwaccel_output_format vaapi -hwaccel_flags allow_profile_mismatch -allowed_media_types video -fflags nobuffer -flags low_delay -timeout 5000000 -user_agent go2rtc/ffmpeg -rtsp_flags prefer_tcp -i rtsp://example.com -c:v h264_vaapi -g 50 -bf 0 -profile:v high -level:v 4.1 -sei:v 0 -an -vf "format=vaapi|nv12,hwupload,transpose_vaapi=4,scale_vaapi=out_color_matrix=bt709:out_range=tv:format=nv12" -user_agent ffmpeg/go2rtc -rtsp_transport tcp -f rtsp {output}`,
+			expect: `ffmpeg -hide_banner -init_hw_device vaapi -hwaccel_output_format vaapi -hwaccel_flags allow_profile_mismatch -allowed_media_types video -fflags nobuffer -flags low_delay -timeout 5000000 -user_agent go2rtc/ffmpeg -rtsp_flags prefer_tcp -i rtsp://example.com -c:v h264_vaapi -g 50 -bf 0 -profile:v high -level:v 4.1 -sei:v 0 -an -vf "format=vaapi|nv12,hwupload,transpose_vaapi=4,scale_vaapi=out_color_matrix=bt709:out_range=tv:format=nv12" -user_agent ffmpeg/go2rtc -rtsp_transport tcp -f rtsp {output}`,
 		},
 		{
 			name:   "[RTSP] video with resize to 1280x720, should be transcoded, so select H265",
 			source: "rtsp://example.com#video=h265#width=1280#height=720#hardware=vaapi",
-			expect: `ffmpeg -hide_banner -hwaccel vaapi -hwaccel_output_format vaapi -hwaccel_flags allow_profile_mismatch -allowed_media_types video -fflags nobuffer -flags low_delay -timeout 5000000 -user_agent go2rtc/ffmpeg -rtsp_flags prefer_tcp -i rtsp://example.com -c:v hevc_vaapi -g 50 -bf 0 -profile:v main -level:v 5.1 -sei:v 0 -an -vf "format=vaapi|nv12,hwupload,scale_vaapi=1280:720" -user_agent ffmpeg/go2rtc -rtsp_transport tcp -f rtsp {output}`,
+			expect: `ffmpeg -hide_banner -init_hw_device vaapi -hwaccel_output_format vaapi -hwaccel_flags allow_profile_mismatch -allowed_media_types video -fflags nobuffer -flags low_delay -timeout 5000000 -user_agent go2rtc/ffmpeg -rtsp_flags prefer_tcp -i rtsp://example.com -c:v hevc_vaapi -g 50 -bf 0 -profile:v main -level:v 5.1 -sei:v 0 -an -vf "format=vaapi|nv12,hwupload,scale_vaapi=1280:720" -user_agent ffmpeg/go2rtc -rtsp_transport tcp -f rtsp {output}`,
 		},
 		{
 			name:   "[FILE] video will be output for MJPEG to pipe, audio will be skipped",
 			source: "/media/bbb.mp4#video=mjpeg#hardware=vaapi",
-			expect: `ffmpeg -hide_banner -hwaccel vaapi -hwaccel_output_format vaapi -hwaccel_flags allow_profile_mismatch -re -i /media/bbb.mp4 -c:v mjpeg_vaapi -an -vf "format=vaapi|nv12,hwupload" -f mjpeg -`,
+			expect: `ffmpeg -hide_banner -init_hw_device vaapi -hwaccel_output_format vaapi -hwaccel_flags allow_profile_mismatch -re -i /media/bbb.mp4 -c:v mjpeg_vaapi -an -vf "format=vaapi|nv12,hwupload" -f mjpeg -`,
 		},
 		{
 			name:   "[DEVICE] MJPEG video with size 1920x1080 will be transcoded to H265",
 			source: "device?video=0&video_size=1920x1080#video=h265#hardware=vaapi",
-			expect: `ffmpeg -hide_banner -hwaccel vaapi -hwaccel_output_format vaapi -hwaccel_flags allow_profile_mismatch -f dshow -video_size 1920x1080 -i "video=0" -c:v hevc_vaapi -g 50 -bf 0 -profile:v main -level:v 5.1 -sei:v 0 -an -vf "format=vaapi|nv12,hwupload" -user_agent ffmpeg/go2rtc -rtsp_transport tcp -f rtsp {output}`,
+			expect: `ffmpeg -hide_banner -init_hw_device vaapi -hwaccel_output_format vaapi -hwaccel_flags allow_profile_mismatch -f dshow -video_size 1920x1080 -i "video=0" -c:v hevc_vaapi -g 50 -bf 0 -profile:v main -level:v 5.1 -sei:v 0 -an -vf "format=vaapi|nv12,hwupload" -user_agent ffmpeg/go2rtc -rtsp_transport tcp -f rtsp {output}`,
 		},
 	}
 	for _, test := range tests {
@@ -377,7 +377,7 @@ func _TestParseArgsHwVideotoolbox(t *testing.T) {
 
 func TestDeckLink(t *testing.T) {
 	args := parseArgs(`DeckLink SDI (2)#video=h264#hardware=vaapi#input=-format_code Hp29 -f decklink -i "{input}"`)
-	require.Equal(t, `ffmpeg -hide_banner -hwaccel vaapi -hwaccel_output_format vaapi -hwaccel_flags allow_profile_mismatch -format_code Hp29 -f decklink -i "DeckLink SDI (2)" -c:v h264_vaapi -g 50 -bf 0 -profile:v high -level:v 4.1 -sei:v 0 -an -vf "format=vaapi|nv12,hwupload,scale_vaapi=out_color_matrix=bt709:out_range=tv:format=nv12" -user_agent ffmpeg/go2rtc -rtsp_transport tcp -f rtsp {output}`, args.String())
+	require.Equal(t, `ffmpeg -hide_banner -init_hw_device vaapi -hwaccel_output_format vaapi -hwaccel_flags allow_profile_mismatch -format_code Hp29 -f decklink -i "DeckLink SDI (2)" -c:v h264_vaapi -g 50 -bf 0 -profile:v high -level:v 4.1 -sei:v 0 -an -vf "format=vaapi|nv12,hwupload,scale_vaapi=out_color_matrix=bt709:out_range=tv:format=nv12" -user_agent ffmpeg/go2rtc -rtsp_transport tcp -f rtsp {output}`, args.String())
 }
 
 func TestDrawText(t *testing.T) {
@@ -396,7 +396,7 @@ func TestDrawText(t *testing.T) {
 		},
 		{
 			source: "http:///example.com#video=h264#width=640#drawtext=fontsize=12#hardware=vaapi",
-			expect: `ffmpeg -hide_banner -hwaccel vaapi -hwaccel_output_format nv12 -hwaccel_flags allow_profile_mismatch -fflags nobuffer -flags low_delay -i http:///example.com -c:v h264_vaapi -g 50 -bf 0 -profile:v high -level:v 4.1 -sei:v 0 -an -vf "scale=640:-1,drawtext=fontsize=12:text='%{localtime\:%Y-%m-%d %X}',hwupload" -user_agent ffmpeg/go2rtc -rtsp_transport tcp -f rtsp {output}`,
+			expect: `ffmpeg -hide_banner -init_hw_device vaapi -hwaccel_output_format nv12 -hwaccel_flags allow_profile_mismatch -fflags nobuffer -flags low_delay -i http:///example.com -c:v h264_vaapi -g 50 -bf 0 -profile:v high -level:v 4.1 -sei:v 0 -an -vf "scale=640:-1,drawtext=fontsize=12:text='%{localtime\:%Y-%m-%d %X}',hwupload" -user_agent ffmpeg/go2rtc -rtsp_transport tcp -f rtsp {output}`,
 		},
 	}
 	for _, test := range tests {

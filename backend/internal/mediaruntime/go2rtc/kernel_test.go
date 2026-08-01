@@ -37,7 +37,7 @@ func TestPublisherConfigUsesProtectedPlaceholdersAndRetainsPairings(t *testing.T
 			t.Fatalf("publisher config contains a secret: %q", secret)
 		}
 	}
-	for _, required := range []string{"modules: [api, rtsp, srtp, homekit, xiaomi, streams, mp4, exec, ffmpeg]", "allow_paths: [/pair-setup, /pair-verify, /api/stream.mp4, /api/frame.mp4, /api/frame.jpeg, /api/homekit/session, /api/matter/webrtc]", "exec:\n  allow_paths: [\"/opt/homeloom/ffmpeg\"]", "ffmpeg:\n  bin: \"/opt/homeloom/ffmpeg\"", "  global: \"-hide_banner -nostats\"", "ffmpeg:camera-main#video=h264", "${HOMELOOM_CAMERA_SOURCE_CAMERA_MAIN}"} {
+	for _, required := range []string{"modules: [api, rtsp, srtp, homekit, xiaomi, streams, mp4, exec, ffmpeg]", "homekit: warn", "allow_paths: [/pair-setup, /pair-verify, /api/stream.mp4, /api/frame.mp4, /api/frame.jpeg, /api/homekit/session, /api/matter/webrtc]", "exec:\n  allow_paths: [\"/opt/homeloom/ffmpeg\"]", "ffmpeg:\n  bin: \"/opt/homeloom/ffmpeg\"", "  global: \"-hide_banner -nostats\"", "ffmpeg:camera-main#video=h264", "${HOMELOOM_CAMERA_SOURCE_CAMERA_MAIN}"} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("publisher config missing %q:\n%s", required, text)
 		}
@@ -75,7 +75,7 @@ func TestPreviewOnlyConfigDoesNotExposeHomeKitAccessory(t *testing.T) {
 	config := publisherTestConfig(t.TempDir())
 	config.PublishHomeKit = false
 	text := publisherYAML(config)
-	if strings.Contains(text, "homekit:") || strings.Contains(text, "/pair-setup") || strings.Contains(text, "homekit,") {
+	if strings.Contains(text, "\nhomekit:\n") || strings.Contains(text, "/pair-setup") || strings.Contains(text, "homekit,") {
 		t.Fatalf("preview-only config advertises HomeKit:\n%s", text)
 	}
 	if !strings.Contains(text, "/api/stream.mp4") || !strings.Contains(text, "streams:") {
@@ -637,7 +637,7 @@ func TestPreviewOnlyRestartPreservesHomeKitPairings(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(content)
-	if strings.Contains(text, "homekit:") ||
+	if strings.Contains(text, "\nhomekit:\n") ||
 		strings.Contains(text, "client_id=controller&client_public=abcd&permissions=1") ||
 		strings.Contains(text, "modules: [api, rtsp, srtp, homekit,") ||
 		strings.Contains(text, "hap_listen:") ||

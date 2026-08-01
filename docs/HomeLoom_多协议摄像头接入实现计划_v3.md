@@ -1865,6 +1865,10 @@ tombstone。
 4. 当前纵切版本在 MIoT Cloud 的“管理设备”中选择 Camera，并自动生成
    `protocol=xiaomi-miss`、`subtype=hd` 和媒体 Profile。目标架构会把这一步迁移到
    “设备来源 → 摄像头 → 从 Xiaomi 目录导入”，MIoT Provider 本身不再发布 Camera。
+
+2026-08-01：Camera Provider 的子设备编辑器已增加 Xiaomi MISS `subtype` 可视化选择，支持
+`auto`、`sd`、`hd` 以及厂商码流 `0–5`，默认 `hd`。扫描导入的小米摄像头也显式写入默认值；
+后端在 Provider 加载时对同一枚举执行归一化和严格校验，高级 JSON 与可视化配置保持一致。
 5. 当前纵切版本会自动创建独立 Apple Home Stream；目标架构会迁移为
    “桥接中心 → HomeKit 摄像头 → 新建发布”。迁移完成前不要把自动发布行为作为正式
    产品契约。

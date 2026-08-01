@@ -900,10 +900,10 @@ func applyPublisherModules(content string, publishHomeKit bool) string {
 }
 
 func publisherLogConfig() string {
-	// Global debug includes HomeKit setup/session negotiation and stream
-	// selection. FFmpeg's own verbosity is bounded to info; its stderr is still
-	// relayed by the exec module into this redacted structured log.
-	return "log:\n  output: stdout\n  format: json\n  level: debug\n  time: UNIXMS\n  ffmpeg: info\n"
+	// Keep the global level at debug for media lifecycle diagnostics, while
+	// bounding the normally noisy HomeKit characteristic/session logger to warn.
+	// FFmpeg's own verbosity is separately bounded to info.
+	return "log:\n  output: stdout\n  format: json\n  level: debug\n  time: UNIXMS\n  homekit: warn\n  ffmpeg: info\n"
 }
 
 func applyPublisherLogConfig(content string) string {
@@ -982,7 +982,7 @@ func transcodeFallbackURIs(streamID string, query []string) []string {
 		}
 	default:
 		return []string{
-			join("video=h264/vaapi", "starttimeout=8"),
+			join("video=h264#hardware=vaapi", "starttimeout=8"),
 			join("video=h264/cuda", "starttimeout=8"),
 			join("video=h264/v4l2m2m", "starttimeout=8"),
 			join("video=h264/rkmpp", "starttimeout=8"),

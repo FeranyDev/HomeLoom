@@ -74,6 +74,27 @@ describe('CameraDeviceManager', () => {
 		}), true)
 	})
 
+	it('configures Xiaomi MISS subtype from a visual selector', async () => {
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		render(<CameraDeviceManager provider={provider} onClose={() => {}} onSave={onSave} />)
+		await userEvent.click(screen.getByRole('button', { name: '手动添加' }))
+		await userEvent.type(screen.getByLabelText('摄像头 ID'), 'xiaomi-front')
+		await userEvent.type(screen.getByLabelText('摄像头名称'), '小米门口摄像头')
+		await userEvent.selectOptions(screen.getByLabelText('摄像头驱动'), 'xiaomi-miss')
+		expect(screen.getByLabelText('小米摄像头视频子类型')).toHaveValue('hd')
+		await userEvent.selectOptions(screen.getByLabelText('小米摄像头视频子类型'), 'sd')
+		await userEvent.type(screen.getByLabelText('小米摄像头 DID'), 'did-front')
+		await userEvent.type(screen.getByLabelText('小米摄像头型号'), 'chuangmi.camera.079ac1')
+		await userEvent.type(screen.getByLabelText('小米摄像头局域网 IP'), '192.168.1.30')
+		await userEvent.click(screen.getByRole('button', { name: '加入子设备' }))
+		await userEvent.click(screen.getByRole('button', { name: '保存子设备并应用' }))
+		expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+			config: expect.objectContaining({ cameras: [expect.objectContaining({
+				xiaomi: expect.objectContaining({ subtype: 'sd' }),
+			})] }),
+		}), true)
+	})
+
 	it('does not allow child-device mutation before the Camera Provider runs', () => {
 		render(<CameraDeviceManager provider={{ ...provider, status: 'disabled', enabled: false }} onClose={() => {}} onSave={vi.fn()} />)
 		expect(screen.getByRole('button', { name: '扫描摄像头' })).toBeDisabled()

@@ -108,8 +108,12 @@ var Logger zerolog.Logger
 var modules = map[string]string{
 	"format": "", // useless, but anyway
 	"level":  "info",
-	"output": "stdout", // TODO: change to stderr someday
-	"time":   zerolog.TimeFormatUnixMs,
+	// HomeKit negotiation is useful when diagnosing pairing/media failures,
+	// but its normal characteristic and session traffic is too noisy for the
+	// per-camera diagnostic log. It can still be overridden with log.homekit.
+	"homekit": "warn",
+	"output":  "stdout", // TODO: change to stderr someday
+	"time":    zerolog.TimeFormatUnixMs,
 }
 
 const (

@@ -195,6 +195,52 @@ func TestXiaomiCameraUsesIndependentEncryptedSessionConfig(t *testing.T) {
 	}
 }
 
+func TestXiaomiCameraSubtypeDefaultsAndValidation(t *testing.T) {
+	valid := []string{"auto", "sd", "hd", "0", "5"}
+	for _, subtype := range valid {
+		t.Run("accepts-"+subtype, func(t *testing.T) {
+			provider := newTestProvider(t, Config{Cameras: []Entry{{
+				ID: "xiaomi-" + subtype, Name: "Xiaomi Camera", Driver: "xiaomi-miss", Profiles: []media.MediaProfile{testProfile()},
+				Xiaomi: &XiaomiConfig{UserID: "123", Ssecurity: "security", ServiceToken: "service", PassToken: "pass", DID: "987", Model: "chuangmi.camera.079ac1", LocalIP: "192.0.2.20", Subtype: subtype},
+			}}})
+			sources, err := provider.DiscoverMediaSources(context.Background())
+			if err != nil || len(sources) != 1 {
+				t.Fatalf("sources = %#v, %v", sources, err)
+			}
+			var source struct {
+				Subtype string `json:"subtype"`
+			}
+			if err := json.Unmarshal(sources[0].SourceConfig, &source); err != nil || source.Subtype != subtype {
+				t.Fatalf("source subtype = %#v, %v", source, err)
+			}
+		})
+	}
+
+	defaultProvider := newTestProvider(t, Config{Cameras: []Entry{{
+		ID: "xiaomi-default", Name: "Xiaomi Camera", Driver: "xiaomi-miss", Profiles: []media.MediaProfile{testProfile()},
+		Xiaomi: &XiaomiConfig{UserID: "123", Ssecurity: "security", ServiceToken: "service", PassToken: "pass", DID: "987", Model: "chuangmi.camera.079ac1", LocalIP: "192.0.2.20"},
+	}}})
+	sources, err := defaultProvider.DiscoverMediaSources(context.Background())
+	if err != nil || len(sources) != 1 || !strings.Contains(string(sources[0].SourceConfig), `"subtype":"hd"`) {
+		t.Fatalf("default subtype source = %#v, %v", sources, err)
+	}
+
+	for _, subtype := range []string{"6", "main"} {
+		t.Run("rejects-"+subtype, func(t *testing.T) {
+			raw, err := json.Marshal(Config{Cameras: []Entry{{
+				ID: "xiaomi-invalid", Name: "Xiaomi Camera", Driver: "xiaomi-miss", Profiles: []media.MediaProfile{testProfile()},
+				Xiaomi: &XiaomiConfig{UserID: "123", Ssecurity: "security", ServiceToken: "service", PassToken: "pass", DID: "987", Model: "chuangmi.camera.079ac1", LocalIP: "192.0.2.20", Subtype: subtype},
+			}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := NewProviderFromConfig(providerconfig.Config{ID: "camera-main", Type: ProviderType, Name: "Cameras", Config: raw}); err == nil {
+				t.Fatalf("subtype %q was accepted", subtype)
+			}
+		})
+	}
+}
+
 func TestXiaomiCameraCachesSignatureForWorkerKeyUntilProviderRestart(t *testing.T) {
 	config := Config{Cameras: []Entry{{
 		ID: "xiaomi-camera", Name: "Xiaomi Camera", Driver: "xiaomi-miss", Profiles: []media.MediaProfile{testProfile()},

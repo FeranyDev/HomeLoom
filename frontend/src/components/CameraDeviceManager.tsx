@@ -25,6 +25,18 @@ const defaultProfile = {
 	videoCodec: 'h264', audioCodec: 'aac', bitrate: 2_000_000,
 }
 
+const xiaomiSubtypes = [
+	['auto', '自动选择'],
+	['sd', '标清'],
+	['hd', '高清（默认）'],
+	['0', '厂商码流 0'],
+	['1', '厂商码流 1'],
+	['2', '厂商码流 2'],
+	['3', '厂商码流 3'],
+	['4', '厂商码流 4'],
+	['5', '厂商码流 5'],
+] as const
+
 function cameraEntries(provider: Provider): CameraEntry[] {
 	return Array.isArray(provider.config.cameras)
 		? provider.config.cameras.filter((item): item is CameraEntry => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
@@ -224,6 +236,7 @@ export function CameraDeviceManager({ provider, providers = [], devices = [], on
 				region: String(providers.find((source) => source.id === item.sourceProviderId)?.config.region ?? 'cn'),
 				username: '', password: '', passToken: '',
 				did: item.did, model: item.model ?? '', localIp: item.localIp ?? '',
+				subtype: 'hd',
 				channel: 1,
 			},
 		})
@@ -309,7 +322,7 @@ export function CameraDeviceManager({ provider, providers = [], devices = [], on
 						? { ...current, driver: next, rtsp: objectValue(current.rtsp).host ? current.rtsp : { host: '', port: 554, path: '', authType: 'basic', username: '', password: '' }, onvif: undefined, xiaomi: undefined }
 						: next === 'onvif'
 							? { ...current, driver: next, onvif: objectValue(current.onvif).host ? current.onvif : { host: '', port: 80, profile: '', username: '', password: '' }, rtsp: undefined, xiaomi: undefined }
-							: { ...current, driver: next, xiaomi: objectValue(current.xiaomi).did ? current.xiaomi : { region: 'cn', username: '', password: '', passToken: '', did: '', model: '', localIp: '', channel: 1 }, rtsp: undefined, onvif: undefined })
+							: { ...current, driver: next, xiaomi: objectValue(current.xiaomi).did ? current.xiaomi : { region: 'cn', username: '', password: '', passToken: '', did: '', model: '', localIp: '', subtype: 'hd', channel: 1 }, rtsp: undefined, onvif: undefined })
 				}}><option value="rtsp">RTSP</option><option value="onvif">ONVIF</option><option value="xiaomi-miss">Xiaomi MISS</option></select></label>
 				<label className="wide">连接模式<select aria-label="摄像头连接模式" value={connectionMode} onChange={(event) => updateDraft('connectionMode', event.target.value)}>
 					<option value="on_demand">按需连接：观看时才连接，资源占用最低</option>
@@ -346,6 +359,7 @@ export function CameraDeviceManager({ provider, providers = [], devices = [], on
 					<label>型号<input aria-label="小米摄像头型号" value={String(xiaomi.model ?? '')} onChange={(event) => updateNested('xiaomi', 'model', event.target.value)} placeholder="chuangmi.camera.079ac1" /></label>
 					<label>局域网 IP<input aria-label="小米摄像头局域网 IP" value={String(xiaomi.localIp ?? '')} onChange={(event) => updateNested('xiaomi', 'localIp', event.target.value)} /></label>
 					<label>地区<input aria-label="小米摄像头地区" value={String(xiaomi.region ?? 'cn')} onChange={(event) => updateNested('xiaomi', 'region', event.target.value)} /></label>
+					<label>视频子类型（subtype）<select aria-label="小米摄像头视频子类型" value={String(xiaomi.subtype ?? 'hd')} onChange={(event) => updateNested('xiaomi', 'subtype', event.target.value)}>{xiaomiSubtypes.map(([value, label]) => <option key={value} value={value}>{label}（{value}）</option>)}</select><small>用于 Xiaomi MISS 选择媒体档位；默认使用高清。设备不支持某个厂商码流时请改用自动、标清或高清。</small></label>
 					<label className="wide">账号认证<select aria-label="小米摄像头账号认证" value={String(xiaomi.credentialProviderRef ?? '')} onChange={(event) => updateNested('xiaomi', 'credentialProviderRef', event.target.value)}><option value="">独立凭据</option>{credentialProviders.map((item) => <option key={item.id} value={item.id}>复用 {item.name}（{item.id}）</option>)}</select><small>复用时只保存 Provider 引用；密码和 Token 仅在后端授权边界读取，不经过浏览器或 Camera 配置。</small></label>
 					{!String(xiaomi.credentialProviderRef ?? '') && <>
 						<label>小米账号<input aria-label="小米摄像头账号" value={String(xiaomi.username ?? '')} onChange={(event) => updateNested('xiaomi', 'username', event.target.value)} /></label>
