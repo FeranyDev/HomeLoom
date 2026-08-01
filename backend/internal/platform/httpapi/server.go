@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +23,7 @@ import (
 	domainaudit "github.com/feranydev/homeloom/backend/internal/domain/audit"
 	domaincommand "github.com/feranydev/homeloom/backend/internal/domain/command"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
+	domainmedia "github.com/feranydev/homeloom/backend/internal/domain/media"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	domainstate "github.com/feranydev/homeloom/backend/internal/domain/state"
 	domaintarget "github.com/feranydev/homeloom/backend/internal/domain/target"
@@ -32,17 +36,22 @@ import (
 )
 
 type Server struct {
-	address        string
-	echo           *echo.Echo
-	settings       *application.SettingsService
-	audit          *application.AuditService
-	exports        *application.ExportService
-	profiles       *application.ProfileService
-	auth           *application.AuthService
-	maintenance    *application.MaintenanceService
-	logins         *loginLimiter
-	cloudLogins    *xiaomi.CloudLoginService
-	trustedProxies []*net.IPNet
+	address                    string
+	echo                       *echo.Echo
+	devices                    *application.DeviceService
+	settings                   *application.SettingsService
+	audit                      *application.AuditService
+	exports                    *application.ExportService
+	profiles                   *application.ProfileService
+	auth                       *application.AuthService
+	maintenance                *application.MaintenanceService
+	media                      *application.MediaService
+	mediaPreview               *http.Client
+	mediaPreviewStartupTimeout time.Duration
+	mediaRuntimeDir            string
+	logins                     *loginLimiter
+	cloudLogins                *xiaomi.CloudLoginService
+	trustedProxies             []*net.IPNet
 }
 
 func runtimeChanges(previousProviders, previousDiagnostics []byte, providers, diagnostics any) (map[string]any, []byte, []byte) {
@@ -238,7 +247,7 @@ func (r targetRequest) domain(id string) domaintarget.Config {
 
 func NewServer(address string, devices *application.DeviceService, targets *application.TargetService, logger *slog.Logger, providerServices ...*application.ProviderService) *Server {
 	e := echo.New()
-	server := &Server{address: address, echo: e, logins: newLoginLimiter(), cloudLogins: xiaomi.NewCloudLoginService()}
+	server := &Server{address: address, echo: e, devices: devices, logins: newLoginLimiter(), cloudLogins: xiaomi.NewCloudLoginService()}
 	e.IPExtractor = server.clientIP
 	e.HideBanner = true
 	e.HidePort = true
@@ -598,6 +607,60 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 	e.GET("/api/v1/diagnostics", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"data": devices.Metrics()})
 	})
+	e.GET("/api/v1/media/streams", func(c echo.Context) error {
+		if server.media == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "media configuration is unavailable")
+		}
+		items, err := server.media.List(c.Request().Context())
+		if err != nil {
+			return mediaHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": items})
+	})
+	e.POST("/api/v1/media/streams", func(c echo.Context) error {
+		if server.media == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "media configuration is unavailable")
+		}
+		var item domainmedia.StreamSpec
+		if err := c.Bind(&item); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid media stream")
+		}
+		created, err := server.media.Create(c.Request().Context(), item)
+		if err != nil {
+			return mediaHTTPError(err)
+		}
+		return c.JSON(http.StatusCreated, map[string]any{"data": created})
+	})
+	e.PUT("/api/v1/media/streams/:id", func(c echo.Context) error {
+		if server.media == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "media configuration is unavailable")
+		}
+		var item domainmedia.StreamSpec
+		if err := c.Bind(&item); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid media stream")
+		}
+		updated, err := server.media.Update(c.Request().Context(), c.Param("id"), item)
+		if err != nil {
+			return mediaHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": updated})
+	})
+	e.DELETE("/api/v1/media/streams/:id", func(c echo.Context) error {
+		if server.media == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "media configuration is unavailable")
+		}
+		if err := server.media.Delete(c.Request().Context(), c.Param("id")); err != nil {
+			return mediaHTTPError(err)
+		}
+		return c.NoContent(http.StatusNoContent)
+	})
+	e.GET("/api/v1/media/health", func(c echo.Context) error {
+		if server.media == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "media configuration is unavailable")
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": map[string]string{"status": server.media.RuntimeStatus()}})
+	})
+	e.GET("/api/v1/media/devices/:deviceId/preview.mp4", server.serveMediaPreview)
 	e.POST("/api/v1/mapping/preview", func(c echo.Context) error {
 		var input mapping.PreviewRequest
 		if err := c.Bind(&input); err != nil {
@@ -1545,6 +1608,151 @@ func (s *Server) SetMaintenanceService(maintenance *application.MaintenanceServi
 	s.maintenance = maintenance
 }
 
+func (s *Server) SetMediaService(media *application.MediaService) { s.media = media }
+
+func (s *Server) SetMediaPreview(runtimeDir string) {
+	root, err := filepath.Abs(runtimeDir)
+	if err != nil || root == filepath.Dir(root) {
+		return
+	}
+	s.mediaRuntimeDir = root
+	dialer := &net.Dialer{}
+	s.mediaPreview = &http.Client{Transport: &http.Transport{
+		Proxy: nil,
+		DialContext: func(ctx context.Context, _, address string) (net.Conn, error) {
+			streamID, _, err := net.SplitHostPort(address)
+			if err != nil || !device.ValidStableID(streamID) {
+				return nil, errors.New("invalid camera preview stream address")
+			}
+			socket := filepath.Join(root, streamID, "media.sock")
+			if filepath.Dir(filepath.Dir(socket)) != root {
+				return nil, errors.New("unsafe camera preview socket path")
+			}
+			return dialer.DialContext(ctx, "unix", socket)
+		},
+	}}
+	s.mediaPreviewStartupTimeout = 10 * time.Second
+}
+
+var errMediaPreviewStartupTimeout = errors.New("camera preview did not produce a media fragment")
+
+func readMediaPreviewStartup(ctx context.Context, body io.ReadCloser, timeout time.Duration, limit int) ([]byte, error) {
+	type result struct {
+		payload []byte
+		err     error
+	}
+	done := make(chan result, 1)
+	go func() {
+		buffer := bytes.NewBuffer(make([]byte, 0, 64<<10))
+		chunk := make([]byte, 32<<10)
+		for buffer.Len() < limit {
+			remaining := limit - buffer.Len()
+			if remaining < len(chunk) {
+				chunk = chunk[:remaining]
+			}
+			count, err := body.Read(chunk)
+			if count > 0 {
+				_, _ = buffer.Write(chunk[:count])
+				if bytes.Contains(buffer.Bytes(), []byte("moof")) {
+					done <- result{payload: buffer.Bytes()}
+					return
+				}
+			}
+			if err != nil {
+				done <- result{err: errMediaPreviewStartupTimeout}
+				return
+			}
+		}
+		done <- result{err: errMediaPreviewStartupTimeout}
+	}()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case outcome := <-done:
+		return outcome.payload, outcome.err
+	case <-ctx.Done():
+		_ = body.Close()
+		return nil, ctx.Err()
+	case <-timer.C:
+		_ = body.Close()
+		return nil, errMediaPreviewStartupTimeout
+	}
+}
+
+func (s *Server) serveMediaPreview(c echo.Context) error {
+	if s.media == nil || s.mediaPreview == nil || s.mediaRuntimeDir == "" {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "camera preview is unavailable")
+	}
+	streams, err := s.media.List(c.Request().Context())
+	if err != nil {
+		return mediaHTTPError(err)
+	}
+	var selected *domainmedia.StreamSpec
+	for index := range streams {
+		if streams[index].DeviceID == c.Param("deviceId") {
+			selected = &streams[index]
+			break
+		}
+	}
+	if selected == nil {
+		return echo.NewHTTPError(http.StatusNotFound, "camera media stream not found")
+	}
+	// Device Center is a visual diagnostic surface. Keep its MP4 video-only:
+	// Opus-in-MP4 support differs across browsers, and an incompatible audio
+	// track can make an otherwise valid H.264 stream remain in HAVE_NOTHING.
+	// HomeKit audio continues over its separate SRTP session.
+	query := url.Values{"src": {selected.ID}, "video": {"h264"}}
+	endpoint := "http://" + selected.ID + "/api/stream.mp4?" + query.Encode()
+	request, err := http.NewRequestWithContext(c.Request().Context(), http.MethodGet, endpoint, nil)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "camera preview request failed").SetInternal(err)
+	}
+	request.Header.Set("User-Agent", "HomeLoom-Media-Preview/1")
+	response, err := s.mediaPreview.Do(request)
+	if err != nil {
+		if c.Request().Context().Err() == nil {
+			s.reportMediaAvailability(selected.DeviceID, device.AvailabilityOffline)
+		}
+		return echo.NewHTTPError(http.StatusBadGateway, "camera publisher is unreachable").SetInternal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		s.reportMediaAvailability(selected.DeviceID, device.AvailabilityOffline)
+		return echo.NewHTTPError(http.StatusBadGateway, "camera publisher rejected the preview stream")
+	}
+	contentType := response.Header.Get(echo.HeaderContentType)
+	if !strings.HasPrefix(contentType, "video/mp4") {
+		s.reportMediaAvailability(selected.DeviceID, device.AvailabilityOffline)
+		return echo.NewHTTPError(http.StatusBadGateway, "camera publisher returned an invalid preview stream")
+	}
+	startup, err := readMediaPreviewStartup(c.Request().Context(), response.Body, s.mediaPreviewStartupTimeout, 4<<20)
+	if err != nil {
+		if c.Request().Context().Err() != nil {
+			return c.Request().Context().Err()
+		}
+		s.reportMediaAvailability(selected.DeviceID, device.AvailabilityOffline)
+		return echo.NewHTTPError(http.StatusGatewayTimeout, "camera preview timed out waiting for a keyframe").SetInternal(err)
+	}
+	s.reportMediaAvailability(selected.DeviceID, device.AvailabilityOnline)
+	c.Response().Header().Set(echo.HeaderContentType, contentType)
+	c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+	c.Response().WriteHeader(http.StatusOK)
+	if _, err := c.Response().Writer.Write(startup); err != nil {
+		return err
+	}
+	if _, err := io.Copy(c.Response().Writer, response.Body); err != nil && c.Request().Context().Err() == nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Server) reportMediaAvailability(deviceID string, availability device.Availability) {
+	if s.devices != nil {
+		_, _ = s.devices.ReportDeviceAvailability(deviceID, availability)
+	}
+}
+
 func (s *Server) SetTrustedProxies(values []string) error {
 	ranges := make([]*net.IPNet, 0, len(values))
 	for _, value := range values {
@@ -1680,6 +1888,22 @@ func profileHTTPError(err error) error {
 		return validation
 	}
 	return echo.NewHTTPError(http.StatusInternalServerError, "mapping profile operation failed").SetInternal(err)
+}
+
+func mediaHTTPError(err error) error {
+	switch {
+	case errors.Is(err, application.ErrMediaStreamNotFound):
+		return echo.NewHTTPError(http.StatusNotFound, "media stream not found")
+	case errors.Is(err, application.ErrMediaStreamExists):
+		return echo.NewHTTPError(http.StatusConflict, "media stream already exists")
+	case errors.Is(err, application.ErrMediaStreamStoreUnavailable):
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "media configuration is unavailable").SetInternal(err)
+	}
+	var validation *application.ValidationError
+	if errors.As(err, &validation) {
+		return validation
+	}
+	return echo.NewHTTPError(http.StatusServiceUnavailable, "media configuration operation failed").SetInternal(err)
 }
 
 func writeJSONDownload(c echo.Context, filename string, value any) error {

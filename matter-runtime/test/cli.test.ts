@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseArguments } from "../src/cli.js";
+import { IPC_PROTOCOL_VERSION } from "../src/contract.js";
+import { parseArguments, readyEvent } from "../src/cli.js";
 
 test("CLI defaults to the real matter.js adapter and keeps fake explicit", () => {
   const previous = process.env.HOMELOOM_MATTER_ADAPTER;
@@ -28,4 +29,18 @@ test("CLI defaults to the real matter.js adapter and keeps fake explicit", () =>
       process.env.HOMELOOM_MATTER_ADAPTER = previous;
     }
   }
+});
+
+test("CLI ready event advertises the current IPC contract version", () => {
+  const options = parseArguments([
+    "--socket",
+    "/tmp/matter-camera.sock",
+    "--target",
+    "matter-camera",
+    "--adapter",
+    "fake",
+  ]);
+
+  assert.equal(readyEvent(options).protocolVersion, IPC_PROTOCOL_VERSION);
+  assert.equal(readyEvent(options).protocolVersion, "1.1");
 });

@@ -309,20 +309,7 @@ func validateValue(value device.PropertyValue, expected device.ValueType) error 
 	if value.Type != expected {
 		return fmt.Errorf("type %q does not match expected %q", value.Type, expected)
 	}
-	payloads := 0
-	if value.Bool != nil {
-		payloads++
-	}
-	if value.Int != nil {
-		payloads++
-	}
-	if value.Number != nil {
-		payloads++
-	}
-	if value.String != nil {
-		payloads++
-	}
-	if payloads != 1 {
+	if !value.HasSinglePayload() {
 		return fmt.Errorf("must contain exactly one typed payload")
 	}
 	switch value.Type {

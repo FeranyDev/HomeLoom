@@ -5,6 +5,7 @@ import type {
   AttributeUpdate,
   AttributeWriteResult,
   BridgeConfiguration,
+  CameraMediaBinding,
   CommandResult,
   CommissioningChangedEvent,
   CommissioningWindowResult,
@@ -22,6 +23,13 @@ import {
   type MatterProtocolAdapter,
 } from "./adapter.js";
 import type { LoadedMatterJs } from "./matter-js-adapter.js";
+import type {
+  AudioAllocationRequest,
+  CameraAvOwner,
+  SnapshotAllocationRequest,
+  VideoAllocationRequest,
+} from "../camera/av-allocation-manager.js";
+import type { CameraSessionEndReason, IceCandidate } from "../camera/session-manager.js";
 
 type MatterMain = LoadedMatterJs["main"];
 type MatterProtocol = LoadedMatterJs["protocol"];
@@ -32,6 +40,31 @@ interface MatterJsDriverOptions {
    * implementation without binding UDP/mDNS. Production never disables it.
    */
   startNetwork?: boolean;
+}
+
+interface WebRtcOfferCommand {
+  webRtcSessionId: number | null;
+  sdp: string;
+  streamUsage?: number;
+  originatingEndpointId?: number;
+  videoStreamId?: number | null;
+  audioStreamId?: number | null;
+  videoStreams?: number[];
+  audioStreams?: number[];
+}
+
+interface WebRtcIceCommand {
+  webRtcSessionId: number;
+  iceCandidates: Array<{
+    candidate: string;
+    sdpMid?: string | null;
+    sdpMLineIndex?: number | null;
+  }>;
+}
+
+interface WebRtcEndCommand {
+  webRtcSessionId: number;
+  reason: number;
 }
 
 interface InstalledDevice {
@@ -285,6 +318,7 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
   readonly #devicesByEndpoint = new Map<number, DeviceSnapshot>();
   #context: AdapterContext | undefined;
   #configuration: BridgeConfiguration | undefined;
+  #media: CameraMediaBinding | undefined;
   #environment: InstanceType<MatterMain["Environment"]> | undefined;
   #node: InstanceType<MatterMain["ServerNode"]> | undefined;
   #aggregator: InstanceType<MatterMain["Endpoint"]> | undefined;
@@ -292,6 +326,7 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
   #commissioningTimer: NodeJS.Timeout | undefined;
   #commissioningDurationSeconds = 900;
   #identityGeneration = 0;
+  #cameraTransportCleanup: (() => void) | undefined;
 
   constructor(sdk: LoadedMatterJs, options: MatterJsDriverOptions = {}) {
     this.#sdk = sdk;
@@ -309,6 +344,8 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
 
   async stop(): Promise<void> {
     this.#clearCommissioningTimer();
+    this.#cameraTransportCleanup?.();
+    this.#cameraTransportCleanup = undefined;
     const node = this.#node;
     this.#node = undefined;
     this.#aggregator = undefined;
@@ -316,6 +353,7 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
     this.#installed.clear();
     this.#devicesByEndpoint.clear();
     this.#configuration = undefined;
+    this.#media = undefined;
     this.#commissioningWindowExpiresAt = null;
     try {
       await node?.close();
@@ -331,13 +369,13 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
       this.#configuration = undefined;
       return;
     }
-    await this.#applyConfiguration(state.bridge, state.devices);
+    await this.#applyConfiguration(state.bridge, state.devices, state.media);
   }
 
   async configureBridge(configuration: BridgeConfiguration): Promise<void> {
     this.#assertContext();
     const devices = [...this.#installed.values()].map(({ snapshot }) => structuredClone(snapshot));
-    await this.#applyConfiguration(configuration, devices);
+    await this.#applyConfiguration(configuration, devices, this.#media);
   }
 
   async replaceDevices(devices: DeviceSnapshot[]): Promise<void> {
@@ -371,7 +409,9 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
       } else {
         Object.assign(installed.snapshot, structuredClone(device));
         this.#devicesByEndpoint.set(device.endpointId, installed.snapshot);
-        await this.#applySnapshot(installed.endpoint, device);
+        if (this.#configuration?.nodeKind === "bridge") {
+          await this.#applySnapshot(installed.endpoint, device);
+        }
       }
     }
   }
@@ -396,9 +436,11 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
         throw new AdapterOperationError("device_not_found", `unknown device ${update.deviceId}`);
       }
       installed.snapshot.reachable = update.reachable;
-      await installed.endpoint.setStateOf("bridgedDeviceBasicInformation", {
-        reachable: update.reachable,
-      });
+      if (this.#configuration?.nodeKind === "bridge") {
+        await installed.endpoint.setStateOf("bridgedDeviceBasicInformation", {
+          reachable: update.reachable,
+        });
+      }
     }
   }
 
@@ -460,7 +502,9 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
     await node.env.close(this.#sdk.protocol.DeviceCommissioner);
     this.#installCommissioningConfigProvider(node);
     for (const installed of this.#installed.values()) {
-      await this.#applySnapshot(installed.endpoint, installed.snapshot);
+      if (this.#configuration?.nodeKind === "bridge") {
+        await this.#applySnapshot(installed.endpoint, installed.snapshot);
+      }
     }
     if (this.#options.startNetwork) {
       await node.env.get(this.#sdk.protocol.DeviceCommissioner).allowBasicCommissioning();
@@ -539,6 +583,18 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
     return state[attribute];
   }
 
+  endpointPlacementForTest(deviceId: string): "node" | "aggregator" {
+    const installed = this.#installed.get(deviceId);
+    if (installed === undefined) {
+      throw new AdapterOperationError("device_not_found", `unknown device ${deviceId}`);
+    }
+    return installed.endpoint.owner === this.#node ? "node" : "aggregator";
+  }
+
+  mediaBindingForTest(): CameraMediaBinding | undefined {
+    return this.#media === undefined ? undefined : structuredClone(this.#media);
+  }
+
   /**
    * Test-only interaction seam for writable Matter attributes. Values here are
    * already in Matter wire representation; unlike updateAttributes(), this is
@@ -596,18 +652,21 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
   async #applyConfiguration(
     configuration: BridgeConfiguration,
     devices: DeviceSnapshot[],
+    media?: CameraMediaBinding,
   ): Promise<void> {
     if (
       this.#configuration !== undefined &&
       JSON.stringify(this.#configuration) === JSON.stringify(configuration) &&
       this.#node !== undefined
     ) {
+      this.#media = media === undefined ? undefined : structuredClone(media);
       await this.replaceDevices(devices);
       return;
     }
 
     await this.#closeNode();
     this.#configuration = structuredClone(configuration);
+    this.#media = media === undefined ? undefined : structuredClone(media);
     const context = this.#assertContext();
     const generation = await context.storage.get("runtime/identity-generation");
     if (generation !== undefined) {
@@ -748,11 +807,13 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
     this.#commissioningDurationSeconds = configuration.commissioningWindowSeconds;
     this.#installCommissioningConfigProvider(node);
     this.#attachNodeEvents(node);
-    const aggregator = await node.add(this.#sdk.aggregator.AggregatorEndpoint, {
-      id: "aggregator",
-      number: this.#sdk.main.EndpointNumber(1),
-    });
-    this.#aggregator = aggregator;
+    if (configuration.nodeKind === "bridge") {
+      const aggregator = await node.add(this.#sdk.aggregator.AggregatorEndpoint, {
+        id: "aggregator",
+        number: this.#sdk.main.EndpointNumber(1),
+      });
+      this.#aggregator = aggregator;
+    }
     for (const device of devices) {
       await this.#addDevice(device);
     }
@@ -772,21 +833,22 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
 
   async #closeNode(): Promise<void> {
     this.#clearCommissioningTimer();
+    this.#cameraTransportCleanup?.();
+    this.#cameraTransportCleanup = undefined;
     const node = this.#node;
     this.#node = undefined;
     this.#aggregator = undefined;
     this.#environment = undefined;
     this.#installed.clear();
     this.#devicesByEndpoint.clear();
+    this.#media = undefined;
     this.#commissioningWindowExpiresAt = null;
     await node?.close();
   }
 
   async #addDevice(device: DeviceSnapshot): Promise<void> {
-    const aggregator = this.#aggregator;
-    if (aggregator === undefined) {
-      throw new AdapterOperationError("not_configured", "Matter aggregator is not configured");
-    }
+    const node = this.#assertReady();
+    const nodeKind = this.#configuration?.nodeKind;
     if (this.#devicesByEndpoint.has(device.endpointId)) {
       throw new AdapterOperationError(
         "endpoint_conflict",
@@ -794,6 +856,267 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
       );
     }
 
+    if (nodeKind === "camera") {
+      const camera = this.#assertContext().cameraClusterAdapter;
+      const sdk = this.#sdk;
+      const CameraAvBase = this.#sdk.cameraAvStreamManagement.CameraAvStreamManagementServer.with(
+        "Video",
+        "Audio",
+        "Snapshot",
+        // matter.js 0.17.6 incorrectly activates ImageControl choice "b" when
+        // composing CameraDevice without this feature.
+        "ImageControl",
+      );
+      const ProviderBase =
+        this.#sdk.cameraDevice.CameraRequirements.WebRtcTransportProviderServer;
+      const unsupported = (): never => {
+        throw new this.#sdk.types.StatusResponseError(
+          "Matter Camera reverse media RPC is not configured",
+          this.#sdk.types.Status.UnsupportedCommand,
+        );
+      };
+      let providerBehavior: WebRtcProviderSkeleton | undefined;
+      class CameraAvSkeleton extends CameraAvBase {
+        override async setStreamPriorities(
+          request: { streamPriorities: number[] },
+        ): Promise<void> {
+          if (
+            this.state.allocatedVideoStreams.length > 0
+            || this.state.allocatedAudioStreams.length > 0
+            || this.state.allocatedSnapshotStreams.length > 0
+          ) {
+            throw new sdk.types.StatusResponseError(
+              "stream priorities cannot change while streams are allocated",
+              sdk.types.Status.InvalidInState,
+            );
+          }
+          validateCameraStreamPriorities(
+            request.streamPriorities,
+            this.state.supportedStreamUsages,
+          );
+          this.state.streamUsagePriorities = [...request.streamPriorities] as never;
+        }
+
+        override async videoStreamAllocate(
+          request: VideoAllocationRequest,
+        ): Promise<{ videoStreamId: number }> {
+          if (camera === undefined) return unsupported();
+          const allocated = await camera.allocateVideo(cameraAvOwner(this.context), request);
+          this.state.allocatedVideoStreams = camera.allocationState.video as never;
+          return { videoStreamId: allocated.videoStreamId };
+        }
+
+        override async videoStreamDeallocate(
+          request: { videoStreamId: number },
+        ): Promise<void> {
+          if (camera === undefined) return unsupported();
+          await camera.deallocateVideo(cameraAvOwner(this.context), request.videoStreamId);
+          this.state.allocatedVideoStreams = camera.allocationState.video as never;
+        }
+
+        override async audioStreamAllocate(
+          request: AudioAllocationRequest,
+        ): Promise<{ audioStreamId: number }> {
+          if (camera === undefined) return unsupported();
+          const allocated = await camera.allocateAudio(cameraAvOwner(this.context), request);
+          this.state.allocatedAudioStreams = camera.allocationState.audio as never;
+          return { audioStreamId: allocated.audioStreamId };
+        }
+
+        override async audioStreamDeallocate(
+          request: { audioStreamId: number },
+        ): Promise<void> {
+          if (camera === undefined) return unsupported();
+          await camera.deallocateAudio(cameraAvOwner(this.context), request.audioStreamId);
+          this.state.allocatedAudioStreams = camera.allocationState.audio as never;
+        }
+
+        override async snapshotStreamAllocate(
+          request: SnapshotAllocationRequest,
+        ): Promise<{ snapshotStreamId: number }> {
+          if (camera === undefined) return unsupported();
+          const allocated = await camera.allocateSnapshot(cameraAvOwner(this.context), request);
+          this.state.allocatedSnapshotStreams = camera.allocationState.snapshot as never;
+          return { snapshotStreamId: allocated.snapshotStreamId };
+        }
+
+        override async snapshotStreamDeallocate(
+          request: { snapshotStreamId: number },
+        ): Promise<void> {
+          if (camera === undefined) return unsupported();
+          await camera.deallocateSnapshot(cameraAvOwner(this.context), request.snapshotStreamId);
+          this.state.allocatedSnapshotStreams = camera.allocationState.snapshot as never;
+        }
+
+        override async captureSnapshot(
+          request: { snapshotStreamId: number | null; requestedResolution: { width: number; height: number } },
+        ): Promise<{ data: Uint8Array; imageCodec: 0; resolution: { width: number; height: number } }> {
+          if (camera === undefined || request.snapshotStreamId === null) return unsupported();
+          const captured = await camera.captureSnapshot(
+            cameraAvOwner(this.context),
+            request.snapshotStreamId,
+            request.requestedResolution,
+          );
+          return {
+            data: Buffer.from(captured.jpegBase64, "base64"),
+            imageCodec: 0,
+            resolution: captured.resolution,
+          };
+        }
+      }
+      class WebRtcProviderSkeleton extends ProviderBase {
+        override async solicitOffer(): Promise<never> {
+          return unsupported();
+        }
+
+        override async provideOffer(
+          request: WebRtcOfferCommand,
+        ): Promise<{ webRtcSessionId: number; videoStreamId?: number; audioStreamId?: number }> {
+          if (camera === undefined) return unsupported();
+          const peer = cameraAvOwner(this.context);
+          const owner = request.webRtcSessionId === null
+            ? {
+              ...peer,
+              peerEndpointId: requiredOriginatingEndpoint(request.originatingEndpointId),
+            }
+            : camera.sessionOwner(request.webRtcSessionId, peer);
+          const videoStreams = request.videoStreams
+            ?? (request.videoStreamId === undefined || request.videoStreamId === null
+              ? []
+              : [request.videoStreamId]);
+          const audioStreams = request.audioStreams
+            ?? (request.audioStreamId === undefined || request.audioStreamId === null
+              ? []
+              : [request.audioStreamId]);
+          const response = await camera.provideOffer({
+            ...owner,
+            sessionId: request.webRtcSessionId,
+            offerSdp: request.sdp,
+            streamUsage: request.streamUsage ?? 3,
+            videoStreamIds: videoStreams,
+            audioStreamIds: audioStreams,
+          });
+          providerBehavior = this;
+          const session = {
+            id: response.sessionId,
+            peerNodeId: sdkNodeId(peer.peerNodeId),
+            peerEndpointId: sdkEndpointId(owner.peerEndpointId),
+            streamUsage: request.streamUsage ?? 3,
+            videoStreamId: videoStreams[0] ?? null,
+            audioStreamId: audioStreams[0] ?? null,
+            metadataEnabled: false,
+            videoStreams,
+            audioStreams,
+            fabricIndex: sdkFabricIndex(peer.fabricIndex),
+          };
+          this.state.currentSessions = upsertCameraCurrentSession(
+            this.state.currentSessions,
+            session,
+          ) as never;
+          const result: {
+            webRtcSessionId: number;
+            videoStreamId?: number;
+            audioStreamId?: number;
+          } = { webRtcSessionId: response.sessionId };
+          if (videoStreams[0] !== undefined) result.videoStreamId = videoStreams[0];
+          if (audioStreams[0] !== undefined) result.audioStreamId = audioStreams[0];
+          return result;
+        }
+
+        override async provideAnswer(): Promise<never> {
+          return unsupported();
+        }
+
+        override async provideIceCandidates(request: WebRtcIceCommand): Promise<void> {
+          if (camera === undefined) return unsupported();
+          const peer = cameraAvOwner(this.context);
+          const owner = camera.sessionOwner(request.webRtcSessionId, peer);
+          await camera.provideIceCandidates({
+            ...owner,
+            sessionId: request.webRtcSessionId,
+            candidates: request.iceCandidates.map((candidate) => ({
+              candidate: candidate.candidate,
+              sdpMid: candidate.sdpMid ?? null,
+              sdpMLineIndex: candidate.sdpMLineIndex ?? null,
+            })),
+          });
+        }
+
+        override async endSession(request: WebRtcEndCommand): Promise<void> {
+          if (camera === undefined) return unsupported();
+          const peer = cameraAvOwner(this.context);
+          const owner = camera.sessionOwner(request.webRtcSessionId, peer);
+          await camera.endSession(
+            request.webRtcSessionId,
+            owner,
+            cameraEndReason(request.reason),
+          );
+          this.state.currentSessions = removeCameraCurrentSession(
+            this.state.currentSessions,
+            request.webRtcSessionId,
+          );
+        }
+      }
+      const sdkNodeId = (value: string) => this.#sdk.types.NodeId(BigInt(value));
+      const sdkEndpointId = (value: number) => this.#sdk.main.EndpointNumber(value);
+      const sdkFabricIndex = (value: number) => this.#sdk.types.FabricIndex(value);
+      const type = this.#sdk.cameraDevice.CameraDevice.with(
+        CameraAvSkeleton,
+        WebRtcProviderSkeleton,
+      );
+      const endpoint = await node.add(type, {
+        id: `camera-${safeId(device.id)}`,
+        number: this.#sdk.main.EndpointNumber(device.endpointId),
+        webRtcTransportProvider: {
+          currentSessions: [],
+        },
+        cameraAvStreamManagement: cameraSkeletonState(),
+      } as never);
+      const registerTransport = this.#assertContext().registerCameraRequestorTransport;
+      if (camera !== undefined && registerTransport !== undefined) {
+        this.#cameraTransportCleanup?.();
+        this.#cameraTransportCleanup = registerTransport({
+          provideAnswer: (answer) => this.#sendCameraRequestorCommand(
+            answer,
+            "answer",
+            {
+              webRtcSessionId: answer.sessionId,
+              sdp: answer.sdp,
+            },
+          ),
+          provideIceCandidates: (update) => this.#sendCameraRequestorCommand(
+            update,
+            "iceCandidates",
+            {
+              webRtcSessionId: update.sessionId,
+              iceCandidates: update.candidates.map((candidate) => ({
+                candidate: candidate.candidate,
+                sdpMid: candidate.sdpMid,
+                sdpMLineIndex: candidate.sdpMLineIndex ?? undefined,
+              })),
+            },
+          ),
+          sessionFailed: (sessionId) => {
+            if (providerBehavior !== undefined) {
+              providerBehavior.state.currentSessions =
+                removeCameraCurrentSession(
+                  providerBehavior.state.currentSessions,
+                  sessionId,
+                );
+            }
+          },
+        });
+      }
+      const snapshot = structuredClone(device);
+      this.#installed.set(device.id, { snapshot, endpoint });
+      this.#devicesByEndpoint.set(device.endpointId, snapshot);
+      return;
+    }
+
+    const aggregator = this.#aggregator;
+    if (aggregator === undefined || nodeKind !== "bridge") {
+      throw new AdapterOperationError("not_configured", "Matter node owner is not configured");
+    }
     const type = this.#deviceType(device);
     const endpoint = await aggregator.add(type, {
       id: `device-${safeId(device.id)}`,
@@ -811,6 +1134,34 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
     this.#installed.set(device.id, { snapshot, endpoint });
     this.#devicesByEndpoint.set(device.endpointId, snapshot);
     await this.#applySnapshot(endpoint, device);
+  }
+
+  async #sendCameraRequestorCommand(
+    owner: {
+      fabricIndex: number;
+      peerNodeId: string;
+      peerEndpointId: number;
+    },
+    command: "answer" | "iceCandidates",
+    request: Record<string, unknown>,
+  ): Promise<void> {
+    const node = this.#assertReady();
+    const peerAddress = this.#sdk.protocol.PeerAddress({
+      fabricIndex: this.#sdk.types.FabricIndex(owner.fabricIndex),
+      nodeId: this.#sdk.types.NodeId(BigInt(owner.peerNodeId)),
+    });
+    const peer = await node.peers.forAddress(peerAddress);
+    await peer.start();
+    const endpoint = peer.endpoints.require(
+      this.#sdk.main.EndpointNumber(owner.peerEndpointId),
+    );
+    const client = this.#sdk.cameraDevice.CameraRequirements.WebRtcTransportRequestorClient;
+    endpoint.behaviors.require(client);
+    const commands = endpoint.commandsOf(client) as unknown as Record<
+      "answer" | "iceCandidates",
+      (request: Record<string, unknown>) => Promise<unknown>
+    >;
+    await commands[command](request);
   }
 
   #deviceType(device: DeviceSnapshot): ReturnType<LoadedMatterJs["extendedColorLight"]["ExtendedColorLightDevice"]["with"]> {
@@ -2282,6 +2633,153 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
 
 export function createMatterJsDriver(sdk: LoadedMatterJs): MatterProtocolAdapter {
   return new MatterJsBridgeDriver(sdk);
+}
+
+/** Initial truthful AV capabilities for the host-backed Matter Camera node. */
+function cameraSkeletonState(): Record<string, unknown> {
+  return {
+    maxContentBufferSize: 0,
+    maxNetworkBandwidth: 4_000_000,
+    supportedStreamUsages: [3],
+    streamUsagePriorities: [3],
+    maxConcurrentEncoders: 1,
+    maxEncodedPixelRate: 27_648_000,
+    videoSensorParams: {
+      sensorWidth: 1_280,
+      sensorHeight: 720,
+      maxFps: 30,
+    },
+    minViewportResolution: {
+      width: 320,
+      height: 240,
+    },
+    rateDistortionTradeOffPoints: [{
+      codec: 0,
+      resolution: {
+        width: 320,
+        height: 240,
+      },
+      minBitRate: 128_000,
+    }],
+    currentFrameRate: 30,
+    allocatedVideoStreams: [],
+    microphoneCapabilities: {
+      maxNumberOfChannels: 1,
+      supportedCodecs: [0],
+      supportedSampleRates: [48_000],
+      supportedBitDepths: [16],
+    },
+    allocatedAudioStreams: [],
+    microphoneMuted: false,
+    microphoneVolumeLevel: 100,
+    microphoneMaxLevel: 254,
+    microphoneMinLevel: 0,
+    microphoneAgcEnabled: true,
+    snapshotCapabilities: [
+      {
+        resolution: { width: 1_280, height: 720 },
+        maxFrameRate: 1,
+        imageCodec: 0,
+        requiresEncodedPixels: false,
+      },
+      {
+        resolution: { width: 640, height: 360 },
+        maxFrameRate: 1,
+        imageCodec: 0,
+        requiresEncodedPixels: false,
+      },
+    ],
+    allocatedSnapshotStreams: [],
+    viewport: {
+      x1: 0,
+      y1: 0,
+      x2: 1_280,
+      y2: 720,
+    },
+    imageRotation: 0,
+  };
+}
+
+export function validateCameraStreamPriorities(
+  priorities: readonly number[],
+  supported: readonly number[],
+): void {
+  if (
+    priorities.length !== supported.length
+    || new Set(priorities).size !== priorities.length
+    || priorities.some((usage) => !supported.includes(usage))
+  ) {
+    throw new TypeError(
+      "stream priorities must contain each supported stream usage exactly once",
+    );
+  }
+}
+
+export function upsertCameraCurrentSession<T extends { id: number }>(
+  current: readonly T[],
+  session: T,
+): T[] {
+  const next = [...current];
+  const existing = next.findIndex((item) => item.id === session.id);
+  if (existing === -1) next.push(session);
+  else next[existing] = session;
+  return next;
+}
+
+export function removeCameraCurrentSession<T extends { id: number }>(
+  current: readonly T[],
+  sessionId: number,
+): T[] {
+  return current.filter((session) => session.id !== sessionId);
+}
+
+function cameraAvOwner(context: unknown): CameraAvOwner {
+  const session = (context as {
+    session?: {
+      peerAddress?: {
+        fabricIndex?: number;
+        nodeId?: { toString(): string } | string | bigint;
+      };
+    };
+  }).session;
+  const address = session?.peerAddress;
+  if (
+    address === undefined
+    || typeof address.fabricIndex !== "number"
+    || address.fabricIndex < 1
+    || address.nodeId === undefined
+  ) {
+    throw new Error("Matter Camera command requires a secure operational session");
+  }
+  return {
+    fabricIndex: address.fabricIndex,
+    peerNodeId: address.nodeId.toString(),
+  };
+}
+
+function requiredOriginatingEndpoint(value: number | undefined): number {
+  if (!Number.isSafeInteger(value) || value === undefined || value < 0 || value > 65_535) {
+    throw new Error("new Matter WebRTC offer requires OriginatingEndpointID");
+  }
+  return value;
+}
+
+function cameraEndReason(reason: number): CameraSessionEndReason {
+  return [
+    "ice-failed",
+    "ice-timeout",
+    "user-hangup",
+    "user-busy",
+    "replaced",
+    "no-user-media",
+    "invite-timeout",
+    "answered-elsewhere",
+    "out-of-resources",
+    "media-timeout",
+    "low-power",
+    "privacy-mode",
+    "unknown",
+  ][reason] as CameraSessionEndReason | undefined ?? "unknown";
 }
 
 type NormalizedDeviceType =

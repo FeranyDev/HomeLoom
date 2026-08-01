@@ -28,7 +28,7 @@ function transformInputType(type: MappingTransformType): ValueType {
 }
 
 function enumOptions(profile: MappingProfileInfo, direction: MappingDirection): string[] {
-  const values = profile.transforms.flatMap((transform) => {
+  const values = (profile.transforms ?? []).flatMap((transform) => {
     if (transform.type === 'enum') {
       const entries = Object.entries(transform.values ?? {})
       return direction === 'forward' ? entries.map(([source]) => source) : entries.map(([, target]) => String(target))

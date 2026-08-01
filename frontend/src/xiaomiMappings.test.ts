@@ -1,12 +1,38 @@
 import { describe, expect, it } from 'vitest'
-import { inferXiaomiDeviceType, requiredXiaomiProperties, xiaomiDeviceTypes } from './xiaomiMappings'
+import { defaultXiaomiMedia, inferXiaomiDeviceType, requiredXiaomiProperties, stableXiaomiControlID, stableXiaomiID, xiaomiDeviceTypes } from './xiaomiMappings'
 
 describe('Xiaomi temperature/humidity mapping', () => {
 	it('offers every built-in model exactly once', () => {
 		const types = xiaomiDeviceTypes.map(([type]) => type)
-		expect(types).toHaveLength(36)
-		expect(new Set(types).size).toBe(36)
+		expect(types).toHaveLength(37)
+		expect(new Set(types).size).toBe(37)
 		expect(types).not.toContain('single-property-sensor')
+	})
+
+	it('infers cameras and creates a secret-free native media baseline', () => {
+		expect(inferXiaomiDeviceType({
+			did: 'camera-1',
+			name: '客厅摄像头',
+			model: 'isa.camera.hlc7',
+			specType: 'urn:miot-spec-v2:device:camera:0000A01C',
+		})).toBe('camera')
+		expect(requiredXiaomiProperties('camera')).toEqual([])
+		expect(defaultXiaomiMedia('camera')).toEqual({
+			protocol: 'xiaomi-miss',
+			subtype: 'hd',
+			channel: 1,
+			profiles: [expect.objectContaining({
+				schemaVersion: 1,
+				id: 'main',
+				width: 1920,
+				height: 1080,
+				videoCodec: 'h264',
+				audioCodec: 'aac',
+			})],
+		})
+		expect(JSON.stringify(defaultXiaomiMedia('camera'))).not.toMatch(/token|password|user/i)
+		expect(stableXiaomiID('1178028045')).toBe('xiaomi-1178028045')
+		expect(stableXiaomiControlID('1178028045')).toBe('xiaomi-control-1178028045')
 	})
 
 	it('infers the combined model before explicit single-measurement models', () => {

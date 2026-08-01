@@ -205,7 +205,10 @@ export class ReconnectingRuntimeClient {
   }
 
   async replaceDevices(devices: DeviceSnapshot[]): Promise<void> {
-    const validated = expectDeviceSnapshots(devices);
+    const validated = expectDeviceSnapshots(
+      devices,
+      this.#desiredState.bridge?.nodeKind ?? "bridge",
+    );
     this.#desiredState.devices = structuredClone(validated);
     this.#bumpRevision();
     await this.#requestWhenReady(RpcMethod.replaceDevices, { devices: validated });

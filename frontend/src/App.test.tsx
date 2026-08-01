@@ -111,7 +111,7 @@ describe('App integration', () => {
 		}))
 
 		await waitFor(() => expect(screen.queryByRole('heading', { name: 'Matter 主桥' })).not.toBeInTheDocument())
-		expect(screen.getByText('还没有目标实例')).toBeInTheDocument()
+		expect(screen.getByText('还没有普通设备目标')).toBeInTheDocument()
 	})
 
   it('initializes the sole administrator and loads the dashboard', async () => {
@@ -138,7 +138,7 @@ describe('App integration', () => {
 
     await user.click(await screen.findByRole('button', { name: '桥接中心' }))
     expect(await screen.findByRole('heading', { name: '桥接中心' })).toBeInTheDocument()
-    expect(screen.getByText('还没有目标实例')).toBeInTheDocument()
+    expect(screen.getByText('还没有普通设备目标')).toBeInTheDocument()
 	await user.click(screen.getByRole('button', { name: '设备来源' }))
 	expect(await screen.findByRole('heading', { name: '设备来源管理' })).toBeInTheDocument()
 	expect(screen.getByRole('button', { name: '＋ 新建设备来源' })).toBeInTheDocument()
@@ -159,6 +159,25 @@ describe('App integration', () => {
     expect(await screen.findByLabelText('36 统一设备模型')).toBeInTheDocument()
     expect(api.listModelContracts).toHaveBeenCalled()
   })
+
+	it('separates HomeKit Camera publication from ordinary bridge targets', async () => {
+		api.getAuthStatus.mockResolvedValue({ initialized: true, authenticated: true, username: 'admin' })
+		render(<App />)
+		const user = userEvent.setup()
+		await user.click(await screen.findByRole('button', { name: '桥接中心' }))
+		await user.click(screen.getByRole('button', { name: 'HomeKit 摄像头' }))
+		expect(screen.getByText('独立 HAP Camera Target')).toBeInTheDocument()
+		expect(screen.getByText('还没有发布摄像头')).toBeInTheDocument()
+		expect(screen.getByRole('button', { name: '＋ 发布摄像头' })).toBeInTheDocument()
+		await user.click(screen.getByRole('button', { name: 'Matter 摄像头' }))
+		expect(screen.getByText('Matter 1.5+ Camera')).toBeInTheDocument()
+		expect(screen.getByText(/实验性 Controller 兼容，不保证 Apple Home 支持/)).toBeInTheDocument()
+		expect(screen.getByRole('button', { name: '＋ 发布摄像头' })).toBeInTheDocument()
+		await user.click(screen.getByRole('button', { name: '＋ 发布摄像头' }))
+		expect(screen.getByRole('combobox', { name: /目标类型（type）/ })).toHaveValue('matter-camera')
+		expect(screen.queryByLabelText(/HomeKit 8 位配对码/)).not.toBeInTheDocument()
+		expect(screen.getByLabelText(/配网辨识码/)).toBeInTheDocument()
+	})
 
   it('returns an authenticated dashboard to login on a global unauthorized event', async () => {
     api.getAuthStatus.mockResolvedValue({ initialized: true, authenticated: true, username: 'admin' })

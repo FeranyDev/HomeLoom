@@ -66,23 +66,6 @@ func decodeJSON(payload []byte, destination any) error {
 	return nil
 }
 
-func topicParts(topic, prefix string) ([]string, bool) {
-	if !strings.HasPrefix(topic, prefix+"/") {
-		return nil, false
-	}
-	suffix := strings.TrimPrefix(topic, prefix+"/")
-	if suffix == "" {
-		return nil, false
-	}
-	parts := strings.Split(suffix, "/")
-	for _, part := range parts {
-		if part == "" {
-			return nil, false
-		}
-	}
-	return parts, true
-}
-
 func discoveryTopic(prefix, deviceID string) string {
 	return fmt.Sprintf("%s/discovery/%s", prefix, deviceID)
 }

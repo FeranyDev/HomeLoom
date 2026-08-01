@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { TargetForm } from './TargetForm'
 import { ApiError } from '../api/client'
 import type { Target } from '../types/target'
+import type { Device } from '../types/device'
 
 describe('TargetForm', () => {
   it('creates target configuration without embedding Consumer devices', async () => {
@@ -59,5 +60,46 @@ describe('TargetForm', () => {
 		await userEvent.type(screen.getByLabelText(/网络接口/), 'en0')
 		await userEvent.click(screen.getByRole('button', { name: '保存到数据库' }))
 		expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ type: 'matter', name: '客厅桥', config: expect.objectContaining({ networkInterface: 'en0', udpPort: null, discriminator: null, passcode: null, vendorId: null, productId: null, commissioningWindowSeconds: null }) }), false)
+	})
+
+	it('creates an independent HomeKit Camera target from a Camera Provider device', async () => {
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		const camera: Device = {
+			schemaVersion: 1, id: 'xiaomi-camera-1', providerId: 'camera-30f90b', name: '客厅摄像头',
+			type: 'camera', availability: 'online', online: true, endpoints: [], lastUpdateAt: '2026-07-26T00:00:00Z',
+		}
+		render(<TargetForm target={null} initialType="homekit-camera" devices={[camera]} onCancel={vi.fn()} onSave={onSave} />)
+		expect(screen.queryByLabelText(/HomeKit 设置标识/)).not.toBeInTheDocument()
+		expect(screen.queryByLabelText(/HomeKit 8 位配对码/)).not.toBeInTheDocument()
+		await userEvent.selectOptions(screen.getByLabelText('发布摄像头'), camera.id)
+		await userEvent.click(screen.getByRole('button', { name: '保存到数据库' }))
+		expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+			type: 'homekit-camera',
+			deviceIds: [camera.id],
+			devices: [{ id: camera.id, name: camera.name, type: 'camera', sourceDeviceId: camera.id, auxiliarySourceDeviceIds: [], enabled: true }],
+		}), false)
+	})
+
+	it('creates an experimental Matter Camera with Matter commissioning and one camera source', async () => {
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		const camera: Device = {
+			schemaVersion: 1, id: 'front-camera', providerId: 'camera-main', name: '门口摄像头',
+			type: 'camera', availability: 'online', online: true, endpoints: [], lastUpdateAt: '2026-07-29T00:00:00Z',
+		}
+		render(<TargetForm target={null} initialType="matter-camera" devices={[camera]} onCancel={vi.fn()} onSave={onSave} />)
+		expect(screen.getByText('Controller 兼容性仍需实测')).toBeInTheDocument()
+		expect(screen.getByText(/不保证能在 Apple Home 中发现或播放/)).toBeInTheDocument()
+		expect(screen.queryByLabelText(/HomeKit 8 位配对码/)).not.toBeInTheDocument()
+		expect(screen.queryByLabelText(/HomeKit 设置标识/)).not.toBeInTheDocument()
+		expect(screen.getByLabelText(/配网辨识码/)).toBeInTheDocument()
+		expect(screen.getByLabelText(/配网密码/)).toBeInTheDocument()
+		await userEvent.selectOptions(screen.getByLabelText('发布摄像头'), camera.id)
+		await userEvent.click(screen.getByRole('button', { name: '保存到数据库' }))
+		expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+			type: 'matter-camera',
+			deviceIds: [camera.id],
+			devices: [{ id: camera.id, name: camera.name, type: 'camera', sourceDeviceId: camera.id, auxiliarySourceDeviceIds: [], enabled: true }],
+			config: expect.objectContaining({ passcode: null, discriminator: null }),
+		}), false)
 	})
 })

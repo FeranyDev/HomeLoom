@@ -76,6 +76,121 @@ describe('XiaomiDeviceManager', () => {
 		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ type: 'xiaomi-miot-cloud', config: expect.objectContaining({ devices: [expect.objectContaining({ id: 'xiaomi-miot-123.456', connectionMode: 'auto' })] }) }), true))
 	})
 
+	it('adds a discovered camera with a Xiaomi MISS media profile', async () => {
+		api.discoverXiaomiDevices.mockResolvedValue([{
+			did: 'camera.did.1',
+			name: '客厅摄像头',
+			model: 'isa.camera.hlc7',
+			localIp: '192.168.1.30',
+			localAvailable: true,
+			specType: 'urn:miot-spec-v2:device:camera:0000A01C',
+		}])
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		const cloud: Provider = {
+			...provider,
+			id: 'xiaomi-miot-cloud-main',
+			type: 'xiaomi-miot-cloud',
+			name: '小米 MIoT 云',
+			config: { region: 'cn', userId: '42', ssecurity: '********', serviceToken: '********', passToken: '********', devices: [] },
+		}
+		render(<XiaomiDeviceManager provider={cloud} onClose={() => {}} onSave={onSave} />)
+		await userEvent.click(screen.getByRole('button', { name: '从 MIoT 云读取设备' }))
+		expect(await screen.findByLabelText('客厅摄像头 统一模型')).toHaveValue('camera')
+		await userEvent.click(screen.getByRole('button', { name: '加入映射' }))
+		await userEvent.click(screen.getByRole('button', { name: '保存子设备映射' }))
+		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+			config: expect.objectContaining({
+				passToken: '********',
+				devices: [expect.objectContaining({
+					did: 'camera.did.1',
+					type: 'camera',
+					model: 'isa.camera.hlc7',
+					properties: [],
+					media: {
+						protocol: 'xiaomi-miss',
+						subtype: 'hd',
+						channel: 1,
+						profiles: [expect.objectContaining({
+							schemaVersion: 1,
+							id: 'main',
+							videoCodec: 'h264',
+							audioCodec: 'aac',
+						})],
+					},
+				})],
+			}),
+		}), true))
+	})
+
+	it('maps a central-hub camera as a control-only camera source', async () => {
+		api.discoverXiaomiDevices.mockResolvedValue([{
+			did: 'camera.did.1',
+			name: '客厅摄像头',
+			model: 'isa.camera.hlc7',
+			gatewayAvailable: true,
+			localControlAvailable: true,
+			cloudAvailable: true,
+			pushAvailable: true,
+			specType: 'urn:miot-spec-v2:device:camera:0000A01C',
+		}])
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		render(<XiaomiDeviceManager provider={provider} onClose={() => {}} onSave={onSave} />)
+
+		await userEvent.click(screen.getByRole('button', { name: '从中枢读取子设备' }))
+		const model = await screen.findByLabelText('客厅摄像头 统一模型')
+		expect(model).toHaveValue('camera')
+		expect(screen.getByRole('option', { name: '摄像头（camera）' })).toBeInTheDocument()
+		expect(screen.getByText(/只提供中枢\/云端控制能力/)).toBeInTheDocument()
+		await userEvent.click(screen.getByRole('button', { name: '加入映射' }))
+		await userEvent.click(screen.getByRole('button', { name: '保存子设备映射' }))
+
+		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+			type: 'xiaomi',
+			config: expect.objectContaining({
+				devices: [expect.objectContaining({
+					did: 'camera.did.1',
+					id: 'xiaomi-control-camera.did.1',
+					type: 'camera',
+					properties: [],
+					actions: [],
+				})],
+			}),
+		}), true))
+		const saved = (onSave.mock.calls[0][0].config.devices as Array<Record<string, unknown>>)[0]
+		expect(saved).not.toHaveProperty('media')
+	})
+
+	it('repairs a persisted central-camera id that collides with the Camera Provider', async () => {
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		const conflicting = {
+			...provider,
+			config: {
+				...provider.config,
+				devices: [{
+					did: '1178028045',
+					id: 'xiaomi-1178028045',
+					name: '小米智能摄像机',
+					type: 'camera',
+					connectionMode: 'auto',
+					properties: [],
+					actions: [],
+				}],
+			},
+		}
+		render(<XiaomiDeviceManager provider={conflicting} onClose={() => {}} onSave={onSave} />)
+		await userEvent.click(screen.getByRole('button', { name: '保存子设备映射' }))
+
+		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+			config: expect.objectContaining({
+				devices: [expect.objectContaining({
+					did: '1178028045',
+					id: 'xiaomi-control-1178028045',
+					type: 'camera',
+				})],
+			}),
+		}), true))
+	})
+
 	it('filters the discovery directory by home and room before mapping', async () => {
 		api.discoverXiaomiDevices.mockResolvedValue([
 			{ did: '123.456', name: '客厅灯', homeId: 'home-main', homeName: '我的家', roomId: 'room-living', roomName: '客厅' },

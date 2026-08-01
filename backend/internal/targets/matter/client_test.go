@@ -2,6 +2,7 @@ package matter
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -21,7 +22,7 @@ func TestClientCallCorrelatesJSONRPCResponse(t *testing.T) {
 		_ = json.Unmarshal(line, &request)
 		response, _ := json.Marshal(rpcMessage{
 			JSONRPC: "2.0", ID: request.ID,
-			Result: json.RawMessage(`{"protocolVersion":"1.0","replayRequired":true}`),
+			Result: json.RawMessage(`{"protocolVersion":"1.1","replayRequired":true}`),
 		})
 		_, _ = runtimeConn.Write(append(response, '\n'))
 	}()
@@ -30,12 +31,12 @@ func TestClientCallCorrelatesJSONRPCResponse(t *testing.T) {
 		ReplayRequired  bool   `json:"replayRequired"`
 	}
 	err := client.Call(context.Background(), "runtime.handshake", map[string]string{
-		"protocolVersion": "1.0", "targetId": "matter-one",
+		"protocolVersion": "1.1", "targetId": "matter-one",
 	}, &result)
 	if err != nil {
 		t.Fatalf("Call() error = %v", err)
 	}
-	if result.ProtocolVersion != "1.0" || !result.ReplayRequired {
+	if result.ProtocolVersion != "1.1" || !result.ReplayRequired {
 		t.Fatalf("Call() result = %#v", result)
 	}
 }
@@ -118,5 +119,23 @@ func TestClientDisconnectFailsPendingCall(t *testing.T) {
 	}()
 	if err := client.Call(context.Background(), "runtime.ping", map[string]any{}, nil); err == nil {
 		t.Fatal("Call() succeeded after runtime disconnect")
+	}
+}
+
+func TestClientRejectsOversizedInboundFrame(t *testing.T) {
+	clientConn, runtimeConn := net.Pipe()
+	client := NewClient(clientConn, ClientOptions{MaxFrameBytes: 128})
+	defer client.Close()
+	defer runtimeConn.Close()
+	go func() {
+		_, _ = runtimeConn.Write(append(bytes.Repeat([]byte("x"), 256), '\n'))
+	}()
+	select {
+	case <-client.Done():
+		if client.closeError() == nil {
+			t.Fatal("oversized inbound frame closed without an error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("oversized inbound frame was not rejected")
 	}
 }

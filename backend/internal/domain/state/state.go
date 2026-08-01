@@ -30,14 +30,15 @@ const (
 	QualityStale      Quality = "stale"
 	QualityUnknown    Quality = "unknown"
 
-	UnavailableNeverReported       UnavailableReason = "never-reported"
-	UnavailableDeviceOffline       UnavailableReason = "device-offline"
-	UnavailableAvailabilityUnknown UnavailableReason = "availability-unknown"
-	UnavailableDisabled            UnavailableReason = "disabled"
-	UnavailableRemoved             UnavailableReason = "removed"
-	UnavailableExpired             UnavailableReason = "expired"
-	UnavailableStale               UnavailableReason = "stale"
-	UnavailableCommandUnconfirmed  UnavailableReason = "command-unconfirmed"
+	UnavailableNeverReported          UnavailableReason = "never-reported"
+	UnavailableDeviceOffline          UnavailableReason = "device-offline"
+	UnavailableAvailabilityUnknown    UnavailableReason = "availability-unknown"
+	UnavailableDisabled               UnavailableReason = "disabled"
+	UnavailableRemoved                UnavailableReason = "removed"
+	UnavailableExpired                UnavailableReason = "expired"
+	UnavailableStale                  UnavailableReason = "stale"
+	UnavailableCommandUnconfirmed     UnavailableReason = "command-unconfirmed"
+	UnavailableControlProviderOffline UnavailableReason = "control-provider-offline"
 )
 
 type Value struct {

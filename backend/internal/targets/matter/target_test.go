@@ -15,6 +15,7 @@ import (
 
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
+	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	domaintarget "github.com/feranydev/homeloom/backend/internal/domain/target"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
 )
@@ -24,6 +25,27 @@ type memoryStorage struct {
 	endpoints  map[string]domaintarget.MatterEndpointIdentity
 	values     map[string][]byte
 	tombstoned []string
+}
+
+type cameraMediaStub struct {
+	streamID string
+	request  CameraWebRTCRequest
+	width    uint16
+	height   uint16
+}
+
+func (s *cameraMediaStub) WebRTC(
+	_ context.Context,
+	streamID string,
+	request CameraWebRTCRequest,
+) (CameraWebRTCResponse, error) {
+	s.streamID, s.request = streamID, request
+	return CameraWebRTCResponse{SessionID: "media-session", SDP: "answer"}, nil
+}
+
+func (s *cameraMediaStub) Snapshot(_ context.Context, streamID string, width, height uint16) ([]byte, error) {
+	s.streamID, s.width, s.height = streamID, width, height
+	return []byte{0xff, 0xd8, 0xff, 0xd9}, nil
 }
 
 func newMemoryStorage() *memoryStorage {
@@ -124,6 +146,97 @@ func TestDeviceSnapshotsUseStableEndpointAndMatterAttributes(t *testing.T) {
 	}
 	if storage.next != 3 {
 		t.Fatalf("endpoint allocator advanced on replay: %d", storage.next)
+	}
+}
+
+func TestCameraNodeUsesFixedEndpointAndMediaContractWithoutMappingAllocation(t *testing.T) {
+	provider, err := virtual.NewProviderFromConfig(providerconfig.Config{
+		ID: "virtual-main", Type: "virtual", Name: "Virtual", Enabled: true,
+		Config: json.RawMessage(`{"devices":[{"id":"virtual-camera-1","name":"Camera","type":"camera","online":true}]}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	devices := application.NewDeviceService(provider)
+	defer devices.Close()
+	discriminator := uint16(1234)
+	storage := newMemoryStorage()
+	media := &cameraMediaStub{}
+	target, err := New(Config{
+		ID: "matter-camera", Name: "Camera", NodeKind: "camera",
+		Matter: domaintarget.MatterConfig{
+			Discriminator: &discriminator, Passcode: "20202021", VendorID: 0xfff1,
+			ProductID: 0x8000, ProductName: "Camera", SerialNumber: "matter-camera",
+			CommissioningWindowSeconds: 900, UDPPort: 5540,
+		},
+		Devices: []domaintarget.VirtualDevice{{
+			ID: "camera", Name: "Camera", Type: device.TypeCamera,
+			SourceDeviceID: "virtual-camera-1", Enabled: true,
+		}},
+		CameraMedia: media,
+	}, devices, storage, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := target.replayState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Bridge.NodeKind != "camera" || len(state.Devices) != 1 || state.Devices[0].EndpointID != 1 ||
+		state.Media == nil || state.Media.DeviceID != "virtual-camera-1" ||
+		state.Media.StreamID != cameraStreamID("virtual-camera-1") {
+		t.Fatalf("camera replay state = %#v", state)
+	}
+	raw, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	deviceDocuments := document["devices"].([]any)
+	if document["media"] == nil || deviceDocuments[0].(map[string]any)["media"] != nil {
+		t.Fatalf("camera media binding is not top-level: %s", raw)
+	}
+	if storage.next != 2 || len(storage.endpoints) != 0 {
+		t.Fatalf("camera node used Matter bridge endpoint allocator: %#v", storage)
+	}
+	result, err := target.handleRequest(context.Background(), "camera.webrtc", json.RawMessage(
+		`{"operation":"open","sdp":"offer"}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response := result.(CameraWebRTCResponse); response.SessionID != "media-session" ||
+		media.streamID != cameraStreamID("virtual-camera-1") || media.request.SDP != "offer" {
+		t.Fatalf("WebRTC relay = %#v, media = %#v", result, media)
+	}
+	snapshot, err := target.handleRequest(context.Background(), "camera.snapshot", json.RawMessage(
+		`{"width":640,"height":360}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.(map[string]string)["jpegBase64"] != "/9j/2Q==" || media.width != 640 || media.height != 360 {
+		t.Fatalf("snapshot relay = %#v, media = %#v", snapshot, media)
+	}
+}
+
+func TestCameraNodeRejectsInvalidTopology(t *testing.T) {
+	provider := virtual.NewProvider()
+	devices := application.NewDeviceService(provider)
+	defer devices.Close()
+	discriminator := uint16(1234)
+	_, err := New(Config{
+		ID: "matter-camera", NodeKind: "camera",
+		Matter: domaintarget.MatterConfig{Discriminator: &discriminator},
+		Devices: []domaintarget.VirtualDevice{{
+			ID: "switch", Type: device.TypeSwitch, SourceDeviceID: "virtual-switch-1", Enabled: true,
+		}},
+	}, devices, newMemoryStorage(), nil)
+	if err == nil {
+		t.Fatal("New() accepted a non-camera topology")
 	}
 }
 

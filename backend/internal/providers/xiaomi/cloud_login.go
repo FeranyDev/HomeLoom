@@ -37,6 +37,7 @@ type CloudLoginResult struct {
 	UserID          string     `json:"userId,omitempty"`
 	Ssecurity       string     `json:"ssecurity,omitempty"`
 	ServiceToken    string     `json:"serviceToken,omitempty"`
+	PassToken       string     `json:"passToken,omitempty"`
 }
 
 type cloudLoginChallenge struct {
@@ -152,7 +153,14 @@ func cloudLoginSessionResult(client *httpMiotCloudClient) (CloudLoginResult, err
 	if userID == "" || ssecurity == "" || serviceToken == "" {
 		return CloudLoginResult{}, errors.New("Xiaomi cloud login completed without a full session")
 	}
-	return CloudLoginResult{Status: "verified", UserID: userID, Ssecurity: ssecurity, ServiceToken: serviceToken}, nil
+	mediaUserID, passToken := client.mediaSession()
+	if mediaUserID != "" && mediaUserID != userID {
+		return CloudLoginResult{}, errors.New("Xiaomi cloud login returned inconsistent account identities")
+	}
+	return CloudLoginResult{
+		Status: "verified", UserID: userID, Ssecurity: ssecurity,
+		ServiceToken: serviceToken, PassToken: passToken,
+	}, nil
 }
 
 func (s *CloudLoginService) cleanupLocked(now time.Time) {

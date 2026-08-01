@@ -84,7 +84,7 @@ func (t *Tracker) BeginPropertyCorrelated(deviceID, endpointID, capabilityID, pr
 	if previousID, exists := t.pending[key]; exists {
 		previous := t.commands[previousID]
 		if !terminal(previous.Status) {
-			if valuesEqual(previous.Expected, value) {
+			if previous.Expected.Equal(value) {
 				previous.Coalesced++
 				previous.UpdatedAt = now
 				t.commands[previousID] = previous
@@ -232,7 +232,7 @@ func parameterMapsEqual(left, right map[string]device.PropertyValue) bool {
 	}
 	for key, value := range left {
 		other, ok := right[key]
-		if !ok || !valuesEqual(value, other) {
+		if !ok || !value.Equal(other) {
 			return false
 		}
 	}
@@ -255,7 +255,7 @@ func (t *Tracker) Confirm(deviceID, endpointID, capabilityID, propertyID string,
 		return false
 	}
 	command := t.commands[id]
-	if !valuesEqual(command.Expected, value) {
+	if !command.Expected.Equal(value) {
 		t.mu.Unlock()
 		return false
 	}
@@ -372,24 +372,6 @@ func terminal(status domaincommand.Status) bool {
 
 func pendingKey(deviceID, endpointID, capabilityID, propertyID string) string {
 	return deviceID + "\x00" + endpointID + "\x00" + capabilityID + "\x00" + propertyID
-}
-
-func valuesEqual(left, right device.PropertyValue) bool {
-	if left.Type != right.Type {
-		return false
-	}
-	switch left.Type {
-	case device.ValueTypeBool:
-		return left.Bool != nil && right.Bool != nil && *left.Bool == *right.Bool
-	case device.ValueTypeInt:
-		return left.Int != nil && right.Int != nil && *left.Int == *right.Int
-	case device.ValueTypeNumber:
-		return left.Number != nil && right.Number != nil && *left.Number == *right.Number
-	case device.ValueTypeString, device.ValueTypeEnum:
-		return left.String != nil && right.String != nil && *left.String == *right.String
-	default:
-		return false
-	}
 }
 
 func commandID() string {

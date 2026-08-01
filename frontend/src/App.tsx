@@ -17,7 +17,7 @@ import { ToastCenter } from './components/ToastCenter'
 import { useToasts } from './useToasts'
 import { CollectionEmpty, LoadingState } from './components/PageState'
 import type { Device, DeviceAvailability, PropertyValue } from './types/device'
-import type { MatterFabric, MatterTarget, Target, TargetInput } from './types/target'
+import type { MatterFabric, MatterTarget, Target, TargetInput, TargetType } from './types/target'
 import type { Provider, ProviderInput } from './types/provider'
 import type { AuditEvent, DeviceCommand, Diagnostics, RuntimeSettings, SystemVersion } from './types/diagnostics'
 import { usePageRoute } from './routing'
@@ -27,11 +27,13 @@ import { AuthScreen } from './components/AuthScreen'
 import { ProviderWorkspace } from './components/ProviderWorkspace'
 import { XiaomiDeviceManager } from './components/XiaomiDeviceManager'
 import { MQTTDeviceManager } from './components/MQTTDeviceManager'
+import { CameraDeviceManager } from './components/CameraDeviceManager'
 import { DeviceMappingDialog } from './components/DeviceMappingDialog'
 import { BrandMark } from './components/BrandMark'
 import { listModelContracts } from './api/mapping'
 import { homeLocationOptions, matchesDeviceLocation, roomLocationOptions } from './deviceLocation'
 import { deviceTypeLabel } from './presentationLabels'
+import { supportsProviderChildDevices } from './providerRouting'
 
 export function App() {
 	const [auth, setAuth] = useState<AuthStatus | null>(null)
@@ -73,6 +75,7 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
 	const commandHistoryLimit = useRef(1000)
 	const [page, setPage] = usePageRoute()
 	const [targetForm, setTargetForm] = useState<{ open: boolean, target: Target | null }>({ open: false, target: null })
+	const [targetSection, setTargetSection] = useState<'devices' | 'homekit-camera' | 'matter-camera' | 'other-camera'>('devices')
 	const [targetDeviceID, setTargetDeviceID] = useState<string | null>(null)
 	const [providerForm, setProviderForm] = useState<{ open: boolean, provider: Provider | null }>({ open: false, provider: null })
 	const [deviceProviderID, setDeviceProviderID] = useState<string | null>(null)
@@ -219,6 +222,23 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
 		if (!confirmation) return
 		try { await factoryResetMatterTarget(target.id, confirmation); await refresh(); notify('success', `目标“${target.name}”已恢复 Matter 出厂身份`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '恢复 Matter 出厂身份失败') }
 	}
+	async function handleMatterCameraEnabled(target: MatterTarget, enabled: boolean) {
+		try {
+			await saveTarget({
+				id: target.id, type: target.type, name: target.name, enabled,
+				deviceIds: target.deviceIds, devices: target.devices,
+				config: {
+					networkInterface: target.config.networkInterface ?? '', udpPort: target.config.udpPort ?? null,
+					discriminator: target.config.discriminator ?? null, passcode: null,
+					vendorId: target.config.vendorId ?? null, productId: target.config.productId ?? null,
+					productName: target.config.productName ?? '', serialNumber: target.config.serialNumber ?? '',
+					commissioningWindowSeconds: target.config.commissioningWindowSeconds ?? null,
+				},
+			}, true)
+			await refresh()
+			notify('success', `目标“${target.name}”已${enabled ? '启用' : '停用'}`)
+		} catch (cause) { notify('error', cause instanceof Error ? cause.message : '更新 Matter 摄像头状态失败') }
+	}
 	async function handleProviderSave(input: ProviderInput, editing: boolean) { try { await saveProvider(input, editing); setProviderForm({ open: false, provider: null }); await refresh(); notify('success', editing ? 'Provider 配置已更新' : 'Provider 已创建') } catch (cause) { notify('error', cause instanceof Error ? cause.message : '保存 Provider 失败'); throw cause } }
 	async function handleProviderTest(input: ProviderInput) { try { await testProviderConnection(input); notify('success', 'Provider 连接测试成功') } catch (cause) { notify('error', cause instanceof Error ? cause.message : 'Provider 连接测试失败'); throw cause } }
 	async function handleProviderDelete(provider: Provider) { if (!confirmProviderDeletion(provider.name)) return; try { await deleteProvider(provider.id); await refresh(); notify('success', `Provider“${provider.name}”已删除`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '删除 Provider 失败') } }
@@ -228,7 +248,7 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
 	async function handlePropertyWrite(device: Device, endpointId: string, capabilityId: string, propertyId: string, value: PropertyValue) { try { const updated = await setDeviceProperty(device.id, endpointId, capabilityId, propertyId, value); setDevices((current) => current.map((item) => item.id === updated.id ? updated : item)); const [diagnosticData, commandData] = await Promise.all([getDiagnostics(), listCommands()]); setDiagnostics(diagnosticData); setCommands(commandData); setError(null); notify('success', `${device.name}.${propertyId} 写入成功`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '属性写入失败'); throw cause } }
 	async function handleCommandExecute(device: Device, endpointId: string, capabilityId: string, commandId: string, parameters: Record<string, PropertyValue>, idempotencyKey: string) { try { const updated = await executeDeviceCommand(device.id, endpointId, capabilityId, commandId, parameters, idempotencyKey); setDevices((current) => current.map((item) => item.id === updated.id ? updated : item)); const [diagnosticData, commandData] = await Promise.all([getDiagnostics(), listCommands()]); setDiagnostics(diagnosticData); setCommands(commandData); setError(null); notify('success', `${device.name}.${commandId} 执行成功`) } catch (cause) { notify('error', cause instanceof Error ? cause.message : '命令执行失败'); throw cause } }
 	async function handleRuntimeSettingsSave(next: RuntimeSettings) { try { const saved = await saveRuntimeSettings(next); commandHistoryLimit.current = saved.commandHistoryLimit; setCommands((current) => current.slice(0, saved.commandHistoryLimit)); setRuntimeSettings(saved); notify('success', '运行时设置已保存并实时生效') } catch (cause) { notify('error', cause instanceof Error ? cause.message : '保存运行时设置失败'); throw cause } }
-	const deviceProvider = deviceProviderID ? providers.find((item) => item.id === deviceProviderID && (item.type === 'mqtt' || item.type === 'xiaomi' || item.type === 'xiaomi-miot-cloud')) ?? null : null
+	const deviceProvider = deviceProviderID ? providers.find((item) => item.id === deviceProviderID && supportsProviderChildDevices(item.type)) ?? null : null
 	const pageCopy = page === 'devices' ? { title: '把家的状态织在一起。', intro: '设备状态驻留内存，映射从每台设备独立进入配置。', eyebrow: 'DEVICES', section: '设备中心' } : page === 'providers' ? { title: '让所有数据源有序接入。', intro: 'Virtual、MQTT、小米中枢与第三方兼容 MIoT 云按独立实例运行。', eyebrow: 'PROVIDERS', section: '设备来源管理' } : page === 'targets' ? { title: '一个目标，或很多个目标。', intro: '每个目标实例选择独立的 Consumer 适配器、设备身份和属性目录；协议专属配置互不混用。', eyebrow: 'TARGETS', section: '桥接中心' } : page === 'mapping' ? { title: '定义一次，处处使用。', intro: '集中查看统一设备模型，配置端点、能力和属性三级字段；设备路由仍从对应设备进入。', eyebrow: 'UNIFIED MODELS', section: '统一模型配置' } : { title: '看见系统的每一次呼吸。', intro: '观察事件队列、设备连接和命令生命周期。', eyebrow: 'SYSTEM', section: '系统诊断' }
 	const summary = page === 'devices' ? devices.filter((item) => item.availability === 'online').length : page === 'providers' ? providers.filter((item) => item.status === 'running').length : page === 'targets' ? targets.filter((item) => item.status === 'running').length : page === 'mapping' ? modelCount : diagnostics?.eventsProcessed ?? 0
 	const deviceHomeOptions = useMemo(() => homeLocationOptions(devices), [devices])
@@ -242,6 +262,10 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
 	})
 	const selectedDevice = selectedDeviceID ? devices.find((item) => item.id === selectedDeviceID) ?? null : null
 	const targetDeviceTarget = targetDeviceID ? targets.find((item) => item.id === targetDeviceID) ?? null : null
+	const targetCreateType: TargetType = targetSection === 'homekit-camera' ? 'homekit-camera' : targetSection === 'matter-camera' ? 'matter-camera' : 'apple-hap'
+	const visibleTargets = targets.filter((item) => targetSection === 'devices'
+		? item.type === 'apple-hap' || item.type === 'matter'
+		: targetSection === 'homekit-camera' ? item.type === 'homekit-camera' : targetSection === 'matter-camera' ? item.type === 'matter-camera' : false)
 
   return (<>
 	<a className="skip-link" href="#main-content">跳到主要内容</a>
@@ -271,7 +295,7 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
         <div>
 		  <p className="eyebrow">{pageCopy.eyebrow}</p><h2>{pageCopy.section}</h2>
         </div>
-		<div className="heading-actions">{page === 'providers' && !deviceProvider && <button className="add-button" onClick={() => setProviderForm({ open: true, provider: null })}>＋ 新建设备来源</button>}{page === 'targets' && <button className="add-button" onClick={() => setTargetForm({ open: true, target: null })}>＋ 新建目标</button>}{page !== 'devices' && <button className="refresh-button" onClick={() => void refresh()} disabled={loading}>刷新状态</button>}</div>
+		<div className="heading-actions">{page === 'providers' && !deviceProvider && <button className="add-button" onClick={() => setProviderForm({ open: true, provider: null })}>＋ 新建设备来源</button>}{page === 'targets' && (targetSection === 'devices' || targetSection === 'homekit-camera' || targetSection === 'matter-camera') && <button className="add-button" onClick={() => setTargetForm({ open: true, target: null })}>＋ {targetSection === 'homekit-camera' || targetSection === 'matter-camera' ? '发布摄像头' : '新建目标'}</button>}{page !== 'devices' && <button className="refresh-button" onClick={() => void refresh()} disabled={loading}>刷新状态</button>}</div>
       </section>
 	  {page === 'devices' && <div className="device-filters" aria-label="设备筛选">
 		<label className="device-search"><i aria-hidden="true" /><input aria-label="搜索设备" value={deviceQuery} onChange={(event) => setDeviceQuery(event.target.value)} placeholder="搜索名称、ID、来源或位置" /></label>
@@ -300,17 +324,18 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
             />
           ))}
 		  {filteredDevices.length === 0 && <CollectionEmpty title="没有匹配的设备" description={devices.length ? '请调整搜索文字或在线状态筛选。' : '启用 Provider 后，发现的设备会显示在这里。'} />}
-		</section> : page === 'providers' ? deviceProvider ? deviceProvider.type === 'mqtt' ? <MQTTDeviceManager provider={deviceProvider} devices={devices.filter((item) => item.providerId === deviceProvider.id && !item.removed)} onClose={() => setDeviceProviderID(null)} onSave={async (input, editing) => { await handleProviderSave(input, editing); setDeviceProviderID(null) }} /> : <XiaomiDeviceManager provider={deviceProvider} onMapping={setMappingDevice} onClose={() => setDeviceProviderID(null)} onSave={async (input, editing) => { await handleProviderSave(input, editing); setDeviceProviderID(null) }} /> : <ProviderWorkspace providers={providers} devices={devices} onEdit={(item) => setProviderForm({ open: true, provider: item })} onManageDevices={(item) => setDeviceProviderID(item.id)} onDelete={(item) => void handleProviderDelete(item)} onRestart={handleProviderRestart} onTest={handleProviderTest} onSimulate={handleSimulation} /> : page === 'mapping' ? <MappingWorkspace /> : page === 'system' ? <SystemDashboard diagnostics={diagnostics} commands={commands} auditEvents={auditEvents} settings={runtimeSettings} onSettingsSave={handleRuntimeSettingsSave} /> : targetDeviceTarget ? <TargetDeviceManager target={targetDeviceTarget} devices={devices.filter((item) => !item.removed)} onClose={() => setTargetDeviceID(null)} onSave={async (input) => { await saveTarget(input, true); await refresh(); notify('success', '消费端设备已保存并实时应用到目标实例') }} onConfirmMatterEndpointType={async (consumerDeviceID, deviceType, confirmation) => { await confirmMatterEndpointDeviceType(targetDeviceTarget.id, consumerDeviceID, deviceType, confirmation); await refresh(); notify('success', `Matter Endpoint“${consumerDeviceID}”已切换为 ${deviceType}`) }} /> : <section className="target-list">
+		</section> : page === 'providers' ? deviceProvider ? deviceProvider.type === 'mqtt' ? <MQTTDeviceManager provider={deviceProvider} devices={devices.filter((item) => item.providerId === deviceProvider.id && !item.removed)} onClose={() => setDeviceProviderID(null)} onSave={async (input, editing) => { await handleProviderSave(input, editing); setDeviceProviderID(null) }} /> : deviceProvider.type === 'camera' ? <CameraDeviceManager provider={deviceProvider} providers={providers} devices={devices} onClose={() => setDeviceProviderID(null)} onSave={async (input, editing) => { await handleProviderSave(input, editing); setDeviceProviderID(null) }} /> : <XiaomiDeviceManager provider={deviceProvider} onMapping={setMappingDevice} onClose={() => setDeviceProviderID(null)} onSave={async (input, editing) => { await handleProviderSave(input, editing); setDeviceProviderID(null) }} /> : <ProviderWorkspace providers={providers} devices={devices} onEdit={(item) => setProviderForm({ open: true, provider: item })} onManageDevices={(item) => setDeviceProviderID(item.id)} onDelete={(item) => void handleProviderDelete(item)} onRestart={handleProviderRestart} onTest={handleProviderTest} onSimulate={handleSimulation} /> : page === 'mapping' ? <MappingWorkspace /> : page === 'system' ? <SystemDashboard diagnostics={diagnostics} commands={commands} auditEvents={auditEvents} settings={runtimeSettings} onSettingsSave={handleRuntimeSettingsSave} /> : targetDeviceTarget ? <TargetDeviceManager target={targetDeviceTarget} devices={devices.filter((item) => !item.removed)} onClose={() => setTargetDeviceID(null)} onSave={async (input) => { await saveTarget(input, true); await refresh(); notify('success', '消费端设备已保存并实时应用到目标实例') }} onConfirmMatterEndpointType={async (consumerDeviceID, deviceType, confirmation) => { await confirmMatterEndpointDeviceType(targetDeviceTarget.id, consumerDeviceID, deviceType, confirmation); await refresh(); notify('success', `Matter Endpoint“${consumerDeviceID}”已切换为 ${deviceType}`) }} /> : <section className="target-list">
+		  <nav className="target-subnav" aria-label="目标类型分页"><button className={targetSection === 'devices' ? 'is-active' : ''} onClick={() => setTargetSection('devices')}>普通设备</button><button className={targetSection === 'homekit-camera' ? 'is-active' : ''} onClick={() => setTargetSection('homekit-camera')}>HomeKit 摄像头</button><button className={targetSection === 'matter-camera' ? 'is-active' : ''} onClick={() => setTargetSection('matter-camera')}>Matter 摄像头</button><button className={targetSection === 'other-camera' ? 'is-active' : ''} onClick={() => setTargetSection('other-camera')}>其他摄像头</button></nav>
 		  <div className="config-note">
 		    <span>配置来源</span>
-		    <strong>PostgreSQL · targets</strong>
-		    <p>目标实例、消费端设备与映射统一保存在数据库中；各适配器独有的配对参数按目标类型管理。</p>
+		    <strong>{targetSection === 'homekit-camera' ? '独立 HAP Camera Target' : targetSection === 'matter-camera' ? 'Matter 1.5+ Camera' : targetSection === 'other-camera' ? '其他媒体消费协议' : 'PostgreSQL · targets'}</strong>
+		    <p>{targetSection === 'homekit-camera' ? '每个目标只发布一台摄像头，拥有独立 HAP/mDNS 与配对身份，不进入普通 Apple Home Bridge。' : targetSection === 'matter-camera' ? 'Matter Camera 使用 Matter 1.5+ Camera 与 WebRTC，每个 Target 只选择一台摄像头。此能力为实验性 Controller 兼容，不保证 Apple Home 支持；配网使用 Matter QR，不使用 HomeKit PIN。' : targetSection === 'other-camera' ? '预留 RTSP restream、NVR、ONVIF Profile S、厂商云等消费目标；当前没有已注册适配器。' : '普通 HomeKit Bridge 与 Matter Bridge 管理非摄像头设备；Camera 必须从专属分页发布。'}</p>
 		  </div>
-		  {targets.map((target) => <TargetCard key={target.id} target={target} onEdit={(item) => setTargetForm({ open: true, target: item })} onManageDevices={(item) => setTargetDeviceID(item.id)} onDelete={(item) => void handleTargetDelete(item)} onRegeneratePairing={(item) => void handleTargetPairingRegenerate(item)} onClearPairingIdentity={(item) => void handleTargetPairingIdentityClear(item)} onMatterCommissioningToggle={(item, open) => void handleMatterCommissioningToggle(item, open)} onDeleteMatterFabric={(item, fabric) => void handleMatterFabricDelete(item, fabric)} onFactoryResetMatter={(item) => void handleMatterFactoryReset(item)} />)}
-		  {targets.length === 0 && <CollectionEmpty title="还没有目标实例" description="新建目标并配置消费端设备后，即可接入 HomeKit、Matter 或其他消费平台。" />}
+		  {visibleTargets.map((target) => <TargetCard key={target.id} target={target} sourceDevice={target.type === 'homekit-camera' || target.type === 'matter-camera' ? devices.find((item) => item.id === (target.devices[0]?.sourceDeviceId ?? target.deviceIds[0])) : undefined} onPreviewCamera={(item) => setSelectedDeviceID(item.id)} onEdit={(item) => setTargetForm({ open: true, target: item })} onManageDevices={(item) => setTargetDeviceID(item.id)} onDelete={(item) => void handleTargetDelete(item)} onRegeneratePairing={(item) => void handleTargetPairingRegenerate(item)} onClearPairingIdentity={(item) => void handleTargetPairingIdentityClear(item)} onMatterCommissioningToggle={(item, open) => void handleMatterCommissioningToggle(item, open)} onDeleteMatterFabric={(item, fabric) => void handleMatterFabricDelete(item, fabric)} onFactoryResetMatter={(item) => void handleMatterFactoryReset(item)} onEnabledChange={(item, enabled) => void handleMatterCameraEnabled(item, enabled)} />)}
+		  {visibleTargets.length === 0 && <CollectionEmpty title={targetSection === 'homekit-camera' || targetSection === 'matter-camera' ? '还没有发布摄像头' : targetSection === 'devices' ? '还没有普通设备目标' : '当前适配器尚未开放'} description={targetSection === 'homekit-camera' ? '点击“发布摄像头”，选择设备中心中的 Camera 并创建独立 HomeKit Camera Target。' : targetSection === 'matter-camera' ? '点击“发布摄像头”，选择设备中心中的 Camera 并创建实验性 Matter Camera Target。' : targetSection === 'devices' ? '新建普通 HomeKit 或 Matter 目标后，再配置消费端设备。' : '该分页用于明确协议边界，待运行时能力完成后再开放创建。'} />}
 		</section>
       )}
-	  {targetForm.open && <TargetForm target={targetForm.target} onCancel={() => setTargetForm({ open: false, target: null })} onSave={handleTargetSave} />}
+	  {targetForm.open && <TargetForm target={targetForm.target} devices={devices} initialType={targetCreateType} onCancel={() => setTargetForm({ open: false, target: null })} onSave={handleTargetSave} />}
 	  {providerForm.open && <ProviderForm provider={providerForm.provider} onCancel={() => setProviderForm({ open: false, provider: null })} onSave={handleProviderSave} onTest={handleProviderTest} />}
 	  {selectedDevice && <DeviceDetails device={selectedDevice} onClose={() => setSelectedDeviceID(null)} onPropertyWrite={(endpointId, capabilityId, propertyId, value) => handlePropertyWrite(selectedDevice, endpointId, capabilityId, propertyId, value)} onCommandExecute={(endpointId, capabilityId, commandId, parameters, idempotencyKey) => handleCommandExecute(selectedDevice, endpointId, capabilityId, commandId, parameters, idempotencyKey)} />}
 	  {mappingDevice && <DeviceMappingDialog device={mappingDevice} onClose={() => setMappingDevice(null)} />}

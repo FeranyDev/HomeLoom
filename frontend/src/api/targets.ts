@@ -1,4 +1,5 @@
-import type { AppleHAPTarget, MatterCommissioning, MatterTarget, MatterTargetConfig, Target, TargetInput, TargetStatus, TargetVirtualDevice } from '../types/target'
+import { isMatterTargetInput, isMatterTargetType } from '../types/target'
+import type { AppleHAPTarget, HomeKitCameraTarget, MatterCommissioning, MatterTarget, MatterTargetConfig, Target, TargetInput, TargetStatus, TargetType, TargetVirtualDevice } from '../types/target'
 import { requestData, requestJSON } from './client'
 
 type RecordValue = Record<string, unknown>
@@ -18,7 +19,9 @@ function ids(value: unknown): string[] { return Array.isArray(value) ? value.fil
  */
 export function normalizeTarget(value: unknown): Target {
 	const raw = record(value)
-	const type = raw.type === 'matter' ? 'matter' : 'apple-hap'
+	const type: TargetType = raw.type === 'matter' || raw.type === 'matter-camera'
+		? raw.type
+		: raw.type === 'homekit-camera' ? 'homekit-camera' : 'apple-hap'
 	const issues = Array.isArray(raw.issues)
 		? raw.issues.map((item) => {
 			const issue = record(item)
@@ -40,7 +43,7 @@ export function normalizeTarget(value: unknown): Target {
 		status: status(raw.status), deviceIds: ids(raw.deviceIds), devices: targetDevices(raw.devices), error: string(raw.error), issues, diagnostics, removed: boolean(raw.removed) ?? false,
 	}
 	const config = record(raw.config)
-	if (type === 'apple-hap') {
+	if (!isMatterTargetType(type)) {
 		const pairing = record(raw.pairing)
 		return {
 			...common, type,
@@ -50,7 +53,7 @@ export function normalizeTarget(value: unknown): Target {
 				pairingCode: string(pairing.pairingCode) ?? string(raw.pairingCode),
 				setupUri: string(pairing.setupUri) ?? string(raw.setupUri),
 			},
-		} satisfies AppleHAPTarget
+		} satisfies AppleHAPTarget | HomeKitCameraTarget
 	}
 	const commissioningRaw = record(raw.commissioning)
 	const windowOpen = boolean(commissioningRaw.windowOpen) ?? boolean(raw.commissioningWindowOpen) ?? false
@@ -91,7 +94,7 @@ export function normalizeTarget(value: unknown): Target {
 }
 
 function requestPayload(input: TargetInput): RecordValue {
-	if (input.type === 'matter') {
+	if (isMatterTargetInput(input)) {
 		const { config, ...common } = input
 		return { ...common, matterConfig: config }
 	}

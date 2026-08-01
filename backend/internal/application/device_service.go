@@ -29,39 +29,40 @@ var (
 )
 
 type DeviceService struct {
-	provider                providersdk.Provider
-	discoverer              providersdk.Discoverer
-	cataloger               providersdk.SourceCataloger
-	reader                  providersdk.PropertyReader
-	writer                  providersdk.PropertyWriter
-	executor                providersdk.CommandExecutor
-	registry                *registry.DeviceRegistry
-	dispatcher              *eventbus.Dispatcher
-	states                  *statestore.Store
-	commands                *commandtracker.Tracker
-	commandQueue            *commandCoordinator
-	unsubscribe             func()
-	unsubscribeDeviceEvents func()
-	mu                      sync.RWMutex
-	nextID                  uint64
-	listeners               map[uint64]*deviceSubscription
-	nextStateID             uint64
-	stateListeners          map[uint64]*stateSubscription
-	nextDeviceEventID       uint64
-	deviceEventListeners    map[uint64]*deviceEventSubscription
-	snapshotMu              sync.Mutex
-	snapshotSeq             map[string]uint64
-	refreshMu               sync.Mutex
-	staleCancel             context.CancelFunc
-	staleDone               chan struct{}
-	metrics                 deviceMetrics
-	storageMetrics          DatabaseMetricsProvider
-	preferences             DevicePreferenceStore
-	disabledMu              sync.RWMutex
-	disabled                map[string]struct{}
-	propertyMu              sync.Mutex
-	propertyOps             map[domainstate.Key]*propertyOperation
-	propertyMapper          PropertyMapper
+	provider                          providersdk.Provider
+	discoverer                        providersdk.Discoverer
+	cataloger                         providersdk.SourceCataloger
+	reader                            providersdk.PropertyReader
+	writer                            providersdk.PropertyWriter
+	executor                          providersdk.CommandExecutor
+	registry                          *registry.DeviceRegistry
+	dispatcher                        *eventbus.Dispatcher
+	states                            *statestore.Store
+	commands                          *commandtracker.Tracker
+	commandQueue                      *commandCoordinator
+	unsubscribe                       func()
+	unsubscribeDeviceEvents           func()
+	unsubscribeCapabilityAvailability func()
+	mu                                sync.RWMutex
+	nextID                            uint64
+	listeners                         map[uint64]*subscription[device.Device]
+	nextStateID                       uint64
+	stateListeners                    map[uint64]*subscription[domainstate.StateValue]
+	nextDeviceEventID                 uint64
+	deviceEventListeners              map[uint64]*subscription[providersdk.DeviceEvent]
+	snapshotMu                        sync.Mutex
+	snapshotSeq                       map[string]uint64
+	refreshMu                         sync.Mutex
+	staleCancel                       context.CancelFunc
+	staleDone                         chan struct{}
+	metrics                           deviceMetrics
+	storageMetrics                    DatabaseMetricsProvider
+	preferences                       DevicePreferenceStore
+	disabledMu                        sync.RWMutex
+	disabled                          map[string]struct{}
+	propertyMu                        sync.Mutex
+	propertyOps                       map[domainstate.Key]*propertyOperation
+	propertyMapper                    PropertyMapper
 }
 
 type propertyOperation struct {
@@ -133,18 +134,8 @@ type Readiness struct {
 	Error    string `json:"error,omitempty"`
 }
 
-type deviceSubscription struct {
-	queue chan device.Device
-	done  chan struct{}
-}
-
-type stateSubscription struct {
-	queue chan domainstate.StateValue
-	done  chan struct{}
-}
-
-type deviceEventSubscription struct {
-	queue chan providersdk.DeviceEvent
+type subscription[T any] struct {
+	queue chan T
 	done  chan struct{}
 }
 
@@ -250,7 +241,7 @@ func NewDeviceService(provider providersdk.Provider, dependencies ...any) *Devic
 		provider: provider, discoverer: discoverer, cataloger: cataloger, reader: reader, writer: writer, executor: executor,
 		registry: registry.NewDeviceRegistry(nil),
 		states:   statestore.NewStore(), commands: commandtracker.NewTracker(5 * time.Second), commandQueue: newCommandCoordinator(),
-		listeners: make(map[uint64]*deviceSubscription), stateListeners: make(map[uint64]*stateSubscription), deviceEventListeners: make(map[uint64]*deviceEventSubscription), snapshotSeq: make(map[string]uint64), disabled: make(map[string]struct{}), propertyOps: make(map[domainstate.Key]*propertyOperation),
+		listeners: make(map[uint64]*subscription[device.Device]), stateListeners: make(map[uint64]*subscription[domainstate.StateValue]), deviceEventListeners: make(map[uint64]*subscription[providersdk.DeviceEvent]), snapshotSeq: make(map[string]uint64), disabled: make(map[string]struct{}), propertyOps: make(map[domainstate.Key]*propertyOperation),
 	}
 	for _, dependency := range dependencies {
 		if metrics, ok := dependency.(DatabaseMetricsProvider); ok && service.storageMetrics == nil {
@@ -297,6 +288,17 @@ func NewDeviceService(provider providersdk.Provider, dependencies ...any) *Devic
 			service.ensureUnknownStates(item, unavailableReason(item), "")
 		}
 	}
+	if reporter, ok := provider.(providersdk.CapabilityAvailabilityReporter); ok {
+		for _, availability := range reporter.CapabilityAvailabilities() {
+			if availability.Available {
+				continue
+			}
+			service.states.MarkCapabilityUnavailable(
+				availability.DeviceID, availability.EndpointID, availability.CapabilityID,
+				domainstate.UnavailableControlProviderOffline,
+			)
+		}
+	}
 	service.dispatcher = eventbus.NewDispatcher(8, 128, service.handleEvent)
 	staleCtx, staleCancel := context.WithCancel(context.Background())
 	service.staleCancel, service.staleDone = staleCancel, make(chan struct{})
@@ -315,6 +317,15 @@ func NewDeviceService(provider providersdk.Provider, dependencies ...any) *Devic
 		service.unsubscribeDeviceEvents = subscriber.SubscribeDeviceEvents(service.publishDeviceEvent)
 	} else {
 		service.unsubscribeDeviceEvents = func() {}
+	}
+	if subscriber, ok := provider.(providersdk.CapabilityAvailabilitySubscriber); ok {
+		service.unsubscribeCapabilityAvailability = subscriber.SubscribeCapabilityAvailability(func(availability providersdk.CapabilityAvailability) {
+			if err := service.dispatcher.Publish(eventbus.Event{DeviceID: availability.DeviceID, Payload: availability}); err != nil {
+				service.metrics.eventsDropped.Add(1)
+			}
+		})
+	} else {
+		service.unsubscribeCapabilityAvailability = func() {}
 	}
 	return service
 }
@@ -560,6 +571,41 @@ func (s *DeviceService) List(ctx context.Context) ([]device.Device, error) {
 	return s.registry.List(), nil
 }
 
+// ReportDeviceAvailability lets a protocol runtime feed observed reachability
+// back into the unified Device without making the Camera Provider own media
+// sessions. It is intentionally limited to availability and never mutates
+// Provider configuration or media credentials.
+func (s *DeviceService) ReportDeviceAvailability(id string, availability device.Availability) (device.Device, error) {
+	if availability != device.AvailabilityOnline && availability != device.AvailabilityOffline && availability != device.AvailabilityUnknown {
+		return device.Device{}, errors.New("invalid device availability")
+	}
+	item, ok := s.registry.Get(id)
+	if !ok {
+		return device.Device{}, ErrDeviceNotFound
+	}
+	if item.Disabled || item.Removed {
+		return item, ErrDeviceDisabled
+	}
+	if item.EffectiveAvailability() == availability {
+		return item, nil
+	}
+	item.SetAvailability(availability)
+	item.LastUpdateAt = time.Now().UTC()
+	s.registry.Upsert(item)
+	switch availability {
+	case device.AvailabilityOnline:
+		s.applySnapshot(item, "")
+	case device.AvailabilityOffline:
+		stale := s.states.MarkDeviceUnavailable(id, domainstate.UnavailableDeviceOffline)
+		s.metrics.statesMarkedStale.Add(uint64(len(stale)))
+		for _, state := range stale {
+			s.publishState(state)
+		}
+	}
+	s.publishDevice(item)
+	return item, nil
+}
+
 // ProviderCatalog returns the unprojected Provider snapshots for mapping
 // configuration. It intentionally bypasses Provider → model routes so the UI
 // can display every raw property address offered by the Provider.
@@ -573,39 +619,34 @@ func (s *DeviceService) ProviderCatalog(ctx context.Context) ([]providersdk.Sour
 		if len(fallback) == 0 {
 			return nil, err
 		}
-		result := make([]providersdk.SourceCatalogDevice, 0, len(fallback))
-		for _, item := range fallback {
-			result = append(result, providersdk.SourceCatalogDevice{Device: item, Catalog: providersdk.SourceCatalogMetadata{Complete: false, Source: "unified-registry-fallback", Error: err.Error(), Values: providersdk.SnapshotValueStatuses(item)}})
-		}
-		return result, nil
+		return fallbackCatalog(fallback, err.Error()), nil
 	}
 	if s.discoverer == nil {
-		items := s.registry.List()
-		result := make([]providersdk.SourceCatalogDevice, 0, len(items))
-		for _, item := range items {
-			result = append(result, providersdk.SourceCatalogDevice{Device: item, Catalog: providersdk.SourceCatalogMetadata{Complete: false, Source: "unified-registry-fallback", Error: "provider does not expose a native source catalog", Values: providersdk.SnapshotValueStatuses(item)}})
-		}
-		return result, nil
+		return fallbackCatalog(s.registry.List(), "provider does not expose a native source catalog"), nil
 	}
 	items, err := s.discoverer.DiscoverDevices(ctx)
 	if err != nil {
 		// Existing registry data is still useful when a Provider is temporarily
 		// offline; callers should only fail when no catalog can be shown.
 		fallback := s.registry.List()
-		if len(fallback) > 0 {
-			result := make([]providersdk.SourceCatalogDevice, 0, len(fallback))
-			for _, item := range fallback {
-				result = append(result, providersdk.SourceCatalogDevice{Device: item, Catalog: providersdk.SourceCatalogMetadata{Complete: false, Source: "unified-registry-fallback", Error: err.Error(), Values: providersdk.SnapshotValueStatuses(item)}})
-			}
-			return result, nil
+		if len(fallback) == 0 {
+			return nil, err
 		}
-		return nil, err
+		return fallbackCatalog(fallback, err.Error()), nil
 	}
 	result := make([]providersdk.SourceCatalogDevice, 0, len(items))
 	for _, item := range items {
 		result = append(result, providersdk.SourceCatalogDevice{Device: item, Catalog: providersdk.SourceCatalogMetadata{Complete: true, Source: "provider-discovery", FetchedAt: time.Now().UTC(), Values: providersdk.SnapshotValueStatuses(item)}})
 	}
 	return result, nil
+}
+
+func fallbackCatalog(items []device.Device, reason string) []providersdk.SourceCatalogDevice {
+	result := make([]providersdk.SourceCatalogDevice, 0, len(items))
+	for _, item := range items {
+		result = append(result, providersdk.SourceCatalogDevice{Device: item, Catalog: providersdk.SourceCatalogMetadata{Complete: false, Source: "unified-registry-fallback", Error: reason, Values: providersdk.SnapshotValueStatuses(item)}})
+	}
+	return result
 }
 
 func (s *DeviceService) SetPower(ctx context.Context, id string, power bool) (device.Device, error) {
@@ -845,37 +886,19 @@ func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointI
 	s.applyOptimisticState(key, value, command, previous, hadPrevious)
 	s.commands.Sent(command.ID)
 	if s.writer == nil {
-		err := ErrPropertyUnsupported
-		s.commands.Rejected(command.ID, err)
-		s.rollbackOptimistic(command.ID, previous, hadPrevious)
-		s.metrics.commandsRejected.Add(1)
-		current, _ := s.commands.Get(command.ID)
-		return device.Device{}, current, err
+		return s.rejectPropertyWrite(command, previous, hadPrevious, ErrPropertyUnsupported)
 	}
 	registered, ok := s.registry.Get(deviceID)
 	if !ok {
-		err := ErrDeviceNotFound
-		s.commands.Rejected(command.ID, err)
-		s.rollbackOptimistic(command.ID, previous, hadPrevious)
-		s.metrics.commandsRejected.Add(1)
-		current, _ := s.commands.Get(command.ID)
-		return device.Device{}, current, err
+		return s.rejectPropertyWrite(command, previous, hadPrevious, ErrDeviceNotFound)
 	}
 	providerValue, _, _, mapErr := s.mapProperty(registered.ProviderID, deviceID, endpointID, capabilityID, propertyID, value, mapping.DirectionReverse)
 	if mapErr != nil {
-		s.commands.Rejected(command.ID, mapErr)
-		s.rollbackOptimistic(command.ID, previous, hadPrevious)
-		s.metrics.commandsRejected.Add(1)
-		current, _ := s.commands.Get(command.ID)
-		return device.Device{}, current, mapErr
+		return s.rejectPropertyWrite(command, previous, hadPrevious, mapErr)
 	}
 	providerPath, _, _, pathErr := s.resolvePropertyPath(registered.ProviderID, deviceID, endpointID, capabilityID, propertyID, mapping.DirectionReverse)
 	if pathErr != nil {
-		s.commands.Rejected(command.ID, pathErr)
-		s.rollbackOptimistic(command.ID, previous, hadPrevious)
-		s.metrics.commandsRejected.Add(1)
-		current, _ := s.commands.Get(command.ID)
-		return device.Device{}, current, pathErr
+		return s.rejectPropertyWrite(command, previous, hadPrevious, pathErr)
 	}
 	providerValue = s.alignProviderEnumValue(operation.ctx, deviceID, providerPath, providerValue)
 	item, err := s.writer.WriteProperty(operation.ctx, providersdk.PropertyWriteRequest{
@@ -886,11 +909,7 @@ func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointI
 			s.rollbackOptimistic(command.ID, previous, hadPrevious)
 			return device.Device{}, current, ErrCommandSuperseded
 		}
-		s.commands.Rejected(command.ID, err)
-		s.rollbackOptimistic(command.ID, previous, hadPrevious)
-		s.metrics.commandsRejected.Add(1)
-		current, _ := s.commands.Get(command.ID)
-		return device.Device{}, current, err
+		return s.rejectPropertyWrite(command, previous, hadPrevious, err)
 	}
 	if current, ok := s.commands.Get(command.ID); ok && current.Status == domaincommand.StatusSuperseded {
 		s.rollbackOptimistic(command.ID, previous, hadPrevious)
@@ -904,11 +923,19 @@ func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointI
 	return item, current, nil
 }
 
+func (s *DeviceService) rejectPropertyWrite(command domaincommand.Command, previous domainstate.StateValue, hadPrevious bool, err error) (device.Device, domaincommand.Command, error) {
+	s.commands.Rejected(command.ID, err)
+	s.rollbackOptimistic(command.ID, previous, hadPrevious)
+	s.metrics.commandsRejected.Add(1)
+	current, _ := s.commands.Get(command.ID)
+	return device.Device{}, current, err
+}
+
 func (s *DeviceService) beginPropertyOperation(ctx context.Context, key domainstate.Key, value device.PropertyValue) (*propertyOperation, bool) {
 	s.propertyMu.Lock()
 	var superseded *domaincommand.Command
 	if existing := s.propertyOps[key]; existing != nil {
-		if propertyValuesEqual(existing.expected, value) {
+		if existing.expected.Equal(value) {
 			existing.coalesced++
 			commandID := existing.command.ID
 			s.propertyMu.Unlock()
@@ -977,24 +1004,6 @@ func (s *DeviceService) finishPropertyOperation(key domainstate.Key, operation *
 	return item, command, err
 }
 
-func propertyValuesEqual(left, right device.PropertyValue) bool {
-	if left.Type != right.Type {
-		return false
-	}
-	switch left.Type {
-	case device.ValueTypeBool:
-		return left.Bool != nil && right.Bool != nil && *left.Bool == *right.Bool
-	case device.ValueTypeInt:
-		return left.Int != nil && right.Int != nil && *left.Int == *right.Int
-	case device.ValueTypeNumber:
-		return left.Number != nil && right.Number != nil && *left.Number == *right.Number
-	case device.ValueTypeString, device.ValueTypeEnum:
-		return left.String != nil && right.String != nil && *left.String == *right.String
-	default:
-		return false
-	}
-}
-
 func (s *DeviceService) validatePropertyWrite(deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue) error {
 	item, ok := s.registry.Get(deviceID)
 	if !ok {
@@ -1040,18 +1049,11 @@ func (s *DeviceService) ExecuteCommand(ctx context.Context, request providersdk.
 	s.metrics.commandsStarted.Add(1)
 	s.commands.Sent(command.ID)
 	if s.executor == nil {
-		err := providersdk.ErrCommandUnsupported
-		s.commands.Rejected(command.ID, err)
-		s.metrics.commandsRejected.Add(1)
-		current, _ := s.commands.Get(command.ID)
-		return device.Device{}, current, err
+		return s.rejectCommand(command, providersdk.ErrCommandUnsupported)
 	}
 	item, err := s.executor.ExecuteCommand(ctx, request)
 	if err != nil {
-		s.commands.Rejected(command.ID, err)
-		s.metrics.commandsRejected.Add(1)
-		current, _ := s.commands.Get(command.ID)
-		return device.Device{}, current, err
+		return s.rejectCommand(command, err)
 	}
 	if mapped, mapErr := s.projectLatestSnapshot(ctx, item); mapErr == nil {
 		item = mapped
@@ -1061,6 +1063,13 @@ func (s *DeviceService) ExecuteCommand(ctx context.Context, request providersdk.
 	s.metrics.commandsConfirmed.Add(1)
 	current, _ := s.commands.Get(command.ID)
 	return item, current, nil
+}
+
+func (s *DeviceService) rejectCommand(command domaincommand.Command, err error) (device.Device, domaincommand.Command, error) {
+	s.commands.Rejected(command.ID, err)
+	s.metrics.commandsRejected.Add(1)
+	current, _ := s.commands.Get(command.ID)
+	return device.Device{}, current, err
 }
 
 func (s *DeviceService) validateCommand(request providersdk.CommandRequest) error {
@@ -1106,23 +1115,7 @@ func (s *DeviceService) validateCommand(request providersdk.CommandRequest) erro
 }
 
 func valueMatchesType(value device.PropertyValue, expected device.ValueType) bool {
-	if value.Type != expected {
-		return false
-	}
-	payloads := 0
-	if value.Bool != nil {
-		payloads++
-	}
-	if value.Int != nil {
-		payloads++
-	}
-	if value.Number != nil {
-		payloads++
-	}
-	if value.String != nil {
-		payloads++
-	}
-	if payloads != 1 {
+	if value.Type != expected || !value.HasSinglePayload() {
 		return false
 	}
 	return (expected == device.ValueTypeBool && value.Bool != nil) || (expected == device.ValueTypeInt && value.Int != nil) || (expected == device.ValueTypeNumber && value.Number != nil) || ((expected == device.ValueTypeString || expected == device.ValueTypeEnum) && value.String != nil)
@@ -1188,59 +1181,38 @@ func (s *DeviceService) SubscribeCommands(handler func(domaincommand.Command)) f
 }
 
 func (s *DeviceService) Subscribe(handler func(device.Device)) func() {
-	s.mu.Lock()
-	s.nextID++
-	id := s.nextID
-	subscription := &deviceSubscription{queue: make(chan device.Device, 64), done: make(chan struct{})}
-	s.listeners[id] = subscription
-	s.mu.Unlock()
-	go func() {
-		defer close(subscription.done)
-		for item := range subscription.queue {
-			handler(item)
-		}
-	}()
-	var once sync.Once
-	return func() { once.Do(func() { s.removeSubscription(id) }) }
+	return subscribe(s, &s.nextID, s.listeners, handler)
 }
 
 func (s *DeviceService) SubscribeStates(handler func(domainstate.StateValue)) func() {
+	return subscribe(s, &s.nextStateID, s.stateListeners, handler)
+}
+
+func (s *DeviceService) SubscribeDeviceEvents(handler func(providersdk.DeviceEvent)) func() {
+	return subscribe(s, &s.nextDeviceEventID, s.deviceEventListeners, handler)
+}
+
+func subscribe[T any](s *DeviceService, nextID *uint64, listeners map[uint64]*subscription[T], handler func(T)) func() {
 	s.mu.Lock()
-	s.nextStateID++
-	id := s.nextStateID
-	subscription := &stateSubscription{queue: make(chan domainstate.StateValue, 64), done: make(chan struct{})}
-	s.stateListeners[id] = subscription
+	*nextID++
+	id := *nextID
+	sub := &subscription[T]{queue: make(chan T, 64), done: make(chan struct{})}
+	listeners[id] = sub
 	s.mu.Unlock()
 	go func() {
-		defer close(subscription.done)
-		for item := range subscription.queue {
+		defer close(sub.done)
+		for item := range sub.queue {
 			handler(item)
 		}
 	}()
 	var once sync.Once
-	return func() { once.Do(func() { s.removeStateSubscription(id) }) }
-}
-
-func (s *DeviceService) SubscribeDeviceEvents(handler func(providersdk.DeviceEvent)) func() {
-	s.mu.Lock()
-	s.nextDeviceEventID++
-	id := s.nextDeviceEventID
-	subscription := &deviceEventSubscription{queue: make(chan providersdk.DeviceEvent, 64), done: make(chan struct{})}
-	s.deviceEventListeners[id] = subscription
-	s.mu.Unlock()
-	go func() {
-		defer close(subscription.done)
-		for event := range subscription.queue {
-			handler(event)
-		}
-	}()
-	var once sync.Once
-	return func() { once.Do(func() { s.removeDeviceEventSubscription(id) }) }
+	return func() { once.Do(func() { removeSubscription(s, id, listeners) }) }
 }
 
 func (s *DeviceService) Close() error {
 	s.unsubscribe()
 	s.unsubscribeDeviceEvents()
+	s.unsubscribeCapabilityAvailability()
 	s.closeSubscriptions()
 	s.staleCancel()
 	<-s.staleDone
@@ -1253,6 +1225,10 @@ func (s *DeviceService) Close() error {
 }
 
 func (s *DeviceService) handleEvent(event eventbus.Event) {
+	if availability, ok := event.Payload.(providersdk.CapabilityAvailability); ok {
+		s.handleCapabilityAvailability(availability, event.TraceID)
+		return
+	}
 	item, ok := event.Payload.(device.Device)
 	if !ok {
 		return
@@ -1266,6 +1242,16 @@ func (s *DeviceService) handleEvent(event eventbus.Event) {
 		return
 	}
 	item = mapped
+	if current, exists := s.registry.Get(item.ID); exists &&
+		item.Type == device.TypeCamera && item.ProviderID == current.ProviderID &&
+		item.EffectiveAvailability() == device.AvailabilityUnknown &&
+		current.EffectiveAvailability() != device.AvailabilityUnknown &&
+		!item.Disabled && !item.Removed {
+		// Camera media reachability is reported independently by the media
+		// runtime. A control-only Provider projection starts as unknown and
+		// must not erase a newer online/offline media observation.
+		item.SetAvailability(current.EffectiveAvailability())
+	}
 	item.NormalizeAvailability()
 	if s.isDeviceDisabled(item.ID) {
 		item.Disabled = true
@@ -1311,6 +1297,29 @@ func (s *DeviceService) handleEvent(event eventbus.Event) {
 		}
 	}
 	s.publishDevice(item)
+}
+
+func (s *DeviceService) handleCapabilityAvailability(
+	availability providersdk.CapabilityAvailability,
+	traceID string,
+) {
+	if availability.Available {
+		// The following projected provider snapshot is authoritative and will
+		// restore these states through applySnapshot.
+		return
+	}
+	item, exists := s.registry.Get(availability.DeviceID)
+	if !exists || item.ProviderID != availability.ProviderID || item.Disabled || item.Removed {
+		return
+	}
+	changed := s.states.MarkCapabilityUnavailable(
+		availability.DeviceID, availability.EndpointID, availability.CapabilityID,
+		domainstate.UnavailableControlProviderOffline, traceID,
+	)
+	s.metrics.statesMarkedStale.Add(uint64(len(changed)))
+	for _, value := range changed {
+		s.publishState(value)
+	}
 }
 
 func (s *DeviceService) mapSnapshot(item device.Device) (device.Device, error) {
@@ -1720,37 +1729,11 @@ func (s *DeviceService) runStaleScanner(ctx context.Context) {
 	}
 }
 
-func (s *DeviceService) removeSubscription(id uint64) {
+func removeSubscription[T any](s *DeviceService, id uint64, listeners map[uint64]*subscription[T]) {
 	s.mu.Lock()
-	subscription, ok := s.listeners[id]
+	subscription, ok := listeners[id]
 	if ok {
-		delete(s.listeners, id)
-		close(subscription.queue)
-	}
-	s.mu.Unlock()
-	if ok {
-		<-subscription.done
-	}
-}
-
-func (s *DeviceService) removeStateSubscription(id uint64) {
-	s.mu.Lock()
-	subscription, ok := s.stateListeners[id]
-	if ok {
-		delete(s.stateListeners, id)
-		close(subscription.queue)
-	}
-	s.mu.Unlock()
-	if ok {
-		<-subscription.done
-	}
-}
-
-func (s *DeviceService) removeDeviceEventSubscription(id uint64) {
-	s.mu.Lock()
-	subscription, ok := s.deviceEventListeners[id]
-	if ok {
-		delete(s.deviceEventListeners, id)
+		delete(listeners, id)
 		close(subscription.queue)
 	}
 	s.mu.Unlock()
@@ -1791,19 +1774,19 @@ func (s *DeviceService) publishState(value domainstate.StateValue) {
 
 func (s *DeviceService) closeSubscriptions() {
 	s.mu.Lock()
-	subscriptions := make([]*deviceSubscription, 0, len(s.listeners))
+	subscriptions := make([]*subscription[device.Device], 0, len(s.listeners))
 	for id, subscription := range s.listeners {
 		delete(s.listeners, id)
 		close(subscription.queue)
 		subscriptions = append(subscriptions, subscription)
 	}
-	stateSubscriptions := make([]*stateSubscription, 0, len(s.stateListeners))
+	stateSubscriptions := make([]*subscription[domainstate.StateValue], 0, len(s.stateListeners))
 	for id, subscription := range s.stateListeners {
 		delete(s.stateListeners, id)
 		close(subscription.queue)
 		stateSubscriptions = append(stateSubscriptions, subscription)
 	}
-	deviceEventSubscriptions := make([]*deviceEventSubscription, 0, len(s.deviceEventListeners))
+	deviceEventSubscriptions := make([]*subscription[providersdk.DeviceEvent], 0, len(s.deviceEventListeners))
 	for id, subscription := range s.deviceEventListeners {
 		delete(s.deviceEventListeners, id)
 		close(subscription.queue)

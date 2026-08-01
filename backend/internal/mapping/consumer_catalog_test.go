@@ -208,6 +208,9 @@ func TestAirConditionerOffersHomeKitHeaterCoolerSemantics(t *testing.T) {
 
 func TestHomeKitSupportsEveryNativeUnifiedModel(t *testing.T) {
 	unsupported := map[device.Type]bool{
+		// Cameras are published by the isolated Media Worker and are not a
+		// regular accessory on the existing HomeKit bridge target.
+		device.TypeCamera:         true,
 		device.TypePressureSensor: true, device.TypeNoiseSensor: true,
 		device.TypeWaterLevelSensor: true, device.TypeSoilMoistureSensor: true,
 		device.TypePump: true, device.TypeWaterHeater: true, device.TypePowerMeter: true,
@@ -231,17 +234,17 @@ func TestAirPurifierHomeKitContractIsOptionalBeyondActiveAndCurrentState(t *test
 		t.Fatal("HomeKit air-purifier contract is missing")
 	}
 	want := map[string]device.ParameterLevel{
-		"AirPurifier.Active":                         device.ParameterRequired,
-		"AirPurifier.CurrentAirPurifierState":         device.ParameterRequired,
-		"AirPurifier.TargetAirPurifierState":          device.ParameterOptional,
-		"AirPurifier.RotationSpeed":                   device.ParameterOptional,
-		"AirPurifier.SwingMode":                       device.ParameterOptional,
-		"AirPurifier.LockPhysicalControls":            device.ParameterOptional,
-		"AirQualitySensor.AirQuality":                 device.ParameterOptional,
-		"AirQualitySensor.PM2.5Density":               device.ParameterOptional,
-		"AirQualitySensor.VOCDensity":                 device.ParameterOptional,
-		"FilterMaintenance.FilterLifeLevel":           device.ParameterOptional,
-		"FilterMaintenance.FilterChangeIndication":    device.ParameterOptional,
+		"AirPurifier.Active":                       device.ParameterRequired,
+		"AirPurifier.CurrentAirPurifierState":      device.ParameterRequired,
+		"AirPurifier.TargetAirPurifierState":       device.ParameterOptional,
+		"AirPurifier.RotationSpeed":                device.ParameterOptional,
+		"AirPurifier.SwingMode":                    device.ParameterOptional,
+		"AirPurifier.LockPhysicalControls":         device.ParameterOptional,
+		"AirQualitySensor.AirQuality":              device.ParameterOptional,
+		"AirQualitySensor.PM2.5Density":            device.ParameterOptional,
+		"AirQualitySensor.VOCDensity":              device.ParameterOptional,
+		"FilterMaintenance.FilterLifeLevel":        device.ParameterOptional,
+		"FilterMaintenance.FilterChangeIndication": device.ParameterOptional,
 	}
 	if len(contract.Parameters) != len(want) {
 		t.Fatalf("air-purifier parameters = %#v", contract.Parameters)

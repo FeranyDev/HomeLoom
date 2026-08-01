@@ -1,4 +1,5 @@
-export type TargetType = 'apple-hap' | 'matter'
+export type TargetType = 'apple-hap' | 'homekit-camera' | 'matter' | 'matter-camera'
+export type MatterTargetType = 'matter' | 'matter-camera'
 export type TargetStatus = 'disabled' | 'starting' | 'running' | 'error'
 
 export interface TargetVirtualDevice {
@@ -13,7 +14,7 @@ export interface TargetVirtualDevice {
 /** Fields shared by every bridge protocol. Protocol configuration deliberately
  * lives in the discriminated branch below: Matter must never inherit HAP's
  * listener, Setup ID, or PIN fields. */
-export interface TargetIssue {
+interface TargetIssue {
 	deviceId?: string
 	deviceName?: string
 	deviceType?: string
@@ -21,7 +22,7 @@ export interface TargetIssue {
 	message: string
 }
 
-export interface TargetBase {
+interface TargetBase {
 	id: string
 	type: TargetType
 	consumerId?: string
@@ -37,13 +38,13 @@ export interface TargetBase {
 	removed?: boolean
 }
 
-export interface AppleHAPConfig {
+interface AppleHAPConfig {
 	/** Listener address, for example :51826. An empty value asks the service to choose it. */
 	address?: string
 	setupId?: string
 }
 
-export interface AppleHAPPairing {
+interface AppleHAPPairing {
 	paired: boolean
 	pairingCode?: string
 	setupUri?: string
@@ -55,7 +56,13 @@ export interface AppleHAPTarget extends TargetBase {
 	pairing: AppleHAPPairing
 }
 
-export type MatterCommissioningState = 'uncommissioned' | 'window-open' | 'commissioned' | 'unknown'
+export interface HomeKitCameraTarget extends TargetBase {
+	type: 'homekit-camera'
+	config: AppleHAPConfig
+	pairing: AppleHAPPairing
+}
+
+type MatterCommissioningState = 'uncommissioned' | 'window-open' | 'commissioned' | 'unknown'
 
 export interface MatterCommissioning {
 	state: MatterCommissioningState
@@ -85,7 +92,7 @@ export interface MatterTargetConfig {
 }
 
 export interface MatterTarget extends TargetBase {
-	type: 'matter'
+	type: MatterTargetType
 	config: MatterTargetConfig
 	commissioning: MatterCommissioning
 	fabricCount: number
@@ -99,9 +106,9 @@ export interface MatterTarget extends TargetBase {
 	certification?: 'test' | 'certified' | 'unknown'
 }
 
-export type Target = AppleHAPTarget | MatterTarget
+export type Target = AppleHAPTarget | HomeKitCameraTarget | MatterTarget
 
-export interface TargetInputBase {
+interface TargetInputBase {
 	id: string
 	type: TargetType
 	name: string
@@ -120,8 +127,17 @@ export interface AppleHAPTargetInput extends TargetInputBase {
 	}
 }
 
+export interface HomeKitCameraTargetInput extends TargetInputBase {
+	type: 'homekit-camera'
+	config: {
+		address: string
+		pin: string
+		setupId: string
+	}
+}
+
 export interface MatterTargetInput extends TargetInputBase {
-	type: 'matter'
+	type: MatterTargetType
 	config: {
 		/** Empty means the runtime selects a suitable active interface. */
 		networkInterface: string
@@ -137,4 +153,16 @@ export interface MatterTargetInput extends TargetInputBase {
 	}
 }
 
-export type TargetInput = AppleHAPTargetInput | MatterTargetInput
+export type TargetInput = AppleHAPTargetInput | HomeKitCameraTargetInput | MatterTargetInput
+
+export function isMatterTargetType(type: TargetType): type is MatterTargetType {
+	return type === 'matter' || type === 'matter-camera'
+}
+
+export function isMatterTarget(target: Target): target is MatterTarget {
+	return isMatterTargetType(target.type)
+}
+
+export function isMatterTargetInput(input: TargetInput): input is MatterTargetInput {
+	return isMatterTargetType(input.type)
+}

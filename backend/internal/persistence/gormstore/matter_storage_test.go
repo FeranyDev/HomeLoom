@@ -82,6 +82,54 @@ func TestMatterTargetConfigEncryptedRoundTripAndTypeIsImmutable(t *testing.T) {
 	}
 }
 
+func TestMatterCameraConfigAndRuntimeStorageRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	discriminator := uint16(1234)
+	item := target.Config{
+		ID: "matter-camera", Type: "matter-camera", Name: "Matter Camera",
+		MatterConfig: &target.MatterConfig{
+			Discriminator: &discriminator, Passcode: "20202021",
+			VendorID: target.DefaultMatterVendorID, ProductID: target.DefaultMatterProductID,
+			ProductName: "HomeLoom Matter Camera", SerialNumber: "matter-camera",
+			CommissioningWindowSeconds: 900,
+		},
+		Devices: []target.VirtualDevice{{
+			ID: "camera", Name: "Camera", Type: device.TypeCamera,
+			SourceDeviceID: "camera-source", Enabled: true,
+		}},
+	}
+	if err := store.SaveTarget(ctx, item); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutMatterRuntimeValue(ctx, item.ID, "fabric/camera", []byte("secret")); err != nil {
+		t.Fatal(err)
+	}
+	configs, err := store.ListTargets(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored *target.Config
+	for index := range configs {
+		if configs[index].ID == item.ID {
+			restored = &configs[index]
+			break
+		}
+	}
+	if restored == nil || restored.Type != "matter-camera" || restored.MatterConfig == nil ||
+		restored.MatterConfig.Passcode != item.MatterConfig.Passcode {
+		t.Fatalf("restored Matter Camera = %#v", configs)
+	}
+	value, found, err := store.GetMatterRuntimeValue(ctx, item.ID, "fabric/camera")
+	if err != nil || !found || string(value) != "secret" {
+		t.Fatalf("Matter Camera runtime value = %q, %v, %v", value, found, err)
+	}
+}
+
 func TestMatterRuntimeKVEncryptsAndStrictlyIsolatesTargets(t *testing.T) {
 	ctx := context.Background()
 	store, err := openTestStore(t, ctx)

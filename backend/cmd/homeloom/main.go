@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -19,6 +20,7 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/platform/httpapi"
 	"github.com/feranydev/homeloom/backend/internal/platform/safelog"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
+	cameraprovider "github.com/feranydev/homeloom/backend/internal/providers/camera"
 	mqttprovider "github.com/feranydev/homeloom/backend/internal/providers/mqtt"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
 	"github.com/feranydev/homeloom/backend/internal/providers/xiaomi"
@@ -101,6 +103,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
+	var mediaRuntime *embeddedMediaRuntime
 	if *initializeVirtualModels {
 		changed, initializeErr := initializeAllVirtualModels(ctx, store)
 		if initializeErr != nil {
@@ -114,6 +117,11 @@ func main() {
 	providerConfigs, err := store.ListProviders(ctx)
 	if err != nil {
 		logger.Error("provider configuration load failed", "error", err)
+		os.Exit(1)
+	}
+	providerConfigs, err = migrateXiaomiCameraProviders(ctx, providerConfigs, store)
+	if err != nil {
+		logger.Error("camera provider migration failed", "error", err)
 		os.Exit(1)
 	}
 	factory := providersdk.NewFactory()
@@ -130,6 +138,7 @@ func main() {
 		os.Exit(1)
 	}
 	xiaomiSpecs := xiaomi.NewSpecResolver(store)
+	var providerManager *providermanager.Manager
 	if err := factory.Register("xiaomi", func(config providerconfig.Config) (providersdk.Provider, error) {
 		return xiaomi.NewProviderFromConfigWithSpecResolver(config, xiaomiSpecs)
 	}); err != nil {
@@ -140,6 +149,29 @@ func main() {
 		return xiaomi.NewCloudProviderFromConfigWithSpecResolver(config, xiaomiSpecs)
 	}); err != nil {
 		logger.Error("xiaomi MIoT cloud provider factory registration failed", "error", err)
+		os.Exit(1)
+	}
+	if err := factory.Register(cameraprovider.ProviderType, func(config providerconfig.Config) (providersdk.Provider, error) {
+		return cameraprovider.NewProviderFromConfigWithXiaomiCredentialResolver(config, func(id string) (xiaomi.CloudConfig, error) {
+			if providerManager == nil {
+				return xiaomi.CloudConfig{}, errors.New("provider runtime is not initialized")
+			}
+			instance, ok := providerManager.Provider(id)
+			if !ok {
+				return xiaomi.CloudConfig{}, errors.New("referenced provider is not running")
+			}
+			account, ok := instance.(interface{ CameraAccountCredentials() xiaomi.CloudConfig })
+			if !ok {
+				return xiaomi.CloudConfig{}, errors.New("referenced provider does not expose Xiaomi camera credentials")
+			}
+			credentials := account.CameraAccountCredentials()
+			if credentials.UserID == "" || credentials.PassToken == "" {
+				return xiaomi.CloudConfig{}, errors.New("referenced provider has no Xiaomi MISS userId/passToken session")
+			}
+			return credentials, nil
+		})
+	}); err != nil {
+		logger.Error("camera provider factory registration failed", "error", err)
 		os.Exit(1)
 	}
 	providerInstances := make([]providersdk.Provider, 0, len(providerConfigs))
@@ -154,7 +186,7 @@ func main() {
 		}
 		providerInstances = append(providerInstances, instance)
 	}
-	providerManager, err := providermanager.New(providerInstances...)
+	providerManager, err = providermanager.New(providerInstances...)
 	if err != nil {
 		logger.Error("provider manager creation failed", "error", err)
 		os.Exit(1)
@@ -163,10 +195,54 @@ func main() {
 		logger.Error("provider initialization failed", "error", err)
 		os.Exit(1)
 	}
+	for _, info := range providerManager.ProviderInfos() {
+		if info.Status != "running" {
+			logger.Warn("provider is not running", "provider_id", info.Manifest.ID, "provider_type", info.Manifest.Type, "status", info.Status, "error", info.Error)
+		}
+	}
+	// Media authorization must not depend on DeviceService's constructor
+	// silently succeeding later in startup. Validate and populate ordinary
+	// Device routes before the Media Worker can connect.
+	if _, err := providerManager.DiscoverDevices(ctx); err != nil {
+		logger.Error("initial device discovery failed", "error", err)
+		os.Exit(1)
+	}
+	if err := reconcileDiscoveredMedia(ctx, providerManager, store, providerConfigs); err != nil {
+		logger.Error("media source reconciliation failed", "error", err)
+		os.Exit(1)
+	}
+	if moved, err := migrateLegacyCameraPublisherRuntimeDir(settings.Media.RuntimeDir); err != nil {
+		logger.Error("camera publisher runtime migration failed", "error", err)
+		os.Exit(1)
+	} else if moved > 0 {
+		logger.Info("camera publisher runtime migrated from legacy cache path", "count", moved)
+	}
+	if removed, err := pruneOrphanedCameraPublisherDirectories(ctx, settings.Media.RuntimeDir, store); err != nil {
+		logger.Error("orphaned camera publisher cleanup failed", "error", err)
+		os.Exit(1)
+	} else if removed > 0 {
+		logger.Info("orphaned camera publisher directories removed", "count", removed)
+	}
 	profileService, err := application.NewProfileService(ctx, store)
 	if err != nil {
 		logger.Error("mapping profile load failed", "error", err)
 		os.Exit(1)
+	}
+	knownProviders := make(map[string]struct{}, len(providerConfigs))
+	configuredProviderDevices := make(map[string]map[string]struct{}, len(providerConfigs))
+	for _, providerConfig := range providerConfigs {
+		knownProviders[providerConfig.ID] = struct{}{}
+		if deviceIDs, authoritative := application.ConfiguredProviderDeviceIDs(providerConfig); authoritative {
+			configuredProviderDevices[providerConfig.ID] = deviceIDs
+		}
+	}
+	prunedBindings, err := profileService.PruneOrphanedBindings(ctx, knownProviders, configuredProviderDevices)
+	if err != nil {
+		logger.Error("orphaned mapping binding cleanup failed", "error", err)
+		os.Exit(1)
+	}
+	if prunedBindings > 0 {
+		logger.Info("orphaned mapping bindings pruned", "count", prunedBindings)
 	}
 	syncProviderPropertyInterests := func() {
 		bindings := profileService.ListBindings()
@@ -186,6 +262,22 @@ func main() {
 		logger.Error("device preference load failed", "error", err)
 		os.Exit(1)
 	}
+	if settings.Media.Enabled {
+		mediaRuntime, err = newEmbeddedMediaRuntime(ctx, store, providerManager, embeddedMediaConfig{
+			CameraKernelBinary: settings.Media.CameraKernelBinary,
+			RuntimeDir:         settings.Media.RuntimeDir,
+			HAPHost:            settings.Media.HAPHost,
+			HAPPortBase:        settings.Media.HAPPortBase,
+			RTSPPortBase:       settings.Media.RTSPPortBase,
+			SRTPPortBase:       settings.Media.SRTPPortBase,
+		}, logger)
+		if err != nil {
+			logger.Error("embedded media runtime initialization failed", "error", err)
+			os.Exit(1)
+		}
+	}
+	mediaService := application.NewMediaService(gormMediaStreamStore{store: store}, mediaRuntime)
+	cameraPublications := newCameraTargetPublication(mediaService, service, settings.Media.RuntimeDir, settings.Media.HAPPortBase)
 	settingsService, err := application.NewSettingsService(ctx, store, service)
 	if err != nil {
 		logger.Error("runtime settings load failed", "error", err)
@@ -199,7 +291,7 @@ func main() {
 		os.Exit(1)
 	}
 	registrations := make([]application.TargetRegistration, 0, len(targetConfigs))
-	manager := targetmanager.New(ctx, service, logger, store)
+	manager := targetmanager.New(ctx, service, logger, store, cameraPublications)
 	for _, targetConfig := range targetConfigs {
 		registration, targetErr := manager.Apply(ctx, targetConfig)
 		if targetErr != nil {
@@ -224,6 +316,45 @@ func main() {
 			logger.Error("consumer mapping target refresh failed", "error", refreshErr)
 		}
 	})
+	providerService.SetChangeHandler(func(changeCtx context.Context, item providerconfig.Config, deleted bool) error {
+		configuredDevices := map[string]struct{}{}
+		authoritative := deleted
+		if !deleted {
+			configuredDevices, authoritative = application.ConfiguredProviderDeviceIDs(item)
+		}
+		if authoritative {
+			pruned, pruneErr := profileService.PruneProviderBindings(changeCtx, item.ID, configuredDevices)
+			if pruneErr != nil {
+				return fmt.Errorf("prune mapping bindings for provider %q: %w", item.ID, pruneErr)
+			}
+			if pruned > 0 {
+				logger.Info("provider mapping bindings pruned", "provider_id", item.ID, "count", pruned)
+			}
+		}
+		if item.Type == cameraprovider.ProviderType {
+			infos := providerService.List()
+			configs := make([]providerconfig.Config, 0, len(infos))
+			for _, info := range infos {
+				configs = append(configs, info.Config)
+			}
+			if err := reconcileDiscoveredMedia(changeCtx, providerManager, store, configs); err != nil {
+				return fmt.Errorf("reconcile Camera Provider media: %w", err)
+			}
+			if mediaRuntime != nil {
+				if err := mediaRuntime.Replay(changeCtx); err != nil {
+					return fmt.Errorf("replay embedded media runtime: %w", err)
+				}
+				removed, err := pruneOrphanedCameraPublisherDirectories(changeCtx, settings.Media.RuntimeDir, store)
+				if err != nil {
+					return fmt.Errorf("clean orphaned Camera Provider publishers: %w", err)
+				}
+				if removed > 0 {
+					logger.Info("orphaned camera publisher directories removed", "count", removed)
+				}
+			}
+		}
+		return nil
+	})
 	server := httpapi.NewServer(settings.Server.Address, service, targetService, logger, providerService)
 	if err := server.SetTrustedProxies(settings.Server.TrustedProxies); err != nil {
 		logger.Error("trusted proxy configuration failed", "error", err)
@@ -236,6 +367,10 @@ func main() {
 	server.SetAuditService(auditService)
 	server.SetProfileService(profileService)
 	server.SetExportService(application.NewExportService(service, providerService, targetService, settingsService, auditService, profileService))
+	server.SetMediaService(mediaService)
+	if settings.Media.Enabled {
+		server.SetMediaPreview(settings.Media.RuntimeDir)
+	}
 
 	go func() {
 		if err := server.Start(); err != nil {
@@ -249,6 +384,11 @@ func main() {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	if mediaRuntime != nil {
+		if err := mediaRuntime.Close(); err != nil && !errors.Is(err, context.Canceled) {
+			logger.Error("embedded media runtime shutdown failed", "error", err)
+		}
+	}
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Error("graceful shutdown failed", "error", err)
 	}

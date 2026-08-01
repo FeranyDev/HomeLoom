@@ -1,4 +1,4 @@
-export interface ProviderCapabilities {
+interface ProviderCapabilities {
   discovery: boolean
   propertyRead: boolean
   propertyWrite: boolean
@@ -6,10 +6,10 @@ export interface ProviderCapabilities {
   events: boolean
 }
 
-export interface ProviderManifest { id: string; type: string; name: string; version: string }
-export interface ProviderCredentialStatus { managed: boolean; refreshAt?: string; tokenExpiresAt?: string; certificateExpiresAt?: string }
+interface ProviderManifest { id: string; type: string; name: string; version: string }
+interface ProviderCredentialStatus { managed: boolean; refreshAt?: string; tokenExpiresAt?: string; certificateExpiresAt?: string }
 
-export interface ProviderConfig {
+interface ProviderConfig {
   id: string
   type: string
   name: string

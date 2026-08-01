@@ -28,10 +28,6 @@ func boolProperty(id string, value bool) Property {
 	return Property{Definition: PropertyDefinition{ID: id, Type: ValueTypeBool, Readable: true}, Value: BoolValue(value)}
 }
 
-func enumPropertyForContract(id, value string, options ...string) Property {
-	return Property{Definition: PropertyDefinition{ID: id, Type: ValueTypeEnum, Readable: true, Enum: options}, Value: EnumValue(value)}
-}
-
 func TestPublisherModelRequiresRequiredParametersAndClassifiesCustom(t *testing.T) {
 	missing := contractDevice(TypeLightbulb, struct {
 		capability string
@@ -124,6 +120,7 @@ func TestModelCatalogCoversEverySupportedType(t *testing.T) {
 		TypeHumidifierDehumidifier: false, TypeLock: false, TypeGarageDoor: false,
 		TypeSecuritySystem: false, TypeValve: false, TypePump: false, TypeWaterHeater: false,
 		TypePowerMeter: false, TypeEVCharger: false, TypeSpeaker: false, TypeRobotVacuum: false,
+		TypeCamera: false,
 	}
 	for _, contract := range ModelContracts() {
 		if _, exists := want[contract.DeviceType]; !exists || len(contract.Parameters) == 0 {
@@ -139,8 +136,8 @@ func TestModelCatalogCoversEverySupportedType(t *testing.T) {
 }
 
 func TestExpandedModelContractsExposeCompleteMetadata(t *testing.T) {
-	if got := len(ModelContracts()); got != 36 {
-		t.Fatalf("built-in model count = %d, want 36", got)
+	if got := len(ModelContracts()); got != 37 {
+		t.Fatalf("built-in model count = %d, want 37", got)
 	}
 	for _, contract := range ModelContracts() {
 		if contract.Name == "" || contract.Version < 1 || !contract.BuiltIn {
@@ -199,6 +196,58 @@ func TestExpandedModelContractsExposeCompleteMetadata(t *testing.T) {
 	for _, path := range []string{"main/air-conditioner/fan-speed", "main/air-conditioner/vertical-swing", "main/air-conditioner/horizontal-swing", "main/air-conditioner/auxiliary-heat", "main/air-conditioner/sleep-mode", "main/filter/life-level"} {
 		if _, found := airConditionerPaths[path]; !found {
 			t.Errorf("air conditioner optional parameter %s is missing", path)
+		}
+	}
+}
+
+func TestCameraModelUsesUnifiedDeviceCapabilities(t *testing.T) {
+	contract, ok := ModelContractFor(TypeCamera)
+	if !ok {
+		t.Fatal("camera contract is missing")
+	}
+	paths := make(map[string]ModelParameter, len(contract.Parameters))
+	for _, parameter := range contract.Parameters {
+		paths[parameter.Path.String()] = parameter
+		if parameter.Level != ParameterOptional {
+			t.Errorf("camera parameter %s is %q, want optional", parameter.Path, parameter.Level)
+		}
+	}
+	for _, path := range []string{
+		"main/camera/privacy",
+		"main/camera/indicator",
+		"main/camera/night-vision",
+		"main/camera/motion-detection",
+		"main/camera/motion-detected",
+		"main/media/live-stream",
+		"main/media/snapshot",
+		"main/media/microphone",
+		"main/media/talkback",
+		"main/ptz/movement",
+		"main/ptz/movement-speed",
+		"main/ptz/pan-position",
+		"main/ptz/tilt-position",
+		"main/ptz/zoom-level",
+		"main/ptz/current-preset",
+		"main/ptz/target-preset",
+		"main/ptz/preset-count",
+		"main/battery/level",
+	} {
+		if _, found := paths[path]; !found {
+			t.Errorf("camera model parameter %s is missing", path)
+		}
+	}
+	if !paths["main/camera/privacy"].Writable {
+		t.Error("camera privacy must remain controllable through the unified device command/property model")
+	}
+	if movement := paths["main/ptz/movement"]; !movement.Writable || len(movement.Enum) != 9 {
+		t.Errorf("camera PTZ movement = %#v", movement)
+	}
+	if paths["main/ptz/current-preset"].Writable || !paths["main/ptz/target-preset"].Writable {
+		t.Error("camera preset state must be readable through current-preset and selected through target-preset")
+	}
+	for _, legacy := range []string{"main/ptz/pan", "main/ptz/tilt", "main/ptz/zoom"} {
+		if _, found := paths[legacy]; found {
+			t.Errorf("legacy camera parameter %s must not be exposed", legacy)
 		}
 	}
 }

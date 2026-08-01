@@ -99,6 +99,62 @@ func TestHTTPMiotCloudClientEncryptsPropertyRequests(t *testing.T) {
 	}
 }
 
+func TestHTTPMiotCloudClientAcquiresStructuredMISSAuthorization(t *testing.T) {
+	securityBytes := []byte("0123456789abcdef")
+	security := base64.StdEncoding.EncodeToString(securityBytes)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/app/v2/device/miss_get_vendor" {
+			t.Errorf("request path = %q", request.URL.Path)
+		}
+		if _, err := request.Cookie("passToken"); err == nil {
+			t.Error("passToken must not be copied into the MIoT API request")
+		}
+		if err := request.ParseForm(); err != nil {
+			t.Error(err)
+			response.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		nonce, err := base64.StdEncoding.DecodeString(request.Form.Get("_nonce"))
+		if err != nil {
+			t.Error(err)
+		}
+		sum := sha256.Sum256(append(append([]byte(nil), securityBytes...), nonce...))
+		encrypted, err := base64.StdEncoding.DecodeString(request.Form.Get("data"))
+		if err != nil {
+			t.Error(err)
+		}
+		var payload struct {
+			ClientPublic string `json:"app_pubkey"`
+			DID          string `json:"did"`
+			Vendors      string `json:"support_vendors"`
+		}
+		if err := json.Unmarshal(rc4CryptDrop1024(sum[:], encrypted), &payload); err != nil {
+			t.Errorf("decrypt MISS payload: %v", err)
+		}
+		if payload.ClientPublic != "client-public" || payload.DID != "camera-did" ||
+			payload.Vendors != "TUTK_CS2_MTP" {
+			t.Errorf("MISS payload = %#v", payload)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"code":0,"result":{"vendor":{"vendor":4,"vendor_params":{"p2p_id":"camera-uid"}},"public_key":"device-public","sign":"short-lived-sign"}}`))
+	}))
+	defer server.Close()
+
+	client := newHTTPMiotCloudClient(CloudConfig{
+		Region: "cn", UserID: "123", Ssecurity: security,
+		ServiceToken: "service-token", PassToken: "distinct-pass-token", RequestTimeoutSec: 5,
+	})
+	client.apiBase, client.http = server.URL+"/app", server.Client()
+	result, err := client.AcquireMISSAuthorization(context.Background(), "camera-did", "client-public")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.DevicePublic != "device-public" || result.Sign != "short-lived-sign" ||
+		result.Vendor != "cs2" || result.UID != "camera-uid" {
+		t.Fatalf("MISS authorization = %#v", result)
+	}
+}
+
 func TestHTTPMiotCloudClientMergesHomeAndRoomDirectoryIntoDevices(t *testing.T) {
 	security := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef"))
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
@@ -171,10 +227,11 @@ func TestHTTPMiotCloudLoginFindsAppPathCookiesSetDuringRedirect(t *testing.T) {
 			if request.Form.Get("user") != "owner@example.com" || request.Form.Get("hash") == "" {
 				t.Errorf("login form = %v", request.Form)
 			}
-			_, _ = response.Write([]byte(`&&&START&&&{"location":"` + server.URL + `/sts","userId":"987654321","ssecurity":"` + security + `"}`))
+			_, _ = response.Write([]byte(`&&&START&&&{"location":"` + server.URL + `/sts","userId":"987654321","ssecurity":"` + security + `","passToken":"auth-pass-token"}`))
 		case "/sts":
 			http.SetCookie(response, &http.Cookie{Name: "serviceToken", Value: "redirect-token", Path: "/app"})
 			http.SetCookie(response, &http.Cookie{Name: "userId", Value: "987654321", Path: "/app"})
+			http.SetCookie(response, &http.Cookie{Name: "passToken", Value: "redirect-pass-token", Path: "/app"})
 			http.Redirect(response, request, server.URL+"/done", http.StatusFound)
 		case "/done":
 			_, _ = response.Write([]byte("ok"))
@@ -195,8 +252,42 @@ func TestHTTPMiotCloudLoginFindsAppPathCookiesSetDuringRedirect(t *testing.T) {
 	if err := client.Login(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if client.userID != "987654321" || client.ssecurity != security || client.serviceToken != "redirect-token" {
-		t.Fatalf("session user=%q security=%t token=%q", client.userID, client.ssecurity != "", client.serviceToken)
+	if client.userID != "987654321" || client.ssecurity != security ||
+		client.serviceToken != "redirect-token" || client.passToken != "redirect-pass-token" {
+		t.Fatalf("session user=%q security=%t token=%q passToken=%t", client.userID, client.ssecurity != "", client.serviceToken, client.passToken != "")
+	}
+}
+
+func TestHTTPMiotCloudLoginKeepsPassTokenFromPasswordAuthResponse(t *testing.T) {
+	security := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef"))
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/pass/serviceLogin":
+			_, _ = response.Write([]byte(`&&&START&&&{"_sign":"sign","qs":"qs","callback":"callback"}`))
+		case "/pass/serviceLoginAuth2":
+			_, _ = response.Write([]byte(`&&&START&&&{"location":"` + server.URL + `/sts","userId":"42","ssecurity":"` + security + `","passToken":"password-auth-pass-token"}`))
+		case "/sts":
+			http.SetCookie(response, &http.Cookie{Name: "serviceToken", Value: "service-token", Path: "/"})
+			_, _ = response.Write([]byte("ok"))
+		default:
+			response.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := newHTTPMiotCloudClient(CloudConfig{
+		Region: "cn", Username: "owner@example.com", Password: "password", RequestTimeoutSec: 5,
+	})
+	client.accountBase, client.apiBase = server.URL, server.URL+"/app"
+	client.http.Transport = server.Client().Transport
+	if err := client.Login(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	userID, passToken := client.mediaSession()
+	if userID != "42" || passToken != "password-auth-pass-token" ||
+		client.serviceToken != "service-token" {
+		t.Fatalf("media session user=%q passToken=%t serviceToken=%q", userID, passToken != "", client.serviceToken)
 	}
 }
 

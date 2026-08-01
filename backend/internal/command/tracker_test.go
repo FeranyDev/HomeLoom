@@ -51,7 +51,7 @@ func TestCommandConfirmsTypedNumber(t *testing.T) {
 		t.Fatalf("status = %s", current.Status)
 	}
 	text := "auto"
-	if valuesEqual(device.PropertyValue{Type: device.ValueTypeString, String: &text}, device.PropertyValue{Type: device.ValueTypeEnum, String: &text}) {
+	if (device.PropertyValue{Type: device.ValueTypeString, String: &text}).Equal(device.PropertyValue{Type: device.ValueTypeEnum, String: &text}) {
 		t.Fatal("values with different types compared equal")
 	}
 }
@@ -66,7 +66,7 @@ func TestCommandConfirmsTypedInteger(t *testing.T) {
 		t.Fatalf("status = %s", current.Status)
 	}
 	tracker.Confirm("counter", "main", "counter", "value", device.NumberValue(7))
-	if valuesEqual(device.IntValue(7), device.NumberValue(7)) {
+	if device.IntValue(7).Equal(device.NumberValue(7)) {
 		t.Fatal("int and number compared equal")
 	}
 }
@@ -140,7 +140,7 @@ func TestNewCommandSupersedesPendingCommandForSameProperty(t *testing.T) {
 
 func TestIdenticalPendingPropertyCommandIsCoalesced(t *testing.T) {
 	tracker := NewTracker(time.Second)
-	first, _, replayed := tracker.BeginPropertyCorrelated("switch", "main", "switch", "power", device.BoolValue(true), "trace-first")
+	first, _, _ := tracker.BeginPropertyCorrelated("switch", "main", "switch", "power", device.BoolValue(true), "trace-first")
 	second, superseded, replayed := tracker.BeginPropertyCorrelated("switch", "main", "switch", "power", device.BoolValue(true), "trace-second")
 	if replayed == false || superseded != nil || second.ID != first.ID || second.CorrelationID != "trace-first" || second.Coalesced != 1 || len(tracker.List()) != 1 {
 		t.Fatalf("coalesced = %#v, %#v, replayed=%v", second, superseded, replayed)

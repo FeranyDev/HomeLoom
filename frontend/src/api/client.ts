@@ -1,4 +1,4 @@
-export interface ApiErrorBody { code?: string; message?: string; requestId?: string; fields?: Record<string, string> }
+interface ApiErrorBody { code?: string; message?: string; requestId?: string; fields?: Record<string, string> }
 
 export class ApiError extends Error {
   constructor(message: string, public readonly status: number, public readonly fields: Record<string, string> = {}, public readonly code = 'unknown_error', public readonly requestId = '') { super(message); this.name = 'ApiError' }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
+	"github.com/feranydev/homeloom/backend/internal/domain/media"
 )
 
 var (
@@ -75,6 +76,71 @@ type CredentialMaintainer interface {
 
 type Discoverer interface {
 	DiscoverDevices(context.Context) ([]device.Device, error)
+}
+
+// HiddenDeviceSource marks Provider-owned identities that exist only as
+// internal capability sources. The runtime keeps their routes available for
+// delegated reads, writes and commands, but never publishes them as separate
+// Device Center cards.
+type HiddenDeviceSource interface {
+	HiddenDeviceIDs() []string
+}
+
+// CapabilityBinding joins the non-media capabilities of a source Device to a
+// canonical Device owned by another Provider. The binding contains identities
+// only: credentials and protocol-specific identifiers remain in the source
+// Provider.
+type CapabilityBinding struct {
+	DeviceID       string
+	ProviderID     string
+	SourceDeviceID string
+}
+
+// CapabilityBindingSource is intentionally provider-agnostic. It lets the
+// runtime compose a Camera with a control Provider without making either
+// Provider import the other's implementation.
+type CapabilityBindingSource interface {
+	CapabilityBindings() []CapabilityBinding
+}
+
+// CapabilityAvailability reports reachability of a delegated capability
+// independently from the canonical Device. It is used when media remains
+// online while an auxiliary control Provider is unavailable.
+type CapabilityAvailability struct {
+	ProviderID   string
+	DeviceID     string
+	EndpointID   string
+	CapabilityID string
+	Available    bool
+}
+
+type CapabilityAvailabilityReporter interface {
+	CapabilityAvailabilities() []CapabilityAvailability
+}
+
+type CapabilityAvailabilitySubscriber interface {
+	SubscribeCapabilityAvailability(func(CapabilityAvailability)) func()
+}
+
+// MediaSourceDiscoverer optionally exposes media extensions for camera Devices.
+// The standard Device remains the authority for identity, room, availability,
+// commands, and events; a discovered source only describes how media is
+// acquired.
+type MediaSourceDiscoverer interface {
+	DiscoverMediaSources(context.Context) ([]media.MediaSourceDescriptor, error)
+}
+
+// MediaSourceRefresher refreshes the protocol-specific media extension for one
+// already discovered Device without creating a parallel camera identity.
+type MediaSourceRefresher interface {
+	RefreshMediaSource(context.Context, string) (*media.MediaSourceDescriptor, error)
+}
+
+// MediaAuthorizer is the optional short-lived authorization capability for a
+// Provider. Durable credentials stay owned by the Core/Provider configuration;
+// implementations must never return them in AuthorizationResponse.
+type MediaAuthorizer interface {
+	AcquireMediaAuthorization(context.Context, media.AuthorizationRequest) (*media.AuthorizationResponse, error)
 }
 
 // SourceCatalogMetadata describes how completely a Provider can enumerate the

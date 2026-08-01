@@ -122,7 +122,11 @@ var (
 	_ providersdk.LiveReconfigurer      = (*Provider)(nil)
 	_ providersdk.CredentialMaintainer  = (*Provider)(nil)
 	_ providersdk.Discoverer            = (*Provider)(nil)
+	_ providersdk.MediaSourceDiscoverer = (*Provider)(nil)
+	_ providersdk.MediaSourceRefresher  = (*Provider)(nil)
+	_ providersdk.MediaAuthorizer       = (*Provider)(nil)
 	_ providersdk.SourceCataloger       = (*Provider)(nil)
+	_ providersdk.HiddenDeviceSource    = (*Provider)(nil)
 	_ providersdk.DeviceEventSubscriber = (*Provider)(nil)
 )
 
@@ -496,6 +500,22 @@ func (p *Provider) DiscoverDevices(context.Context) ([]device.Device, error) {
 	p.mu.RUnlock()
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result, nil
+}
+
+// HiddenDeviceIDs returns central-hub camera identities. Xiaomi account and
+// hub Providers only supply catalog, credentials and controls; the independent
+// Camera Provider is always the sole user-visible media device owner.
+func (p *Provider) HiddenDeviceIDs() []string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	result := make([]string, 0)
+	for _, item := range p.config.Devices {
+		if item.Type == device.TypeCamera {
+			result = append(result, item.ID)
+		}
+	}
+	sort.Strings(result)
+	return result
 }
 
 // SetPropertyInterests hot-applies the Provider-native fields used by explicit

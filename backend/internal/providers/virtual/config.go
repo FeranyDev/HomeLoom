@@ -95,6 +95,7 @@ func AllModelDeviceConfigs() []DeviceConfig {
 		{ID: "virtual-power-meter-1", Name: "全屋电力计量", Type: "power-meter", Online: boolValue(true)},
 		{ID: "virtual-ev-charger-1", Name: "车库充电桩", Type: "ev-charger", Online: boolValue(true)},
 		{ID: "virtual-speaker-1", Name: "客厅扬声器", Type: "speaker", Online: boolValue(true)},
+		{ID: "virtual-camera-1", Name: "客厅摄像头", Type: "camera", Online: boolValue(true)},
 		{ID: "virtual-robot-vacuum-1", Name: "扫地机器人", Type: "robot-vacuum", Online: boolValue(true)},
 	}
 }

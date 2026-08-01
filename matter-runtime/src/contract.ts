@@ -1,4 +1,4 @@
-export const IPC_PROTOCOL_VERSION = "1.0";
+export const IPC_PROTOCOL_VERSION = "1.1";
 
 export const RpcMethod = {
   handshake: "runtime.handshake",
@@ -23,10 +23,13 @@ export const RpcMethod = {
   storageDelete: "storage.delete",
   storageList: "storage.list",
   storageClear: "storage.clear",
+  cameraWebRtc: "camera.webrtc",
+  cameraSnapshot: "camera.snapshot",
 } as const;
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+export type NodeKind = "bridge" | "camera";
 
 export interface HandshakeParams {
   protocolVersion: string;
@@ -44,6 +47,7 @@ export interface HandshakeResult {
 }
 
 export interface BridgeConfiguration {
+  nodeKind: NodeKind;
   targetId: string;
   identityNamespace: string;
   networkInterface?: string;
@@ -55,6 +59,11 @@ export interface BridgeConfiguration {
   productName: string;
   serialNumber: string;
   commissioningWindowSeconds: number;
+}
+
+export interface CameraMediaBinding {
+  streamId: string;
+  deviceId: string;
 }
 
 export interface DeviceSnapshot {
@@ -82,6 +91,11 @@ export interface RuntimeReplayState {
   revision: number;
   bridge: BridgeConfiguration | null;
   devices: DeviceSnapshot[];
+  /**
+   * Opaque host-side media identity only. Transport URIs and credentials must
+   * never cross this IPC boundary.
+   */
+  media?: CameraMediaBinding;
 }
 
 export interface OpenCommissioningWindowParams {
@@ -205,6 +219,7 @@ export function expectHandshakeParams(value: unknown): HandshakeParams {
 export function expectBridgeConfiguration(value: unknown): BridgeConfiguration {
   const object = expectObject(value, "bridge configuration");
   const result: BridgeConfiguration = {
+    nodeKind: expectNodeKind(object.nodeKind),
     targetId: expectNonEmptyString(object.targetId, "targetId"),
     identityNamespace: expectNonEmptyString(object.identityNamespace, "identityNamespace"),
     listenPort: expectIntegerInRange(object.listenPort, "listenPort", 1, 65_535),
@@ -232,15 +247,23 @@ export function expectBridgeConfiguration(value: unknown): BridgeConfiguration {
   return result;
 }
 
-export function expectDeviceSnapshots(value: unknown): DeviceSnapshot[] {
+export function expectDeviceSnapshots(
+  value: unknown,
+  nodeKind: NodeKind = "bridge",
+): DeviceSnapshot[] {
   if (!Array.isArray(value)) {
     throw new ContractValidationError("devices must be an array");
   }
   const endpointIds = new Set<number>();
   const deviceIds = new Set<string>();
-  return value.map((entry, index) => {
+  const devices = value.map((entry, index) => {
     const object = expectObject(entry, `devices[${index}]`);
-    const endpointId = expectIntegerInRange(object.endpointId, `devices[${index}].endpointId`, 2, 65_534);
+    const endpointId = expectIntegerInRange(
+      object.endpointId,
+      `devices[${index}].endpointId`,
+      nodeKind === "camera" ? 1 : 2,
+      65_534,
+    );
     const id = expectNonEmptyString(object.id, `devices[${index}].id`);
     if (endpointIds.has(endpointId)) {
       throw new ContractValidationError(`duplicate endpointId ${endpointId}`);
@@ -259,6 +282,19 @@ export function expectDeviceSnapshots(value: unknown): DeviceSnapshot[] {
       attributes: expectJsonRecord(object.attributes, `devices[${index}].attributes`),
     };
   });
+  if (
+    nodeKind === "camera"
+    && (
+      devices.length !== 1
+      || devices[0]?.endpointId !== 1
+      || devices[0].deviceType.trim().toLowerCase() !== "camera"
+    )
+  ) {
+    throw new ContractValidationError(
+      "camera node requires exactly one camera device at endpointId 1",
+    );
+  }
+  return devices;
 }
 
 export function expectAttributeUpdates(value: unknown): AttributeUpdate[] {
@@ -294,11 +330,48 @@ export function expectReachabilityUpdates(value: unknown): ReachabilityUpdate[] 
 
 export function expectReplayState(value: unknown): RuntimeReplayState {
   const object = expectObject(value, "replay state");
-  return {
+  const bridge = object.bridge === null ? null : expectBridgeConfiguration(object.bridge);
+  const nodeKind = bridge?.nodeKind ?? "bridge";
+  const devices = expectDeviceSnapshots(object.devices, nodeKind);
+  const result: RuntimeReplayState = {
     revision: expectIntegerInRange(object.revision, "revision", 0, Number.MAX_SAFE_INTEGER),
-    bridge: object.bridge === null ? null : expectBridgeConfiguration(object.bridge),
-    devices: expectDeviceSnapshots(object.devices),
+    bridge,
+    devices,
   };
+  if (nodeKind === "camera" && object.media === undefined) {
+    throw new ContractValidationError("camera node requires a media binding");
+  }
+  if (object.media !== undefined) {
+    if (nodeKind !== "camera") {
+      throw new ContractValidationError("media is only valid for a camera node");
+    }
+    const media = expectCameraMediaBinding(object.media);
+    if (media.deviceId !== devices[0]?.id) {
+      throw new ContractValidationError("media.deviceId must match the camera device id");
+    }
+    result.media = media;
+  }
+  return result;
+}
+
+export function expectCameraMediaBinding(value: unknown): CameraMediaBinding {
+  const object = expectObject(value, "camera media binding");
+  const allowed = new Set(["streamId", "deviceId"]);
+  const unexpected = Object.keys(object).find((key) => !allowed.has(key));
+  if (unexpected !== undefined) {
+    throw new ContractValidationError(`camera media binding contains unsupported field ${unexpected}`);
+  }
+  return {
+    streamId: expectNonEmptyString(object.streamId, "media.streamId"),
+    deviceId: expectNonEmptyString(object.deviceId, "media.deviceId"),
+  };
+}
+
+function expectNodeKind(value: unknown): NodeKind {
+  if (value !== "bridge" && value !== "camera") {
+    throw new ContractValidationError("nodeKind must be bridge or camera");
+  }
+  return value;
 }
 
 export function expectOpenCommissioningWindowParams(value: unknown): OpenCommissioningWindowParams {
@@ -318,7 +391,7 @@ export function expectAttributeWriteEvent(value: unknown): AttributeWriteEvent {
   return {
     targetId: expectNonEmptyString(object.targetId, "targetId"),
     deviceId: expectNonEmptyString(object.deviceId, "deviceId"),
-    endpointId: expectIntegerInRange(object.endpointId, "endpointId", 2, 65_534),
+    endpointId: expectIntegerInRange(object.endpointId, "endpointId", 1, 65_534),
     path: expectNonEmptyString(object.path, "path"),
     value: expectJsonValue(object.value, "value"),
     interactionId: expectNonEmptyString(object.interactionId, "interactionId"),
@@ -341,7 +414,7 @@ export function expectCommandEvent(value: unknown): CommandEvent {
   return {
     targetId: expectNonEmptyString(object.targetId, "targetId"),
     deviceId: expectNonEmptyString(object.deviceId, "deviceId"),
-    endpointId: expectIntegerInRange(object.endpointId, "endpointId", 2, 65_534),
+    endpointId: expectIntegerInRange(object.endpointId, "endpointId", 1, 65_534),
     path: expectNonEmptyString(object.path, "path"),
     fields: expectJsonRecord(object.fields, "fields"),
     interactionId: expectNonEmptyString(object.interactionId, "interactionId"),

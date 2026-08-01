@@ -260,6 +260,43 @@ func TestMatterTargetUsesIndependentRuntimeFactory(t *testing.T) {
 	}
 }
 
+func TestMatterCameraTargetUsesDedicatedCameraNode(t *testing.T) {
+	devices := application.NewDeviceService(virtual.NewProvider())
+	defer devices.Close()
+	manager := New(context.Background(), devices, slog.New(slog.NewTextHandler(io.Discard, nil)), lifecycleMatterStore{})
+	created := newLifecycleTarget("matter-camera-one")
+	var received mattertarget.Config
+	manager.matterFactory = func(_ context.Context, config mattertarget.Config, _ *application.DeviceService, _ mattertarget.Storage, _ *slog.Logger) (managedTarget, error) {
+		received = config
+		return created, nil
+	}
+	manager.startGrace = time.Millisecond
+	discriminator := uint16(1234)
+	config := target.Config{
+		ID: "matter-camera-one", Type: "matter-camera", Name: "Matter Camera", Enabled: true,
+		MatterConfig: &target.MatterConfig{
+			Discriminator: &discriminator, Passcode: "20202021", VendorID: 0xfff1, ProductID: 0x8000,
+			ProductName: "HomeLoom Matter Camera", SerialNumber: "matter-camera-one", CommissioningWindowSeconds: 900,
+		},
+		Devices: []target.VirtualDevice{{
+			ID: "camera", Name: "Camera", Type: device.TypeCamera, SourceDeviceID: "camera-source", Enabled: true,
+		}},
+	}
+	registration, err := manager.Apply(context.Background(), config)
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if received.NodeKind != "camera" || len(received.Devices) != 1 {
+		t.Fatalf("Matter Camera factory config = %#v", received)
+	}
+	if registration.Info.Type != "matter-camera" || registration.Info.ConsumerID != "matter-camera" {
+		t.Fatalf("Matter Camera registration = %#v", registration.Info)
+	}
+	if err := manager.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMatterApplyWaitsForAuthenticatedRuntimeReadiness(t *testing.T) {
 	devices := application.NewDeviceService(virtual.NewProvider())
 	defer devices.Close()

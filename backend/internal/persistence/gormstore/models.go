@@ -89,6 +89,112 @@ type targetVirtualDeviceRow struct {
 
 func (targetVirtualDeviceRow) TableName() string { return "target_virtual_devices" }
 
+type mediaSourceRow struct {
+	DeviceID         string               `gorm:"column:device_id;primaryKey"`
+	ProviderID       string               `gorm:"column:provider_id;not null;index:media_sources_provider_id_idx"`
+	ProviderDeviceID string               `gorm:"column:provider_device_id;not null;default:''"`
+	Protocol         string               `gorm:"column:protocol;not null;check:media_sources_protocol_check,protocol <> ''"`
+	CredentialRef    string               `gorm:"column:credential_ref;not null;default:''"`
+	ProfilesJSON     jsonDocument         `gorm:"column:profiles_json;not null;default:'[]'"`
+	SourceConfigJSON jsonDocument         `gorm:"column:source_config_json;not null;default:'{}'"`
+	Revision         uint64               `gorm:"column:revision;not null;check:media_sources_revision_check,revision > 0"`
+	Enabled          bool                 `gorm:"column:enabled;not null;default:false"`
+	CreatedAt        int64                `gorm:"column:created_at;not null"`
+	UpdatedAt        int64                `gorm:"column:updated_at;not null"`
+	Provider         providerRow          `gorm:"foreignKey:ProviderID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+	Credentials      []mediaCredentialRow `gorm:"foreignKey:DeviceID;references:DeviceID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+	Streams          []mediaStreamRow     `gorm:"foreignKey:DeviceID;references:DeviceID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+	AuthLeases       []mediaAuthLeaseRow  `gorm:"foreignKey:DeviceID;references:DeviceID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+}
+
+func (mediaSourceRow) TableName() string { return "media_sources" }
+
+type mediaCredentialRow struct {
+	ID                      string `gorm:"column:id;primaryKey"`
+	DeviceID                string `gorm:"column:device_id;not null;index:media_credentials_device_id_idx"`
+	CredentialType          string `gorm:"column:credential_type;not null;check:media_credentials_type_check,credential_type IN ('static_password','homekit_input_pairing_identity','homekit_output_accessory_identity','device_secret','vendor_device_material')"`
+	CredentialBlobEncrypted string `gorm:"column:credential_blob_encrypted;not null"`
+	KeyVersion              uint32 `gorm:"column:key_version;not null;default:1;check:media_credentials_key_version_check,key_version > 0"`
+	Version                 uint64 `gorm:"column:version;not null;default:1;check:media_credentials_version_check,version > 0"`
+	Status                  string `gorm:"column:status;not null;default:'active';check:media_credentials_status_check,status IN ('active','disabled','revoked')"`
+	CreatedAt               int64  `gorm:"column:created_at;not null"`
+	UpdatedAt               int64  `gorm:"column:updated_at;not null"`
+}
+
+func (mediaCredentialRow) TableName() string { return "media_credentials" }
+
+type mediaStreamRow struct {
+	ID              string       `gorm:"column:id;primaryKey"`
+	DeviceID        string       `gorm:"column:device_id;not null;index:media_streams_device_id_idx"`
+	Protocol        string       `gorm:"column:protocol;not null;check:media_streams_protocol_check,protocol <> ''"`
+	CredentialRef   string       `gorm:"column:credential_ref;not null;default:''"`
+	Profile         string       `gorm:"column:profile;not null;default:''"`
+	Mode            string       `gorm:"column:mode;not null;check:media_streams_mode_check,mode IN ('on_demand','preload','always_on')"`
+	AudioEnabled    bool         `gorm:"column:audio_enabled;not null;default:false"`
+	TalkbackEnabled bool         `gorm:"column:talkback_enabled;not null;default:false"`
+	OptionsJSON     jsonDocument `gorm:"column:options_json;not null;default:'{}'"`
+	Revision        uint64       `gorm:"column:revision;not null;check:media_streams_revision_check,revision > 0"`
+	Enabled         bool         `gorm:"column:enabled;not null;default:false"`
+	CreatedAt       int64        `gorm:"column:created_at;not null"`
+	UpdatedAt       int64        `gorm:"column:updated_at;not null"`
+}
+
+func (mediaStreamRow) TableName() string { return "media_streams" }
+
+type mediaRuntimeKVRow struct {
+	Namespace string `gorm:"column:namespace;primaryKey"`
+	Key       string `gorm:"column:key;primaryKey"`
+	Value     string `gorm:"column:value_encrypted;not null"`
+	Sensitive bool   `gorm:"column:sensitive;not null;default:true"`
+	UpdatedAt int64  `gorm:"column:updated_at;not null"`
+}
+
+func (mediaRuntimeKVRow) TableName() string { return "media_runtime_kv" }
+
+type mediaAuthLeaseRow struct {
+	ID                  string `gorm:"column:id;primaryKey"`
+	WorkerID            string `gorm:"column:worker_id;not null;index:media_auth_leases_worker_idx,priority:1;uniqueIndex:media_auth_leases_request_unique,priority:1"`
+	WorkerInstanceID    string `gorm:"column:worker_instance_id;not null;index:media_auth_leases_worker_idx,priority:2;uniqueIndex:media_auth_leases_request_unique,priority:2"`
+	DeviceID            string `gorm:"column:device_id;not null;index:media_auth_leases_device_id_idx"`
+	Protocol            string `gorm:"column:protocol;not null;check:media_auth_leases_protocol_check,protocol <> ''"`
+	Purpose             string `gorm:"column:purpose;not null;check:media_auth_leases_purpose_check,purpose <> ''"`
+	Status              string `gorm:"column:status;not null;check:media_auth_leases_status_check,status IN ('claimed','connected','ended','expired','revoked','failed')"`
+	ExpiresAt           int64  `gorm:"column:expires_at;not null;index:media_auth_leases_expires_at_idx"`
+	RequestID           string `gorm:"column:request_id;not null;uniqueIndex:media_auth_leases_request_unique,priority:3"`
+	RequestMaterialHash string `gorm:"column:request_material_hash;not null;default:''"`
+	MaxUses             uint32 `gorm:"column:max_uses;not null;default:1;check:media_auth_leases_max_uses_check,max_uses > 0"`
+	UseCount            uint32 `gorm:"column:use_count;not null;default:0;check:media_auth_leases_use_count_check,use_count <= max_uses"`
+	CreatedAt           int64  `gorm:"column:created_at;not null"`
+	ClaimedAt           int64  `gorm:"column:claimed_at;not null;default:0"`
+	UsedAt              int64  `gorm:"column:used_at;not null;default:0"`
+	EndedAt             int64  `gorm:"column:ended_at;not null;default:0"`
+}
+
+func (mediaAuthLeaseRow) TableName() string { return "media_auth_leases" }
+
+type mediaAuthAuditRow struct {
+	ID             int64  `gorm:"column:id;primaryKey;autoIncrement"`
+	WorkerID       string `gorm:"column:worker_id;not null;index:media_auth_audit_worker_id_idx"`
+	DeviceID       string `gorm:"column:device_id;not null;index:media_auth_audit_device_id_idx"`
+	Provider       string `gorm:"column:provider;not null;default:''"`
+	Action         string `gorm:"column:action;not null"`
+	Result         string `gorm:"column:result;not null"`
+	ErrorCode      string `gorm:"column:error_code;not null;default:''"`
+	RemoteIdentity string `gorm:"column:remote_identity;not null;default:''"`
+	CreatedAt      int64  `gorm:"column:created_at;not null;index:media_auth_audit_created_at_idx,sort:desc"`
+}
+
+func (mediaAuthAuditRow) TableName() string { return "media_auth_audit" }
+
+type mediaConfigStateRow struct {
+	ID         uint8  `gorm:"column:id;primaryKey;autoIncrement:false;check:media_config_state_singleton_check,id = 1"`
+	Generation uint64 `gorm:"column:generation;not null;check:media_config_state_generation_check,generation > 0"`
+	Revision   uint64 `gorm:"column:revision;not null;check:media_config_state_revision_check,revision > 0"`
+	UpdatedAt  int64  `gorm:"column:updated_at;not null"`
+}
+
+func (mediaConfigStateRow) TableName() string { return "media_config_state" }
+
 type matterRuntimeKVRow struct {
 	TargetID  string    `gorm:"column:target_id;primaryKey"`
 	Key       string    `gorm:"column:key;primaryKey"`
@@ -272,7 +378,9 @@ func (modelEnumOverrideRow) TableName() string { return "model_enum_overrides" }
 
 func currentModels() []any {
 	return []any{
-		&providerRow{}, &targetRow{}, &targetVirtualDeviceRow{},
+		&providerRow{}, &targetRow{}, &targetVirtualDeviceRow{}, &mediaSourceRow{},
+		&mediaCredentialRow{}, &mediaStreamRow{}, &mediaRuntimeKVRow{},
+		&mediaAuthLeaseRow{}, &mediaAuthAuditRow{}, &mediaConfigStateRow{},
 		&matterRuntimeKVRow{}, &matterEndpointIdentityRow{},
 		&homeKitAccessoryIDRow{}, &homeKitIIDRow{}, &systemSettingRow{},
 		&devicePreferenceRow{}, &auditEventRow{}, &mappingProfileRow{},

@@ -175,6 +175,17 @@ GET /metrics
 
 包含 Core 事件接收/处理/丢弃、队列深度、慢 Target 丢弃、stale 状态、命令开始/确认/拒绝/超时计数。每个 Target 使用独立的 64 条有界队列，慢 Target 不会阻塞设备事件 shard。
 
+摄像头诊断日志按 Stream 独立写入：
+
+```text
+<media.runtime_dir>/<stream_id>/camera.log
+```
+
+日志合并 Core 发布生命周期、Camera Kernel、HomeKit/SRTP、输入协议和 FFmpeg 输出，采用
+JSON Debug 级别；当前文件及四份轮转文件均为 `0600`，单份上限 8 MiB。源地址中的账号、
+Token、HomeKit PIN、SRTP/附件私钥在 Camera Kernel 写出前统一脱敏。历史文件依次为
+`camera.log.1` 到 `camera.log.4`。
+
 支持资料可在系统页按需下载，也可以直接请求：
 
 ```text

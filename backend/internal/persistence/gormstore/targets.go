@@ -182,7 +182,7 @@ func (s *Store) ListTargets(ctx context.Context) ([]target.Config, error) {
 		if err != nil {
 			return nil, fmt.Errorf("decrypt target %q pin: %w", item.ID, err)
 		}
-		if item.Type == "matter" {
+		if target.IsMatterType(item.Type) {
 			passcode, err := s.secrets.decrypt("target-matter-passcode:"+item.ID, row.MatterPasscode)
 			if err != nil {
 				return nil, fmt.Errorf("decrypt Matter target %q passcode: %w", item.ID, err)

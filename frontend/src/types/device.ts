@@ -8,7 +8,7 @@ export const builtInDeviceTypes = [
   'security-system', 'valve', 'pump', 'water-heater', 'power-meter', 'ev-charger',
   'speaker', 'robot-vacuum',
 ] as const
-export type BuiltInDeviceType = typeof builtInDeviceTypes[number]
+type BuiltInDeviceType = typeof builtInDeviceTypes[number]
 export type DeviceType = BuiltInDeviceType | (string & {})
 export type ValueType = 'bool' | 'int' | 'number' | 'string' | 'enum'
 export type DeviceAvailability = 'online' | 'offline' | 'unknown'
@@ -19,10 +19,10 @@ export type DeviceStateTransport = 'pending' | 'local-mqtt' | 'cloud-mqtt' | 'cl
 export interface PropertyValue { type: ValueType; bool?: boolean; int?: number; number?: number; string?: string }
 export interface PropertyDefinition { id: string; name: string; type: ValueType; parameterLevel?: ParameterLevel; unit?: string; readable: boolean; writable: boolean; notifiable: boolean; min?: number; max?: number; step?: number; enum?: string[]; staleAfterSeconds?: number }
 export interface Property { definition: PropertyDefinition; value: PropertyValue; stateTransport?: DeviceStateTransport }
-export interface CommandParameter { id: string; name: string; type: ValueType; required: boolean }
+interface CommandParameter { id: string; name: string; type: ValueType; required: boolean }
 export interface CommandDefinition { id: string; name: string; idempotent?: boolean; parameters?: CommandParameter[] }
-export interface Capability { id: string; type: string; properties: Property[]; commands?: CommandDefinition[]; events?: { id: string; name: string; payload: ValueType }[] }
-export interface Endpoint { id: string; name: string; type: string; capabilities: Capability[] }
+interface Capability { id: string; type: string; properties: Property[]; commands?: CommandDefinition[]; events?: { id: string; name: string; payload: ValueType }[] }
+interface Endpoint { id: string; name: string; type: string; capabilities: Capability[] }
 export interface Device {
   schemaVersion: number; id: string; providerId: string; name: string; type: DeviceType; availability: DeviceAvailability; online: boolean
   homeId?: string; homeName?: string; roomId?: string; roomName?: string
@@ -38,7 +38,10 @@ export function runtimeModeLabel(value: DeviceRuntimeMode, transport?: DeviceSta
 }
 
 export function deviceProperty(device: Device, capabilityId: string, propertyId: string): PropertyValue | undefined {
-  return device.endpoints.flatMap((endpoint) => endpoint.capabilities).find((capability) => capability.id === capabilityId)?.properties.find((property) => property.definition.id === propertyId)?.value
+  return (device.endpoints ?? [])
+    .flatMap((endpoint) => endpoint.capabilities ?? [])
+    .find((capability) => capability.id === capabilityId)
+    ?.properties?.find((property) => property.definition.id === propertyId)?.value
 }
 
 export interface StateValue {

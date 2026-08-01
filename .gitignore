@@ -5,6 +5,7 @@
 backend/bin/
 backend/internal/webui/dist/
 backend/data/
+data/
 backend/coverage.out
 backups/
 backend/.cache/

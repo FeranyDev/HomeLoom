@@ -16,6 +16,13 @@ func TestLoadYAMLAndEnvironmentOverride(t *testing.T) {
 	t.Setenv("HOMELOOM_DATABASE_URL", "postgres://override:secret@127.0.0.1:54329/override?sslmode=disable")
 	t.Setenv("HOMELOOM_MASTER_KEY", "./override.key")
 	t.Setenv("HOMELOOM_TRUSTED_PROXIES", "127.0.0.1/32, 10.0.0.8")
+	t.Setenv("HOMELOOM_MEDIA_ENABLED", "true")
+	t.Setenv("HOMELOOM_CAMERA_KERNEL_BIN", "/opt/homeloom/homeloom-camera-kernel")
+	t.Setenv("HOMELOOM_MEDIA_RUNTIME_DIR", "/var/lib/homeloom/media")
+	t.Setenv("HOMELOOM_HAP_HOST", "192.0.2.10")
+	t.Setenv("HOMELOOM_HAP_PORT_BASE", "52000")
+	t.Setenv("HOMELOOM_RTSP_PORT_BASE", "20000")
+	t.Setenv("HOMELOOM_SRTP_PORT_BASE", "21000")
 
 	loaded, err := Load(path)
 	if err != nil {
@@ -32,6 +39,17 @@ func TestLoadYAMLAndEnvironmentOverride(t *testing.T) {
 	}
 	if len(loaded.Server.TrustedProxies) != 2 || loaded.Server.TrustedProxies[1] != "10.0.0.8" {
 		t.Fatalf("trusted proxies = %#v", loaded.Server.TrustedProxies)
+	}
+	if !loaded.Media.Enabled {
+		t.Fatalf("media = %#v", loaded.Media)
+	}
+	if loaded.Media.CameraKernelBinary != "/opt/homeloom/homeloom-camera-kernel" ||
+		loaded.Media.RuntimeDir != "/var/lib/homeloom/media" ||
+		loaded.Media.HAPHost != "192.0.2.10" ||
+		loaded.Media.HAPPortBase != 52000 ||
+		loaded.Media.RTSPPortBase != 20000 ||
+		loaded.Media.SRTPPortBase != 21000 {
+		t.Fatalf("media process settings = %#v", loaded.Media)
 	}
 }
 
@@ -63,6 +81,18 @@ func TestDefaultOnlyListensOnLoopback(t *testing.T) {
 	if defaults.Storage.DatabaseURL != "postgres://homeloom:homeloom-dev@127.0.0.1:54329/homeloom?sslmode=disable" || defaults.Storage.MasterKey != "./data/homeloom.key" {
 		t.Fatalf("default storage = %#v", defaults.Storage)
 	}
+	if defaults.Media.CameraKernelBinary != "homeloom-camera-kernel" ||
+		defaults.Media.RuntimeDir != "./data/media/publishers" ||
+		defaults.Media.HAPHost != "0.0.0.0" {
+		t.Fatalf("default media = %#v", defaults.Media)
+	}
+}
+
+func TestExampleConfigurationLoads(t *testing.T) {
+	path := filepath.Join("..", "..", "configs", "config.example.yaml")
+	if _, err := Load(path); err != nil {
+		t.Fatalf("Load(%q) = %v", path, err)
+	}
 }
 
 func TestValidateRequiresSupportedDatabaseURLAndMasterKey(t *testing.T) {
@@ -93,6 +123,48 @@ func TestValidateAcceptsSQLiteURL(t *testing.T) {
 	config.Storage.DatabaseURL = "sqlite://./data/homeloom.db"
 	if err := config.Validate(); err != nil {
 		t.Fatalf("Validate() = %v", err)
+	}
+}
+
+func TestValidateMedia(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*MediaConfig)
+	}{
+		{name: "missing camera kernel binary", mutate: func(c *MediaConfig) { c.CameraKernelBinary = "" }},
+		{name: "missing runtime directory", mutate: func(c *MediaConfig) { c.RuntimeDir = "" }},
+		{name: "loopback HAP host", mutate: func(c *MediaConfig) { c.HAPHost = "127.0.0.1" }},
+		{name: "invalid HAP port band", mutate: func(c *MediaConfig) { c.HAPPortBase = 65000 }},
+		{name: "overlapping RTSP and SRTP port bands", mutate: func(c *MediaConfig) { c.SRTPPortBase = c.RTSPPortBase + 500 }},
+		{name: "touching HAP and SRTP port bands", mutate: func(c *MediaConfig) { c.SRTPPortBase = c.HAPPortBase + 999 }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config := Default()
+			config.Media.Enabled = true
+			test.mutate(&config.Media)
+			if err := config.Validate(); err == nil {
+				t.Fatalf("Validate() accepted %#v", config.Media)
+			}
+		})
+	}
+	config := Default()
+	config.Media.Enabled = true
+	if err := config.Validate(); err != nil {
+		t.Fatalf("Validate() = %v", err)
+	}
+}
+
+func TestLoadRejectsInvalidMediaPortEnvironment(t *testing.T) {
+	t.Setenv("HOMELOOM_HAP_PORT_BASE", "not-a-port")
+	if _, err := Load(""); err == nil {
+		t.Fatal("Load() accepted an invalid media port")
+	}
+}
+
+func TestLoadRejectsInvalidMediaEnabledEnvironment(t *testing.T) {
+	t.Setenv("HOMELOOM_MEDIA_ENABLED", "sometimes")
+	if _, err := Load(""); err == nil {
+		t.Fatal("Load() accepted an invalid media enabled value")
 	}
 }
 

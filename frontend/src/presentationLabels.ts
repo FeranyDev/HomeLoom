@@ -21,7 +21,7 @@ const deviceTypes: Record<DeviceType, string> = {
 
 const valueTypes: Record<ValueType, string> = { bool: '布尔值', int: '整数', number: '数值', string: '文本', enum: '枚举' }
 const parameterLevels: Record<ParameterLevel, string> = { required: '必需', optional: '可选', custom: '自定义' }
-const targetTypes: Record<TargetType, string> = { 'apple-hap': 'Apple 家庭桥', matter: 'Matter 桥' }
+const targetTypes: Record<TargetType, string> = { 'apple-hap': 'Apple 家庭桥', 'homekit-camera': 'HomeKit 摄像头', matter: 'Matter 桥', 'matter-camera': 'Matter 摄像头（实验性）' }
 const transformTypes: Record<MappingTransformType, string> = {
 	invert: '布尔反转', reciprocal: '数值倒数', 'int-number': '整数转数值', scale: '数值缩放', clamp: '范围裁剪', enum: '枚举映射', unit: '单位转换',
 	'range-enum': '数值分段转枚举', 'enum-number': '枚举转数值', threshold: '数值阈值转布尔', 'bool-number': '布尔转数值', 'bool-enum': '布尔转枚举', 'enum-bool': '枚举转布尔',
@@ -64,6 +64,12 @@ const resourceNames: Record<string, string> = {
 	'set-duration': '设定时长', 'remaining-duration': '剩余时长', speaker: '扬声器', volume: '音量',
 	mute: '静音', 'current-media-state': '当前媒体状态', 'target-media-state': '目标媒体状态', 'input-source': '输入源',
 	'robot-vacuum': '扫地机器人', 'cleaning-progress': '清洁进度', fault: '故障代码', charging: '正在充电',
+	camera: '摄像头', privacy: '隐私模式', indicator: '状态指示灯', 'night-vision': '夜视模式',
+	'motion-detection': '移动侦测', media: '媒体',
+	'live-stream': '实时视频', snapshot: '快照', microphone: '麦克风', talkback: '双向语音',
+	ptz: '云台控制', movement: '移动方向', 'movement-speed': '移动速度',
+	'pan-position': '水平位置', 'tilt-position': '垂直位置', 'zoom-level': '变焦倍率',
+	'current-preset': '当前记忆点', 'target-preset': '目标记忆点', 'preset-count': '记忆点数量',
 }
 
 const serviceNames: Record<string, string> = {
@@ -131,7 +137,7 @@ export function consumerPropertyLabel(id: string): string {
 
 export function matterClusterLabel(cluster: string): string { return bilingual(cluster, matterClusterNames[cluster]) }
 
-export function matterMemberLabel(member: string): string { return bilingual(member, matterMemberNames[member]) }
+function matterMemberLabel(member: string): string { return bilingual(member, matterMemberNames[member]) }
 
 export function matterConsumerPathLabel(cluster: string, member: string, kind: 'attribute' | 'command'): string {
 	const memberKind = kind === 'command' ? '命令' : '属性'

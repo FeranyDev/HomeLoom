@@ -157,6 +157,65 @@ func (s *ProfileService) DeleteBinding(ctx context.Context, id string) error {
 	return nil
 }
 
+// PruneOrphanedBindings removes persisted routes whose source Provider was
+// deleted or whose source Device was explicitly removed from an authoritative
+// Provider configuration. Disabled bindings are removed as well: they must not
+// reserve uniqueness slots after the device mapping itself no longer exists.
+func (s *ProfileService) PruneOrphanedBindings(ctx context.Context, knownProviders map[string]struct{}, configuredDevices map[string]map[string]struct{}) (int, error) {
+	return s.pruneBindings(ctx, func(item mapping.Binding) bool {
+		_, providerExists := knownProviders[item.ProviderID]
+		active, authoritative := configuredDevices[item.ProviderID]
+		_, deviceExists := active[item.DeviceID]
+		return !providerExists || (authoritative && !deviceExists)
+	})
+}
+
+// PruneProviderBindings removes routes for devices no longer present in one
+// authoritative Provider configuration. Passing an empty device set removes
+// all routes owned by that Provider, as required when deleting the Provider.
+func (s *ProfileService) PruneProviderBindings(ctx context.Context, providerID string, configuredDevices map[string]struct{}) (int, error) {
+	return s.pruneBindings(ctx, func(item mapping.Binding) bool {
+		if item.ProviderID != providerID {
+			return false
+		}
+		_, exists := configuredDevices[item.DeviceID]
+		return !exists
+	})
+}
+
+func (s *ProfileService) pruneBindings(ctx context.Context, shouldDelete func(mapping.Binding) bool) (int, error) {
+	s.mu.Lock()
+	ids := make([]string, 0)
+	for id, item := range s.bindings {
+		if shouldDelete(item) {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	deleted := 0
+	for _, id := range ids {
+		item := s.bindings[id]
+		if err := s.store.DeleteMappingBinding(ctx, id); err != nil {
+			s.mu.Unlock()
+			if deleted > 0 {
+				s.notifyChanged(ctx)
+			}
+			return deleted, err
+		}
+		delete(s.bindings, id)
+		s.removeBindingKeyLocked(item.Key(), id)
+		if item.EffectiveStage() == mapping.StageProvider {
+			delete(s.bindingsByModel, item.ModelKey())
+		}
+		deleted++
+	}
+	s.mu.Unlock()
+	if deleted > 0 {
+		s.notifyChanged(ctx)
+	}
+	return deleted, nil
+}
+
 func (s *ProfileService) TransformProperty(providerID, deviceID, endpointID, capabilityID, propertyID string, value device.PropertyValue, direction mapping.Direction) (device.PropertyValue, string, bool, error) {
 	binding, profile, applied, err := s.resolveProviderBinding(providerID, deviceID, endpointID, capabilityID, propertyID, direction)
 	if err != nil || !applied {

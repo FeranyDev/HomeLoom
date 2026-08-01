@@ -34,6 +34,16 @@ type targetRuntimeStub struct {
 	removeErr       error
 }
 
+type targetDeletionRuntimeStub struct {
+	targetRuntimeStub
+	deletedTargets []target.Config
+}
+
+func (s *targetDeletionRuntimeStub) RemoveTarget(_ context.Context, item target.Config) error {
+	s.deletedTargets = append(s.deletedTargets, item)
+	return s.removeErr
+}
+
 func (s *targetRuntimeStub) Apply(_ context.Context, item target.Config) (TargetRegistration, error) {
 	s.applied = append(s.applied, item)
 	if s.applyErr != nil {
@@ -131,6 +141,80 @@ func TestTargetDefaultsFollowSelectedAdapter(t *testing.T) {
 		config.ProductName == "" || config.SerialNumber != info.ID ||
 		config.CommissioningWindowSeconds != target.DefaultMatterCommissioningWindowSeconds {
 		t.Fatalf("Matter product defaults = %#v", config)
+	}
+}
+
+func TestHomeKitCameraTargetRequiresExactlyOneCamera(t *testing.T) {
+	validCamera := target.VirtualDevice{
+		ID: "camera-1", Name: "客厅摄像头", Type: device.TypeCamera,
+		SourceDeviceID: "camera-1", Enabled: true,
+	}
+	valid := target.Config{
+		ID: "camera-homekit-1", Type: "homekit-camera", Name: "客厅摄像头",
+		Address: ":52000", Pin: "12345678", SetupID: "CAM1", StorePath: "data/hap/camera-homekit-1",
+		Devices: []target.VirtualDevice{validCamera},
+	}
+	if err := validateTarget(valid); err != nil {
+		t.Fatalf("validateTarget(valid camera) = %v", err)
+	}
+	for name, mutate := range map[string]func(*target.Config){
+		"missing":    func(item *target.Config) { item.Devices = nil },
+		"multiple":   func(item *target.Config) { item.Devices = append(item.Devices, validCamera) },
+		"wrong type": func(item *target.Config) { item.Devices[0].Type = device.TypeSwitch },
+		"disabled":   func(item *target.Config) { item.Devices[0].Enabled = false },
+		"auxiliary source": func(item *target.Config) {
+			item.Devices[0].AuxiliarySourceDeviceIDs = []string{"camera-2"}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			item := valid
+			item.Devices = append([]target.VirtualDevice(nil), valid.Devices...)
+			mutate(&item)
+			if err := validateTarget(item); err == nil {
+				t.Fatal("validateTarget() accepted invalid camera target")
+			}
+		})
+	}
+}
+
+func TestMatterCameraTargetDefaultsAndRequiresExactlyOneCamera(t *testing.T) {
+	store := &targetStoreStub{}
+	service := NewTargetService(nil, store)
+	camera := target.VirtualDevice{
+		ID: "camera-1", Name: "客厅摄像头", Type: device.TypeCamera,
+		SourceDeviceID: "camera-1", Enabled: true,
+	}
+	info, err := service.Save(context.Background(), target.Config{
+		ID: "camera-matter-1", Type: "matter-camera", Name: "客厅摄像头",
+		Devices: []target.VirtualDevice{camera},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ConsumerID != "matter-camera" || store.saved[0].MatterConfig == nil ||
+		store.saved[0].MatterConfig.ProductName != "HomeLoom Matter Camera" {
+		t.Fatalf("Matter Camera defaults = info %#v config %#v", info, store.saved[0])
+	}
+	for name, mutate := range map[string]func(*target.Config){
+		"missing":  func(item *target.Config) { item.Devices = nil },
+		"multiple": func(item *target.Config) { item.Devices = append(item.Devices, camera) },
+		"wrong type": func(item *target.Config) {
+			item.Devices[0].Type = device.TypeSwitch
+		},
+		"disabled": func(item *target.Config) { item.Devices[0].Enabled = false },
+		"auxiliary": func(item *target.Config) {
+			item.Devices[0].AuxiliarySourceDeviceIDs = []string{"camera-2"}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			item := store.saved[0]
+			item.ID = "camera-matter-" + strings.ReplaceAll(name, " ", "-")
+			item.Devices = append([]target.VirtualDevice(nil), store.saved[0].Devices...)
+			mutate(&item)
+			if err := validateTarget(item); err == nil {
+				t.Fatal("validateTarget() accepted invalid Matter Camera target")
+			}
+		})
 	}
 }
 
@@ -269,6 +353,69 @@ func TestTargetServiceDeleteRemovesProjectionAndPublishesTombstoneWhenRuntimeSto
 	}
 }
 
+func TestTargetServiceDeletePassesCameraConfigToDeletionRuntime(t *testing.T) {
+	store := &targetStoreStub{}
+	runtime := &targetDeletionRuntimeStub{}
+	config := target.Config{
+		ID: "camera-homekit-1", Type: "homekit-camera", Name: "客厅摄像头", Enabled: true,
+		Devices: []target.VirtualDevice{{
+			ID: "camera-1", SourceDeviceID: "camera-1", Type: device.TypeCamera, Enabled: true,
+		}},
+	}
+	service := NewTargetService(
+		[]TargetRegistration{{Info: TargetInfo{ID: config.ID, Type: config.Type, Status: "running"}}},
+		store,
+		config,
+	)
+	service.SetRuntime(runtime)
+	if err := service.Delete(context.Background(), config.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime.deletedTargets) != 1 || runtime.deletedTargets[0].Devices[0].SourceDeviceID != "camera-1" {
+		t.Fatalf("deletion runtime configs = %#v", runtime.deletedTargets)
+	}
+	if len(runtime.removed) != 0 {
+		t.Fatalf("legacy runtime removal was also called: %#v", runtime.removed)
+	}
+}
+
+func TestTargetServiceDeleteKeepsCameraWhenPairingCleanupFails(t *testing.T) {
+	store := &targetStoreStub{}
+	runtime := &targetDeletionRuntimeStub{}
+	runtime.removeErr = errors.New("pairing store is read-only")
+	config := target.Config{
+		ID: "camera-homekit-1", Type: "homekit-camera", Name: "客厅摄像头", Enabled: true,
+		Devices: []target.VirtualDevice{{
+			ID: "camera-1", SourceDeviceID: "camera-1", Type: device.TypeCamera, Enabled: true,
+		}},
+	}
+	service := NewTargetService(
+		[]TargetRegistration{{Info: TargetInfo{ID: config.ID, Type: config.Type, Name: config.Name, Status: "running"}}},
+		store,
+		config,
+	)
+	service.SetRuntime(runtime)
+	events := make(chan TargetInfo, 1)
+	unsubscribe := service.Subscribe(func(info TargetInfo) { events <- info })
+	defer unsubscribe()
+
+	err := service.Delete(context.Background(), config.ID)
+	if err == nil || !strings.Contains(err.Error(), "pairing identity") {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	if len(store.deleted) != 0 {
+		t.Fatalf("persistent target was deleted despite cleanup failure: %#v", store.deleted)
+	}
+	if items := service.List(); len(items) != 1 || items[0].ID != config.ID || items[0].Removed {
+		t.Fatalf("failed deletion changed target projection: %#v", items)
+	}
+	select {
+	case event := <-events:
+		t.Fatalf("failed deletion published a tombstone: %#v", event)
+	default:
+	}
+}
+
 func TestTargetSaveRejectsInvalidConfiguration(t *testing.T) {
 	service := NewTargetService(nil, &targetStoreStub{})
 	cases := []target.Config{
@@ -324,6 +471,9 @@ func TestTargetSaveAcceptsEveryHomeKitConsumerModel(t *testing.T) {
 	service := NewTargetService(nil, store)
 	var devices []target.VirtualDevice
 	unsupported := map[device.Type]bool{
+		// Camera accessories are owned by the isolated Media Worker rather
+		// than the ordinary HomeKit bridge target.
+		device.TypeCamera:         true,
 		device.TypePressureSensor: true, device.TypeNoiseSensor: true,
 		device.TypeWaterLevelSensor: true, device.TypeSoilMoistureSensor: true,
 		device.TypePump: true, device.TypeWaterHeater: true, device.TypePowerMeter: true,

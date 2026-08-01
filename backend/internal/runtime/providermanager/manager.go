@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
+	domainmedia "github.com/feranydev/homeloom/backend/internal/domain/media"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 )
 
@@ -24,26 +26,46 @@ type managedProvider struct {
 	transitionedAt    time.Time
 }
 
+type capabilityRoute struct {
+	deviceID, endpointID, capabilityID string
+}
+
+type capabilityDelegate struct {
+	canonicalProviderID string
+	sourceProviderID    string
+	sourceDeviceID      string
+	sourceEndpointID    string
+	sourceCapabilityID  string
+	available           bool
+}
+
 type Manager struct {
-	mu                sync.RWMutex
-	providers         map[string]*managedProvider
-	order             []string
-	routes            map[string]string
-	listeners         map[uint64]func(device.Device)
-	eventListeners    map[uint64]func(providersdk.DeviceEvent)
-	propertyInterests map[string][]providersdk.PropertyInterest
-	nextListener      uint64
-	nextEventListener uint64
-	initialized       bool
-	lifecycleCtx      context.Context
-	lifecycleCancel   context.CancelFunc
-	retryRunning      bool
-	retryDone         chan struct{}
-	closed            bool
+	mu                                 sync.RWMutex
+	providers                          map[string]*managedProvider
+	order                              []string
+	routes                             map[string]string
+	mediaRoutes                        map[string]string
+	capabilityRoutes                   map[capabilityRoute]capabilityDelegate
+	boundSources                       map[string]string
+	hiddenSources                      map[string]struct{}
+	canonicalSnapshots                 map[string]device.Device
+	listeners                          map[uint64]func(device.Device)
+	eventListeners                     map[uint64]func(providersdk.DeviceEvent)
+	capabilityAvailabilityListeners    map[uint64]func(providersdk.CapabilityAvailability)
+	propertyInterests                  map[string][]providersdk.PropertyInterest
+	nextListener                       uint64
+	nextEventListener                  uint64
+	nextCapabilityAvailabilityListener uint64
+	initialized                        bool
+	lifecycleCtx                       context.Context
+	lifecycleCancel                    context.CancelFunc
+	retryRunning                       bool
+	retryDone                          chan struct{}
+	closed                             bool
 }
 
 func New(items ...providersdk.Provider) (*Manager, error) {
-	m := &Manager{providers: make(map[string]*managedProvider), routes: make(map[string]string), listeners: make(map[uint64]func(device.Device)), eventListeners: make(map[uint64]func(providersdk.DeviceEvent)), propertyInterests: make(map[string][]providersdk.PropertyInterest)}
+	m := &Manager{providers: make(map[string]*managedProvider), routes: make(map[string]string), mediaRoutes: make(map[string]string), capabilityRoutes: make(map[capabilityRoute]capabilityDelegate), boundSources: make(map[string]string), hiddenSources: make(map[string]struct{}), canonicalSnapshots: make(map[string]device.Device), listeners: make(map[uint64]func(device.Device)), eventListeners: make(map[uint64]func(providersdk.DeviceEvent)), capabilityAvailabilityListeners: make(map[uint64]func(providersdk.CapabilityAvailability)), propertyInterests: make(map[string][]providersdk.PropertyInterest)}
 	for _, item := range items {
 		id := item.Manifest().ID
 		if id == "" {
@@ -151,6 +173,9 @@ func (m *Manager) DiscoverDevices(ctx context.Context) ([]device.Device, error) 
 	m.mu.RUnlock()
 	result := make([]device.Device, 0)
 	routes := make(map[string]string)
+	capabilitySourceDevices := make(map[string]device.Device)
+	bindings := make([]providersdk.CapabilityBinding, 0)
+	hiddenSources := make(map[string]struct{})
 providerLoop:
 	for _, id := range ids {
 		m.mu.RLock()
@@ -189,6 +214,47 @@ providerLoop:
 			routes[item.ID] = id
 			currentIDs[item.ID] = struct{}{}
 			result = append(result, item)
+			key := providerDeviceKey(id, item.ID)
+			capabilitySourceDevices[key] = item
+		}
+		// A Provider may expose a richer native MIoT catalog than its public
+		// configured Device projection. Capability bindings consume that
+		// catalog so a control-only Xiaomi camera can contribute privacy,
+		// indicator, motion and PTZ controls without becoming a media owner.
+		// The ordinary route must still exist; catalog-only identities are
+		// never promoted into the Device registry.
+		if cataloger, ok := current.provider.(providersdk.SourceCataloger); ok {
+			if catalog, catalogErr := cataloger.SourceCatalog(ctx); catalogErr == nil {
+				for _, candidate := range catalog {
+					if _, routed := currentIDs[candidate.ID]; !routed {
+						continue
+					}
+					candidate.ProviderID = id
+					candidate.NormalizeAvailability()
+					if candidate.ValidateStructure() == nil {
+						capabilitySourceDevices[providerDeviceKey(id, candidate.ID)] = candidate.Device
+					}
+				}
+			}
+		}
+		if source, ok := current.provider.(providersdk.CapabilityBindingSource); ok {
+			for _, binding := range source.CapabilityBindings() {
+				if binding.DeviceID == "" || binding.ProviderID == "" || binding.SourceDeviceID == "" {
+					return nil, fmt.Errorf("provider %q returned an incomplete capability binding", id)
+				}
+				if binding.ProviderID == id {
+					return nil, fmt.Errorf("device %q cannot bind capabilities from its own provider %q", binding.DeviceID, id)
+				}
+				bindings = append(bindings, binding)
+			}
+		}
+		if source, ok := current.provider.(providersdk.HiddenDeviceSource); ok {
+			for _, deviceID := range source.HiddenDeviceIDs() {
+				if _, exists := currentIDs[deviceID]; !exists {
+					return nil, fmt.Errorf("provider %q marked undiscovered device %q as hidden", id, deviceID)
+				}
+				hiddenSources[providerDeviceKey(id, deviceID)] = struct{}{}
+			}
 		}
 		m.mu.Lock()
 		if live := m.providers[id]; live == current {
@@ -196,21 +262,185 @@ providerLoop:
 		}
 		m.mu.Unlock()
 	}
+	capabilityRoutes := make(map[capabilityRoute]capabilityDelegate)
+	boundSources := make(map[string]string)
+	sourceClaims := make(map[string]string)
+	canonicalIndexes := make(map[string]int, len(result))
+	for index := range result {
+		canonicalIndexes[providerDeviceKey(result[index].ProviderID, result[index].ID)] = index
+	}
+	for _, binding := range bindings {
+		canonicalProviderID := routes[binding.DeviceID]
+		canonicalKey := providerDeviceKey(canonicalProviderID, binding.DeviceID)
+		index, canonicalExists := canonicalIndexes[canonicalKey]
+		if !canonicalExists {
+			return nil, fmt.Errorf("capability binding target device %q was not discovered", binding.DeviceID)
+		}
+		sourceKey := providerDeviceKey(binding.ProviderID, binding.SourceDeviceID)
+		if previous, duplicate := sourceClaims[sourceKey]; duplicate {
+			return nil, fmt.Errorf("control device %q from provider %q is bound to both %q and %q", binding.SourceDeviceID, binding.ProviderID, previous, binding.DeviceID)
+		}
+		sourceClaims[sourceKey] = binding.DeviceID
+		source, sourceExists := capabilitySourceDevices[sourceKey]
+		if !sourceExists {
+			// A missing or stopped control Provider degrades only controls.
+			// The canonical Camera and its media source remain discoverable.
+			continue
+		}
+		m.mu.RLock()
+		sourceProvider := m.providers[binding.ProviderID]
+		m.mu.RUnlock()
+		sourceType := ""
+		if sourceProvider != nil {
+			sourceType = sourceProvider.provider.Manifest().Type
+		}
+		if sourceType != "xiaomi" && sourceType != "xiaomi-miot-cloud" {
+			return nil, fmt.Errorf(
+				"control device %q uses unsupported provider type %q",
+				binding.SourceDeviceID, sourceType,
+			)
+		}
+		boundSources[sourceKey] = binding.DeviceID
+		merged, delegates, err := mergeControlCapabilities(result[index], source, canonicalProviderID, binding.ProviderID)
+		if err != nil {
+			return nil, fmt.Errorf("merge controls for camera %q: %w", binding.DeviceID, err)
+		}
+		result[index] = merged
+		for route, delegate := range delegates {
+			capabilityRoutes[route] = delegate
+		}
+	}
+	if len(boundSources) != 0 || len(hiddenSources) != 0 {
+		filtered := result[:0]
+		for _, item := range result {
+			key := providerDeviceKey(item.ProviderID, item.ID)
+			if _, hidden := boundSources[key]; hidden {
+				continue
+			}
+			if _, hidden := hiddenSources[key]; hidden {
+				continue
+			}
+			filtered = append(filtered, item)
+		}
+		result = filtered
+	}
 	m.mu.Lock()
 	m.routes = routes
+	m.capabilityRoutes = capabilityRoutes
+	m.boundSources = boundSources
+	m.hiddenSources = hiddenSources
+	m.canonicalSnapshots = make(map[string]device.Device, len(result))
+	for _, item := range result {
+		m.canonicalSnapshots[providerDeviceKey(item.ProviderID, item.ID)] = item.Clone()
+	}
 	m.mu.Unlock()
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result, nil
 }
 
-// SourceCatalog aggregates native catalogs from running providers. Providers
-// without a specialized catalog contract fall back to their discovery
-// snapshot, which is complete relative to that Provider's published contract.
-func (m *Manager) SourceCatalog(ctx context.Context) ([]providersdk.SourceCatalogDevice, error) {
+// DiscoverMediaSources aggregates optional camera media extensions without
+// creating a second device registry. Provider and device identity remain
+// authoritative in the normal Provider routes.
+func (m *Manager) DiscoverMediaSources(ctx context.Context) ([]domainmedia.MediaSourceDescriptor, error) {
 	m.mu.RLock()
 	ids := append([]string(nil), m.order...)
 	m.mu.RUnlock()
-	result := make([]providersdk.SourceCatalogDevice, 0)
+	result := make([]domainmedia.MediaSourceDescriptor, 0)
+	routes := make(map[string]string)
+	for _, id := range ids {
+		m.mu.RLock()
+		current := m.providers[id]
+		running := current != nil && current.status == "running"
+		m.mu.RUnlock()
+		if !running {
+			continue
+		}
+		// Media ownership is intentionally restricted to the independent
+		// Camera Provider. Account/catalog Providers may expose similarly
+		// shaped helper methods internally, but must never publish sources.
+		if current.provider.Manifest().Type != "camera" {
+			continue
+		}
+		discoverer, ok := current.provider.(providersdk.MediaSourceDiscoverer)
+		if !ok {
+			continue
+		}
+		items, err := discoverer.DiscoverMediaSources(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("discover media sources from provider %q: %w", id, err)
+		}
+		for _, item := range items {
+			if item.ProviderID != id {
+				return nil, fmt.Errorf("provider %q returned media source %q with provider id %q", id, item.DeviceID, item.ProviderID)
+			}
+			if err := item.Validate(); err != nil {
+				return nil, fmt.Errorf("provider %q returned invalid media source %q: %w", id, item.DeviceID, err)
+			}
+			if owner, exists := routes[item.DeviceID]; exists {
+				return nil, fmt.Errorf("media source device id %q is provided by both %q and %q", item.DeviceID, owner, id)
+			}
+			routes[item.DeviceID] = id
+			result = append(result, item)
+		}
+	}
+	m.mu.Lock()
+	m.mediaRoutes = routes
+	m.mu.Unlock()
+	sort.Slice(result, func(i, j int) bool { return result[i].DeviceID < result[j].DeviceID })
+	return result, nil
+}
+
+// AcquireMediaAuthorization routes one short-lived Worker request to the
+// Provider that owns the unified camera Device.
+func (m *Manager) AcquireMediaAuthorization(ctx context.Context, request domainmedia.AuthorizationRequest) (*domainmedia.AuthorizationResponse, error) {
+	if err := request.Validate(); err != nil {
+		return nil, err
+	}
+	m.mu.RLock()
+	providerID := m.mediaRoutes[request.DeviceID]
+	if providerID == "" {
+		// Compatibility fallback for Providers without MediaSource discovery.
+		providerID = m.routes[request.DeviceID]
+	}
+	current := m.providers[providerID]
+	running := current != nil && current.status == "running"
+	m.mu.RUnlock()
+	if providerID == "" || current == nil {
+		return nil, providersdk.ErrDeviceNotFound
+	}
+	if !running {
+		return nil, providersdk.ErrProviderUnavailable
+	}
+	authorizer, ok := current.provider.(providersdk.MediaAuthorizer)
+	if !ok {
+		return nil, providersdk.ErrCommandUnsupported
+	}
+	response, err := authorizer.AcquireMediaAuthorization(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	if response == nil {
+		return nil, fmt.Errorf("provider %q returned an empty media authorization", providerID)
+	}
+	if err := response.Validate(); err != nil {
+		return nil, fmt.Errorf("provider %q returned invalid media authorization: %w", providerID, err)
+	}
+	return response, nil
+}
+
+// SourceCatalog exposes the same composed identities as DiscoverDevices while
+// retaining Provider-native catalog metadata. Internal control identities are
+// omitted, and their complete non-media catalogs are merged into the canonical
+// Camera Provider device shown by Device Center and the mapping editor.
+func (m *Manager) SourceCatalog(ctx context.Context) ([]providersdk.SourceCatalogDevice, error) {
+	visible, err := m.DiscoverDevices(ctx)
+	if err != nil {
+		return nil, err
+	}
+	m.mu.RLock()
+	ids := append([]string(nil), m.order...)
+	m.mu.RUnlock()
+	native := make(map[string]providersdk.SourceCatalogDevice)
 	for _, id := range ids {
 		m.mu.RLock()
 		current := m.providers[id]
@@ -226,8 +456,8 @@ func (m *Manager) SourceCatalog(ctx context.Context) ([]providersdk.SourceCatalo
 			}
 			for index := range items {
 				items[index].ProviderID = id
+				native[providerDeviceKey(id, items[index].ID)] = items[index]
 			}
-			result = append(result, items...)
 			continue
 		}
 		discoverer, ok := current.provider.(providersdk.Discoverer)
@@ -240,8 +470,44 @@ func (m *Manager) SourceCatalog(ctx context.Context) ([]providersdk.SourceCatalo
 		}
 		for _, item := range items {
 			item.ProviderID = id
-			result = append(result, providersdk.SourceCatalogDevice{Device: item, Catalog: providersdk.SourceCatalogMetadata{Complete: true, Source: "provider-discovery", FetchedAt: time.Now().UTC(), Values: providersdk.SnapshotValueStatuses(item)}})
+			native[providerDeviceKey(id, item.ID)] = providersdk.SourceCatalogDevice{
+				Device: item,
+				Catalog: providersdk.SourceCatalogMetadata{
+					Complete: true, Source: "provider-discovery", FetchedAt: time.Now().UTC(),
+					Values: providersdk.SnapshotValueStatuses(item),
+				},
+			}
 		}
+	}
+	m.mu.RLock()
+	boundSources := make(map[string]string, len(m.boundSources))
+	for sourceKey, canonicalDeviceID := range m.boundSources {
+		boundSources[sourceKey] = canonicalDeviceID
+	}
+	m.mu.RUnlock()
+	result := make([]providersdk.SourceCatalogDevice, 0, len(visible))
+	for _, item := range visible {
+		key := providerDeviceKey(item.ProviderID, item.ID)
+		composed, exists := native[key]
+		if !exists {
+			composed = providersdk.SourceCatalogDevice{Catalog: providersdk.SourceCatalogMetadata{
+				Complete: false, Source: "composed-discovery", Error: "canonical Provider source catalog is unavailable",
+			}}
+		}
+		composed.Device = item.Clone()
+		for sourceKey, canonicalDeviceID := range boundSources {
+			if canonicalDeviceID != item.ID {
+				continue
+			}
+			source, sourceExists := native[sourceKey]
+			if !sourceExists {
+				composed.Catalog.Complete = false
+				composed.Catalog.Error = joinCatalogError(composed.Catalog.Error, "control Provider source catalog is unavailable")
+				continue
+			}
+			composed.Catalog = mergeSourceCatalogMetadata(composed.Catalog, source.Catalog)
+		}
+		result = append(result, composed)
 	}
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].ProviderID != result[j].ProviderID {
@@ -250,6 +516,49 @@ func (m *Manager) SourceCatalog(ctx context.Context) ([]providersdk.SourceCatalo
 		return result[i].ID < result[j].ID
 	})
 	return result, nil
+}
+
+func mergeSourceCatalogMetadata(
+	canonical, source providersdk.SourceCatalogMetadata,
+) providersdk.SourceCatalogMetadata {
+	canonical.Complete = canonical.Complete && source.Complete
+	if source.Source != "" && source.Source != canonical.Source {
+		if canonical.Source == "" {
+			canonical.Source = source.Source
+		} else {
+			canonical.Source += "+" + source.Source
+		}
+	}
+	if source.SpecType != "" {
+		canonical.SpecType = source.SpecType
+	}
+	if source.Model != "" {
+		canonical.Model = source.Model
+	}
+	if source.FetchedAt.After(canonical.FetchedAt) {
+		canonical.FetchedAt = source.FetchedAt
+	}
+	canonical.Error = joinCatalogError(canonical.Error, source.Error)
+	values := make(map[string]providersdk.SourceValueStatus, len(canonical.Values)+len(source.Values))
+	for key, status := range canonical.Values {
+		values[key] = status
+	}
+	for key, status := range source.Values {
+		values[key] = status
+	}
+	canonical.Values = values
+	return canonical
+}
+
+func joinCatalogError(current, addition string) string {
+	current, addition = strings.TrimSpace(current), strings.TrimSpace(addition)
+	if addition == "" || current == addition {
+		return current
+	}
+	if current == "" {
+		return addition
+	}
+	return current + "; " + addition
 }
 
 // Apply hot-reconfigures a compatible provider. If transport settings changed,
@@ -365,11 +674,7 @@ func (m *Manager) Apply(ctx context.Context, item providersdk.Provider) error {
 		snapshot.SetOnline(false)
 		m.broadcast(snapshot)
 	}
-	for _, snapshot := range discovered {
-		snapshot.ProviderID = id
-		m.broadcast(snapshot)
-	}
-	return nil
+	return m.broadcastDiscovery(ctx)
 }
 
 func (m *Manager) restoreAfterFailedReplacement(ctx context.Context, id string, current *managedProvider, cause error) error {
@@ -444,10 +749,7 @@ func (m *Manager) reconcileReconfigured(ctx context.Context, id string, current 
 		snapshot.SetOnline(false)
 		m.broadcast(snapshot)
 	}
-	for _, snapshot := range items {
-		m.broadcast(snapshot)
-	}
-	return nil
+	return m.broadcastDiscovery(ctx)
 }
 
 // Remove stops a provider and emits offline snapshots for its known devices.
@@ -496,6 +798,9 @@ func (m *Manager) Remove(ctx context.Context, id string) error {
 	if err := current.provider.Close(ctx); err != nil {
 		return fmt.Errorf("close provider %q: %w", id, err)
 	}
+	if err := m.broadcastDiscovery(ctx); err != nil {
+		return fmt.Errorf("refresh devices after removing provider %q: %w", id, err)
+	}
 	return nil
 }
 
@@ -527,8 +832,51 @@ func (m *Manager) attachSnapshots(id string, current *managedProvider) {
 			m.routes[item.ID] = id
 			current.deviceIDs[item.ID] = struct{}{}
 		}
+		canonicalDeviceID, boundSource := m.boundSources[providerDeviceKey(id, item.ID)]
+		_, hiddenSource := m.hiddenSources[providerDeviceKey(id, item.ID)]
+		var projected device.Device
+		projectedOK := false
+		availabilityChanges := make([]providersdk.CapabilityAvailability, 0)
+		if boundSource {
+			for route, delegate := range m.capabilityRoutes {
+				if delegate.sourceProviderID == id && delegate.sourceDeviceID == item.ID {
+					previous := delegate.available
+					delegate.available = item.IsOnline()
+					m.capabilityRoutes[route] = delegate
+					if previous != delegate.available {
+						availabilityChanges = append(availabilityChanges, providersdk.CapabilityAvailability{
+							ProviderID: delegate.canonicalProviderID,
+							DeviceID:   route.deviceID, EndpointID: route.endpointID, CapabilityID: route.capabilityID,
+							Available: delegate.available,
+						})
+					}
+				}
+			}
+			canonicalProviderID := m.routes[canonicalDeviceID]
+			canonicalKey := providerDeviceKey(canonicalProviderID, canonicalDeviceID)
+			if cached, exists := m.canonicalSnapshots[canonicalKey]; exists {
+				projected = projectControlSnapshot(cached, item, m.capabilityRoutes)
+				m.canonicalSnapshots[canonicalKey] = projected.Clone()
+				projectedOK = true
+			}
+		}
 		m.mu.Unlock()
 		if exists && owner != id {
+			return
+		}
+		if boundSource {
+			if !item.IsOnline() && projectedOK {
+				m.broadcast(projected)
+			}
+			for _, availability := range availabilityChanges {
+				m.broadcastCapabilityAvailability(availability)
+			}
+			if item.IsOnline() && projectedOK {
+				m.broadcast(projected)
+			}
+			return
+		}
+		if hiddenSource {
 			return
 		}
 		m.broadcast(item)
@@ -555,7 +903,23 @@ func (m *Manager) attachDeviceEvents(id string, current *managedProvider) {
 		}
 		m.mu.RLock()
 		owner, exists := m.routes[event.DeviceID]
+		canonicalDeviceID, boundSource := m.boundSources[providerDeviceKey(id, event.DeviceID)]
+		_, hiddenSource := m.hiddenSources[providerDeviceKey(id, event.DeviceID)]
+		canonicalProviderID := m.routes[canonicalDeviceID]
+		_, delegatedCapability := m.capabilityRoutes[capabilityRoute{canonicalDeviceID, event.EndpointID, event.CapabilityID}]
 		m.mu.RUnlock()
+		if boundSource {
+			if !delegatedCapability || canonicalProviderID == "" {
+				return
+			}
+			event.ProviderID = canonicalProviderID
+			event.DeviceID = canonicalDeviceID
+			m.broadcastDeviceEvent(event)
+			return
+		}
+		if hiddenSource {
+			return
+		}
 		if exists && owner == id {
 			m.broadcastDeviceEvent(event)
 		}
@@ -599,18 +963,35 @@ func (m *Manager) broadcastDeviceEvent(event providersdk.DeviceEvent) {
 func (m *Manager) WriteProperty(ctx context.Context, request providersdk.PropertyWriteRequest) (device.Device, error) {
 	m.mu.RLock()
 	id, ok := m.routes[request.DeviceID]
+	delegate, delegated := m.capabilityRoutes[capabilityRoute{request.DeviceID, request.EndpointID, request.CapabilityID}]
+	if delegated {
+		id = delegate.sourceProviderID
+	}
 	current := m.providers[id]
+	running := current != nil && current.status == "running"
 	m.mu.RUnlock()
 	if !ok || current == nil {
 		return device.Device{}, providersdk.ErrDeviceNotFound
+	}
+	if !running || (delegated && !delegate.available) {
+		return device.Device{}, providersdk.ErrProviderUnavailable
 	}
 	writer, ok := current.provider.(providersdk.PropertyWriter)
 	if !ok {
 		return device.Device{}, providersdk.ErrPropertyUnsupported
 	}
-	item, err := writer.WriteProperty(ctx, request)
+	sourceRequest := request
+	if delegated {
+		sourceRequest.DeviceID = delegate.sourceDeviceID
+		sourceRequest.EndpointID = delegate.sourceEndpointID
+		sourceRequest.CapabilityID = delegate.sourceCapabilityID
+	}
+	item, err := writer.WriteProperty(ctx, sourceRequest)
 	if err != nil {
 		return device.Device{}, err
+	}
+	if delegated {
+		return m.finalizeDelegatedSnapshot(ctx, request.DeviceID, delegate, item)
 	}
 	item.ProviderID = id
 	item.NormalizeAvailability()
@@ -623,14 +1004,27 @@ func (m *Manager) WriteProperty(ctx context.Context, request providersdk.Propert
 func (m *Manager) ReadProperty(ctx context.Context, request providersdk.PropertyReadRequest) (device.Property, error) {
 	m.mu.RLock()
 	id, ok := m.routes[request.DeviceID]
+	delegate, delegated := m.capabilityRoutes[capabilityRoute{request.DeviceID, request.EndpointID, request.CapabilityID}]
+	if delegated {
+		id = delegate.sourceProviderID
+	}
 	current := m.providers[id]
+	running := current != nil && current.status == "running"
 	m.mu.RUnlock()
 	if !ok || current == nil {
 		return device.Property{}, providersdk.ErrDeviceNotFound
 	}
+	if !running || (delegated && !delegate.available) {
+		return device.Property{}, providersdk.ErrProviderUnavailable
+	}
 	reader, ok := current.provider.(providersdk.PropertyReader)
 	if !ok {
 		return device.Property{}, providersdk.ErrPropertyUnsupported
+	}
+	if delegated {
+		request.DeviceID = delegate.sourceDeviceID
+		request.EndpointID = delegate.sourceEndpointID
+		request.CapabilityID = delegate.sourceCapabilityID
 	}
 	return reader.ReadProperty(ctx, request)
 }
@@ -638,18 +1032,35 @@ func (m *Manager) ReadProperty(ctx context.Context, request providersdk.Property
 func (m *Manager) ExecuteCommand(ctx context.Context, request providersdk.CommandRequest) (device.Device, error) {
 	m.mu.RLock()
 	id, ok := m.routes[request.DeviceID]
+	delegate, delegated := m.capabilityRoutes[capabilityRoute{request.DeviceID, request.EndpointID, request.CapabilityID}]
+	if delegated {
+		id = delegate.sourceProviderID
+	}
 	current := m.providers[id]
+	running := current != nil && current.status == "running"
 	m.mu.RUnlock()
 	if !ok || current == nil {
 		return device.Device{}, providersdk.ErrDeviceNotFound
+	}
+	if !running || (delegated && !delegate.available) {
+		return device.Device{}, providersdk.ErrProviderUnavailable
 	}
 	executor, ok := current.provider.(providersdk.CommandExecutor)
 	if !ok {
 		return device.Device{}, providersdk.ErrCommandUnsupported
 	}
-	item, err := executor.ExecuteCommand(ctx, request)
+	sourceRequest := request
+	if delegated {
+		sourceRequest.DeviceID = delegate.sourceDeviceID
+		sourceRequest.EndpointID = delegate.sourceEndpointID
+		sourceRequest.CapabilityID = delegate.sourceCapabilityID
+	}
+	item, err := executor.ExecuteCommand(ctx, sourceRequest)
 	if err != nil {
 		return device.Device{}, err
+	}
+	if delegated {
+		return m.finalizeDelegatedSnapshot(ctx, request.DeviceID, delegate, item)
 	}
 	item.ProviderID = id
 	item.NormalizeAvailability()
@@ -657,6 +1068,149 @@ func (m *Manager) ExecuteCommand(ctx context.Context, request providersdk.Comman
 		return device.Device{}, fmt.Errorf("provider %q returned invalid device snapshot: %w", id, err)
 	}
 	return item, nil
+}
+
+func providerDeviceKey(providerID, deviceID string) string {
+	return providerID + "\x00" + deviceID
+}
+
+func mergeControlCapabilities(
+	canonical, source device.Device,
+	canonicalProviderID, sourceProviderID string,
+) (device.Device, map[capabilityRoute]capabilityDelegate, error) {
+	if canonical.Type != device.TypeCamera {
+		return device.Device{}, nil, fmt.Errorf("canonical device is not a camera")
+	}
+	if source.Type != device.TypeCamera {
+		return device.Device{}, nil, fmt.Errorf("control source device %q is not a camera", source.ID)
+	}
+	merged := canonical.Clone()
+	delegates := make(map[capabilityRoute]capabilityDelegate)
+	endpointIndexes := make(map[string]int, len(merged.Endpoints))
+	for index, endpoint := range merged.Endpoints {
+		endpointIndexes[endpoint.ID] = index
+	}
+	for _, sourceEndpoint := range source.Endpoints {
+		targetIndex, endpointExists := endpointIndexes[sourceEndpoint.ID]
+		if !endpointExists {
+			merged.Endpoints = append(merged.Endpoints, device.Endpoint{
+				ID: sourceEndpoint.ID, Name: sourceEndpoint.Name, Type: sourceEndpoint.Type,
+			})
+			targetIndex = len(merged.Endpoints) - 1
+			endpointIndexes[sourceEndpoint.ID] = targetIndex
+		}
+		target := &merged.Endpoints[targetIndex]
+		existingCapabilities := make(map[string]struct{}, len(target.Capabilities))
+		for _, capability := range target.Capabilities {
+			existingCapabilities[capability.ID] = struct{}{}
+		}
+		for _, capability := range sourceEndpoint.Capabilities {
+			if capability.ID == "media" || capability.Type == "media" {
+				continue
+			}
+			if _, duplicate := existingCapabilities[capability.ID]; duplicate {
+				return device.Device{}, nil, fmt.Errorf(
+					"endpoint %q capability %q conflicts with the canonical camera",
+					sourceEndpoint.ID, capability.ID,
+				)
+			}
+			copiedEndpoint := device.Endpoint{Capabilities: []device.Capability{capability}}
+			copiedDevice := device.Device{Endpoints: []device.Endpoint{copiedEndpoint}}.Clone()
+			target.Capabilities = append(target.Capabilities, copiedDevice.Endpoints[0].Capabilities[0])
+			existingCapabilities[capability.ID] = struct{}{}
+			delegates[capabilityRoute{canonical.ID, sourceEndpoint.ID, capability.ID}] = capabilityDelegate{
+				canonicalProviderID: canonicalProviderID,
+				sourceProviderID:    sourceProviderID, sourceDeviceID: source.ID,
+				sourceEndpointID: sourceEndpoint.ID, sourceCapabilityID: capability.ID,
+				available: source.IsOnline(),
+			}
+		}
+	}
+	return merged, delegates, nil
+}
+
+func projectControlSnapshot(
+	canonical, source device.Device,
+	routes map[capabilityRoute]capabilityDelegate,
+) device.Device {
+	projected := canonical.Clone()
+	for _, sourceEndpoint := range source.Endpoints {
+		for _, sourceCapability := range sourceEndpoint.Capabilities {
+			route := capabilityRoute{canonical.ID, sourceEndpoint.ID, sourceCapability.ID}
+			delegate, delegated := routes[route]
+			if !delegated || delegate.sourceDeviceID != source.ID {
+				continue
+			}
+			for endpointIndex := range projected.Endpoints {
+				if projected.Endpoints[endpointIndex].ID != sourceEndpoint.ID {
+					continue
+				}
+				for capabilityIndex := range projected.Endpoints[endpointIndex].Capabilities {
+					if projected.Endpoints[endpointIndex].Capabilities[capabilityIndex].ID != sourceCapability.ID {
+						continue
+					}
+					copyHolder := device.Device{Endpoints: []device.Endpoint{{Capabilities: []device.Capability{sourceCapability}}}}.Clone()
+					projected.Endpoints[endpointIndex].Capabilities[capabilityIndex] = copyHolder.Endpoints[0].Capabilities[0]
+				}
+			}
+		}
+	}
+	if source.LastUpdateAt.After(projected.LastUpdateAt) {
+		projected.LastUpdateAt = source.LastUpdateAt
+	}
+	if source.Sequence >= projected.Sequence {
+		projected.Sequence = source.Sequence + 1
+	} else {
+		projected.Sequence++
+	}
+	// Availability belongs to the Camera/media identity, never to its control
+	// transport. Keep the canonical projection exactly as it was.
+	projected.NormalizeAvailability()
+	return projected
+}
+
+func (m *Manager) finalizeDelegatedSnapshot(
+	ctx context.Context,
+	canonicalDeviceID string,
+	delegate capabilityDelegate,
+	source device.Device,
+) (device.Device, error) {
+	source.ProviderID = delegate.sourceProviderID
+	source.NormalizeAvailability()
+	if err := source.ValidateStructure(); err != nil {
+		return device.Device{}, fmt.Errorf("provider %q returned invalid device snapshot: %w", delegate.sourceProviderID, err)
+	}
+	m.mu.RLock()
+	current := m.providers[delegate.canonicalProviderID]
+	running := current != nil && current.status == "running"
+	m.mu.RUnlock()
+	if !running {
+		return device.Device{}, providersdk.ErrProviderUnavailable
+	}
+	discoverer, ok := current.provider.(providersdk.Discoverer)
+	if !ok {
+		return device.Device{}, providersdk.ErrDeviceNotFound
+	}
+	items, err := discoverer.DiscoverDevices(ctx)
+	if err != nil {
+		return device.Device{}, err
+	}
+	for _, canonical := range items {
+		if canonical.ID != canonicalDeviceID {
+			continue
+		}
+		canonical.ProviderID = delegate.canonicalProviderID
+		merged, _, err := mergeControlCapabilities(canonical, source, delegate.canonicalProviderID, delegate.sourceProviderID)
+		if err != nil {
+			return device.Device{}, err
+		}
+		merged.NormalizeAvailability()
+		if err := merged.ValidateStructure(); err != nil {
+			return device.Device{}, fmt.Errorf("invalid merged camera snapshot: %w", err)
+		}
+		return merged, nil
+	}
+	return device.Device{}, providersdk.ErrDeviceNotFound
 }
 
 func (m *Manager) Simulate(ctx context.Context, request providersdk.SimulationRequest) (device.Device, error) {
@@ -701,6 +1255,57 @@ func (m *Manager) SubscribeDeviceEvents(handler func(providersdk.DeviceEvent)) f
 	m.mu.Unlock()
 	var once sync.Once
 	return func() { once.Do(func() { m.mu.Lock(); delete(m.eventListeners, id); m.mu.Unlock() }) }
+}
+
+func (m *Manager) CapabilityAvailabilities() []providersdk.CapabilityAvailability {
+	m.mu.RLock()
+	result := make([]providersdk.CapabilityAvailability, 0, len(m.capabilityRoutes))
+	for route, delegate := range m.capabilityRoutes {
+		result = append(result, providersdk.CapabilityAvailability{
+			ProviderID: delegate.canonicalProviderID,
+			DeviceID:   route.deviceID, EndpointID: route.endpointID, CapabilityID: route.capabilityID,
+			Available: delegate.available,
+		})
+	}
+	m.mu.RUnlock()
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].DeviceID != result[j].DeviceID {
+			return result[i].DeviceID < result[j].DeviceID
+		}
+		if result[i].EndpointID != result[j].EndpointID {
+			return result[i].EndpointID < result[j].EndpointID
+		}
+		return result[i].CapabilityID < result[j].CapabilityID
+	})
+	return result
+}
+
+func (m *Manager) SubscribeCapabilityAvailability(handler func(providersdk.CapabilityAvailability)) func() {
+	m.mu.Lock()
+	m.nextCapabilityAvailabilityListener++
+	id := m.nextCapabilityAvailabilityListener
+	m.capabilityAvailabilityListeners[id] = handler
+	m.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			m.mu.Lock()
+			delete(m.capabilityAvailabilityListeners, id)
+			m.mu.Unlock()
+		})
+	}
+}
+
+func (m *Manager) broadcastCapabilityAvailability(event providersdk.CapabilityAvailability) {
+	m.mu.RLock()
+	handlers := make([]func(providersdk.CapabilityAvailability), 0, len(m.capabilityAvailabilityListeners))
+	for _, handler := range m.capabilityAvailabilityListeners {
+		handlers = append(handlers, handler)
+	}
+	m.mu.RUnlock()
+	for _, handler := range handlers {
+		handler(event)
+	}
 }
 
 func (m *Manager) markFailureLocked(current *managedProvider, err error) {
@@ -854,10 +1459,18 @@ func (m *Manager) retryProvider(ctx context.Context, id string, current *managed
 	current.status, current.err, current.nextRetryAt, current.transitionedAt = "running", "", time.Time{}, time.Now().UTC()
 	m.mu.Unlock()
 	m.attach(id, current)
+	_ = m.broadcastDiscovery(ctx)
+}
+
+func (m *Manager) broadcastDiscovery(ctx context.Context) error {
+	items, err := m.DiscoverDevices(ctx)
+	if err != nil {
+		return err
+	}
 	for _, item := range items {
-		item.ProviderID = id
 		m.broadcast(item)
 	}
+	return nil
 }
 
 func (m *Manager) ProviderInfos() []providersdk.RuntimeInfo {
@@ -932,5 +1545,7 @@ var _ providersdk.PropertyReader = (*Manager)(nil)
 var _ providersdk.PropertyWriter = (*Manager)(nil)
 var _ providersdk.CommandExecutor = (*Manager)(nil)
 var _ providersdk.EventSubscriber = (*Manager)(nil)
+var _ providersdk.CapabilityAvailabilityReporter = (*Manager)(nil)
+var _ providersdk.CapabilityAvailabilitySubscriber = (*Manager)(nil)
 var _ providersdk.Inspector = (*Manager)(nil)
 var _ providersdk.Simulator = (*Manager)(nil)

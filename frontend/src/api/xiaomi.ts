@@ -60,6 +60,7 @@ export interface XiaomiCloudLoginResult {
 	userId?: string
 	ssecurity?: string
 	serviceToken?: string
+	passToken?: string
 }
 
 export async function startXiaomiOAuth(input: XiaomiOAuthStartInput): Promise<XiaomiOAuthStartResult> {

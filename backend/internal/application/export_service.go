@@ -78,7 +78,7 @@ func (s *ExportService) configurationAt(generatedAt time.Time) ConfigurationExpo
 	if s.targets != nil {
 		for _, target := range s.targets.List() {
 			exported := ExportTargetConfig{ID: target.ID, Type: target.Type, Name: target.Name, Enabled: target.Enabled, Address: target.Address, SetupID: target.SetupID, DeviceIDs: append([]string{}, target.DeviceIDs...), Devices: append([]domaintarget.VirtualDevice(nil), target.Devices...)}
-			if target.Type == "matter" {
+			if domaintarget.IsMatterType(target.Type) {
 				discriminator := target.Discriminator
 				exported.MatterConfig = &domaintarget.MatterConfig{
 					NetworkInterface: target.NetworkInterface, UDPPort: target.UDPPort,

@@ -47,6 +47,7 @@ func TestCloudLoginServiceContinuesIdentityVerificationInOriginalSession(t *test
 			_, _ = response.Write([]byte("ok"))
 		case "/sts":
 			http.SetCookie(response, &http.Cookie{Name: "serviceToken", Value: "verified-token", Path: "/"})
+			http.SetCookie(response, &http.Cookie{Name: "passToken", Value: "verified-pass-token", Path: "/"})
 			_, _ = response.Write([]byte("ok"))
 		default:
 			response.WriteHeader(http.StatusNotFound)
@@ -75,7 +76,9 @@ func TestCloudLoginServiceContinuesIdentityVerificationInOriginalSession(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if verificationCalls != 2 || verified.Status != "verified" || verified.UserID != "42" || verified.Ssecurity != security || verified.ServiceToken != "verified-token" {
+	if verificationCalls != 2 || verified.Status != "verified" || verified.UserID != "42" ||
+		verified.Ssecurity != security || verified.ServiceToken != "verified-token" ||
+		verified.PassToken != "verified-pass-token" {
 		t.Fatalf("calls=%d verified=%#v", verificationCalls, verified)
 	}
 	if _, err := service.Verify(context.Background(), CloudLoginVerifyRequest{ChallengeID: started.ChallengeID, Code: "123456"}); err == nil || !strings.Contains(err.Error(), "missing or expired") {

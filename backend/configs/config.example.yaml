@@ -5,3 +5,21 @@ storage:
   database_url: "postgres://homeloom:homeloom-dev@127.0.0.1:54329/homeloom?sslmode=disable"
   # SQLite alternative: "sqlite://./data/homeloom.db"
   master_key: "./data/homeloom.key"
+
+media:
+  # Core directly owns media lifecycle and authorization. Only the constrained
+  # per-camera kernel and FFmpeg remain external executables.
+  enabled: true
+  # HomeLoom-owned constrained camera kernel, built beside Core.
+  camera_kernel_binary: "homeloom-camera-kernel"
+  # Durable per-camera HomeKit identity + pairings. Keep this outside .cache
+  # so Apple Home controllers survive HomeLoom restarts.
+  # Detailed redacted camera diagnostics are written below each stream as
+  # <runtime_dir>/<stream_id>/camera.log with four 8 MiB rotated backups.
+  runtime_dir: "./data/media/publishers"
+  # HAP/SRTP must be reachable from Apple Home controllers on the LAN.
+  hap_host: "0.0.0.0"
+  hap_port_base: 51826
+  # RTSP remains loopback-only between Core-managed camera kernels.
+  rtsp_port_base: 18554
+  srtp_port_base: 20000

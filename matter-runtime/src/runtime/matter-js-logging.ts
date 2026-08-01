@@ -1,4 +1,4 @@
-export type MatterJsLogLevelName =
+type MatterJsLogLevelName =
   | "debug"
   | "info"
   | "notice"
@@ -6,7 +6,7 @@ export type MatterJsLogLevelName =
   | "error"
   | "fatal";
 
-export type MatterJsLogFormatName = "json" | "plain" | "ansi";
+type MatterJsLogFormatName = "json" | "plain" | "ansi";
 
 export interface MatterJsLoggingOptions {
   level?: string;

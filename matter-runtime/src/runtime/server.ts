@@ -25,6 +25,7 @@ import {
   type CommissioningChangedEvent,
   type FabricChangedEvent,
   type HandshakeResult,
+  type NodeKind,
   type RuntimeDiagnosticsEvent,
   type RuntimeStatus,
   type StorageGetResult,
@@ -39,9 +40,21 @@ import {
 import {
   AdapterOperationError,
   type AdapterContext,
+  type CameraRequestorTransport,
   type HostStorage,
   type MatterProtocolAdapter,
 } from "./adapter.js";
+import {
+  CameraAvAllocationManager,
+  type CameraAvHostClient,
+  type CameraMediaIdentity,
+} from "../camera/av-allocation-manager.js";
+import { MatterCameraClusterAdapter } from "../camera/camera-cluster-adapter.js";
+import {
+  HostRpcCameraMediaBackend,
+  RpcCameraHostMediaClient,
+} from "../camera/host-media-client.js";
+import { CameraSessionManager } from "../camera/session-manager.js";
 
 interface RuntimeServerOptions {
   socketPath: string;
@@ -85,7 +98,23 @@ const CAPABILITIES = [
   RpcMethod.storageDelete,
   RpcMethod.storageList,
   RpcMethod.storageClear,
+  RpcMethod.cameraWebRtc,
+  RpcMethod.cameraSnapshot,
 ] as const;
+
+const CAMERA_MEDIA_TIMEOUT_MS = 12_000;
+const CAMERA_CONTROL_TIMEOUT_MS = 5_000;
+
+export function cameraRpcTimeoutMs(
+  method: "camera.webrtc" | "camera.snapshot",
+  operation?: unknown,
+): number {
+  return method === RpcMethod.cameraSnapshot
+    || operation === "open"
+    || operation === "reoffer"
+    ? CAMERA_MEDIA_TIMEOUT_MS
+    : CAMERA_CONTROL_TIMEOUT_MS;
+}
 
 /**
  * One RuntimeServer represents exactly one Target and one Unix socket.
@@ -104,6 +133,9 @@ export class RuntimeServer {
   #activeSession: Session | undefined;
   #socketIdentity: SocketIdentity | undefined;
   #lastReplayRevision: number | null = null;
+  #nodeKind: NodeKind = "bridge";
+  #cameraClusterAdapter: MatterCameraClusterAdapter | undefined;
+  #cameraRequestorTransport: CameraRequestorTransport | undefined;
 
   constructor(adapter: MatterProtocolAdapter, options: RuntimeServerOptions) {
     if (options.socketPath.trim() === "") {
@@ -170,6 +202,10 @@ export class RuntimeServer {
     }
     this.#sessions.clear();
     this.#activeSession = undefined;
+    const camera = this.#cameraClusterAdapter;
+    this.#cameraClusterAdapter = undefined;
+    this.#cameraRequestorTransport = undefined;
+    await camera?.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await this.#adapter.stop();
     await this.#unlinkOwnedSocket();
@@ -241,7 +277,9 @@ export class RuntimeServer {
     peer.register(RpcMethod.replayState, (params) => this.#authenticated(session, async () => {
       const state = expectReplayState(params);
       this.#assertConfigurationIdentity(state.bridge);
+      await this.#configureCameraAdapter(state.bridge?.nodeKind ?? "bridge", state.media);
       await this.#adapter.replayState(state);
+      this.#nodeKind = state.bridge?.nodeKind ?? "bridge";
       this.#lastReplayRevision = state.revision;
       session.replayed = true;
       return { appliedRevision: state.revision };
@@ -250,11 +288,12 @@ export class RuntimeServer {
       const configuration = expectBridgeConfiguration(params);
       this.#assertConfigurationIdentity(configuration);
       await this.#adapter.configureBridge(configuration);
+      this.#nodeKind = configuration.nodeKind;
       return { applied: true };
     }));
     peer.register(RpcMethod.replaceDevices, (params) => this.#ready(session, async () => {
       const object = expectObject(params, "devices.replace params");
-      const devices = expectDeviceSnapshots(object.devices);
+      const devices = expectDeviceSnapshots(object.devices, this.#nodeKind);
       await this.#adapter.replaceDevices(devices);
       return { applied: devices.length };
     }));
@@ -377,6 +416,7 @@ export class RuntimeServer {
   }
 
   #adapterContext(): AdapterContext {
+    const server = this;
     return {
       targetId: this.targetId,
       identityNamespace: this.identityNamespace,
@@ -386,7 +426,74 @@ export class RuntimeServer {
       emitFabricChanged: (event) => this.#notifyFabricChanged(event),
       emitDiagnostics: (event) => this.#notifyDiagnostics(event),
       storage: this.#hostStorage(),
+      get cameraClusterAdapter() {
+        return server.#cameraClusterAdapter;
+      },
+      registerCameraRequestorTransport: (transport) => {
+        this.#cameraRequestorTransport = transport;
+        return () => {
+          if (this.#cameraRequestorTransport === transport) {
+            this.#cameraRequestorTransport = undefined;
+          }
+        };
+      },
+    } as AdapterContext;
+  }
+
+  async #configureCameraAdapter(
+    nodeKind: NodeKind,
+    media: CameraMediaIdentity | undefined,
+  ): Promise<void> {
+    const previous = this.#cameraClusterAdapter;
+    this.#cameraClusterAdapter = undefined;
+    this.#cameraRequestorTransport = undefined;
+    await previous?.close();
+    if (nodeKind !== "camera" || media === undefined) {
+      return;
+    }
+
+    const host = new RpcCameraHostMediaClient(media, {
+      request: <T>(method: "camera.webrtc" | "camera.snapshot", params: Record<string, unknown>) => {
+        return this.#activePeer().request<T>(
+          method,
+          params,
+          cameraRpcTimeoutMs(method, params.operation),
+        );
+      },
+    });
+    const logicalAllocationHost: CameraAvHostClient = {
+      async allocate() {
+        return {
+          async modifyVideo() {},
+          async close() {},
+        };
+      },
     };
+    const allocations = new CameraAvAllocationManager(media, logicalAllocationHost);
+    const sessions = new CameraSessionManager(
+      new HostRpcCameraMediaBackend(media, host),
+      {
+        provideAnswer: (answer) => this.#cameraTransport().provideAnswer(answer),
+        provideIceCandidates: (update) =>
+          this.#cameraTransport().provideIceCandidates(update),
+        sessionFailed: (sessionId) => {
+          this.#cameraRequestorTransport?.sessionFailed(sessionId);
+        },
+      },
+      { maxConcurrentSessions: 1 },
+    );
+    this.#cameraClusterAdapter = new MatterCameraClusterAdapter(
+      allocations,
+      sessions,
+      { host, media },
+    );
+  }
+
+  #cameraTransport(): CameraRequestorTransport {
+    if (this.#cameraRequestorTransport === undefined) {
+      throw new Error("Matter Camera requestor transport is not installed");
+    }
+    return this.#cameraRequestorTransport;
   }
 
   async #emitAttributeWrite(event: AttributeWriteEvent) {

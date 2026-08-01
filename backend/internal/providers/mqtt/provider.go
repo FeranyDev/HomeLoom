@@ -657,42 +657,11 @@ func validateCommandParameters(definition device.CommandDefinition, parameters m
 		if !exists {
 			return fmt.Errorf("unknown parameter %q", id)
 		}
-		if value.Type != parameter.Type || !valueHasSinglePayload(value) {
+		if value.Type != parameter.Type || !value.HasSinglePayload() {
 			return fmt.Errorf("parameter %q does not contain a valid %s value", id, parameter.Type)
 		}
 	}
 	return nil
-}
-
-func valueHasSinglePayload(value device.PropertyValue) bool {
-	payloads := 0
-	if value.Bool != nil {
-		payloads++
-	}
-	if value.Int != nil {
-		payloads++
-	}
-	if value.Number != nil {
-		payloads++
-	}
-	if value.String != nil {
-		payloads++
-	}
-	if payloads != 1 {
-		return false
-	}
-	switch value.Type {
-	case device.ValueTypeBool:
-		return value.Bool != nil
-	case device.ValueTypeInt:
-		return value.Int != nil
-	case device.ValueTypeNumber:
-		return value.Number != nil
-	case device.ValueTypeString, device.ValueTypeEnum:
-		return value.String != nil
-	default:
-		return false
-	}
 }
 
 func newCorrelationID() string {

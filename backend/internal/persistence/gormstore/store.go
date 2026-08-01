@@ -111,9 +111,7 @@ func openGORM(databaseURL string) (*gorm.DB, databaseKind, error) {
 
 func sqliteDSN(databaseURL string) (dsn, path string, err error) {
 	raw := strings.TrimPrefix(databaseURL, "sqlite:")
-	if strings.HasPrefix(raw, "//") {
-		raw = strings.TrimPrefix(raw, "//")
-	}
+	raw = strings.TrimPrefix(raw, "//")
 	if raw == "" {
 		return "", "", fmt.Errorf("SQLite database path is required")
 	}
@@ -204,6 +202,7 @@ func (s *Store) seedDefaults(ctx context.Context) error {
 	}{
 		{&providerRow{}, &providerRow{ID: "virtual-main", Type: "virtual", Name: "Virtual Provider", Enabled: true, ConfigJSON: jsonDocument("{}"), CreatedAt: now, UpdatedAt: now}},
 		{&targetRow{}, &targetRow{ID: "apple-main", Type: "apple-hap", Name: "HomeLoom 主桥", Enabled: true, Address: ":51826", PIN: "00102003", SetupID: "HLM1", StorePath: "./data/hap/apple-main", CreatedAt: now, UpdatedAt: now}},
+		{&mediaConfigStateRow{}, &mediaConfigStateRow{ID: 1, Generation: 1, Revision: 1, UpdatedAt: now}},
 	}
 	for _, item := range defaults {
 		var count int64

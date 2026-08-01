@@ -62,19 +62,35 @@ type CloudProvider struct {
 }
 
 var (
-	_ providersdk.Provider         = (*CloudProvider)(nil)
-	_ providersdk.LiveReconfigurer = (*CloudProvider)(nil)
-	_ providersdk.Discoverer       = (*CloudProvider)(nil)
-	_ providersdk.SourceCataloger  = (*CloudProvider)(nil)
-	_ providersdk.PropertyReader   = (*CloudProvider)(nil)
-	_ providersdk.PropertyWriter   = (*CloudProvider)(nil)
-	_ providersdk.CommandExecutor  = (*CloudProvider)(nil)
-	_ providersdk.EventSubscriber  = (*CloudProvider)(nil)
-	_ providersdk.MetricsReporter  = (*CloudProvider)(nil)
+	_ providersdk.Provider              = (*CloudProvider)(nil)
+	_ providersdk.LiveReconfigurer      = (*CloudProvider)(nil)
+	_ providersdk.Discoverer            = (*CloudProvider)(nil)
+	_ providersdk.MediaSourceDiscoverer = (*CloudProvider)(nil)
+	_ providersdk.MediaSourceRefresher  = (*CloudProvider)(nil)
+	_ providersdk.MediaAuthorizer       = (*CloudProvider)(nil)
+	_ providersdk.SourceCataloger       = (*CloudProvider)(nil)
+	_ providersdk.PropertyReader        = (*CloudProvider)(nil)
+	_ providersdk.PropertyWriter        = (*CloudProvider)(nil)
+	_ providersdk.CommandExecutor       = (*CloudProvider)(nil)
+	_ providersdk.EventSubscriber       = (*CloudProvider)(nil)
+	_ providersdk.MetricsReporter       = (*CloudProvider)(nil)
 )
 
 func NewCloudProviderFromConfig(item providerconfig.Config) (*CloudProvider, error) {
 	return NewCloudProviderFromConfigWithSpecResolver(item, NewSpecResolver(nil))
+}
+
+// CameraAccountCredentials returns a copy of the account session for a Camera
+// Provider authorization request. It is consumed only inside the backend;
+// HTTP management responses continue to expose redacted configuration.
+func (p *CloudProvider) CameraAccountCredentials() CloudConfig {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return CloudConfig{
+		Region: p.config.Region, Username: p.config.Username, Password: p.config.Password,
+		UserID: p.config.UserID, Ssecurity: p.config.Ssecurity, ServiceToken: p.config.ServiceToken,
+		PassToken: p.config.PassToken, RequestTimeoutSec: p.config.RequestTimeoutSec,
+	}
 }
 
 func NewCloudProviderFromConfigWithSpecResolver(item providerconfig.Config, resolver *SpecResolver) (*CloudProvider, error) {

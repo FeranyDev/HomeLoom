@@ -63,6 +63,49 @@ type ProviderService struct {
 	maintenanceWake   chan struct{}
 	credentialRun     sync.Mutex
 	credentialRetries map[string]credentialRetry
+	changeHandler     func(context.Context, providerconfig.Config, bool) error
+}
+
+func (s *ProviderService) SetChangeHandler(handler func(context.Context, providerconfig.Config, bool) error) {
+	s.mu.Lock()
+	s.changeHandler = handler
+	s.mu.Unlock()
+}
+
+// ConfiguredProviderDeviceIDs returns the explicit Device IDs controlled by a
+// Provider configuration. The boolean is false for Providers whose devices
+// are not represented by a devices/cameras array and therefore cannot be
+// safely pruned from configuration alone.
+func ConfiguredProviderDeviceIDs(item providerconfig.Config) (map[string]struct{}, bool) {
+	var object map[string]json.RawMessage
+	if json.Unmarshal(item.Config, &object) != nil {
+		return nil, false
+	}
+	key := "devices"
+	if item.Type == "camera" {
+		key = "cameras"
+	}
+	raw, exists := object[key]
+	if !exists {
+		return nil, false
+	}
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) || raw[0] != '[' {
+		return nil, false
+	}
+	var entries []struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(raw, &entries) != nil {
+		return nil, false
+	}
+	result := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		if id := strings.TrimSpace(entry.ID); id != "" {
+			result[id] = struct{}{}
+		}
+	}
+	return result, true
 }
 
 // ResolveTransientConfig restores redacted secrets from the durable provider
@@ -218,6 +261,14 @@ func (s *ProviderService) Save(ctx context.Context, item providerconfig.Config) 
 		}
 		return ProviderInfo{}, NewValidationError("invalid provider configuration", map[string]string{field: err.Error()})
 	}
+	if err := s.validateCameraControlProviders(item); err != nil {
+		return ProviderInfo{}, err
+	}
+	if existed {
+		if err := s.validateReferencedDeviceRemoval(previous, item); err != nil {
+			return ProviderInfo{}, err
+		}
+	}
 	if err := s.store.SaveProvider(ctx, item); err != nil {
 		return ProviderInfo{}, err
 	}
@@ -235,6 +286,14 @@ func (s *ProviderService) Save(ctx context.Context, item providerconfig.Config) 
 			if err := s.runtime.Remove(ctx, item.ID); err != nil {
 				return ProviderInfo{}, err
 			}
+		}
+	}
+	s.mu.RLock()
+	changeHandler := s.changeHandler
+	s.mu.RUnlock()
+	if changeHandler != nil {
+		if err := changeHandler(ctx, item, false); err != nil {
+			return ProviderInfo{}, err
 		}
 	}
 	for _, info := range s.List() {
@@ -444,9 +503,27 @@ func earlierProviderTime(left, right time.Time) time.Time {
 func (s *ProviderService) Delete(ctx context.Context, id string) error {
 	s.mu.RLock()
 	item, exists := s.configs[id]
+	configs := make([]providerconfig.Config, 0, len(s.configs))
+	for _, configured := range s.configs {
+		configs = append(configs, configured)
+	}
 	s.mu.RUnlock()
 	if !exists {
 		return fmt.Errorf("provider %q not found", id)
+	}
+	for _, configured := range configs {
+		if configured.ID == id {
+			continue
+		}
+		references, err := providerReferences(configured)
+		if err != nil {
+			return fmt.Errorf("inspect provider %q references: %w", configured.ID, err)
+		}
+		for _, reference := range references {
+			if reference.providerID == id {
+				return fmt.Errorf("provider %q is still referenced by provider %q (%s)", id, configured.ID, reference.kind)
+			}
+		}
 	}
 	if item.Enabled {
 		if err := s.runtime.Remove(ctx, id); err != nil {
@@ -461,6 +538,143 @@ func (s *ProviderService) Delete(ctx context.Context, id string) error {
 	delete(s.credentialRetries, id)
 	s.mu.Unlock()
 	s.wakeCredentialMaintenance()
+	s.mu.RLock()
+	changeHandler := s.changeHandler
+	s.mu.RUnlock()
+	if changeHandler != nil {
+		if err := changeHandler(ctx, item, true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type providerReference struct {
+	providerID string
+	deviceID   string
+	kind       string
+}
+
+func providerReferences(item providerconfig.Config) ([]providerReference, error) {
+	if item.Type != "camera" {
+		return nil, nil
+	}
+	var config struct {
+		Cameras []struct {
+			Control *struct {
+				ProviderRef string `json:"providerRef"`
+				DeviceID    string `json:"deviceId"`
+			} `json:"control"`
+			Xiaomi *struct {
+				CredentialProviderRef string `json:"credentialProviderRef"`
+			} `json:"xiaomi"`
+		} `json:"cameras"`
+	}
+	if err := json.Unmarshal(item.Config, &config); err != nil {
+		return nil, fmt.Errorf("decode camera config: %w", err)
+	}
+	result := make([]providerReference, 0)
+	for _, camera := range config.Cameras {
+		if camera.Control != nil && strings.TrimSpace(camera.Control.ProviderRef) != "" {
+			result = append(result, providerReference{
+				providerID: strings.TrimSpace(camera.Control.ProviderRef),
+				deviceID:   strings.TrimSpace(camera.Control.DeviceID),
+				kind:       "camera control",
+			})
+		}
+		if camera.Xiaomi != nil && strings.TrimSpace(camera.Xiaomi.CredentialProviderRef) != "" {
+			result = append(result, providerReference{
+				providerID: strings.TrimSpace(camera.Xiaomi.CredentialProviderRef),
+				kind:       "camera credential",
+			})
+		}
+	}
+	return result, nil
+}
+
+func (s *ProviderService) validateCameraControlProviders(item providerconfig.Config) error {
+	references, err := providerReferences(item)
+	if err != nil {
+		return NewValidationError("invalid provider configuration", map[string]string{"config": err.Error()})
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if item.Type != "xiaomi" && item.Type != "xiaomi-miot-cloud" {
+		for _, configured := range s.configs {
+			if configured.ID == item.ID {
+				continue
+			}
+			configuredReferences, referenceErr := providerReferences(configured)
+			if referenceErr != nil {
+				return NewValidationError("invalid provider configuration", map[string]string{"config": referenceErr.Error()})
+			}
+			for _, reference := range configuredReferences {
+				if reference.kind == "camera control" && reference.providerID == item.ID {
+					return NewValidationError("invalid provider configuration", map[string]string{
+						"type": fmt.Sprintf("provider is used as camera control source by %q and must remain xiaomi or xiaomi-miot-cloud", configured.ID),
+					})
+				}
+			}
+		}
+	}
+	for _, reference := range references {
+		if reference.kind != "camera control" {
+			continue
+		}
+		source, exists := s.configs[reference.providerID]
+		if !exists {
+			continue
+		}
+		if source.Type != "xiaomi" && source.Type != "xiaomi-miot-cloud" {
+			return NewValidationError("invalid provider configuration", map[string]string{
+				"config": fmt.Sprintf("camera control Provider %q must have type xiaomi or xiaomi-miot-cloud", reference.providerID),
+			})
+		}
+	}
+	return nil
+}
+
+func (s *ProviderService) validateReferencedDeviceRemoval(previous, replacement providerconfig.Config) error {
+	previousIDs, previousKnown := ConfiguredProviderDeviceIDs(previous)
+	replacementIDs, replacementKnown := ConfiguredProviderDeviceIDs(replacement)
+	if !previousKnown || !replacementKnown {
+		return nil
+	}
+	removed := make(map[string]struct{})
+	for id := range previousIDs {
+		if _, retained := replacementIDs[id]; !retained {
+			removed[id] = struct{}{}
+		}
+	}
+	if len(removed) == 0 {
+		return nil
+	}
+	s.mu.RLock()
+	configs := make([]providerconfig.Config, 0, len(s.configs))
+	for _, configured := range s.configs {
+		configs = append(configs, configured)
+	}
+	s.mu.RUnlock()
+	for _, configured := range configs {
+		if configured.ID == replacement.ID {
+			continue
+		}
+		references, err := providerReferences(configured)
+		if err != nil {
+			return fmt.Errorf("inspect provider %q references: %w", configured.ID, err)
+		}
+		for _, reference := range references {
+			if reference.providerID != replacement.ID || reference.deviceID == "" {
+				continue
+			}
+			if _, wasRemoved := removed[reference.deviceID]; wasRemoved {
+				return fmt.Errorf(
+					"device %q from provider %q is still referenced by provider %q (%s)",
+					reference.deviceID, replacement.ID, configured.ID, reference.kind,
+				)
+			}
+		}
+	}
 	return nil
 }
 

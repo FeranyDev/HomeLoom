@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
+	"github.com/feranydev/homeloom/backend/internal/domain/media"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 )
 
@@ -29,6 +30,7 @@ type CloudConfig struct {
 	UserID            string         `json:"userId,omitempty"`
 	Ssecurity         string         `json:"ssecurity,omitempty"`
 	ServiceToken      string         `json:"serviceToken,omitempty"`
+	PassToken         string         `json:"passToken,omitempty"`
 	PollIntervalSec   int            `json:"pollIntervalSeconds,omitempty"`
 	RequestTimeoutSec int            `json:"requestTimeoutSeconds,omitempty"`
 	Devices           []DeviceConfig `json:"devices"`
@@ -54,6 +56,7 @@ func (c *CloudConfig) applyDefaults() {
 	c.UserID = strings.TrimSpace(c.UserID)
 	c.Ssecurity = strings.TrimSpace(c.Ssecurity)
 	c.ServiceToken = strings.TrimSpace(c.ServiceToken)
+	c.PassToken = strings.TrimSpace(c.PassToken)
 	if c.Region == "" {
 		c.Region = "cn"
 	}
@@ -73,6 +76,7 @@ func (c *CloudConfig) applyDefaults() {
 		if item.ID == "" {
 			item.ID = "xiaomi-miot-" + stableID(item.DID)
 		}
+		applyCameraMediaDefaults(item)
 		for propertyIndex := range item.Properties {
 			mapping := &item.Properties[propertyIndex]
 			if mapping.EndpointID == "" {
@@ -121,6 +125,13 @@ func (c CloudConfig) validate() error {
 		seenDevices[item.ID] = true
 		if item.ConnectionMode != cloudConnectionAuto && item.ConnectionMode != cloudConnectionLocal && item.ConnectionMode != cloudConnectionCloud {
 			return fmt.Errorf("device %q connectionMode must be auto, local or cloud", item.ID)
+		}
+		if err := validateCameraMediaConfig(item); err != nil {
+			return err
+		}
+		if item.Media != nil && item.Media.Protocol == media.ProtocolXiaomiMISS &&
+			(c.UserID == "" || c.PassToken == "") {
+			return fmt.Errorf("device %q Xiaomi MISS media requires userId and passToken from Xiaomi password login", item.ID)
 		}
 		seenProperties := make(map[string]bool)
 		for _, mapping := range item.Properties {

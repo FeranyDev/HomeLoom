@@ -36,3 +36,17 @@ func TestNormalizeProtocolConfigPreventsMatterFromUsingHomeKitFields(t *testing.
 		t.Fatalf("Matter config was lost = %#v", normalized.MatterConfig)
 	}
 }
+
+func TestMatterCameraDescriptorAndNormalization(t *testing.T) {
+	descriptor, found := DescriptorForType("matter-camera")
+	if !found || descriptor.ConsumerID != "matter-camera" || descriptor.DefaultIDPrefix != "camera-matter" {
+		t.Fatalf("Matter Camera descriptor = %#v, %v", descriptor, found)
+	}
+	normalized := (Config{
+		Type: "matter-camera", Address: ":51826", Pin: "12345678",
+		HomeKitConfig: &HomeKitConfig{Address: ":51826"}, MatterConfig: &MatterConfig{},
+	}).NormalizeProtocolConfig()
+	if !IsMatterType(normalized.Type) || normalized.HomeKitConfig != nil || normalized.Address != "" || normalized.MatterConfig == nil {
+		t.Fatalf("normalized Matter Camera config = %#v", normalized)
+	}
+}

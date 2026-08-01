@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
+	"github.com/feranydev/homeloom/backend/internal/domain/media"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 )
 
@@ -59,18 +60,36 @@ type OAuthConfig struct {
 }
 
 type DeviceConfig struct {
-	DID            string            `json:"did"`
-	ID             string            `json:"id,omitempty"`
-	Name           string            `json:"name"`
-	Type           device.Type       `json:"type"`
-	Model          string            `json:"model,omitempty"`
-	HomeID         string            `json:"homeId,omitempty"`
-	Home           string            `json:"home,omitempty"`
-	RoomID         string            `json:"roomId,omitempty"`
-	Room           string            `json:"room,omitempty"`
-	ConnectionMode string            `json:"connectionMode,omitempty"`
-	Properties     []PropertyMapping `json:"properties"`
-	Actions        []ActionMapping   `json:"actions,omitempty"`
+	DID            string             `json:"did"`
+	ID             string             `json:"id,omitempty"`
+	Name           string             `json:"name"`
+	Type           device.Type        `json:"type"`
+	Model          string             `json:"model,omitempty"`
+	HomeID         string             `json:"homeId,omitempty"`
+	Home           string             `json:"home,omitempty"`
+	RoomID         string             `json:"roomId,omitempty"`
+	Room           string             `json:"room,omitempty"`
+	ConnectionMode string             `json:"connectionMode,omitempty"`
+	Properties     []PropertyMapping  `json:"properties"`
+	Actions        []ActionMapping    `json:"actions,omitempty"`
+	Media          *CameraMediaConfig `json:"media,omitempty"`
+}
+
+// CameraMediaConfig is the Provider-owned RTSP or Xiaomi-native configuration
+// for one unified Camera Device. Account and RTSP credentials remain in the
+// encrypted Provider config; discovery emits only a credential reference and
+// secret-free source data.
+type CameraMediaConfig struct {
+	Protocol media.Protocol       `json:"protocol,omitempty"`
+	Host     string               `json:"host,omitempty"`
+	Port     int                  `json:"port,omitempty"`
+	Path     string               `json:"path,omitempty"`
+	AuthType media.AuthType       `json:"authType,omitempty"`
+	Username string               `json:"username,omitempty"`
+	Password string               `json:"password,omitempty"`
+	Subtype  string               `json:"subtype,omitempty"`
+	Channel  int                  `json:"channel,omitempty"`
+	Profiles []media.MediaProfile `json:"profiles"`
 }
 
 type PropertyMapping struct {
@@ -142,9 +161,16 @@ func (c *Config) applyDefaults() {
 		if item.ConnectionMode == "" {
 			item.ConnectionMode = connectionModeAuto
 		}
-		if item.ID == "" {
-			item.ID = "xiaomi-" + stableID(item.DID)
+		defaultID := "xiaomi-" + stableID(item.DID)
+		if item.Type == device.TypeCamera && (item.ID == "" || item.ID == defaultID) {
+			// Camera Provider owns the canonical xiaomi-* identity. The
+			// central Provider publishes this second, hidden identity only as
+			// a control source, so it must never claim the same global route.
+			item.ID = cameraControlID(item.DID)
+		} else if item.ID == "" {
+			item.ID = defaultID
 		}
+		applyCameraMediaDefaults(item)
 		for propertyIndex := range item.Properties {
 			mapping := &item.Properties[propertyIndex]
 			if mapping.EndpointID == "" {
@@ -202,6 +228,12 @@ func (c Config) validate() (*url.URL, error) {
 		}
 		if item.ConnectionMode == connectionModeCloud && (c.OAuth == nil || strings.TrimSpace(c.OAuth.AccessToken) == "") {
 			return nil, fmt.Errorf("device %q requires Xiaomi OAuth accessToken for cloud control", item.ID)
+		}
+		if err := validateCameraMediaConfig(item); err != nil {
+			return nil, err
+		}
+		if item.Media != nil && item.Media.Protocol == media.ProtocolXiaomiMISS {
+			return nil, fmt.Errorf("device %q Xiaomi MISS media requires the Xiaomi MIoT cloud Provider with a distinct passToken", item.ID)
 		}
 		seenProperties := make(map[string]bool)
 		for _, mapping := range item.Properties {
@@ -320,4 +352,13 @@ func stableID(value string) string {
 		result = result[:55]
 	}
 	return result
+}
+
+func cameraControlID(did string) string {
+	suffix := stableID(did)
+	const prefix = "xiaomi-control-"
+	if len(suffix) > 63-len(prefix) {
+		suffix = suffix[:63-len(prefix)]
+	}
+	return prefix + suffix
 }

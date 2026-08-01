@@ -110,6 +110,10 @@ type TargetRuntime interface {
 	IsPaired(domaintarget.Config) bool
 }
 
+type TargetDeletionRuntime interface {
+	RemoveTarget(context.Context, domaintarget.Config) error
+}
+
 type MatterTargetRuntime interface {
 	OpenCommissioningWindow(context.Context, string, uint32) (TargetRegistration, error)
 	CloseCommissioningWindow(context.Context, string) (TargetRegistration, error)
@@ -189,7 +193,7 @@ func (s *TargetService) Save(ctx context.Context, item domaintarget.Config) (Tar
 		wasPaired = runtime.IsPaired(existing)
 	}
 	if editing {
-		if existing.Type == "apple-hap" {
+		if existing.Type == "apple-hap" || existing.Type == "homekit-camera" {
 			next := domaintarget.HomeKitConfig{}
 			if item.HomeKitConfig != nil {
 				next = *item.HomeKitConfig
@@ -215,7 +219,7 @@ func (s *TargetService) Save(ctx context.Context, item domaintarget.Config) (Tar
 			item.HomeKitConfig = &next
 			item.Address, item.Pin, item.SetupID, item.StorePath = next.Address, next.Pin, next.SetupID, next.StorePath
 		}
-		if existing.Type == "matter" {
+		if domaintarget.IsMatterType(existing.Type) {
 			previous := domaintarget.MatterConfig{}
 			if existing.MatterConfig != nil {
 				previous = *existing.MatterConfig
@@ -265,8 +269,12 @@ func (s *TargetService) Save(ctx context.Context, item domaintarget.Config) (Tar
 			registration.Info.ConsumerID = targetConsumerID(item.Type)
 		}
 	} else if descriptor, found := domaintarget.DescriptorForType(item.Type); found && descriptor.SupportsHomeKitPairing {
+		category := homekitqr.CategoryBridge
+		if item.Type == "homekit-camera" {
+			category = homekitqr.CategoryIPCamera
+		}
 		qrConfig := homekitqr.QRCodeConfig{SetupURIConfig: homekitqr.SetupURIConfig{
-			Category: homekitqr.CategoryBridge, Flag: 2, PairingCode: item.Pin, SetupID: item.SetupID,
+			Category: category, Flag: 2, PairingCode: item.Pin, SetupID: item.SetupID,
 		}, Size: 320}
 		uri, err := homekitqr.ComposeSetupURI(qrConfig.SetupURIConfig)
 		if err != nil {
@@ -297,7 +305,7 @@ func (s *TargetService) Save(ctx context.Context, item domaintarget.Config) (Tar
 }
 
 func applyMatterConfigInfo(info *TargetInfo, config domaintarget.Config) {
-	if config.Type != "matter" || config.MatterConfig == nil {
+	if !domaintarget.IsMatterType(config.Type) || config.MatterConfig == nil {
 		return
 	}
 	matter := config.MatterConfig
@@ -382,7 +390,7 @@ func (s *TargetService) withDefaults(item domaintarget.Config) (domaintarget.Con
 		item.StorePath = filepath.Join("data", "hap", item.ID)
 		item = item.NormalizeProtocolConfig()
 	}
-	if item.Type == "matter" {
+	if domaintarget.IsMatterType(item.Type) {
 		if item.HomeKitConfig != nil || item.Address != "" || item.Pin != "" || item.SetupID != "" || item.StorePath != "" {
 			return item, NewValidationError("invalid target configuration", map[string]string{"homeKitConfig": "is only valid for HomeKit targets"})
 		}
@@ -412,6 +420,9 @@ func (s *TargetService) withDefaults(item domaintarget.Config) (domaintarget.Con
 		}
 		if config.ProductName == "" {
 			config.ProductName = "HomeLoom Matter Bridge"
+			if item.Type == "matter-camera" {
+				config.ProductName = "HomeLoom Matter Camera"
+			}
 		}
 		if config.SerialNumber == "" {
 			config.SerialNumber = item.ID
@@ -502,15 +513,35 @@ func (s *TargetService) Delete(ctx context.Context, id string) error {
 	if s.store == nil {
 		return errors.New("target store is unavailable")
 	}
+	s.mu.RLock()
+	config, hasConfig := s.configs[id]
+	runtime := s.runtime
+	s.mu.RUnlock()
+	cameraCleanupCompleted := false
+	if hasConfig && config.Type == "homekit-camera" {
+		// Independent publishers own pairing state outside the target row.
+		// Destroy that state before committing deletion so a cleanup failure
+		// cannot be reported as a successfully deleted target.
+		deletionRuntime, ok := runtime.(TargetDeletionRuntime)
+		if !ok {
+			return errors.New("remove target runtime and pairing identity: deletion runtime is unavailable")
+		}
+		if err := deletionRuntime.RemoveTarget(ctx, config); err != nil {
+			return fmt.Errorf("remove target runtime and pairing identity: %w", err)
+		}
+		cameraCleanupCompleted = true
+	}
 	if err := s.store.DeleteTarget(ctx, id); err != nil {
 		return err
 	}
-	if s.runtime != nil {
+	if runtime != nil {
 		// Persistence is the source of truth for deletion. Runtime shutdown is
 		// best-effort here: Manager.Remove detaches and cancels the runtime
 		// before it can return a timeout, so a slow sidecar must not leave the
 		// already-deleted target visible in the in-memory projection.
-		_ = s.runtime.Remove(ctx, id)
+		if !cameraCleanupCompleted {
+			_ = runtime.Remove(ctx, id)
+		}
 	}
 	s.mu.Lock()
 	registration := s.targets[id]
@@ -625,7 +656,39 @@ func validateTarget(item domaintarget.Config) error {
 			}
 		}
 	}
-	if item.Type == "matter" {
+	if item.Type == "homekit-camera" {
+		if len(item.Devices) != 1 {
+			fields["devices"] = "must contain exactly one camera"
+		} else {
+			camera := item.Devices[0]
+			if camera.Type != device.TypeCamera {
+				fields["devices.0.type"] = "must be camera"
+			}
+			if len(camera.AuxiliarySourceDeviceIDs) != 0 {
+				fields["devices.0.auxiliarySourceDeviceIds"] = "HomeKit Camera does not support auxiliary sources"
+			}
+			if !camera.Enabled {
+				fields["devices.0.enabled"] = "camera publication must be enabled"
+			}
+		}
+	}
+	if item.Type == "matter-camera" {
+		if len(item.Devices) != 1 {
+			fields["devices"] = "must contain exactly one camera"
+		} else {
+			camera := item.Devices[0]
+			if camera.Type != device.TypeCamera {
+				fields["devices.0.type"] = "must be camera"
+			}
+			if len(camera.AuxiliarySourceDeviceIDs) != 0 {
+				fields["devices.0.auxiliarySourceDeviceIds"] = "Matter Camera does not support auxiliary sources"
+			}
+			if !camera.Enabled {
+				fields["devices.0.enabled"] = "camera publication must be enabled"
+			}
+		}
+	}
+	if domaintarget.IsMatterType(item.Type) {
 		config := item.MatterConfig
 		if config == nil {
 			fields["matterConfig"] = "required"
@@ -739,7 +802,7 @@ func (s *TargetService) List() []TargetInfo {
 			if descriptor.SupportsHomeKitPairing {
 				info.Paired = s.runtime.IsPaired(config)
 			}
-			if runtime, ok := s.runtime.(TargetRuntimeInfo); ok && config.Type == "matter" {
+			if runtime, ok := s.runtime.(TargetRuntimeInfo); ok && domaintarget.IsMatterType(config.Type) {
 				info = runtime.RuntimeInfo(config)
 				registration := s.targets[id]
 				registration.Info = info
@@ -779,7 +842,7 @@ func (s *TargetService) MatterQR(id string) ([]byte, error) {
 		}
 	}
 	s.mu.Unlock()
-	if !found || registration.Info.Type != "matter" || !registration.Info.CommissioningWindowOpen || registration.Info.SetupPayload == "" {
+	if !found || !domaintarget.IsMatterType(registration.Info.Type) || !registration.Info.CommissioningWindowOpen || registration.Info.SetupPayload == "" {
 		return nil, errors.New("Matter commissioning QR code not found")
 	}
 	png, err := qrcode.Encode(registration.Info.SetupPayload, qrcode.Medium, 320)
@@ -797,8 +860,8 @@ func (s *TargetService) OpenMatterCommissioningWindow(ctx context.Context, id st
 	if !found {
 		return TargetInfo{}, ErrTargetNotFound
 	}
-	if config.Type != "matter" {
-		return TargetInfo{}, errors.New("target is not a Matter bridge")
+	if !domaintarget.IsMatterType(config.Type) {
+		return TargetInfo{}, errors.New("target is not a Matter target")
 	}
 	if !ok {
 		return TargetInfo{}, errors.New("Matter runtime controls are unavailable")
@@ -920,8 +983,8 @@ func (s *TargetService) matterRuntime(id string) (MatterTargetRuntime, error) {
 	if !found {
 		return nil, ErrTargetNotFound
 	}
-	if config.Type != "matter" {
-		return nil, errors.New("target is not a Matter bridge")
+	if !domaintarget.IsMatterType(config.Type) {
+		return nil, errors.New("target is not a Matter target")
 	}
 	if !ok {
 		return nil, errors.New("Matter runtime controls are unavailable")
@@ -933,7 +996,7 @@ func (s *TargetService) applyMatterRegistration(id string, registration TargetRe
 	if err != nil {
 		return TargetInfo{}, err
 	}
-	registration.Info.ConsumerID = "matter"
+	registration.Info.ConsumerID = targetConsumerID(registration.Info.Type)
 	s.mu.Lock()
 	previous, found := s.targets[id]
 	if found && len(registration.QR) == 0 {
@@ -962,7 +1025,7 @@ func (s *TargetService) SetStatus(id, status string) {
 		return
 	}
 	registration.Info.Status = status
-	if config, exists := s.configs[id]; exists && config.Type == "matter" {
+	if config, exists := s.configs[id]; exists && domaintarget.IsMatterType(config.Type) {
 		if runtime, supported := s.runtime.(TargetRuntimeInfo); supported {
 			registration.Info = runtime.RuntimeInfo(config)
 			registration.Info.Status = status

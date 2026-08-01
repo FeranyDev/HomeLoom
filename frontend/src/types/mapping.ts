@@ -3,7 +3,7 @@ import type { Device, DeviceType, ParameterLevel, PropertyDefinition, PropertyVa
 export type MappingDirection = 'forward' | 'reverse'
 export type MappingTransformType = 'invert' | 'reciprocal' | 'int-number' | 'scale' | 'clamp' | 'enum' | 'unit' | 'range-enum' | 'enum-number' | 'threshold' | 'bool-number' | 'bool-enum' | 'enum-bool' | 'map-range' | 'round' | 'parse-number' | 'number-string'
 
-export interface MappingRangeBand { max?: number; value: string; reverse: number }
+interface MappingRangeBand { max?: number; value: string; reverse: number }
 
 export interface MappingTransform {
   type: MappingTransformType
@@ -50,7 +50,7 @@ export interface MappingBinding {
 	targetId?: string; consumerDeviceId?: string
 }
 
-export interface ModelPath { endpointId: string; capabilityId: string; propertyId: string }
+interface ModelPath { endpointId: string; capabilityId: string; propertyId: string }
 export interface ModelParameter {
   path: ModelPath; name: string; level: ParameterLevel; type: ValueType; unit?: string
   readable: boolean; writable: boolean; notifiable: boolean; enum?: string[]
@@ -95,5 +95,5 @@ export interface ModelEnumOverride {
 }
 
 export interface MappingPreviewRequest { profileId?: string; profile?: MappingProfile; direction: MappingDirection; value: PropertyValue | null }
-export interface MappingStep { index: number; transform: string; input: PropertyValue | null; output: PropertyValue }
+interface MappingStep { index: number; transform: string; input: PropertyValue | null; output: PropertyValue }
 export interface MappingPreviewResult { profileId: string; profileVersion: number; direction: MappingDirection; value: PropertyValue; steps: MappingStep[] }

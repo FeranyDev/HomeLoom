@@ -1,0 +1,12 @@
+# HomeLoom Camera Kernel upstream source lock
+
+repository = "https://github.com/AlexxIT/go2rtc"
+tag = "v1.9.14"
+commit = "b5948cfb25404cc5cb37b166ecaa2dca20b11d4b"
+license = "MIT"
+go_version = "1.24.0"
+
+# HomeLoom vendors the audited source and compiles only the capability allow-list
+# in main.go. The release build must never install or download a generic go2rtc
+# executable.
+integration = "homeloom-camera-kernel-source"

@@ -1,0 +1,171 @@
+package hap
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"sync"
+
+	"github.com/AlexxIT/go2rtc/pkg/hap/tlv8"
+)
+
+// Character - Aqara props order
+// Value should be omit for PW
+// Value may be empty for PR
+type Character struct {
+	Desc string `json:"description,omitempty"`
+
+	IID    uint64   `json:"iid"`
+	Type   string   `json:"type"`
+	Format string   `json:"format"`
+	Value  any      `json:"value,omitempty"`
+	Perms  []string `json:"perms"`
+
+	//MaxLen   int    `json:"maxLen,omitempty"`
+	//Unit     string `json:"unit,omitempty"`
+	//MinValue any    `json:"minValue,omitempty"`
+	//MaxValue any    `json:"maxValue,omitempty"`
+	//MinStep  any    `json:"minStep,omitempty"`
+	//ValidVal []any  `json:"valid-values,omitempty"`
+
+	listenersMu sync.Mutex
+	listeners   map[io.Writer]bool
+}
+
+func (c *Character) AddListener(w io.Writer) {
+	c.listenersMu.Lock()
+	defer c.listenersMu.Unlock()
+	if c.listeners == nil {
+		c.listeners = map[io.Writer]bool{}
+	}
+	c.listeners[w] = true
+}
+
+func (c *Character) RemoveListener(w io.Writer) {
+	c.listenersMu.Lock()
+	defer c.listenersMu.Unlock()
+	delete(c.listeners, w)
+
+	if len(c.listeners) == 0 {
+		c.listeners = nil
+	}
+}
+
+func (c *Character) NotifyListeners(ignore io.Writer) error {
+	c.listenersMu.Lock()
+	if c.listeners == nil {
+		c.listenersMu.Unlock()
+		return nil
+	}
+	listeners := make([]io.Writer, 0, len(c.listeners))
+	for listener := range c.listeners {
+		listeners = append(listeners, listener)
+	}
+	c.listenersMu.Unlock()
+
+	data, err := c.GenerateEvent()
+	if err != nil {
+		return err
+	}
+
+	for _, w := range listeners {
+		if w == ignore {
+			continue
+		}
+		if _, err = w.Write(data); err != nil {
+			// error not a problem - just remove listener
+			c.RemoveListener(w)
+		}
+	}
+
+	return nil
+}
+
+// GenerateEvent with raw HTTP headers
+func (c *Character) GenerateEvent() (data []byte, err error) {
+	v := JSONCharacters{
+		Value: []JSONCharacter{
+			{AID: DeviceAID, IID: c.IID, Value: c.Value},
+		},
+	}
+	if data, err = json.Marshal(v); err != nil {
+		return
+	}
+
+	res := http.Response{
+		StatusCode:    http.StatusOK,
+		ProtoMajor:    1,
+		ProtoMinor:    0,
+		Header:        http.Header{"Content-Type": []string{MimeJSON}},
+		ContentLength: int64(len(data)),
+		Body:          io.NopCloser(bytes.NewReader(data)),
+	}
+
+	buf := bytes.NewBuffer([]byte{0})
+	if err = res.Write(buf); err != nil {
+		return
+	}
+	copy(buf.Bytes(), "EVENT")
+
+	return buf.Bytes(), err
+}
+
+// Set new value and NotifyListeners
+func (c *Character) Set(v any) (err error) {
+	if err = c.Write(v); err != nil {
+		return
+	}
+	return c.NotifyListeners(nil)
+}
+
+// Write new value with right format
+func (c *Character) Write(v any) (err error) {
+	switch c.Format {
+	case "tlv8":
+		c.Value, err = tlv8.MarshalBase64(v)
+
+	case "bool":
+		switch v := v.(type) {
+		case bool:
+			c.Value = v
+		case float64:
+			c.Value = v != 0
+		}
+
+	case FormatUInt8:
+		switch v := v.(type) {
+		case uint8:
+			c.Value = v
+		case int:
+			c.Value = uint8(v)
+		case float64:
+			c.Value = uint8(v)
+		}
+	}
+	return
+}
+
+// ReadTLV8 value to right struct
+func (c *Character) ReadTLV8(v any) (err error) {
+	if s, ok := c.Value.(string); ok {
+		return tlv8.UnmarshalBase64(s, v)
+	}
+	return fmt.Errorf("hap: can't read value: %v", v)
+}
+
+func (c *Character) ReadBool() (bool, error) {
+	if v, ok := c.Value.(bool); ok {
+		return v, nil
+	}
+	return false, fmt.Errorf("hap: can't read value: %v", c.Value)
+}
+
+func (c *Character) String() string {
+	data, err := json.Marshal(c)
+	if err != nil {
+		return "ERROR"
+	}
+	return string(data)
+}

@@ -155,6 +155,41 @@ func (s *Store) MarkDeviceUnavailable(deviceID string, reason domainstate.Unavai
 	return changed
 }
 
+func (s *Store) MarkCapabilityUnavailable(
+	deviceID, endpointID, capabilityID string,
+	reason domainstate.UnavailableReason,
+	traceIDs ...string,
+) []domainstate.StateValue {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	changed := make([]domainstate.StateValue, 0)
+	traceID := ""
+	if len(traceIDs) > 0 {
+		traceID = traceIDs[0]
+	}
+	for key, value := range s.values {
+		if key.DeviceID != deviceID || key.EndpointID != endpointID || key.CapabilityID != capabilityID {
+			continue
+		}
+		quality := domainstate.QualityStale
+		if !value.Known {
+			quality = domainstate.QualityUnknown
+		}
+		if !value.Available && value.Quality == quality && value.UnavailableReason == reason {
+			continue
+		}
+		value.Quality = quality
+		value.Available = false
+		value.UnavailableReason = reason
+		value.TraceID = traceID
+		value.PendingCommandID = ""
+		value.Version++
+		s.values[key] = value
+		changed = append(changed, value)
+	}
+	return changed
+}
+
 func normalize(value domainstate.StateValue) domainstate.StateValue {
 	if value.Value.Kind != "" {
 		value.Known = true

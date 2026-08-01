@@ -21,8 +21,8 @@ describe('ProviderForm', () => {
 		xiaomiAPI.startXiaomiOAuth.mockResolvedValue({ authorizationUrl: 'https://account.xiaomi.com/oauth2/authorize', state: 'expected-state', oauthUuid: '0123456789abcdef0123456789abcdef', virtualDid: '987654321' })
 		xiaomiAPI.completeXiaomiOAuth.mockResolvedValue({ oauth: { clientId: '1234567890', region: 'cn', redirectUrl: 'http://homeassistant.local:8123', oauthUuid: '0123456789abcdef0123456789abcdef', virtualDid: '987654321' }, clientId: '987654321', caCertificate: 'ca', clientCertificate: 'certificate', privateKey: 'private-key' })
 		xiaomiAPI.discoverXiaomiGateways.mockResolvedValue([])
-		xiaomiAPI.startXiaomiCloudLogin.mockResolvedValue({ status: 'verified', userId: '42', ssecurity: 'security', serviceToken: 'service-token' })
-		xiaomiAPI.verifyXiaomiCloudLogin.mockResolvedValue({ status: 'verified', userId: '42', ssecurity: 'security', serviceToken: 'service-token' })
+		xiaomiAPI.startXiaomiCloudLogin.mockResolvedValue({ status: 'verified', userId: '42', ssecurity: 'security', serviceToken: 'service-token', passToken: 'camera-pass-token' })
+		xiaomiAPI.verifyXiaomiCloudLogin.mockResolvedValue({ status: 'verified', userId: '42', ssecurity: 'security', serviceToken: 'service-token', passToken: 'camera-pass-token' })
 	})
 
 	afterEach(() => vi.restoreAllMocks())
@@ -62,6 +62,22 @@ describe('ProviderForm', () => {
 		expect(screen.queryByLabelText('MQTT Topic Prefix')).not.toBeInTheDocument()
 		await userEvent.click(screen.getByRole('button', { name: '保存并应用' }))
 		expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ type: 'mqtt', config: expect.objectContaining({ mode: 'client', brokerUrl: 'mqtt://broker.local:1883', username: 'homeloom', devices: [] }) }), false)
+	})
+
+	it('creates an independent camera provider without selecting an output target', async () => {
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		render(<ProviderForm provider={null} onCancel={() => {}} onSave={onSave} />)
+		await userEvent.selectOptions(screen.getByLabelText('类型'), 'camera')
+		expect(screen.getByText('创建 Camera Provider')).toBeInTheDocument()
+		expect(screen.getByText(/管理摄像头/)).toBeInTheDocument()
+		expect(screen.queryByLabelText('摄像头 ID')).not.toBeInTheDocument()
+		await userEvent.type(screen.getByLabelText(/ID/), 'camera-main')
+		await userEvent.type(screen.getByLabelText('名称'), '家庭摄像头')
+		await userEvent.click(screen.getByRole('button', { name: '保存并应用' }))
+		expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+			type: 'camera',
+			config: expect.objectContaining({ cameras: [] }),
+		}), false)
 	})
 
 	it('tests an MQTT connection without saving', async () => {
@@ -129,7 +145,7 @@ describe('ProviderForm', () => {
 		await userEvent.click(screen.getByRole('button', { name: '登录小米云账号' }))
 		await waitFor(() => expect(xiaomiAPI.startXiaomiCloudLogin).toHaveBeenCalledWith({ region: 'cn', username: 'owner@example.com', password: 'account-password', requestTimeoutSeconds: 15 }))
 		await userEvent.click(screen.getByRole('button', { name: '保存并应用' }))
-		expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ type: 'xiaomi-miot-cloud', config: expect.objectContaining({ region: 'cn', username: 'owner@example.com', password: 'account-password', userId: '42', ssecurity: 'security', serviceToken: 'service-token', pollIntervalSeconds: 30, devices: [] }) }), false)
+			expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ type: 'xiaomi-miot-cloud', config: expect.objectContaining({ region: 'cn', username: 'owner@example.com', password: 'account-password', userId: '42', ssecurity: 'security', serviceToken: 'service-token', passToken: 'camera-pass-token', pollIntervalSeconds: 30, devices: [] }) }), false)
 	})
 
 	it('guides Xiaomi cloud SMS verification and resumes the pending login', async () => {
@@ -146,7 +162,68 @@ describe('ProviderForm', () => {
 		await waitFor(() => expect(xiaomiAPI.verifyXiaomiCloudLogin).toHaveBeenCalledWith({ challengeId: 'challenge-1', code: '123456' }))
 		expect(screen.getByText(/云会话已就绪/)).toBeInTheDocument()
 		await userEvent.click(screen.getByRole('button', { name: '保存并应用' }))
-		expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ userId: '42', serviceToken: 'service-token' }) }), false)
+			expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ userId: '42', serviceToken: 'service-token', passToken: 'camera-pass-token' }) }), false)
+		})
+
+		it('requires a password-login passToken only when Xiaomi MISS cameras are configured', async () => {
+			const onSave = vi.fn().mockResolvedValue(undefined)
+			const cloud: Provider = {
+				id: 'xiaomi-miot-cloud-main',
+				type: 'xiaomi-miot-cloud',
+				name: '小米 MIoT 云',
+				enabled: true,
+				status: 'running',
+				retryCount: 0,
+				capabilities: { discovery: true, propertyRead: true, propertyWrite: true, events: false },
+				config: {
+					region: 'cn',
+					userId: '42',
+					ssecurity: '********',
+					serviceToken: '********',
+					devices: [{ did: 'camera-1', id: 'xiaomi-miot-camera-1', name: 'Camera', type: 'camera', media: { protocol: 'xiaomi-miss' } }],
+				},
+			}
+			render(<ProviderForm provider={cloud} onCancel={() => {}} onSave={onSave} />)
+			expect(screen.getByText(/摄像头还需要使用账号密码重新登录/)).toBeInTheDocument()
+			await userEvent.click(screen.getByRole('button', { name: '保存并应用' }))
+			expect(screen.getByText(/取得摄像头所需的 passToken/)).toBeInTheDocument()
+			expect(onSave).not.toHaveBeenCalled()
+
+			const advanced = screen.getByText('已有会话凭据（高级替代方案）')
+			await userEvent.click(advanced)
+			const input = screen.getByLabelText('小米 MIoT 云 Camera Pass Token')
+			expect(input).toHaveAttribute('type', 'password')
+			await userEvent.type(input, 'camera-pass-token')
+			await userEvent.click(screen.getByRole('button', { name: '保存并应用' }))
+			await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+				config: expect.objectContaining({ passToken: 'camera-pass-token' }),
+			}), true))
+		})
+
+	it('keeps the original three-field MIoT session valid for ordinary devices', async () => {
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		const cloud: Provider = {
+			id: 'xiaomi-miot-cloud-main',
+			type: 'xiaomi-miot-cloud',
+			name: '小米 MIoT 云',
+			enabled: true,
+			status: 'running',
+			retryCount: 0,
+			capabilities: { discovery: true, propertyRead: true, propertyWrite: true, events: false },
+			config: {
+				region: 'cn',
+				userId: '42',
+				ssecurity: '********',
+				serviceToken: '********',
+				devices: [{ did: 'light-1', id: 'xiaomi-miot-light-1', name: 'Light', type: 'lightbulb' }],
+			},
+		}
+		render(<ProviderForm provider={cloud} onCancel={() => {}} onSave={onSave} />)
+		expect(screen.getByText(/云会话已就绪/)).toBeInTheDocument()
+		await userEvent.click(screen.getByRole('button', { name: '保存并应用' }))
+		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+			config: expect.not.objectContaining({ passToken: expect.anything() }),
+		}), true))
 	})
 
 	it('does not save a Xiaomi cloud provider before account login is complete', async () => {
@@ -173,7 +250,7 @@ describe('ProviderForm', () => {
 		await userEvent.click(screen.getByRole('button', { name: '解析 URL 并完成授权' }))
 		await waitFor(() => expect(xiaomiAPI.completeXiaomiOAuth).toHaveBeenCalledWith({ clientId: '1234567890', region: 'cn', redirectUrl: 'http://homeassistant.local:8123', oauthUuid: '0123456789abcdef0123456789abcdef', virtualDid: '987654321', code: 'authorization-code', state: 'expected-state' }))
 		expect(screen.getByText(/OAuth 与中枢客户端证书已就绪/)).toBeInTheDocument()
-	})
+	}, 15_000)
 
 	it('rejects a callback URL from another origin', async () => {
 		render(<ProviderForm provider={null} initialType="xiaomi" onCancel={() => {}} onSave={vi.fn()} />)

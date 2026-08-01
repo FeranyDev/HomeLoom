@@ -30,6 +30,29 @@ func TestUnknownNullAndUnavailableRetainsLastValue(t *testing.T) {
 	}
 }
 
+func TestMarkCapabilityUnavailableDoesNotAffectMedia(t *testing.T) {
+	store := NewStore()
+	now := time.Now().UTC()
+	for _, capability := range []string{"media", "privacy"} {
+		store.Apply(domainstate.StateValue{
+			Key:   domainstate.Key{DeviceID: "camera", EndpointID: "main", CapabilityID: capability, PropertyID: "enabled"},
+			Value: domainstate.BoolValue(true), ProviderID: "camera-provider", Source: domainstate.SourceReported,
+			ObservedAt: now, ReceivedAt: now, Quality: domainstate.QualityReported,
+		})
+	}
+	changed := store.MarkCapabilityUnavailable(
+		"camera", "main", "privacy", domainstate.UnavailableControlProviderOffline,
+	)
+	if len(changed) != 1 || changed[0].Key.CapabilityID != "privacy" ||
+		changed[0].Available || changed[0].UnavailableReason != domainstate.UnavailableControlProviderOffline {
+		t.Fatalf("changed states = %#v", changed)
+	}
+	media, _ := store.Get(domainstate.Key{DeviceID: "camera", EndpointID: "main", CapabilityID: "media", PropertyID: "enabled"})
+	if !media.Available || media.UnavailableReason != "" {
+		t.Fatalf("media state was degraded = %#v", media)
+	}
+}
+
 func TestApplyRejectsOlderSequenceFromSameProvider(t *testing.T) {
 	store := NewStore()
 	now := time.Now().UTC()

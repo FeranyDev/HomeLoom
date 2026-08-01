@@ -272,6 +272,7 @@ test("all Catalog types construct official endpoints and bridge state", async (t
       "WindowCovering.GoToLiftPercentage",
       "WindowCovering.StopMotion",
       "DoorLock.LockDoor",
+      "ValveConfigurationAndControl.Close",
       "DoorLock.UnlockDoor",
     ],
   );

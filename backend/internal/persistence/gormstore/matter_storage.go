@@ -42,7 +42,7 @@ func (s *Store) requireMatterTarget(tx *gorm.DB, targetID string, lock bool) err
 		}
 		return fmt.Errorf("read Matter target %q: %w", targetID, err)
 	}
-	if row.Type != "matter" {
+	if !target.IsMatterType(row.Type) {
 		return fmt.Errorf("target %q is not a Matter target", targetID)
 	}
 	return nil

@@ -30,6 +30,15 @@ type renewalRuntime struct {
 
 type diagnosticRuntime struct{}
 
+type configOnlyProvider struct{ id string }
+
+func (p *configOnlyProvider) Manifest() providersdk.Manifest {
+	return providersdk.Manifest{ID: p.id, Type: "catalog", Name: p.id}
+}
+func (*configOnlyProvider) Capabilities() providersdk.Capabilities { return providersdk.Capabilities{} }
+func (*configOnlyProvider) Initialize(context.Context) error       { return nil }
+func (*configOnlyProvider) Close(context.Context) error            { return nil }
+
 func (*diagnosticRuntime) Apply(context.Context, providersdk.Provider) error { return nil }
 func (*diagnosticRuntime) Remove(context.Context, string) error              { return nil }
 func (*diagnosticRuntime) ProviderInfos() []providersdk.RuntimeInfo {
@@ -144,6 +153,11 @@ func TestProviderServiceAppliesDisablesAndDeletes(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := application.NewProviderService(nil, store, factory, runtime)
+	var changed []string
+	service.SetChangeHandler(func(_ context.Context, item providerconfig.Config, deleted bool) error {
+		changed = append(changed, item.ID+":"+map[bool]string{false: "saved", true: "deleted"}[deleted])
+		return nil
+	})
 	info, err := service.Save(ctx, providerconfig.Config{ID: "virtual-lab", Type: "virtual", Name: "Lab", Enabled: true})
 	if err != nil || info.Status != "running" {
 		t.Fatalf("save = %#v, %v", info, err)
@@ -160,6 +174,73 @@ func TestProviderServiceAppliesDisablesAndDeletes(t *testing.T) {
 	}
 	if len(service.List()) != 0 || len(store.items) != 0 {
 		t.Fatal("provider was not deleted")
+	}
+	if strings.Join(changed, ",") != "virtual-lab:saved,virtual-lab:saved,virtual-lab:deleted" {
+		t.Fatalf("change callbacks = %#v", changed)
+	}
+}
+
+func TestProviderServiceProtectsCameraControlAndCredentialReferences(t *testing.T) {
+	ctx := context.Background()
+	source := providerconfig.Config{
+		ID: "xiaomi-main", Type: "xiaomi", Name: "Xiaomi", Enabled: false,
+		Config: json.RawMessage(`{"devices":[{"id":"camera-source"},{"id":"other"}]}`),
+	}
+	camera := providerconfig.Config{
+		ID: "camera-main", Type: "camera", Name: "Cameras", Enabled: false,
+		Config: json.RawMessage(`{"cameras":[{"id":"camera","control":{"providerRef":"xiaomi-main","deviceId":"camera-source"},"xiaomi":{"credentialProviderRef":"xiaomi-main"}}]}`),
+	}
+	store := &providerStore{items: map[string]providerconfig.Config{source.ID: source, camera.ID: camera}}
+	factory := providersdk.NewFactory()
+	if err := factory.Register("xiaomi", func(item providerconfig.Config) (providersdk.Provider, error) {
+		return &configOnlyProvider{id: item.ID}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service := application.NewProviderService([]providerconfig.Config{source, camera}, store, factory, &diagnosticRuntime{})
+	if err := service.Delete(ctx, source.ID); err == nil || !strings.Contains(err.Error(), "referenced") {
+		t.Fatalf("delete referenced provider error = %v", err)
+	}
+	if _, exists := store.items[source.ID]; !exists {
+		t.Fatal("referenced provider was deleted from durable store")
+	}
+	replacement := source
+	replacement.Config = json.RawMessage(`{"devices":[{"id":"other"}]}`)
+	if _, err := service.Save(ctx, replacement); err == nil || !strings.Contains(err.Error(), "still referenced") {
+		t.Fatalf("remove referenced device error = %v", err)
+	}
+	if !strings.Contains(string(store.items[source.ID].Config), "camera-source") {
+		t.Fatal("referenced source device removal was persisted")
+	}
+}
+
+func TestConfiguredProviderDeviceIDs(t *testing.T) {
+	tests := []struct {
+		name          string
+		config        providerconfig.Config
+		want          []string
+		authoritative bool
+	}{
+		{name: "ordinary provider", config: providerconfig.Config{Type: "xiaomi", Config: json.RawMessage(`{"devices":[{"id":"one"},{"id":"two"},{"id":" "}]}`)}, want: []string{"one", "two"}, authoritative: true},
+		{name: "camera provider", config: providerconfig.Config{Type: "camera", Config: json.RawMessage(`{"cameras":[{"id":"camera-one"}]}`)}, want: []string{"camera-one"}, authoritative: true},
+		{name: "missing device list", config: providerconfig.Config{Type: "discovery", Config: json.RawMessage(`{"host":"localhost"}`)}},
+		{name: "invalid device list", config: providerconfig.Config{Type: "xiaomi", Config: json.RawMessage(`{"devices":null}`)}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, authoritative := application.ConfiguredProviderDeviceIDs(test.config)
+			if authoritative != test.authoritative {
+				t.Fatalf("authoritative = %v, want %v", authoritative, test.authoritative)
+			}
+			for _, id := range test.want {
+				if _, exists := got[id]; !exists {
+					t.Fatalf("device IDs = %#v, missing %q", got, id)
+				}
+			}
+			if len(got) != len(test.want) {
+				t.Fatalf("device IDs = %#v, want %#v", got, test.want)
+			}
+		})
 	}
 }
 

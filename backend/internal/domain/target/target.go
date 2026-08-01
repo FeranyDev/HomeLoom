@@ -17,13 +17,20 @@ type TypeDescriptor struct {
 }
 
 var builtInTypeDescriptors = map[string]TypeDescriptor{
-	"apple-hap": {Type: "apple-hap", ConsumerID: "homekit", DefaultIDPrefix: "apple", DefaultName: "HomeLoom Apple Home Bridge", SupportsHomeKitPairing: true},
-	"matter":    {Type: "matter", ConsumerID: "matter", DefaultIDPrefix: "matter", DefaultName: "HomeLoom Matter Bridge"},
+	"apple-hap":      {Type: "apple-hap", ConsumerID: "homekit", DefaultIDPrefix: "apple", DefaultName: "HomeLoom Apple Home Bridge", SupportsHomeKitPairing: true},
+	"homekit-camera": {Type: "homekit-camera", ConsumerID: "homekit-camera", DefaultIDPrefix: "camera-homekit", DefaultName: "HomeLoom HomeKit Camera", SupportsHomeKitPairing: true},
+	"matter":         {Type: "matter", ConsumerID: "matter", DefaultIDPrefix: "matter", DefaultName: "HomeLoom Matter Bridge"},
+	"matter-camera":  {Type: "matter-camera", ConsumerID: "matter-camera", DefaultIDPrefix: "camera-matter", DefaultName: "HomeLoom Matter Camera"},
 }
 
 func DescriptorForType(value string) (TypeDescriptor, bool) {
 	descriptor, found := builtInTypeDescriptors[value]
 	return descriptor, found
+}
+
+// IsMatterType reports whether a target owns an independent Matter runtime.
+func IsMatterType(value string) bool {
+	return value == "matter" || value == "matter-camera"
 }
 
 // VirtualDevice is a Consumer-side device owned by one Target instance. It
@@ -105,7 +112,7 @@ type Config struct {
 // protocols to which they do not belong. It deliberately returns a copy.
 func (c Config) NormalizeProtocolConfig() Config {
 	switch c.Type {
-	case "", "apple-hap":
+	case "", "apple-hap", "homekit-camera":
 		homekit := HomeKitConfig{}
 		if c.HomeKitConfig != nil {
 			homekit = *c.HomeKitConfig
@@ -125,7 +132,7 @@ func (c Config) NormalizeProtocolConfig() Config {
 		c.HomeKitConfig = &homekit
 		c.MatterConfig = nil
 		c.Address, c.Pin, c.SetupID, c.StorePath = homekit.Address, homekit.Pin, homekit.SetupID, homekit.StorePath
-	case "matter":
+	case "matter", "matter-camera":
 		c.HomeKitConfig = nil
 		c.Address, c.Pin, c.SetupID, c.StorePath = "", "", "", ""
 	}

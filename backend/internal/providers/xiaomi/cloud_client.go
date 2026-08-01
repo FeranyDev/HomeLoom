@@ -33,6 +33,7 @@ type cloudLoginAuth struct {
 	Location        string `json:"location"`
 	UserID          any    `json:"userId"`
 	Ssecurity       string `json:"ssecurity"`
+	PassToken       string `json:"passToken"`
 	NotificationURL string `json:"notificationUrl"`
 	CaptchaURL      string `json:"captchaUrl"`
 	Code            int    `json:"code"`
@@ -83,6 +84,7 @@ type httpMiotCloudClient struct {
 	userID       string
 	ssecurity    string
 	serviceToken string
+	passToken    string
 }
 
 func newHTTPMiotCloudClient(config CloudConfig) *httpMiotCloudClient {
@@ -94,7 +96,7 @@ func newHTTPMiotCloudClient(config CloudConfig) *httpMiotCloudClient {
 	return &httpMiotCloudClient{
 		config: config, http: &http.Client{Jar: jar, Timeout: config.requestTimeout()},
 		accountBase: "https://account.xiaomi.com", apiBase: base,
-		userID: config.UserID, ssecurity: config.Ssecurity, serviceToken: config.ServiceToken,
+		userID: config.UserID, ssecurity: config.Ssecurity, serviceToken: config.ServiceToken, passToken: config.PassToken,
 	}
 }
 
@@ -151,6 +153,9 @@ func (c *httpMiotCloudClient) loginLocked(ctx context.Context, acceptStepOneSess
 			return fmt.Errorf("Xiaomi account requires captcha verification: %s", c.accountURL(auth.CaptchaURL))
 		}
 		return fmt.Errorf("Xiaomi cloud login rejected (code %d): %s", auth.Code, auth.Description)
+	}
+	if auth.PassToken != "" {
+		c.passToken = auth.PassToken
 	}
 	return c.completeLoginLocked(ctx, auth)
 }
@@ -209,6 +214,12 @@ func (c *httpMiotCloudClient) session() (string, string, string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.userID, c.ssecurity, c.serviceToken
+}
+
+func (c *httpMiotCloudClient) mediaSession() (string, string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.userID, c.passToken
 }
 
 func (c *httpMiotCloudClient) VerifyIdentity(ctx context.Context, verificationURL, ticket string) error {
@@ -338,6 +349,10 @@ func (c *httpMiotCloudClient) collectSessionCookies(cookies []*http.Cookie) {
 		case "userId":
 			if cookie.Value != "" {
 				c.userID = cookie.Value
+			}
+		case "passToken":
+			if cookie.Value != "" {
+				c.passToken = cookie.Value
 			}
 		}
 	}
@@ -608,6 +623,55 @@ func (c *httpMiotCloudClient) SetProperties(ctx context.Context, input []cloudPr
 func (c *httpMiotCloudClient) Action(ctx context.Context, input cloudAction) error {
 	var result json.RawMessage
 	return c.request(ctx, "miotspec/action", input, &result, true)
+}
+
+func (c *httpMiotCloudClient) AcquireMISSAuthorization(ctx context.Context, did, clientPublic string) (xiaomiMISSAuthorization, error) {
+	var result struct {
+		Vendor struct {
+			ID     byte `json:"vendor"`
+			Params struct {
+				UID string `json:"p2p_id"`
+			} `json:"vendor_params"`
+		} `json:"vendor"`
+		PublicKey string `json:"public_key"`
+		Sign      string `json:"sign"`
+	}
+	err := c.request(ctx, "v2/device/miss_get_vendor", map[string]any{
+		"app_pubkey":      clientPublic,
+		"did":             did,
+		"support_vendors": "TUTK_CS2_MTP",
+	}, &result, true)
+	if err != nil {
+		return xiaomiMISSAuthorization{}, err
+	}
+	vendor, err := xiaomiMISSVendorName(result.Vendor.ID)
+	if err != nil {
+		return xiaomiMISSAuthorization{}, err
+	}
+	if result.PublicKey == "" || result.Sign == "" {
+		return xiaomiMISSAuthorization{}, errors.New("Xiaomi MISS authorization response is incomplete")
+	}
+	return xiaomiMISSAuthorization{
+		DevicePublic: result.PublicKey,
+		Sign:         result.Sign,
+		Vendor:       vendor,
+		UID:          result.Vendor.Params.UID,
+	}, nil
+}
+
+func xiaomiMISSVendorName(value byte) (string, error) {
+	switch value {
+	case 1:
+		return "tutk", nil
+	case 3:
+		return "agora", nil
+	case 4:
+		return "cs2", nil
+	case 6:
+		return "mtp", nil
+	default:
+		return "", fmt.Errorf("Xiaomi MISS returned unsupported vendor %d", value)
+	}
 }
 
 func (c *httpMiotCloudClient) request(ctx context.Context, api string, payload, output any, retry bool) error {

@@ -73,5 +73,58 @@ describe('TargetCard', () => {
 		expect(screen.getByText('consumer "homekit" requires parameter main/switch/power')).toBeInTheDocument()
 		expect(screen.getByText(/已跳过配件 1/)).toBeInTheDocument()
 	})
-})
 
+	it('shows a manual pairing code and opens device-center preview for an independent HomeKit Camera target', async () => {
+		const camera: Target = {
+			id: 'camera-homekit-1', type: 'homekit-camera', name: '客厅摄像头', enabled: true, status: 'running',
+			config: { address: ':52431' }, pairing: { pairingCode: '123-45-678', paired: false },
+			deviceIds: ['xiaomi-camera-1'],
+			devices: [{ id: 'xiaomi-camera-1', name: '客厅摄像头', type: 'camera', sourceDeviceId: 'xiaomi-camera-1', enabled: true }],
+		}
+		const sourceDevice = {
+			schemaVersion: 1, id: 'xiaomi-camera-1', providerId: 'camera-30f90b', name: '客厅摄像头',
+			type: 'camera', availability: 'online' as const, online: true, endpoints: [], lastUpdateAt: '2026-07-26T00:00:00Z',
+		}
+		const onPreviewCamera = vi.fn()
+		render(<TargetCard target={camera} sourceDevice={sourceDevice} onPreviewCamera={onPreviewCamera} {...callbacks()} />)
+		expect(screen.getByText('手动配对码：123-45-678')).toBeInTheDocument()
+		expect(screen.getByText('客厅摄像头 · camera-30f90b')).toBeInTheDocument()
+		expect(screen.getByText('在线')).toBeInTheDocument()
+		expect(screen.getByRole('button', { name: '设备中心实时预览' })).toBeInTheDocument()
+		await userEvent.click(screen.getByRole('button', { name: '设备中心实时预览' }))
+		expect(onPreviewCamera).toHaveBeenCalledWith(sourceDevice)
+		expect(screen.queryByRole('button', { name: '配置消费端设备' })).not.toBeInTheDocument()
+		expect(screen.queryByRole('button', { name: '重新生成 HomeKit 配对参数' })).not.toBeInTheDocument()
+	})
+
+	it('shows Matter Camera source, experimental warning, and Matter commissioning actions without HomeKit PIN', async () => {
+		const camera: MatterTarget = {
+			id: 'camera-matter-1', type: 'matter-camera', name: '门口 Matter 摄像头', enabled: true, status: 'running',
+			config: { commissioningWindowSeconds: 600 },
+			commissioning: { state: 'window-open', windowOpen: true, manualPairingCode: '349701123' },
+			fabricCount: 0, endpointCount: 1, certification: 'test',
+			deviceIds: ['front-camera'],
+			devices: [{ id: 'front-camera', name: '门口摄像头', type: 'camera', sourceDeviceId: 'front-camera', enabled: true }],
+		}
+		const sourceDevice = {
+			schemaVersion: 1, id: 'front-camera', providerId: 'camera-main', name: '门口摄像头',
+			type: 'camera', availability: 'online' as const, online: true, endpoints: [], lastUpdateAt: '2026-07-29T00:00:00Z',
+		}
+		const onPreviewCamera = vi.fn()
+		const onEnabledChange = vi.fn()
+		render(<TargetCard target={camera} sourceDevice={sourceDevice} onPreviewCamera={onPreviewCamera} {...callbacks()} onMatterCommissioningToggle={vi.fn()} onFactoryResetMatter={vi.fn()} onEnabledChange={onEnabledChange} />)
+		expect(screen.getByText('实验性 Controller 兼容 · 不保证 Apple Home')).toBeInTheDocument()
+		expect(screen.getByText('门口摄像头 · camera-main')).toBeInTheDocument()
+		expect(screen.getByRole('img', { name: /Matter 配网二维码/ })).toHaveAttribute('src', '/api/v1/targets/camera-matter-1/commissioning-qr')
+		expect(screen.getByRole('button', { name: '关闭配网窗口' })).toBeInTheDocument()
+		expect(screen.getByRole('button', { name: '设备中心实时预览' })).toBeInTheDocument()
+		expect(screen.getByRole('button', { name: '停用发布' })).toBeInTheDocument()
+		expect(screen.getByRole('button', { name: '删除' })).toBeInTheDocument()
+		expect(screen.queryByText(/HomeKit.*PIN/)).not.toBeInTheDocument()
+		expect(screen.queryByRole('button', { name: '配置消费端设备' })).not.toBeInTheDocument()
+		await userEvent.click(screen.getByRole('button', { name: '设备中心实时预览' }))
+		expect(onPreviewCamera).toHaveBeenCalledWith(sourceDevice)
+		await userEvent.click(screen.getByRole('button', { name: '停用发布' }))
+		expect(onEnabledChange).toHaveBeenCalledWith(camera, false)
+	})
+})

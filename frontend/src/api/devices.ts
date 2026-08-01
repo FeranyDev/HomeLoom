@@ -43,7 +43,3 @@ export async function simulateDevice(id: string, values: { availability?: Device
     method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values),
   })
 }
-
-export function subscribeDevices(onDevice: (device: Device) => void, onConnection?: (connected: boolean) => void): () => void {
-	return subscribeEvents({ onDevice, onConnection })
-}

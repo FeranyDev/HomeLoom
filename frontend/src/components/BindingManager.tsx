@@ -86,7 +86,7 @@ function compareEnumDomains(sourceDefinition?: EnumDomain, targetDefinition?: En
 
 function providerProperties(devices: Device[], metadata: SourceCatalogMetadata): ProviderProperty[] {
   const inferKnown = metadata.source === 'provider-discovery' || metadata.source === 'device-snapshot' || metadata.source === 'unified-registry-fallback'
-  return devices.flatMap((item) => item.endpoints.flatMap((endpoint) => endpoint.capabilities.flatMap((capability) => capability.properties.map((property) => ({
+  return (devices ?? []).flatMap((item) => (item.endpoints ?? []).flatMap((endpoint) => (endpoint.capabilities ?? []).flatMap((capability) => (capability.properties ?? []).map((property) => ({
     key: `${item.providerId}/${item.id}/${endpoint.id}/${capability.id}/${property.definition.id}`,
     providerId: item.providerId, deviceId: item.id, deviceName: item.name, deviceType: item.type,
     endpointId: endpoint.id, capabilityId: capability.id, propertyId: property.definition.id, definition: property.definition,
@@ -216,8 +216,8 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
   const catalogDevice = catalog.providers.find((item) => item.providerId === device.providerId && item.id === device.id) ?? fallbackCatalogDevice
   const catalogMetadata = catalogDevice.catalog ?? fallbackMetadata
   const sources = useMemo(() => providerProperties([catalogDevice], catalogMetadata), [catalogDevice, catalogMetadata])
-  const sourceCommands = catalogDevice.endpoints.flatMap((endpoint) => endpoint.capabilities.flatMap((capability) => capability.commands?.map((command) => ({ endpoint, capability, command })) ?? []))
-  const sourceEvents = catalogDevice.endpoints.flatMap((endpoint) => endpoint.capabilities.flatMap((capability) => capability.events?.map((event) => ({ endpoint, capability, event })) ?? []))
+  const sourceCommands = (catalogDevice.endpoints ?? []).flatMap((endpoint) => (endpoint.capabilities ?? []).flatMap((capability) => capability.commands?.map((command) => ({ endpoint, capability, command })) ?? []))
+  const sourceEvents = (catalogDevice.endpoints ?? []).flatMap((endpoint) => (endpoint.capabilities ?? []).flatMap((capability) => capability.events?.map((event) => ({ endpoint, capability, event })) ?? []))
   const source = sources.find((item) => item.key === sourceKey)
   const consumerDevice = catalogDevice
   const effectiveType = stage === 'provider' ? source?.deviceType ?? device.type : consumerDevice.type
@@ -225,8 +225,8 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
   const model = catalog.models.find((item) => item.deviceType === effectiveType)
   const parameters = useMemo(() => orderModelParameters(model?.parameters ?? []), [model])
   const modelParameter = parameters.find((item) => pathKey(item.path) === modelKey)
-  const consumerCatalogs = consumerId ? catalog.consumers.filter((item) => item.id === consumerId) : catalog.consumers
-  const consumers = consumerCatalogs.flatMap((item) => item.properties.map((property) => ({ consumer: item, property }))).filter((item) => item.property.deviceType === targetConsumerType)
+  const consumerCatalogs = consumerId ? (catalog.consumers ?? []).filter((item) => item.id === consumerId) : (catalog.consumers ?? [])
+  const consumers = consumerCatalogs.flatMap((item) => (item.properties ?? []).map((property) => ({ consumer: item, property }))).filter((item) => item.property.deviceType === targetConsumerType)
 	const matterConsumerGroups = consumers.filter((item) => item.consumer.id === 'matter').reduce<Array<{ cluster: string; items: typeof consumers }>>((groups, item) => {
 		const cluster = matterMember(item.property).cluster
 		const group = groups.find((candidate) => candidate.cluster === cluster)
@@ -246,7 +246,7 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
   const enumTargetOnlyHint = stage === 'provider' ? '此设备不能反向写入这些值。' : '统一模型不能写入这些值。'
   const enumPartialLabel = stage === 'provider' ? '部分兼容，存在模型独有值' : '部分兼容，存在消费端独有值'
 
-  const compatibleProfiles = profiles.filter((item) => item.inputType === inputType && item.outputType === outputType && !item.transforms.some((transform) => transform.type === 'clamp') && (stage === 'provider' ? item.kind !== 'target' : item.kind !== 'provider'))
+  const compatibleProfiles = profiles.filter((item) => item.inputType === inputType && item.outputType === outputType && !(item.transforms ?? []).some((transform) => transform.type === 'clamp') && (stage === 'provider' ? item.kind !== 'target' : item.kind !== 'provider'))
   const selectedProfile = profiles.find((item) => item.id === profileId)
   const numericSource = stage === 'provider' ? source?.definition : modelParameter
   const numericTarget = stage === 'provider' ? modelParameter : consumer?.property
@@ -392,7 +392,7 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
       </section>
     </div>
     <div className={`mapping-route-toolbar ${editingID || editingDefaultKey ? 'is-editing' : ''}`}>
-      <div className="mapping-profile-field"><label>转换配置（Profile）<select aria-label="映射转换 Profile" value={profileId} onChange={(event) => setProfileId(event.target.value)}><option value="">恒等转换（identity）· 不转换</option>{compatibleProfiles.map((item) => <option key={item.id} value={item.id}>{item.id} · {item.transforms.map((transform) => transform.type).join(' → ') || 'identity'}</option>)}</select></label><button type="button" className="mapping-profile-refresh" aria-label="刷新转换配置列表" title="重新加载可用 Profile" onClick={() => void refresh()} disabled={saving}>刷新</button></div>
+      <div className="mapping-profile-field"><label>转换配置（Profile）<select aria-label="映射转换 Profile" value={profileId} onChange={(event) => setProfileId(event.target.value)}><option value="">恒等转换（identity）· 不转换</option>{compatibleProfiles.map((item) => <option key={item.id} value={item.id}>{item.id} · {(item.transforms ?? []).map((transform) => transform.type).join(' → ') || 'identity'}</option>)}</select></label><button type="button" className="mapping-profile-refresh" aria-label="刷新转换配置列表" title="重新加载可用 Profile" onClick={() => void refresh()} disabled={saving}>刷新</button></div>
       <div className="mapping-route-actions"><small>{editingDefaultKey ? '正在修改默认映射；保存后写入当前设备的独立覆盖。' : editingID ? `正在编辑数据库路由 ${editingID}` : inputType && outputType ? `类型：${valueTypeLabel(inputType)} → ${valueTypeLabel(outputType)}；同一来源可继续映射到其他模型属性。` : '请选择两端属性'}</small>{showProfileJump && enumCompatibility.kind === 'none' && <button type="button" onClick={openProfileForCurrentMismatch}>去配置转换 Profile</button>}{(editingID || editingDefaultKey) && <button onClick={clearEditing}>取消编辑</button>}<button className="add-button" disabled={saving || !modelParameter || (stage === 'provider' ? !source : !consumer || !consumerDevice) || (!profileId && inputType !== outputType) || enumProfileRequired} onClick={() => void save()}>{saving ? '保存中…' : editingDefaultKey ? '保存默认映射覆盖' : editingID ? '保存路由修改' : `＋ 保存第 ${stage === 'provider' ? '一' : '二'} 段路由`}</button></div>
       {showNumericRange && <div className="numeric-range-comparison" role="status"><header><strong>数值范围（NUMERIC RANGE）</strong><span>最终范围由两端约束取交集</span></header><section><small>{stage === 'provider' ? '来源范围（Provider）' : '统一模型范围（Model）'}</small><code>{numericRangeText(numericSource)}</code></section><i>→</i><section><small>转换后范围</small><code>{projectedNumericSource ? numericRangeText(projectedNumericSource) : '无法静态推导'}</code></section><i>∩</i><section><small>{stage === 'provider' ? '统一模型范围（Model）' : `${consumer?.consumer.name ?? '消费端'}范围（Consumer）`}</small><code>{numericRangeText(numericTarget)}</code></section><i>=</i><section className={effectiveNumericRange ? 'is-effective' : 'is-empty'}><small>最终有效范围</small><code>{effectiveNumericRange ? numericRangeText(effectiveNumericRange) : '无有效交集'}</code></section></div>}
       {enumCompatibility.kind !== 'none' && <div className={`enum-compatibility is-${profileId ? 'profile' : enumCompatibility.kind}`} role="status"><header><strong>枚举值域检查（ENUM DOMAIN）</strong><span>{profileId ? `由 Profile ${profileId} 转换` : enumCompatibility.kind === 'exact' ? '完全一致，可直接映射' : enumCompatibility.kind === 'normalized' ? '仅格式差异，可自动对齐' : enumCompatibility.kind === 'partial' ? enumPartialLabel : '语义不一致，需要 Profile'}</span></header><div className="enum-domain-comparison"><section><small>{enumSourceLabel}</small><div>{enumCompatibility.source.map((item) => <code key={item}>{item}</code>)}</div></section><i>→</i><section><small>{enumTargetLabel}</small><div>{enumCompatibility.target.map((item) => <code key={item}>{item}</code>)}</div></section></div><div className="enum-pair-list">{enumCompatibility.pairs.map((item) => <span key={`${item.source}/${item.target}`}><code>{item.source}</code> → <code>{item.target}</code></span>)}</div>{!profileId && enumCompatibility.targetOnly.length > 0 && <p>{enumTargetOnlyLabel}：<code>{enumCompatibility.targetOnly.join(' / ')}</code>；{enumTargetOnlyHint}</p>}{!profileId && enumCompatibility.sourceOnly.length > 0 && <p>无法自动对齐：<code>{enumCompatibility.sourceOnly.join(' / ')}</code>；请选择枚举转换 Profile 后保存。</p>}{showProfileJump && <div className="mapping-profile-jump"><button type="button" className="add-button" onClick={openProfileForCurrentMismatch}>去配置转换 Profile</button><small>将按当前两端类型与枚举值预填草稿，并在新标签打开转换配置页。</small></div>}</div>}

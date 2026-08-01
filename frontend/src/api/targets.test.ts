@@ -11,12 +11,50 @@ describe('Target API boundary', () => {
 		expect(target).toMatchObject({ type: 'apple-hap', config: { address: ':51826', setupId: 'HLM1' }, pairing: { paired: false, pairingCode: '001-02-003' } })
 	})
 
+	it('keeps an independent HomeKit Camera target in its own branch', () => {
+		const target = normalizeTarget({
+			id: 'camera-homekit-1', type: 'homekit-camera', name: '客厅摄像头', enabled: true, status: 'running',
+			address: ':52431', paired: false, pairingCode: '123-45-678',
+			deviceIds: ['xiaomi-camera-1'], devices: [{ id: 'xiaomi-camera-1', name: '客厅摄像头', type: 'camera', sourceDeviceId: 'xiaomi-camera-1', enabled: true }],
+		})
+		expect(target).toMatchObject({
+			type: 'homekit-camera', config: { address: ':52431' },
+			pairing: { paired: false, pairingCode: '123-45-678' },
+		})
+	})
+
 	it('normalizes Matter without retaining legacy HomeKit fields', () => {
 		const target = normalizeTarget({ id: 'matter-main', type: 'matter', name: 'Matter', enabled: true, status: 'running', address: ':51826', setupId: 'HAP1', paired: true, matterConfig: { networkInterface: 'en0', udpPort: 5540, commissioningWindowSeconds: 900 }, commissioningState: 'window-open', commissioningWindowOpen: true, fabricCount: 1, endpointCount: 2, deviceIds: [], devices: [] })
 		expect(target).toMatchObject({ type: 'matter', config: { networkInterface: 'en0', udpPort: 5540, commissioningWindowSeconds: 900 }, commissioning: { state: 'window-open', windowOpen: true }, fabricCount: 1, endpointCount: 2 })
 		if (target.type !== 'matter') throw new Error('expected Matter')
 		expect('address' in target.config).toBe(false)
 		expect('paired' in target).toBe(false)
+	})
+
+	it('normalizes and serializes Matter Camera through the Matter-only boundary', async () => {
+		const normalized = normalizeTarget({
+			id: 'camera-matter-1', type: 'matter-camera', name: 'Matter Camera', enabled: true, status: 'running',
+			matterConfig: { udpPort: 5541 }, commissioningState: 'uncommissioned', commissioningWindowOpen: false,
+			fabricCount: 0, endpointCount: 1, deviceIds: ['front-camera'],
+			devices: [{ id: 'front-camera', name: '门口', type: 'camera', sourceDeviceId: 'front-camera', enabled: true }],
+			pairingCode: 'should-not-be-homekit',
+		})
+		expect(normalized).toMatchObject({ type: 'matter-camera', config: { udpPort: 5541 }, commissioning: { state: 'uncommissioned', windowOpen: false } })
+		expect(normalized).not.toHaveProperty('pairing')
+
+		const fetchMock = vi.fn().mockResolvedValue(response(normalized))
+		vi.stubGlobal('fetch', fetchMock)
+		await saveTarget({
+			id: 'camera-matter-1', type: 'matter-camera', name: 'Matter Camera', enabled: true,
+			deviceIds: ['front-camera'],
+			devices: [{ id: 'front-camera', name: '门口', type: 'camera', sourceDeviceId: 'front-camera', enabled: true }],
+			config: { networkInterface: '', udpPort: null, discriminator: null, passcode: null, vendorId: null, productId: null, productName: '', serialNumber: '', commissioningWindowSeconds: null },
+		}, false)
+		const body = JSON.parse(fetchMock.mock.calls[0][1].body as string)
+		expect(body).toMatchObject({ type: 'matter-camera', matterConfig: { passcode: null }, deviceIds: ['front-camera'] })
+		expect(body).not.toHaveProperty('pin')
+		expect(body).not.toHaveProperty('setupId')
+		expect(body).not.toHaveProperty('homeKitConfig')
 	})
 
 	it('sends Matter config as its own discriminated payload with explicit automatic nulls', async () => {

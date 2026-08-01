@@ -137,7 +137,7 @@ func TestProviderSecretsAreEncryptedAndSurviveRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	item := providerconfig.Config{ID: "mqtt-encrypted", Type: "mqtt", Name: "Encrypted MQTT", Enabled: true, Config: []byte(`{"brokerUrl":"mqtt://localhost:1883","username":"reader","password":"broker-password","ssecurity":"miot-security","tls":{"certFile":"client.pem","privateKey":"key-material"}}`)}
+	item := providerconfig.Config{ID: "mqtt-encrypted", Type: "mqtt", Name: "Encrypted MQTT", Enabled: true, Config: []byte(`{"brokerUrl":"mqtt://localhost:1883","username":"reader","password":"broker-password","ssecurity":"miot-security","passToken":"camera-pass-token","tls":{"certFile":"client.pem","privateKey":"key-material"}}`)}
 	if err := store.SaveProvider(ctx, item); err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,9 @@ func TestProviderSecretsAreEncryptedAndSurviveRestart(t *testing.T) {
 	if err := store.orm.WithContext(ctx).Model(&providerRow{}).Select("config_json").Where("id = ?", item.ID).Scan(&stored).Error; err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(stored, "broker-password") || strings.Contains(stored, "key-material") || strings.Contains(stored, "miot-security") || !strings.Contains(stored, encryptedPrefix) || !strings.Contains(stored, "client.pem") {
+	if strings.Contains(stored, "broker-password") || strings.Contains(stored, "key-material") ||
+		strings.Contains(stored, "miot-security") || strings.Contains(stored, "camera-pass-token") ||
+		!strings.Contains(stored, encryptedPrefix) || !strings.Contains(stored, "client.pem") {
 		t.Fatalf("stored provider config = %s", stored)
 	}
 	if err := store.Close(); err != nil {
@@ -163,7 +165,11 @@ func TestProviderSecretsAreEncryptedAndSurviveRestart(t *testing.T) {
 	for _, current := range items {
 		if current.ID == item.ID {
 			config := string(current.Config)
-			if !strings.Contains(config, `"password":"broker-password"`) || !strings.Contains(config, `"privateKey":"key-material"`) || !strings.Contains(config, `"ssecurity":"miot-security"`) || !strings.Contains(config, `"certFile":"client.pem"`) {
+			if !strings.Contains(config, `"password":"broker-password"`) ||
+				!strings.Contains(config, `"privateKey":"key-material"`) ||
+				!strings.Contains(config, `"ssecurity":"miot-security"`) ||
+				!strings.Contains(config, `"passToken":"camera-pass-token"`) ||
+				!strings.Contains(config, `"certFile":"client.pem"`) {
 				t.Fatalf("decrypted provider config = %s", config)
 			}
 			return
@@ -455,6 +461,32 @@ func TestProviderSeedCRUD(t *testing.T) {
 	}
 	if err := store.DeleteProvider(ctx, item.ID); err == nil {
 		t.Fatal("missing provider delete was accepted")
+	}
+}
+
+func TestSaveProvidersAtomicallyRollsBackTheWholeBatch(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	err = store.SaveProvidersAtomically(ctx,
+		providerconfig.Config{ID: "camera-new", Type: "camera", Name: "Camera", Config: []byte(`{"cameras":[]}`)},
+		providerconfig.Config{ID: "xiaomi-broken", Type: "xiaomi-miot-cloud", Name: "Xiaomi", Config: []byte(`{`)},
+	)
+	if err == nil {
+		t.Fatal("SaveProvidersAtomically() accepted invalid second provider")
+	}
+	items, err := store.ListProviders(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		if item.ID == "camera-new" || item.ID == "xiaomi-broken" {
+			t.Fatalf("atomic provider batch was partially persisted: %#v", items)
+		}
 	}
 }
 

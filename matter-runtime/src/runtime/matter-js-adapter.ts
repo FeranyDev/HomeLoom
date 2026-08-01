@@ -40,6 +40,8 @@ export interface LoadedMatterJs {
   readonly pumpDevice: typeof import("@matter/main/devices/pump");
   readonly airPurifier: typeof import("@matter/main/devices/air-purifier");
   readonly speakerDevice: typeof import("@matter/main/devices/speaker");
+  readonly cameraDevice: typeof import("@matter/main/devices/camera");
+  readonly cameraAvStreamManagement: typeof import("@matter/main/behaviors/camera-av-stream-management");
   readonly onOff: typeof import("@matter/main/behaviors/on-off");
   readonly levelControl: typeof import("@matter/main/behaviors/level-control");
   readonly colorControl: typeof import("@matter/main/behaviors/color-control");
@@ -195,6 +197,8 @@ export async function loadPinnedMatterJs(): Promise<LoadedMatterJs> {
     pumpDevice,
     airPurifier,
     speakerDevice,
+    cameraDevice,
+    cameraAvStreamManagement,
     onOff,
     levelControl,
     colorControl,
@@ -244,6 +248,8 @@ export async function loadPinnedMatterJs(): Promise<LoadedMatterJs> {
     import("@matter/main/devices/pump"),
     import("@matter/main/devices/air-purifier"),
     import("@matter/main/devices/speaker"),
+    import("@matter/main/devices/camera"),
+    import("@matter/main/behaviors/camera-av-stream-management"),
     import("@matter/main/behaviors/on-off"),
     import("@matter/main/behaviors/level-control"),
     import("@matter/main/behaviors/color-control"),
@@ -294,6 +300,8 @@ export async function loadPinnedMatterJs(): Promise<LoadedMatterJs> {
     pumpDevice,
     airPurifier,
     speakerDevice,
+    cameraDevice,
+    cameraAvStreamManagement,
     onOff,
     levelControl,
     colorControl,

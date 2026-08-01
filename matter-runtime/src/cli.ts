@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { IPC_PROTOCOL_VERSION } from "./contract.js";
 import { FakeProtocolAdapter } from "./runtime/fake-adapter.js";
 import { MatterJsAdapter } from "./runtime/matter-js-adapter.js";
 import { RuntimeServer } from "./runtime/server.js";
@@ -27,17 +28,13 @@ export async function runCli(arguments_: string[]): Promise<void> {
     requestTimeoutMs: options.requestTimeoutMs,
     maxInboundQueue: options.maxQueue,
     maxOutboundQueue: options.maxQueue,
+    // Snapshot JPEGs are base64 encoded for the newline-delimited RPC. Keep a
+    // finite symmetric limit with the Go host while allowing a 2 MiB JPEG.
+    maxFrameBytes: 4 * 1024 * 1024,
     onFactoryResetComplete: () => requestStop?.(),
   });
   await server.start();
-  process.stdout.write(`${JSON.stringify({
-    event: "ready",
-    protocolVersion: "1.0",
-    targetId: options.targetId,
-    identityNamespace: options.identityNamespace,
-    socketPath: options.socketPath,
-    adapter: options.adapter,
-  })}\n`);
+  process.stdout.write(`${JSON.stringify(readyEvent(options))}\n`);
 
   await new Promise<void>((resolve, reject) => {
     let stopping = false;
@@ -52,6 +49,24 @@ export async function runCli(arguments_: string[]): Promise<void> {
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);
   });
+}
+
+export function readyEvent(options: CliOptions): {
+  event: "ready";
+  protocolVersion: string;
+  targetId: string;
+  identityNamespace: string;
+  socketPath: string;
+  adapter: "fake" | "matter-js";
+} {
+  return {
+    event: "ready",
+    protocolVersion: IPC_PROTOCOL_VERSION,
+    targetId: options.targetId,
+    identityNamespace: options.identityNamespace,
+    socketPath: options.socketPath,
+    adapter: options.adapter,
+  };
 }
 
 export function parseArguments(arguments_: string[]): CliOptions {

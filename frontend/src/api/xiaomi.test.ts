@@ -12,7 +12,7 @@ describe('Xiaomi API', () => {
 			.mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ did: '1', name: 'Light', model: 'vendor.light.v1' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
 			.mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ did: '2', name: 'Wi-Fi AC', model: 'xiaomi.aircondition.v1', homeId: 'home-main', homeName: '我的家', roomId: 'room-living', roomName: '客厅', localIp: '192.168.1.20', localAvailable: true }] }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
 			.mockResolvedValueOnce(new Response(JSON.stringify({ data: { status: 'verification_required', challengeId: 'challenge-1', verificationUrl: 'https://account.xiaomi.com/verify' } }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
-			.mockResolvedValueOnce(new Response(JSON.stringify({ data: { status: 'verified', userId: '42', ssecurity: 'security', serviceToken: 'token' } }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+			.mockResolvedValueOnce(new Response(JSON.stringify({ data: { status: 'verified', userId: '42', ssecurity: 'security', serviceToken: 'token', passToken: 'camera-pass-token' } }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
 		vi.stubGlobal('fetch', fetchMock)
 
 		await expect(startXiaomiOAuth({ clientId: '1', region: 'cn', redirectUrl: 'http://homeassistant.local:8123' })).resolves.toMatchObject({ virtualDid: '123' })
@@ -21,7 +21,7 @@ describe('Xiaomi API', () => {
 		await expect(discoverXiaomiDevices('xiaomi-main')).resolves.toEqual([expect.objectContaining({ did: '1', name: 'Light' })])
 		await expect(discoverXiaomiDevices('xiaomi-miot-cloud-main', 'xiaomi-miot-cloud')).resolves.toEqual([expect.objectContaining({ did: '2', name: 'Wi-Fi AC', homeName: '我的家', roomName: '客厅', localAvailable: true })])
 		await expect(startXiaomiCloudLogin({ region: 'cn', username: 'owner', password: 'password' })).resolves.toMatchObject({ status: 'verification_required', challengeId: 'challenge-1' })
-		await expect(verifyXiaomiCloudLogin({ challengeId: 'challenge-1', code: '123456' })).resolves.toMatchObject({ status: 'verified', userId: '42' })
+		await expect(verifyXiaomiCloudLogin({ challengeId: 'challenge-1', code: '123456' })).resolves.toMatchObject({ status: 'verified', userId: '42', passToken: 'camera-pass-token' })
 		expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/v1/xiaomi/oauth/start', expect.objectContaining({ method: 'POST' }))
 		expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/v1/xiaomi/gateways', expect.anything())
 		expect(fetchMock).toHaveBeenNthCalledWith(4, '/api/v1/xiaomi/providers/xiaomi-main/devices', expect.anything())

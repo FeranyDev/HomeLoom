@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { Device, DeviceType } from '../types/device'
+import { isMatterTarget } from '../types/target'
 import type { Target, TargetInput, TargetVirtualDevice } from '../types/target'
 import { ApiError } from '../api/client'
 import { listConsumerCatalogs } from '../api/mapping'
@@ -10,9 +11,9 @@ import { deviceLocationLabel, homeLocationOptions, matchesDeviceLocation, roomLo
 import { confirmExactPhrase } from '../confirmations'
 
 function inputFromTarget(target: Target, devices: TargetVirtualDevice[]): TargetInput {
-	if (target.type === 'matter') {
+	if (isMatterTarget(target)) {
 		return {
-			id: target.id, type: 'matter', name: target.name, enabled: target.enabled, deviceIds: [], devices,
+			id: target.id, type: target.type, name: target.name, enabled: target.enabled, deviceIds: [], devices,
 			config: {
 				networkInterface: target.config.networkInterface ?? '', udpPort: target.config.udpPort ?? null, discriminator: target.config.discriminator ?? null,
 				passcode: null, vendorId: target.config.vendorId ?? null, productId: target.config.productId ?? null,
@@ -93,10 +94,10 @@ export function TargetDeviceManager({ target, devices, onClose, onSave, onConfir
 		if (!source) { setError('请选择统一模型来源设备'); return }
 		if (!deviceType || (supportedTypes && !supportedTypes.has(deviceType))) { setError('请选择当前目标适配器支持的设备类型'); return }
 		const requestedID = stableID(id)
-		const baseID = requestedID || generatedConsumerDeviceID(target.id, source.id, deviceType, target.type === 'matter')
+		const baseID = requestedID || generatedConsumerDeviceID(target.id, source.id, deviceType, isMatterTarget(target))
 		let nextID = baseID
 		for (let suffix = 2; !requestedID && items.some((item) => item.id === nextID); suffix += 1) {
-			nextID = generatedConsumerDeviceID(target.id, source.id, deviceType, target.type === 'matter', suffix)
+			nextID = generatedConsumerDeviceID(target.id, source.id, deviceType, isMatterTarget(target), suffix)
 		}
 		if (!nextID || items.some((item) => item.id === nextID)) { setError('消费端设备 ID 无效或重复'); return }
 		setItems((current) => [...current, { id: nextID, name: name.trim() || source.name, type: deviceType, sourceDeviceId: source.id, auxiliarySourceDeviceIds: auxiliarySourceDeviceIds, enabled: true }])
@@ -108,7 +109,7 @@ export function TargetDeviceManager({ target, devices, onClose, onSave, onConfir
 	async function save() {
 		setSaving(true); setError(null)
 		try {
-			const changes = target.type === 'matter' ? items.flatMap((item) => {
+			const changes = isMatterTarget(target) ? items.flatMap((item) => {
 				const previous = target.devices.find((candidate) => candidate.id === item.id)
 				return previous && previous.type !== item.type ? [{ item, previousType: previous.type }] : []
 			}) : []

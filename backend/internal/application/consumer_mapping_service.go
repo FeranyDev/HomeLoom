@@ -28,21 +28,9 @@ func (s *ProfileService) ProjectConsumerDeviceInstance(consumerID, targetID, con
 		if !applied {
 			continue
 		}
-		property, exists := item.Property(binding.ModelPath().EndpointID, binding.ModelPath().CapabilityID, binding.ModelPath().PropertyID)
-		if !exists {
-			continue
+		if _, err := applyConsumerProjection(&result, item, parameter, binding, profile); err != nil {
+			return device.Device{}, err
 		}
-		if binding.ProfileID != "" {
-			preview, previewErr := mapping.Preview(mapping.PreviewRequest{Profile: profile, Direction: mapping.DirectionForward, Value: &property.Value})
-			if previewErr != nil {
-				return device.Device{}, fmt.Errorf("consumer binding %q: %w", binding.ID, previewErr)
-			}
-			property.Value = preview.Value
-			property.Definition.Type = profile.OutputType
-		}
-		property.Definition.ID = parameter.Source.PropertyID
-		property.Definition.ParameterLevel = parameter.Level
-		upsertConsumerProperty(&result, parameter.Source, property)
 	}
 	if _, err := device.ProjectForConsumer(result, contract); err != nil {
 		return device.Device{}, err
@@ -86,29 +74,39 @@ func (s *ProfileService) ProjectConsumerDeviceSourcesInstance(consumerID, target
 			if !applied {
 				continue
 			}
-			path := binding.ModelPath()
-			property, exists := source.Property(path.EndpointID, path.CapabilityID, path.PropertyID)
-			if !exists {
-				continue
+			projected, err := applyConsumerProjection(&result, source, parameter, binding, profile)
+			if err != nil {
+				return device.Device{}, err
 			}
-			if binding.ProfileID != "" {
-				preview, previewErr := mapping.Preview(mapping.PreviewRequest{Profile: profile, Direction: mapping.DirectionForward, Value: &property.Value})
-				if previewErr != nil {
-					return device.Device{}, fmt.Errorf("consumer binding %q: %w", binding.ID, previewErr)
-				}
-				property.Value = preview.Value
-				property.Definition.Type = profile.OutputType
+			if projected {
+				break
 			}
-			property.Definition.ID = parameter.Source.PropertyID
-			property.Definition.ParameterLevel = parameter.Level
-			upsertConsumerProperty(&result, parameter.Source, property)
-			break
 		}
 	}
 	if _, err := device.ProjectForConsumer(result, contract); err != nil {
 		return device.Device{}, err
 	}
 	return result, nil
+}
+
+func applyConsumerProjection(result *device.Device, source device.Device, parameter device.ConsumerParameterMapping, binding mapping.Binding, profile mapping.Profile) (bool, error) {
+	path := binding.ModelPath()
+	property, exists := source.Property(path.EndpointID, path.CapabilityID, path.PropertyID)
+	if !exists {
+		return false, nil
+	}
+	if binding.ProfileID != "" {
+		preview, previewErr := mapping.Preview(mapping.PreviewRequest{Profile: profile, Direction: mapping.DirectionForward, Value: &property.Value})
+		if previewErr != nil {
+			return false, fmt.Errorf("consumer binding %q: %w", binding.ID, previewErr)
+		}
+		property.Value = preview.Value
+		property.Definition.Type = profile.OutputType
+	}
+	property.Definition.ID = parameter.Source.PropertyID
+	property.Definition.ParameterLevel = parameter.Level
+	upsertConsumerProperty(result, parameter.Source, property)
+	return true, nil
 }
 
 // ResolveConsumerWrite maps the adapter's stable default path back to the

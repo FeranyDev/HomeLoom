@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -27,6 +28,13 @@ type databaseSnapshot struct {
 	Providers             []providerRow               `json:"providers"`
 	Targets               []targetRow                 `json:"targets"`
 	TargetVirtualDevices  []targetVirtualDeviceRow    `json:"targetVirtualDevices"`
+	MediaSources          []mediaSourceRow            `json:"mediaSources"`
+	MediaCredentials      []mediaCredentialRow        `json:"mediaCredentials"`
+	MediaStreams          []mediaStreamRow            `json:"mediaStreams"`
+	MediaRuntimeValues    []mediaRuntimeKVRow         `json:"mediaRuntimeValues"`
+	MediaAuthLeases       []mediaAuthLeaseRow         `json:"mediaAuthLeases"`
+	MediaAuthAudits       []mediaAuthAuditRow         `json:"mediaAuthAudits"`
+	MediaConfigState      []mediaConfigStateRow       `json:"mediaConfigState"`
 	MatterRuntimeValues   []matterRuntimeKVRow        `json:"matterRuntimeValues"`
 	MatterEndpointIDs     []matterEndpointIdentityRow `json:"matterEndpointIdentities"`
 	HomeKitAccessoryIDs   []homeKitAccessoryIDRow     `json:"homeKitAccessoryIds"`
@@ -97,6 +105,10 @@ func (s *Store) readSnapshot(ctx context.Context) (databaseSnapshot, error) {
 		}{
 			{"providers", &result.Providers}, {"targets", &result.Targets},
 			{"target virtual devices", &result.TargetVirtualDevices}, {"HomeKit accessory IDs", &result.HomeKitAccessoryIDs},
+			{"media sources", &result.MediaSources}, {"media credentials", &result.MediaCredentials},
+			{"media streams", &result.MediaStreams}, {"media runtime values", &result.MediaRuntimeValues},
+			{"media authorization leases", &result.MediaAuthLeases}, {"media authorization audits", &result.MediaAuthAudits},
+			{"media config state", &result.MediaConfigState},
 			{"Matter runtime values", &result.MatterRuntimeValues}, {"Matter endpoint identities", &result.MatterEndpointIDs},
 			{"HomeKit IIDs", &result.HomeKitIIDs}, {"system settings", &result.SystemSettings},
 			{"device preferences", &result.DevicePreferences}, {"audit events", &result.AuditEvents},
@@ -169,6 +181,49 @@ func ValidateRestoreCandidate(_ context.Context, path string) error {
 	for _, value := range snapshot.MatterRuntimeValues {
 		if _, err := codec.decrypt(matterRuntimeSecretScope(value.TargetID, value.Key), value.Value); err != nil {
 			return fmt.Errorf("validate Matter target %q runtime key %q: %w", value.TargetID, value.Key, err)
+		}
+	}
+	for _, credential := range snapshot.MediaCredentials {
+		if credential.CredentialBlobEncrypted == "" ||
+			!strings.HasPrefix(credential.CredentialBlobEncrypted, encryptedPrefix) {
+			return fmt.Errorf("validate media credential %q: credential is not encrypted", credential.ID)
+		}
+		if _, err := codec.decrypt(
+			mediaCredentialSecretScope(credential.ID, credential.DeviceID),
+			credential.CredentialBlobEncrypted,
+		); err != nil {
+			return fmt.Errorf("validate media credential %q: %w", credential.ID, err)
+		}
+	}
+	for _, value := range snapshot.MediaRuntimeValues {
+		if value.Value != "" && !strings.HasPrefix(value.Value, encryptedPrefix) {
+			return fmt.Errorf(
+				"validate media runtime namespace %q key %q: value is not encrypted",
+				value.Namespace,
+				value.Key,
+			)
+		}
+		if _, err := codec.decrypt(mediaRuntimeSecretScope(value.Namespace, value.Key), value.Value); err != nil {
+			return fmt.Errorf("validate media runtime namespace %q key %q: %w", value.Namespace, value.Key, err)
+		}
+	}
+	if len(snapshot.MediaConfigState) > 1 {
+		return errors.New("validate media config state: multiple singleton rows")
+	}
+	if len(snapshot.MediaConfigState) == 1 {
+		state := snapshot.MediaConfigState[0]
+		if state.ID != mediaConfigStateID || state.Generation == 0 || state.Revision == 0 {
+			return errors.New("validate media config state: invalid singleton version")
+		}
+		for _, stream := range snapshot.MediaStreams {
+			if stream.Revision > state.Revision {
+				return fmt.Errorf(
+					"validate media config state: stream %q revision %d exceeds global revision %d",
+					stream.ID,
+					stream.Revision,
+					state.Revision,
+				)
+			}
 		}
 	}
 	validator := &Store{secrets: codec}
@@ -246,6 +301,8 @@ func (s *Store) replaceRows(ctx context.Context, snapshot databaseSnapshot) erro
 		deleteOrder := []any{
 			&adminSessionRow{}, &homeKitIIDRow{}, &homeKitAccessoryIDRow{}, &matterEndpointIdentityRow{},
 			&matterRuntimeKVRow{}, &targetVirtualDeviceRow{},
+			&mediaAuthLeaseRow{}, &mediaStreamRow{}, &mediaCredentialRow{}, &mediaSourceRow{},
+			&mediaRuntimeKVRow{}, &mediaAuthAuditRow{}, &mediaConfigStateRow{},
 			&mappingBindingRow{}, &mappingProfileRow{}, &customModelPropertyRow{}, &modelEnumOverrideRow{}, &customUnifiedModelRow{},
 			&miotSpecCacheRow{}, &auditEventRow{}, &devicePreferenceRow{}, &systemSettingRow{},
 			&providerRow{}, &targetRow{}, &adminUserRow{},
@@ -260,6 +317,10 @@ func (s *Store) replaceRows(ctx context.Context, snapshot databaseSnapshot) erro
 			rows  any
 		}{
 			{"providers", &snapshot.Providers}, {"targets", &snapshot.Targets}, {"administrator users", &snapshot.AdminUsers},
+			{"media sources", &snapshot.MediaSources}, {"media credentials", &snapshot.MediaCredentials},
+			{"media streams", &snapshot.MediaStreams}, {"media runtime values", &snapshot.MediaRuntimeValues},
+			{"media authorization leases", &snapshot.MediaAuthLeases}, {"media authorization audits", &snapshot.MediaAuthAudits},
+			{"media config state", &snapshot.MediaConfigState},
 			{"system settings", &snapshot.SystemSettings}, {"device preferences", &snapshot.DevicePreferences},
 			{"audit events", &snapshot.AuditEvents}, {"mapping profiles", &snapshot.MappingProfiles},
 			{"mapping bindings", &snapshot.MappingBindings}, {"custom model properties", &snapshot.CustomModelProperties}, {"model enum overrides", &snapshot.ModelEnumOverrides},
@@ -273,6 +334,22 @@ func (s *Store) replaceRows(ctx context.Context, snapshot databaseSnapshot) erro
 				return fmt.Errorf("restore %s: %w", item.label, err)
 			}
 		}
+		// Backups created before media_config_state existed receive a valid
+		// singleton instead of leaving desired-stream versioning unusable.
+		if len(snapshot.MediaConfigState) == 0 {
+			now := time.Now().UTC().UnixMilli()
+			revision := uint64(1)
+			for _, stream := range snapshot.MediaStreams {
+				if stream.Revision > revision {
+					revision = stream.Revision
+				}
+			}
+			if err := tx.Create(&mediaConfigStateRow{
+				ID: mediaConfigStateID, Generation: 1, Revision: revision, UpdatedAt: now,
+			}).Error; err != nil {
+				return fmt.Errorf("restore default media config state: %w", err)
+			}
+		}
 		// Restored browser sessions are intentionally invalidated.
 		if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&adminSessionRow{}).Error; err != nil {
 			return fmt.Errorf("invalidate restored administrator sessions: %w", err)
@@ -280,6 +357,9 @@ func (s *Store) replaceRows(ctx context.Context, snapshot databaseSnapshot) erro
 		if s.databaseKind == databasePostgreSQL {
 			if err := tx.Exec(`SELECT setval(pg_get_serial_sequence('audit_events', 'id'), COALESCE((SELECT MAX(id) FROM audit_events), 1), EXISTS(SELECT 1 FROM audit_events))`).Error; err != nil {
 				return fmt.Errorf("reset audit event sequence: %w", err)
+			}
+			if err := tx.Exec(`SELECT setval(pg_get_serial_sequence('media_auth_audit', 'id'), COALESCE((SELECT MAX(id) FROM media_auth_audit), 1), EXISTS(SELECT 1 FROM media_auth_audit))`).Error; err != nil {
+				return fmt.Errorf("reset media authorization audit sequence: %w", err)
 			}
 		}
 		return nil

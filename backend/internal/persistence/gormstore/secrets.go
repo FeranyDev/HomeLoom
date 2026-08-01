@@ -39,6 +39,12 @@ func (s *Store) initializeSecrets(ctx context.Context) error {
 	if err := s.encryptPlaintextMatterRuntimeValues(ctx); err != nil {
 		return err
 	}
+	if err := s.encryptPlaintextMediaCredentials(ctx); err != nil {
+		return err
+	}
+	if err := s.encryptPlaintextMediaRuntimeValues(ctx); err != nil {
+		return err
+	}
 	return s.encryptPlaintextProviderConfigs(ctx)
 }
 
@@ -72,6 +78,14 @@ func loadOrCreateMasterKey(ctx context.Context, store *Store) ([]byte, error) {
 	if queryErr := store.orm.WithContext(ctx).Model(&matterRuntimeKVRow{}).Count(&matterIdentityRows).Error; queryErr != nil {
 		return nil, fmt.Errorf("inspect Matter runtime identities: %w", queryErr)
 	}
+	var mediaCredentialRows int64
+	if queryErr := store.orm.WithContext(ctx).Model(&mediaCredentialRow{}).Count(&mediaCredentialRows).Error; queryErr != nil {
+		return nil, fmt.Errorf("inspect media credentials: %w", queryErr)
+	}
+	var mediaRuntimeRows int64
+	if queryErr := store.orm.WithContext(ctx).Model(&mediaRuntimeKVRow{}).Count(&mediaRuntimeRows).Error; queryErr != nil {
+		return nil, fmt.Errorf("inspect media runtime identities: %w", queryErr)
+	}
 	var encryptedProviders int64
 	providerSecretQuery := "config_json LIKE ?"
 	if store.databaseKind == databasePostgreSQL {
@@ -80,7 +94,8 @@ func loadOrCreateMasterKey(ctx context.Context, store *Store) ([]byte, error) {
 	if queryErr := store.orm.WithContext(ctx).Model(&providerRow{}).Where(providerSecretQuery, "%"+encryptedPrefix+"%").Count(&encryptedProviders).Error; queryErr != nil {
 		return nil, fmt.Errorf("inspect encrypted provider secrets: %w", queryErr)
 	}
-	if encryptedTargets > 0 || encryptedMatterTargets > 0 || matterIdentityRows > 0 || encryptedProviders > 0 {
+	if encryptedTargets > 0 || encryptedMatterTargets > 0 || matterIdentityRows > 0 ||
+		mediaCredentialRows > 0 || mediaRuntimeRows > 0 || encryptedProviders > 0 {
 		return nil, errors.New("master key is missing for encrypted database secrets")
 	}
 	key := make([]byte, 32)
@@ -214,6 +229,52 @@ func (s *Store) encryptPlaintextMatterRuntimeValues(ctx context.Context) error {
 	})
 }
 
+func (s *Store) encryptPlaintextMediaCredentials(ctx context.Context) error {
+	var rows []mediaCredentialRow
+	if err := s.orm.WithContext(ctx).
+		Where("credential_blob_encrypted NOT LIKE ?", encryptedPrefix+"%").
+		Find(&rows).Error; err != nil {
+		return fmt.Errorf("list plaintext media credentials: %w", err)
+	}
+	return s.orm.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, item := range rows {
+			encrypted, err := s.secrets.encrypt(
+				mediaCredentialSecretScope(item.ID, item.DeviceID),
+				item.CredentialBlobEncrypted,
+			)
+			if err != nil {
+				return err
+			}
+			if err := tx.Model(&mediaCredentialRow{}).Where("id = ?", item.ID).
+				Update("credential_blob_encrypted", encrypted).Error; err != nil {
+				return fmt.Errorf("encrypt media credential: %w", err)
+			}
+		}
+		return nil
+	})
+}
+
+func (s *Store) encryptPlaintextMediaRuntimeValues(ctx context.Context) error {
+	var rows []mediaRuntimeKVRow
+	if err := s.orm.WithContext(ctx).Where("value_encrypted NOT LIKE ?", encryptedPrefix+"%").Find(&rows).Error; err != nil {
+		return fmt.Errorf("list plaintext media runtime values: %w", err)
+	}
+	return s.orm.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, item := range rows {
+			encrypted, err := s.secrets.encrypt(mediaRuntimeSecretScope(item.Namespace, item.Key), item.Value)
+			if err != nil {
+				return err
+			}
+			if err := tx.Model(&mediaRuntimeKVRow{}).
+				Where("namespace = ? AND key = ?", item.Namespace, item.Key).
+				Update("value_encrypted", encrypted).Error; err != nil {
+				return fmt.Errorf("encrypt media runtime value: %w", err)
+			}
+		}
+		return nil
+	})
+}
+
 func (s *Store) encryptPlaintextProviderConfigs(ctx context.Context) error {
 	var rows []providerRow
 	if err := s.orm.WithContext(ctx).Select("id", "config_json").Find(&rows).Error; err != nil {
@@ -316,17 +377,6 @@ func providerConfigSecretKey(key string) bool {
 		}
 	}
 	return false
-}
-
-func (s *Store) hasEncryptedTargetPINs(ctx context.Context) (bool, error) {
-	if !s.orm.WithContext(ctx).Migrator().HasTable(&targetRow{}) {
-		return false, nil
-	}
-	var encrypted int64
-	if err := s.orm.WithContext(ctx).Model(&targetRow{}).Where("pin LIKE ?", encryptedPrefix+"%").Count(&encrypted).Error; err != nil {
-		return false, fmt.Errorf("inspect encrypted target secrets: %w", err)
-	}
-	return encrypted > 0, nil
 }
 
 func copyPrivateFile(source, destination string) error {

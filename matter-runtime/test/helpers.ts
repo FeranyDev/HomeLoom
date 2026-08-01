@@ -21,6 +21,7 @@ export function bridgeConfiguration(
   overrides: Partial<BridgeConfiguration> = {},
 ): BridgeConfiguration {
   return {
+    nodeKind: "bridge",
     targetId,
     identityNamespace: targetId,
     networkInterface: "en0",

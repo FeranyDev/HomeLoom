@@ -15,9 +15,456 @@ import (
 
 type failingProvider struct{ id string }
 
+type bindingProvider struct {
+	id       string
+	devices  []device.Device
+	bindings []providersdk.CapabilityBinding
+	hidden   []string
+}
+
+func (p *bindingProvider) Manifest() providersdk.Manifest {
+	return providersdk.Manifest{ID: p.id, Type: "test-camera", Name: p.id}
+}
+func (*bindingProvider) Capabilities() providersdk.Capabilities {
+	return providersdk.Capabilities{Discovery: true}
+}
+func (*bindingProvider) Initialize(context.Context) error { return nil }
+func (*bindingProvider) Close(context.Context) error      { return nil }
+func (p *bindingProvider) DiscoverDevices(context.Context) ([]device.Device, error) {
+	result := make([]device.Device, len(p.devices))
+	for index := range p.devices {
+		result[index] = p.devices[index].Clone()
+	}
+	return result, nil
+}
+func (p *bindingProvider) CapabilityBindings() []providersdk.CapabilityBinding {
+	return append([]providersdk.CapabilityBinding(nil), p.bindings...)
+}
+func (p *bindingProvider) HiddenDeviceIDs() []string {
+	return append([]string(nil), p.hidden...)
+}
+
+type controlProvider struct {
+	bindingProvider
+	lastWrite   providersdk.PropertyWriteRequest
+	lastCommand providersdk.CommandRequest
+	handler     func(device.Device)
+}
+
+type catalogControlProvider struct {
+	controlProvider
+	catalog []providersdk.SourceCatalogDevice
+}
+
+func (p *catalogControlProvider) SourceCatalog(context.Context) ([]providersdk.SourceCatalogDevice, error) {
+	result := make([]providersdk.SourceCatalogDevice, len(p.catalog))
+	for index := range p.catalog {
+		result[index] = p.catalog[index]
+		result[index].Device = p.catalog[index].Device.Clone()
+	}
+	return result, nil
+}
+
+func (p *controlProvider) Manifest() providersdk.Manifest {
+	return providersdk.Manifest{ID: p.id, Type: "xiaomi", Name: p.id}
+}
+
+func (p *controlProvider) ReadProperty(_ context.Context, request providersdk.PropertyReadRequest) (device.Property, error) {
+	for _, endpoint := range p.devices[0].Endpoints {
+		if endpoint.ID != request.EndpointID {
+			continue
+		}
+		for _, capability := range endpoint.Capabilities {
+			if capability.ID != request.CapabilityID {
+				continue
+			}
+			for _, property := range capability.Properties {
+				if property.Definition.ID == request.PropertyID {
+					return property, nil
+				}
+			}
+		}
+	}
+	return device.Property{}, providersdk.ErrPropertyUnsupported
+}
+func (p *controlProvider) WriteProperty(_ context.Context, request providersdk.PropertyWriteRequest) (device.Device, error) {
+	p.lastWrite = request
+	result := p.devices[0].Clone()
+	if !result.SetProperty(request.EndpointID, request.CapabilityID, request.PropertyID, request.Value) {
+		return device.Device{}, providersdk.ErrPropertyUnsupported
+	}
+	p.devices[0] = result
+	return result, nil
+}
+func (p *controlProvider) ExecuteCommand(_ context.Context, request providersdk.CommandRequest) (device.Device, error) {
+	p.lastCommand = request
+	return p.devices[0].Clone(), nil
+}
+func (p *controlProvider) Subscribe(handler func(device.Device)) func() {
+	p.handler = handler
+	return func() { p.handler = nil }
+}
+func (p *controlProvider) emit(item device.Device) {
+	if p.handler != nil {
+		p.handler(item)
+	}
+}
+
+func cameraSnapshot(id, providerID string, online bool, capabilities ...device.Capability) device.Device {
+	item := device.Device{
+		SchemaVersion: device.SchemaVersion, ID: id, ProviderID: providerID, Name: id,
+		Type: device.TypeCamera, Endpoints: []device.Endpoint{{
+			ID: "main", Name: "Camera", Type: string(device.TypeCamera), Capabilities: capabilities,
+		}}, LastUpdateAt: time.Now().UTC(),
+	}
+	item.SetOnline(online)
+	return item
+}
+
 type interestedProvider struct {
 	id        string
 	interests []providersdk.PropertyInterest
+}
+
+func TestManagerMergesAndDelegatesBoundCameraControls(t *testing.T) {
+	mediaCapability := device.Capability{ID: "media", Type: "media", Properties: []device.Property{{
+		Definition: device.PropertyDefinition{ID: "live-stream", Name: "Live", Type: device.ValueTypeBool, Readable: true},
+		Value:      device.BoolValue(true),
+	}}}
+	privacyCapability := device.Capability{
+		ID: "privacy", Type: "privacy",
+		Properties: []device.Property{{
+			Definition: device.PropertyDefinition{ID: "enabled", Name: "Privacy", Type: device.ValueTypeBool, Readable: true, Writable: true},
+			Value:      device.BoolValue(false),
+		}},
+		Commands: []device.CommandDefinition{{ID: "toggle", Name: "Toggle", Idempotent: false}},
+	}
+	camera := &bindingProvider{
+		id:      "camera-main",
+		devices: []device.Device{cameraSnapshot("living-camera", "camera-main", true, mediaCapability)},
+		bindings: []providersdk.CapabilityBinding{{
+			DeviceID: "living-camera", ProviderID: "xiaomi-hub", SourceDeviceID: "xiaomi-camera",
+		}},
+	}
+	control := &controlProvider{bindingProvider: bindingProvider{
+		id:      "xiaomi-hub",
+		devices: []device.Device{cameraSnapshot("xiaomi-camera", "xiaomi-hub", true, mediaCapability, privacyCapability)},
+	}}
+	manager, err := providermanager.New(camera, control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := manager.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close(ctx)
+	items, err := manager.DiscoverDevices(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ID != "living-camera" || items[0].ProviderID != "camera-main" ||
+		len(items[0].Endpoints) != 1 || len(items[0].Endpoints[0].Capabilities) != 2 {
+		t.Fatalf("merged cameras = %#v", items)
+	}
+	value := device.BoolValue(true)
+	updated, err := manager.WriteProperty(ctx, providersdk.PropertyWriteRequest{
+		DeviceID: "living-camera", EndpointID: "main", CapabilityID: "privacy", PropertyID: "enabled", Value: value,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if control.lastWrite.DeviceID != "xiaomi-camera" || updated.ID != "living-camera" ||
+		updated.ProviderID != "camera-main" || !updated.IsOnline() {
+		t.Fatalf("delegated write = %#v, request=%#v", updated, control.lastWrite)
+	}
+	if _, err := manager.ExecuteCommand(ctx, providersdk.CommandRequest{
+		DeviceID: "living-camera", EndpointID: "main", CapabilityID: "privacy", CommandID: "toggle",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if control.lastCommand.DeviceID != "xiaomi-camera" {
+		t.Fatalf("delegated command = %#v", control.lastCommand)
+	}
+}
+
+func TestManagerUsesNativeCatalogForControlOnlyCameraCapabilities(t *testing.T) {
+	privacy := device.Capability{
+		ID: "privacy", Type: "privacy",
+		Properties: []device.Property{{
+			Definition: device.PropertyDefinition{ID: "enabled", Name: "Privacy", Type: device.ValueTypeBool, Readable: true, Writable: true},
+			Value:      device.BoolValue(false),
+		}},
+		Commands: []device.CommandDefinition{
+			{ID: "move-left", Name: "向左转动"},
+			{ID: "goto-preset", Name: "转到记忆点", Parameters: []device.CommandParameter{
+				{ID: "preset-id", Name: "记忆点", Type: device.ValueTypeString, Required: true},
+			}},
+		},
+	}
+	camera := &bindingProvider{
+		id: "camera-main", devices: []device.Device{cameraSnapshot("camera-one", "camera-main", true)},
+		bindings: []providersdk.CapabilityBinding{{
+			DeviceID: "camera-one", ProviderID: "xiaomi-hub", SourceDeviceID: "source-camera",
+		}},
+	}
+	publicSource := cameraSnapshot("source-camera", "xiaomi-hub", true)
+	nativeSource := cameraSnapshot("source-camera", "xiaomi-hub", true, privacy)
+	control := &catalogControlProvider{
+		controlProvider: controlProvider{bindingProvider: bindingProvider{
+			id: "xiaomi-hub", devices: []device.Device{publicSource},
+		}},
+		catalog: []providersdk.SourceCatalogDevice{{
+			Device: nativeSource,
+			Catalog: providersdk.SourceCatalogMetadata{
+				Complete: true, Source: "miot-spec.org", Model: "vendor.camera.v1",
+				SpecType: "urn:miot-spec-v2:device:camera:vendor-v1:1",
+				Values: map[string]providersdk.SourceValueStatus{
+					providersdk.SourceValueKey("main", "privacy", "enabled"): {Known: true, Available: true},
+				},
+			},
+		}},
+	}
+	manager, err := providermanager.New(camera, control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := manager.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close(ctx)
+
+	items, err := manager.DiscoverDevices(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ID != "camera-one" {
+		t.Fatalf("devices = %#v", items)
+	}
+	if _, ok := items[0].Property("main", "privacy", "enabled"); !ok {
+		t.Fatalf("native catalog capability was not merged: %#v", items[0])
+	}
+	commands := items[0].Endpoints[0].Capabilities[0].Commands
+	if len(commands) != 2 || commands[0].ID != "move-left" || commands[1].ID != "goto-preset" {
+		t.Fatalf("native camera commands were not merged: %#v", commands)
+	}
+	catalog, err := manager.SourceCatalog(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog) != 1 || catalog[0].ID != "camera-one" || catalog[0].ProviderID != "camera-main" {
+		t.Fatalf("composed source catalog identities = %#v", catalog)
+	}
+	if _, ok := catalog[0].Property("main", "privacy", "enabled"); !ok {
+		t.Fatalf("composed source catalog omitted control properties: %#v", catalog[0])
+	}
+	if !catalog[0].Catalog.Complete || catalog[0].Catalog.Model != "vendor.camera.v1" ||
+		catalog[0].Catalog.Values[providersdk.SourceValueKey("main", "privacy", "enabled")].Known != true {
+		t.Fatalf("composed source catalog metadata = %#v", catalog[0].Catalog)
+	}
+}
+
+func TestManagerNeverPublishesProviderHiddenControlSource(t *testing.T) {
+	control := &controlProvider{bindingProvider: bindingProvider{
+		id:      "xiaomi-hub",
+		devices: []device.Device{cameraSnapshot("source-camera", "xiaomi-hub", true)},
+		hidden:  []string{"source-camera"},
+	}}
+	manager, err := providermanager.New(control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := manager.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close(ctx)
+	items, err := manager.DiscoverDevices(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("hidden control source was published: %#v", items)
+	}
+	events := make(chan device.Device, 1)
+	unsubscribe := manager.Subscribe(func(item device.Device) { events <- item })
+	defer unsubscribe()
+	control.emit(control.devices[0])
+	select {
+	case item := <-events:
+		t.Fatalf("hidden control source emitted a snapshot: %#v", item)
+	default:
+	}
+}
+
+func TestManagerRejectsDuplicateControlBindingEvenWhenSourceMissing(t *testing.T) {
+	camera := &bindingProvider{
+		id: "camera-main",
+		devices: []device.Device{
+			cameraSnapshot("camera-one", "camera-main", true),
+			cameraSnapshot("camera-two", "camera-main", true),
+		},
+		bindings: []providersdk.CapabilityBinding{
+			{DeviceID: "camera-one", ProviderID: "missing-provider", SourceDeviceID: "same-source"},
+			{DeviceID: "camera-two", ProviderID: "missing-provider", SourceDeviceID: "same-source"},
+		},
+	}
+	manager, err := providermanager.New(camera)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := manager.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close(ctx)
+	if _, err := manager.DiscoverDevices(ctx); err == nil {
+		t.Fatal("DiscoverDevices accepted duplicate control binding")
+	}
+}
+
+func TestManagerKeepsCameraWhenControlSourceIsOffline(t *testing.T) {
+	privacy := device.Capability{ID: "privacy", Type: "privacy", Properties: []device.Property{{
+		Definition: device.PropertyDefinition{ID: "enabled", Name: "Privacy", Type: device.ValueTypeBool, Readable: true, Writable: true},
+		Value:      device.BoolValue(false),
+	}}}
+	camera := &bindingProvider{
+		id: "camera-main", devices: []device.Device{cameraSnapshot("camera-one", "camera-main", true)},
+		bindings: []providersdk.CapabilityBinding{{
+			DeviceID: "camera-one", ProviderID: "xiaomi-hub", SourceDeviceID: "source-camera",
+		}},
+	}
+	control := &controlProvider{bindingProvider: bindingProvider{
+		id: "xiaomi-hub", devices: []device.Device{cameraSnapshot("source-camera", "xiaomi-hub", false, privacy)},
+	}}
+	manager, err := providermanager.New(camera, control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := manager.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close(ctx)
+	items, err := manager.DiscoverDevices(ctx)
+	if err != nil || len(items) != 1 || !items[0].IsOnline() {
+		t.Fatalf("camera with offline controls = %#v, %v", items, err)
+	}
+	_, err = manager.WriteProperty(ctx, providersdk.PropertyWriteRequest{
+		DeviceID: "camera-one", EndpointID: "main", CapabilityID: "privacy", PropertyID: "enabled", Value: device.BoolValue(true),
+	})
+	if !errors.Is(err, providersdk.ErrProviderUnavailable) {
+		t.Fatalf("offline delegated write error = %v", err)
+	}
+}
+
+func TestManagerApplyActivatesCameraControlBindingWithoutRestart(t *testing.T) {
+	media := device.Capability{ID: "media", Type: "media"}
+	privacy := device.Capability{ID: "privacy", Type: "privacy", Properties: []device.Property{{
+		Definition: device.PropertyDefinition{ID: "enabled", Name: "Privacy", Type: device.ValueTypeBool, Readable: true, Writable: true},
+		Value:      device.BoolValue(false),
+	}}}
+	camera := &bindingProvider{
+		id: "camera-main", devices: []device.Device{cameraSnapshot("camera-one", "camera-main", true, media)},
+	}
+	control := &controlProvider{bindingProvider: bindingProvider{
+		id: "xiaomi-hub", devices: []device.Device{cameraSnapshot("source-camera", "xiaomi-hub", true, privacy)},
+	}}
+	manager, err := providermanager.New(camera, control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := manager.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close(ctx)
+	if items, err := manager.DiscoverDevices(ctx); err != nil || len(items) != 2 {
+		t.Fatalf("initial devices = %#v, %v", items, err)
+	}
+	replacement := &bindingProvider{
+		id: "camera-main", devices: camera.devices,
+		bindings: []providersdk.CapabilityBinding{{
+			DeviceID: "camera-one", ProviderID: "xiaomi-hub", SourceDeviceID: "source-camera",
+		}},
+	}
+	if err := manager.Apply(ctx, replacement); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.WriteProperty(ctx, providersdk.PropertyWriteRequest{
+		DeviceID: "camera-one", EndpointID: "main", CapabilityID: "privacy", PropertyID: "enabled", Value: device.BoolValue(true),
+	}); err != nil {
+		t.Fatalf("hot-applied delegated write = %v", err)
+	}
+	if control.lastWrite.DeviceID != "source-camera" {
+		t.Fatalf("hot-applied request = %#v", control.lastWrite)
+	}
+}
+
+func TestManagerProjectsControlSnapshotWithoutPublishingHiddenSource(t *testing.T) {
+	privacy := device.Capability{ID: "privacy", Type: "privacy", Properties: []device.Property{{
+		Definition: device.PropertyDefinition{ID: "enabled", Name: "Privacy", Type: device.ValueTypeBool, Readable: true, Writable: true},
+		Value:      device.BoolValue(false),
+	}}}
+	camera := &bindingProvider{
+		id: "camera-main", devices: []device.Device{cameraSnapshot("camera-one", "camera-main", true)},
+		bindings: []providersdk.CapabilityBinding{{
+			DeviceID: "camera-one", ProviderID: "xiaomi-hub", SourceDeviceID: "source-camera",
+		}},
+	}
+	control := &controlProvider{bindingProvider: bindingProvider{
+		id: "xiaomi-hub", devices: []device.Device{cameraSnapshot("source-camera", "xiaomi-hub", true, privacy)},
+	}}
+	manager, err := providermanager.New(camera, control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := manager.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close(ctx)
+	if _, err := manager.DiscoverDevices(ctx); err != nil {
+		t.Fatal(err)
+	}
+	events := make(chan device.Device, 1)
+	unsubscribe := manager.Subscribe(func(item device.Device) { events <- item })
+	defer unsubscribe()
+	availabilityEvents := make(chan providersdk.CapabilityAvailability, 1)
+	unsubscribeAvailability := manager.SubscribeCapabilityAvailability(func(item providersdk.CapabilityAvailability) {
+		availabilityEvents <- item
+	})
+	defer unsubscribeAvailability()
+	offline := control.devices[0].Clone()
+	offline.SetOnline(false)
+	offline.SetProperty("main", "privacy", "enabled", device.BoolValue(true))
+	control.emit(offline)
+	select {
+	case projected := <-events:
+		property, ok := projected.Property("main", "privacy", "enabled")
+		if projected.ID != "camera-one" || projected.ProviderID != "camera-main" || !projected.IsOnline() ||
+			!ok || property.Value.Bool == nil || !*property.Value.Bool {
+			t.Fatalf("projected control snapshot = %#v", projected)
+		}
+	default:
+		t.Fatal("control update was not projected to the canonical camera")
+	}
+	select {
+	case availability := <-availabilityEvents:
+		if availability.DeviceID != "camera-one" || availability.ProviderID != "camera-main" ||
+			availability.EndpointID != "main" || availability.CapabilityID != "privacy" || availability.Available {
+			t.Fatalf("capability availability = %#v", availability)
+		}
+	default:
+		t.Fatal("control capability availability was not published")
+	}
+	_, err = manager.WriteProperty(ctx, providersdk.PropertyWriteRequest{
+		DeviceID: "camera-one", EndpointID: "main", CapabilityID: "privacy", PropertyID: "enabled", Value: device.BoolValue(true),
+	})
+	if !errors.Is(err, providersdk.ErrProviderUnavailable) {
+		t.Fatalf("write after control source went offline = %v", err)
+	}
 }
 
 func (p *interestedProvider) Manifest() providersdk.Manifest {

@@ -40,6 +40,37 @@ func (p *removalEventProvider) Subscribe(handler func(device.Device)) func() {
 }
 func (p *removalEventProvider) emit(item device.Device) { p.handler(item) }
 
+type capabilityAvailabilityProvider struct {
+	item                device.Device
+	deviceHandler       func(device.Device)
+	availabilityHandler func(providersdk.CapabilityAvailability)
+}
+
+func (*capabilityAvailabilityProvider) Manifest() providersdk.Manifest {
+	return providersdk.Manifest{ID: "camera-provider", Type: "camera", Name: "Camera"}
+}
+func (*capabilityAvailabilityProvider) Capabilities() providersdk.Capabilities {
+	return providersdk.Capabilities{Discovery: true, Events: true}
+}
+func (*capabilityAvailabilityProvider) Initialize(context.Context) error { return nil }
+func (*capabilityAvailabilityProvider) Close(context.Context) error      { return nil }
+func (p *capabilityAvailabilityProvider) DiscoverDevices(context.Context) ([]device.Device, error) {
+	return []device.Device{p.item.Clone()}, nil
+}
+func (p *capabilityAvailabilityProvider) Subscribe(handler func(device.Device)) func() {
+	p.deviceHandler = handler
+	return func() { p.deviceHandler = nil }
+}
+func (p *capabilityAvailabilityProvider) CapabilityAvailabilities() []providersdk.CapabilityAvailability {
+	return []providersdk.CapabilityAvailability{{
+		ProviderID: "camera-provider", DeviceID: p.item.ID, EndpointID: "main", CapabilityID: "privacy", Available: true,
+	}}
+}
+func (p *capabilityAvailabilityProvider) SubscribeCapabilityAvailability(handler func(providersdk.CapabilityAvailability)) func() {
+	p.availabilityHandler = handler
+	return func() { p.availabilityHandler = nil }
+}
+
 type transientApplicationProvider struct {
 	inner   *virtual.Provider
 	handler func(providersdk.DeviceEvent)
@@ -455,6 +486,127 @@ func TestUnknownDeviceStartsWithoutInventedValueAndRecovers(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("recovered states = %#v", states)
+}
+
+func TestMediaRuntimeCanReportCameraAvailability(t *testing.T) {
+	inner, err := virtual.NewProviderFromConfig(providerconfig.Config{
+		ID: "camera-provider", Name: "Camera",
+		Config: []byte(`{"devices":[{"id":"camera-1","name":"Camera","type":"camera","availability":"unknown"}]}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &removalEventProvider{inner: inner}
+	service := application.NewDeviceService(provider)
+	defer service.Close()
+
+	online, err := service.ReportDeviceAvailability("camera-1", device.AvailabilityOnline)
+	if err != nil || online.EffectiveAvailability() != device.AvailabilityOnline || !online.Online {
+		t.Fatalf("online report = %#v, %v", online, err)
+	}
+	snapshots, err := provider.DiscoverDevices(context.Background())
+	if err != nil || len(snapshots) != 1 {
+		t.Fatalf("camera snapshots = %#v, %v", snapshots, err)
+	}
+	snapshots[0].SetAvailability(device.AvailabilityUnknown)
+	snapshots[0].Name = "Projected Camera"
+	provider.emit(snapshots[0])
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		items, _ := service.List(context.Background())
+		if len(items) == 1 && items[0].Name == "Projected Camera" &&
+			items[0].EffectiveAvailability() == device.AvailabilityOnline {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	items, _ := service.List(context.Background())
+	if len(items) != 1 || items[0].Name != "Projected Camera" ||
+		items[0].EffectiveAvailability() != device.AvailabilityOnline {
+		t.Fatalf("unknown control projection regressed media availability = %#v", items)
+	}
+	offline, err := service.ReportDeviceAvailability("camera-1", device.AvailabilityOffline)
+	if err != nil || offline.EffectiveAvailability() != device.AvailabilityOffline || offline.Online {
+		t.Fatalf("offline report = %#v, %v", offline, err)
+	}
+	if _, err := service.ReportDeviceAvailability("missing", device.AvailabilityOnline); !errors.Is(err, application.ErrDeviceNotFound) {
+		t.Fatalf("missing report error = %v", err)
+	}
+}
+
+func TestControlProviderOfflineDegradesOnlyDelegatedCapability(t *testing.T) {
+	now := time.Now().UTC()
+	item := device.Device{
+		SchemaVersion: device.SchemaVersion, ID: "camera-1", ProviderID: "camera-provider",
+		Name: "Camera", Type: device.TypeCamera, LastUpdateAt: now,
+		Endpoints: []device.Endpoint{{ID: "main", Name: "Camera", Type: "camera", Capabilities: []device.Capability{
+			{ID: "media", Type: "media", Properties: []device.Property{{
+				Definition: device.PropertyDefinition{ID: "live-stream", Name: "Live", Type: device.ValueTypeBool, Readable: true},
+				Value:      device.BoolValue(true),
+			}}},
+			{ID: "privacy", Type: "privacy", Properties: []device.Property{{
+				Definition: device.PropertyDefinition{ID: "enabled", Name: "Privacy", Type: device.ValueTypeBool, Readable: true, Writable: true},
+				Value:      device.BoolValue(false),
+			}}},
+		}}},
+	}
+	item.SetAvailability(device.AvailabilityUnknown)
+	provider := &capabilityAvailabilityProvider{item: item}
+	service := application.NewDeviceService(provider)
+	defer service.Close()
+	if _, err := service.ReportDeviceAvailability("camera-1", device.AvailabilityOnline); err != nil {
+		t.Fatal(err)
+	}
+
+	projected := item.Clone()
+	projected.Sequence = 1
+	projected.LastUpdateAt = now.Add(time.Second)
+	provider.deviceHandler(projected)
+	provider.availabilityHandler(providersdk.CapabilityAvailability{
+		ProviderID: "camera-provider", DeviceID: "camera-1", EndpointID: "main", CapabilityID: "privacy", Available: false,
+	})
+	deadline := time.Now().Add(time.Second)
+	degraded := false
+	for time.Now().Before(deadline) {
+		states := service.States("camera-1")
+		var mediaAvailable, privacyUnavailable bool
+		for _, state := range states {
+			switch state.Key.CapabilityID {
+			case "media":
+				mediaAvailable = state.Available
+			case "privacy":
+				privacyUnavailable = !state.Available && state.UnavailableReason == domainstate.UnavailableControlProviderOffline
+			}
+		}
+		if mediaAvailable && privacyUnavailable {
+			degraded = true
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !degraded {
+		t.Fatalf("capability degradation states = %#v", service.States("camera-1"))
+	}
+
+	provider.availabilityHandler(providersdk.CapabilityAvailability{
+		ProviderID: "camera-provider", DeviceID: "camera-1", EndpointID: "main", CapabilityID: "privacy", Available: true,
+	})
+	recovered := projected.Clone()
+	recovered.Sequence = 2
+	recovered.LastUpdateAt = now.Add(2 * time.Second)
+	recovered.SetProperty("main", "privacy", "enabled", device.BoolValue(true))
+	provider.deviceHandler(recovered)
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		for _, state := range service.States("camera-1") {
+			if state.Key.CapabilityID == "privacy" && state.Available &&
+				state.Value.Bool != nil && *state.Value.Bool {
+				return
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("recovered control states = %#v", service.States("camera-1"))
 }
 
 func TestDeviceServiceRejectsInvalidTypedPropertyBeforeCreatingCommand(t *testing.T) {

@@ -26,6 +26,41 @@ func TestCentralConfigDefaultsDeviceConnectionModeToAuto(t *testing.T) {
 	}
 }
 
+func TestCentralConfigSeparatesCameraControlIdentityFromCanonicalCamera(t *testing.T) {
+	for name, id := range map[string]string{"missing": "", "legacy-collision": "xiaomi-1178028045"} {
+		t.Run(name, func(t *testing.T) {
+			config := centralRouteConfig("")
+			config.Devices[0] = DeviceConfig{
+				DID: "1178028045", ID: id, Name: "小米智能摄像机", Type: device.TypeCamera,
+				Properties: []PropertyMapping{},
+			}
+			config.applyDefaults()
+			if got := config.Devices[0].ID; got != "xiaomi-control-1178028045" {
+				t.Fatalf("camera control id = %q", got)
+			}
+		})
+	}
+	config := centralRouteConfig("")
+	config.Devices[0] = DeviceConfig{DID: "1178028045", ID: "custom-camera-control", Name: "摄像头", Type: device.TypeCamera}
+	config.applyDefaults()
+	if got := config.Devices[0].ID; got != "custom-camera-control" {
+		t.Fatalf("custom camera control id = %q", got)
+	}
+}
+
+func TestProviderHidesEveryCameraIdentity(t *testing.T) {
+	config := centralRouteConfig("")
+	config.Devices = []DeviceConfig{
+		{DID: "1178028045", ID: "camera-control", Name: "摄像头控制", Type: device.TypeCamera},
+		{DID: "other", ID: "visible-switch", Name: "开关", Type: device.TypeSwitch},
+	}
+	provider := &Provider{config: config}
+	hidden := provider.HiddenDeviceIDs()
+	if len(hidden) != 1 || hidden[0] != "camera-control" {
+		t.Fatalf("hidden device IDs = %#v", hidden)
+	}
+}
+
 func TestCentralConfigValidatesConnectionModeAndCloudCredential(t *testing.T) {
 	invalid := centralRouteConfig("invalid")
 	if _, err := invalid.validate(); err == nil || !strings.Contains(err.Error(), "connectionMode") {

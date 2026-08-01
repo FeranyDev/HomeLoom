@@ -200,6 +200,45 @@ func TestTargetBuildsConsumerOwnedVirtualAccessoryIdentity(t *testing.T) {
 	}
 }
 
+func TestEmptyTargetPublishesNoAccessories(t *testing.T) {
+	service := application.NewDeviceService(virtual.NewProvider())
+	defer service.Close()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	target, err := New(context.Background(), Config{
+		ID: "empty-bridge", Name: "Empty Bridge", Address: "127.0.0.1:0",
+		Pin: "12345678", SetupID: "NONE", StorePath: t.TempDir(),
+	}, service, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.PublishedAccessoryCount() != 0 {
+		t.Fatalf("published accessories = %d, want 0", target.PublishedAccessoryCount())
+	}
+	if devices := target.PairingInfo().Devices; len(devices) != 0 {
+		t.Fatalf("pairing devices = %#v, want none", devices)
+	}
+}
+
+func TestLegacyDeviceIDsStillSelectAccessories(t *testing.T) {
+	service := application.NewDeviceService(virtual.NewProvider())
+	defer service.Close()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	target, err := New(context.Background(), Config{
+		ID: "legacy-bridge", Name: "Legacy Bridge", Address: "127.0.0.1:0",
+		Pin: "12345678", SetupID: "OLD1", StorePath: t.TempDir(),
+		DeviceIDs: []string{"virtual-switch-1"},
+	}, service, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.PublishedAccessoryCount() != 1 {
+		t.Fatalf("published accessories = %d, want 1", target.PublishedAccessoryCount())
+	}
+	if devices := target.PairingInfo().Devices; len(devices) != 1 || devices[0] != "virtual-switch-1" {
+		t.Fatalf("pairing devices = %#v", devices)
+	}
+}
+
 func TestPersistentIIDsSurviveAccessoryRebuildAndNewCharacteristic(t *testing.T) {
 	service := application.NewDeviceService(virtual.NewProvider())
 	defer service.Close()

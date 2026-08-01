@@ -209,7 +209,7 @@ func TestExpandedTransformsForwardAndReverse(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !propertyValuesEqual(result.Value, test.want) {
+			if !propertyValuesApproxEqual(result.Value, test.want) {
 				t.Fatalf("value = %#v, want %#v", result.Value, test.want)
 			}
 		})
@@ -248,20 +248,14 @@ func TestIntNumberRejectsLossyConversions(t *testing.T) {
 	}
 }
 
-func propertyValuesEqual(left, right device.PropertyValue) bool {
+func propertyValuesApproxEqual(left, right device.PropertyValue) bool {
 	if left.Type != right.Type {
 		return false
 	}
-	switch left.Type {
-	case device.ValueTypeBool:
-		return left.Bool != nil && right.Bool != nil && *left.Bool == *right.Bool
-	case device.ValueTypeInt:
-		return left.Int != nil && right.Int != nil && *left.Int == *right.Int
-	case device.ValueTypeNumber:
+	if left.Type == device.ValueTypeNumber {
 		return left.Number != nil && right.Number != nil && math.Abs(*left.Number-*right.Number) < 0.000001
-	default:
-		return left.String != nil && right.String != nil && *left.String == *right.String
 	}
+	return left.Equal(right)
 }
 
 func profile(input, output device.ValueType, transforms ...Transform) Profile {

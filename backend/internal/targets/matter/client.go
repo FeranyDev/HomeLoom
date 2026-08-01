@@ -49,6 +49,7 @@ type NotificationHandler func(string, json.RawMessage)
 type ClientOptions struct {
 	QueueCapacity       int
 	DefaultTimeout      time.Duration
+	MaxFrameBytes       int
 	RequestHandler      RequestHandler
 	NotificationHandler NotificationHandler
 }
@@ -67,6 +68,7 @@ type Client struct {
 	pending     map[string]chan rpcResponse
 	nextID      atomic.Uint64
 	defaultWait time.Duration
+	maxFrame    int
 	onRequest   RequestHandler
 	onNotify    NotificationHandler
 	terminalMu  sync.Mutex
@@ -82,10 +84,15 @@ func NewClient(conn net.Conn, options ClientOptions) *Client {
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
+	maxFrame := options.MaxFrameBytes
+	if maxFrame <= 0 {
+		maxFrame = 4 << 20
+	}
 	client := &Client{
 		conn: conn, writer: bufio.NewWriter(conn), outbound: make(chan []byte, capacity),
 		done: make(chan struct{}), pending: make(map[string]chan rpcResponse),
-		defaultWait: timeout, onRequest: options.RequestHandler, onNotify: options.NotificationHandler,
+		defaultWait: timeout, maxFrame: maxFrame,
+		onRequest: options.RequestHandler, onNotify: options.NotificationHandler,
 	}
 	go client.writeLoop()
 	go client.readLoop()
@@ -205,16 +212,14 @@ func (c *Client) writeLoop() {
 }
 
 func (c *Client) readLoop() {
-	reader := bufio.NewReader(c.conn)
-	for {
-		encoded, err := reader.ReadBytes('\n')
-		if err != nil {
-			if !errors.Is(err, io.EOF) {
-				err = fmt.Errorf("read Matter IPC: %w", err)
-			}
-			c.closeWithError(err)
-			return
-		}
+	scanner := bufio.NewScanner(c.conn)
+	initialBuffer := 64 << 10
+	if c.maxFrame < initialBuffer {
+		initialBuffer = c.maxFrame
+	}
+	scanner.Buffer(make([]byte, initialBuffer), c.maxFrame)
+	for scanner.Scan() {
+		encoded := scanner.Bytes()
 		var message rpcMessage
 		if err := json.Unmarshal(encoded, &message); err != nil || message.JSONRPC != "2.0" {
 			continue
@@ -227,6 +232,11 @@ func (c *Client) readLoop() {
 			go c.handleInbound(message)
 		}
 	}
+	err := scanner.Err()
+	if err != nil && !errors.Is(err, io.EOF) {
+		err = fmt.Errorf("read Matter IPC: %w", err)
+	}
+	c.closeWithError(err)
 }
 
 func (c *Client) handleResponse(message rpcMessage) {

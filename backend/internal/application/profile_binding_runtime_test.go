@@ -83,6 +83,58 @@ func TestPropertyBindingHotReloadsAndMapsBothDirections(t *testing.T) {
 	}
 }
 
+func TestOrphanedProviderBindingsArePrunedFromStorageAndIndexes(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, err := application.NewProfileService(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, binding := range []mapping.Binding{
+		{ID: "keep", ProfileID: "builtin-active-low", ProviderID: "provider-one", DeviceID: "device-keep", EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Enabled: true},
+		{ID: "removed-device", ProfileID: "builtin-active-low", ProviderID: "provider-one", DeviceID: "device-removed", EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Enabled: false},
+		{ID: "removed-provider", ProfileID: "builtin-active-low", ProviderID: "provider-gone", DeviceID: "device-gone", EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Enabled: true},
+	} {
+		if _, err := profiles.CreateBinding(ctx, binding); err != nil {
+			t.Fatal(err)
+		}
+	}
+	changed := 0
+	profiles.SetChangeHandler(func(context.Context) { changed++ })
+	pruned, err := profiles.PruneOrphanedBindings(
+		ctx,
+		map[string]struct{}{"provider-one": {}},
+		map[string]map[string]struct{}{"provider-one": {"device-keep": {}}},
+	)
+	if err != nil || pruned != 2 || changed != 1 {
+		t.Fatalf("PruneOrphanedBindings() = %d, %v; changed=%d", pruned, err, changed)
+	}
+	if bindings := profiles.ListBindings(); len(bindings) != 1 || bindings[0].ID != "keep" {
+		t.Fatalf("remaining bindings = %#v", bindings)
+	}
+	if _, err := profiles.CreateBinding(ctx, mapping.Binding{
+		ID: "replacement", ProfileID: "builtin-active-low", ProviderID: "provider-one", DeviceID: "device-removed",
+		EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Enabled: true,
+	}); err != nil {
+		t.Fatalf("pruned binding still reserved an in-memory uniqueness slot: %v", err)
+	}
+	pruned, err = profiles.PruneProviderBindings(ctx, "provider-one", map[string]struct{}{"device-keep": {}})
+	if err != nil || pruned != 1 {
+		t.Fatalf("PruneProviderBindings() = %d, %v", pruned, err)
+	}
+	reloaded, err := application.NewProfileService(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bindings := reloaded.ListBindings(); len(bindings) != 1 || bindings[0].ID != "keep" {
+		t.Fatalf("persisted bindings = %#v", bindings)
+	}
+}
+
 func TestProfileInUseCannotBeDeletedOrMadeNonReversible(t *testing.T) {
 	ctx := context.Background()
 	store, err := openTestStore(t, ctx)

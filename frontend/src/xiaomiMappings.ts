@@ -6,10 +6,12 @@ export const xiaomiDeviceTypes = [
 	['carbon-monoxide-sensor', '一氧化碳传感器'], ['carbon-dioxide-sensor', '二氧化碳传感器'], ['air-quality-sensor', '空气质量传感器'],
 	['thermostat', '恒温器'], ['air-conditioner', '空调'], ['heater-cooler', '冷暖设备'], ['humidifier-dehumidifier', '加湿除湿器'], ['lock', '门锁'], ['garage-door', '车库门'],
 	['security-system', '安防系统'], ['valve', '阀门'], ['pump', '水泵'], ['water-heater', '热水器'], ['power-meter', '电力计量器'], ['ev-charger', '电动汽车充电桩'], ['speaker', '扬声器'], ['robot-vacuum', '扫地机器人'],
+	['camera', '摄像头'],
 ] as const
 
 export function inferXiaomiDeviceType(item: XiaomiHubDevice): string {
 	const hint = `${item.name} ${item.model ?? ''} ${item.specType ?? ''}`.toLowerCase()
+	if (/camera|摄像头|摄像机|监控/.test(hint)) return 'camera'
 	if (/light|lamp|灯/.test(hint)) return 'lightbulb'
 	if (/outlet|plug|插座/.test(hint)) return 'outlet'
 	if (/温湿度/.test(hint) || ((/temperature|thermometer|温度/.test(hint)) && (/humidity|湿度/.test(hint)))) return 'temperature-humidity-sensor'
@@ -51,6 +53,7 @@ export function inferXiaomiDeviceType(item: XiaomiHubDevice): string {
 export function requiredXiaomiProperties(type: string) {
 	const property = (capabilityId: string, propertyId: string, name: string, valueType: string, piid: number, writable: boolean, enumValues?: Record<string, number>) => ({ endpointId: 'main', capabilityId, capabilityType: capabilityId, propertyId, name, valueType, siid: 2, piid, writable, notifiable: true, ...(enumValues ? { enum: enumValues } : {}) })
 	switch (type) {
+	case 'camera': return []
 	case 'temperature-sensor': return [property('temperature', 'current-temperature', '当前温度', 'number', 1, false)]
 	case 'humidity-sensor': return [property('humidity', 'current-humidity', '当前湿度', 'number', 1, false)]
 	case 'temperature-humidity-sensor': return [property('temperature', 'current-temperature', '当前温度', 'number', 1, false), property('humidity', 'current-humidity', '当前湿度', 'number', 2, false)]
@@ -88,6 +91,31 @@ export function requiredXiaomiProperties(type: string) {
 	}
 }
 
+export function defaultXiaomiMedia(type: string) {
+	if (type !== 'camera') return undefined
+	return {
+		protocol: 'xiaomi-miss',
+		subtype: 'hd',
+		channel: 1,
+		profiles: [{
+			schemaVersion: 1,
+			id: 'main',
+			name: 'Main',
+			width: 1920,
+			height: 1080,
+			fps: 25,
+			videoCodec: 'h264',
+			audioCodec: 'aac',
+			bitrate: 2_000_000,
+		}],
+	}
+}
+
 export function stableXiaomiID(did: string) {
 	return `xiaomi-${did.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[-._]+|[-._]+$/g, '') || 'device'}`.slice(0, 63)
+}
+
+export function stableXiaomiControlID(did: string) {
+	const suffix = did.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[-._]+|[-._]+$/g, '') || 'device'
+	return `xiaomi-control-${suffix}`.slice(0, 63)
 }

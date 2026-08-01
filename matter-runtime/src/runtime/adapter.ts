@@ -15,6 +15,11 @@ import type {
   RuntimeReplayState,
   StorageEntry,
 } from "../contract.js";
+import type { MatterCameraClusterAdapter } from "../camera/camera-cluster-adapter.js";
+import type {
+  CameraIceCandidates,
+  CameraSessionDescription,
+} from "../camera/session-manager.js";
 
 export interface HostStorage {
   get(key: string): Promise<Uint8Array | undefined>;
@@ -33,6 +38,14 @@ export interface AdapterContext {
   emitFabricChanged(event: FabricChangedEvent): Promise<void>;
   emitDiagnostics(event: RuntimeDiagnosticsEvent): Promise<void>;
   readonly storage: HostStorage;
+  readonly cameraClusterAdapter?: MatterCameraClusterAdapter;
+  registerCameraRequestorTransport?(transport: CameraRequestorTransport): () => void;
+}
+
+export interface CameraRequestorTransport {
+  provideAnswer(answer: CameraSessionDescription): Promise<void>;
+  provideIceCandidates(update: CameraIceCandidates): Promise<void>;
+  sessionFailed(sessionId: number): void;
 }
 
 export interface AdapterDiagnostics {

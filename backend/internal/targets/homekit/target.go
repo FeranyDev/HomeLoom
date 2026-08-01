@@ -1120,7 +1120,10 @@ func New(ctx context.Context, config Config, devices *application.DeviceService,
 			source.ID, source.Name = virtual.ID, virtual.Name
 			items = append(items, source)
 		}
-	} else {
+	} else if len(config.DeviceIDs) > 0 {
+		// DeviceIDs is the legacy target-device representation. Keep honoring
+		// an explicit legacy selection, but do not treat an entirely empty
+		// target configuration as "publish every registry device".
 		for _, id := range config.DeviceIDs {
 			selected[id] = true
 		}
@@ -1188,6 +1191,9 @@ func New(ctx context.Context, config Config, devices *application.DeviceService,
 	}
 	target.cancelSubscription = devices.Subscribe(func(item device.Device) {
 		if len(config.Devices) == 0 {
+			if !selected[item.ID] {
+				return
+			}
 			projected, projectErr := devices.ProjectForConsumer("homekit", item)
 			if projectErr != nil {
 				logger.Error("HomeKit consumer projection failed", "device_id", item.ID, "error", projectErr)

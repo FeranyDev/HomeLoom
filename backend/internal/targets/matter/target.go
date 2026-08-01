@@ -2,7 +2,9 @@ package matter
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,7 +27,7 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/mapping"
 )
 
-const protocolVersion = "1.0"
+const protocolVersion = "1.1"
 
 type EndpointStorage interface {
 	AllocateEndpoint(context.Context, string, string, device.Type) (uint16, error)
@@ -46,9 +48,38 @@ type Storage interface {
 	RuntimeStorage
 }
 
+// CameraMediaRuntime is the narrow, target-scoped media capability exposed to
+// the Matter sidecar. The sidecar never receives camera source URLs or
+// credentials; Target selects the stream from its persisted device binding.
+type CameraMediaRuntime interface {
+	WebRTC(context.Context, string, CameraWebRTCRequest) (CameraWebRTCResponse, error)
+	Snapshot(context.Context, string, uint16, uint16) ([]byte, error)
+}
+
+type CameraWebRTCRequest struct {
+	Operation string              `json:"operation"`
+	SessionID string              `json:"sessionId,omitempty"`
+	SDP       string              `json:"sdp,omitempty"`
+	Candidate *CameraICECandidate `json:"candidate,omitempty"`
+}
+
+type CameraICECandidate struct {
+	Candidate        string  `json:"candidate"`
+	SDPMid           *string `json:"sdpMid,omitempty"`
+	SDPMLineIndex    *uint16 `json:"sdpMLineIndex,omitempty"`
+	UsernameFragment *string `json:"usernameFragment,omitempty"`
+}
+
+type CameraWebRTCResponse struct {
+	SessionID string `json:"sessionId,omitempty"`
+	SDP       string `json:"sdp,omitempty"`
+	Closed    bool   `json:"closed,omitempty"`
+}
+
 type Config struct {
 	ID          string
 	Name        string
+	NodeKind    string
 	Matter      domaintarget.MatterConfig
 	Devices     []domaintarget.VirtualDevice
 	Executable  string
@@ -58,6 +89,7 @@ type Config struct {
 	StartWait   time.Duration
 	RestartWait time.Duration
 	OnStatus    func()
+	CameraMedia CameraMediaRuntime
 }
 
 type CommissioningState struct {
@@ -89,8 +121,6 @@ type Target struct {
 	initialReady  chan struct{}
 	readyOnce     sync.Once
 	status        CommissioningState
-	setupURI      string
-	manualCode    string
 	revision      atomic.Uint64
 	syncRequested chan struct{}
 
@@ -104,6 +134,20 @@ func New(config Config, devices *application.DeviceService, storage Storage, log
 	}
 	if devices == nil || storage == nil {
 		return nil, errors.New("Matter target requires device and persistent storage services")
+	}
+	if config.NodeKind == "" {
+		config.NodeKind = "bridge"
+	}
+	if config.NodeKind != "bridge" && config.NodeKind != "camera" {
+		return nil, fmt.Errorf("unsupported Matter node kind %q", config.NodeKind)
+	}
+	if config.NodeKind == "camera" &&
+		(len(config.Devices) != 1 || config.Devices[0].Type != device.TypeCamera || !config.Devices[0].Enabled ||
+			len(config.Devices[0].AuxiliarySourceDeviceIDs) != 0) {
+		return nil, errors.New("Matter camera node requires exactly one enabled camera without auxiliary sources")
+	}
+	if config.NodeKind == "camera" && config.CameraMedia == nil {
+		return nil, errors.New("Matter camera node requires a media runtime")
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -274,6 +318,7 @@ func (t *Target) handshakeAndReplay(ctx context.Context, client *Client) error {
 type bridgeConfiguration struct {
 	TargetID                   string `json:"targetId"`
 	IdentityNamespace          string `json:"identityNamespace"`
+	NodeKind                   string `json:"nodeKind"`
 	NetworkInterface           string `json:"networkInterface,omitempty"`
 	ListenPort                 uint16 `json:"listenPort"`
 	Discriminator              uint16 `json:"discriminator"`
@@ -294,10 +339,16 @@ type deviceSnapshot struct {
 	Attributes map[string]any `json:"attributes"`
 }
 
+type cameraMedia struct {
+	DeviceID string `json:"deviceId"`
+	StreamID string `json:"streamId"`
+}
+
 type replayState struct {
 	Revision uint64              `json:"revision"`
 	Bridge   bridgeConfiguration `json:"bridge"`
 	Devices  []deviceSnapshot    `json:"devices"`
+	Media    *cameraMedia        `json:"media,omitempty"`
 }
 
 func (t *Target) replayState(ctx context.Context) (replayState, error) {
@@ -313,10 +364,11 @@ func (t *Target) replayState(ctx context.Context) (replayState, error) {
 	if err != nil {
 		return replayState{}, err
 	}
-	return replayState{
+	state := replayState{
 		Revision: t.revision.Add(1),
 		Bridge: bridgeConfiguration{
 			TargetID: t.config.ID, IdentityNamespace: t.config.ID,
+			NodeKind:         t.config.NodeKind,
 			NetworkInterface: t.config.Matter.NetworkInterface, ListenPort: port,
 			Discriminator: *t.config.Matter.Discriminator, CommissioningPasscode: uint32(passcode),
 			VendorID: t.config.Matter.VendorID, ProductID: t.config.Matter.ProductID,
@@ -324,7 +376,12 @@ func (t *Target) replayState(ctx context.Context) (replayState, error) {
 			CommissioningWindowSeconds: t.config.Matter.CommissioningWindowSeconds,
 		},
 		Devices: snapshots,
-	}, nil
+	}
+	if t.config.NodeKind == "camera" {
+		sourceID := t.config.Devices[0].SourceDeviceID
+		state.Media = &cameraMedia{DeviceID: sourceID, StreamID: cameraStreamID(sourceID)}
+	}
+	return state, nil
 }
 
 func (t *Target) runtimeUDPPort() (uint16, error) {
@@ -351,6 +408,9 @@ func (t *Target) runtimeUDPPort() (uint16, error) {
 }
 
 func (t *Target) buildDeviceSnapshots(ctx context.Context) ([]deviceSnapshot, error) {
+	if t.config.NodeKind == "camera" {
+		return t.buildCameraSnapshot(ctx)
+	}
 	active := make(map[string]struct{})
 	result := make([]deviceSnapshot, 0, len(t.config.Devices))
 	for _, virtual := range t.config.Devices {
@@ -402,6 +462,32 @@ func (t *Target) buildDeviceSnapshots(ctx context.Context) ([]deviceSnapshot, er
 		}
 	}
 	return result, nil
+}
+
+func (t *Target) buildCameraSnapshot(ctx context.Context) ([]deviceSnapshot, error) {
+	virtual := t.config.Devices[0]
+	sources, err := t.devices.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list Matter camera source: %w", err)
+	}
+	for _, source := range sources {
+		if source.ID != virtual.SourceDeviceID {
+			continue
+		}
+		if source.Type != device.TypeCamera {
+			return nil, fmt.Errorf("Matter camera source %q is not a camera", source.ID)
+		}
+		return []deviceSnapshot{{
+			ID: virtual.ID, EndpointID: 1, DeviceType: string(device.TypeCamera),
+			Name: virtual.Name, Reachable: source.IsOnline(), Attributes: map[string]any{},
+		}}, nil
+	}
+	return nil, fmt.Errorf("Matter camera source %q was not found", virtual.SourceDeviceID)
+}
+
+func cameraStreamID(deviceID string) string {
+	sum := sha256.Sum256([]byte(deviceID))
+	return "camera-" + hex.EncodeToString(sum[:8])
 }
 
 func (t *Target) syncLoop(ctx context.Context) {
@@ -589,8 +675,55 @@ func (t *Target) handleRequest(ctx context.Context, method string, params json.R
 		return map[string]any{"entries": entries}, err
 	case "storage.clear":
 		return map[string]bool{"cleared": true}, t.storage.Clear(ctx, t.config.ID)
+	case "camera.webrtc":
+		if t.config.NodeKind != "camera" || t.config.CameraMedia == nil {
+			return nil, &RPCError{Code: -32601, Message: "method not found"}
+		}
+		var request CameraWebRTCRequest
+		if err := json.Unmarshal(params, &request); err != nil || !validCameraWebRTCRequest(request) {
+			return nil, &RPCError{Code: -32602, Message: "invalid camera WebRTC request"}
+		}
+		return t.config.CameraMedia.WebRTC(ctx, cameraStreamID(t.config.Devices[0].SourceDeviceID), request)
+	case "camera.snapshot":
+		if t.config.NodeKind != "camera" || t.config.CameraMedia == nil {
+			return nil, &RPCError{Code: -32601, Message: "method not found"}
+		}
+		var request struct {
+			Width  uint16 `json:"width"`
+			Height uint16 `json:"height"`
+		}
+		if err := json.Unmarshal(params, &request); err != nil ||
+			request.Width == 0 || request.Height == 0 || request.Width > 4096 || request.Height > 4096 {
+			return nil, &RPCError{Code: -32602, Message: "invalid camera snapshot request"}
+		}
+		jpeg, err := t.config.CameraMedia.Snapshot(
+			ctx, cameraStreamID(t.config.Devices[0].SourceDeviceID), request.Width, request.Height,
+		)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{"jpegBase64": base64.StdEncoding.EncodeToString(jpeg)}, nil
 	default:
 		return nil, &RPCError{Code: -32601, Message: "method not found"}
+	}
+}
+
+func validCameraWebRTCRequest(request CameraWebRTCRequest) bool {
+	if len(request.SessionID) > 128 || len(request.SDP) > 512<<10 {
+		return false
+	}
+	switch request.Operation {
+	case "open":
+		return request.SessionID == "" && request.SDP != "" && request.Candidate == nil
+	case "reoffer":
+		return request.SessionID != "" && request.SDP != "" && request.Candidate == nil
+	case "addIce":
+		return request.SessionID != "" && request.SDP == "" && request.Candidate != nil &&
+			request.Candidate.Candidate != "" && len(request.Candidate.Candidate) <= 4096
+	case "close":
+		return request.SessionID != "" && request.SDP == "" && request.Candidate == nil
+	default:
+		return false
 	}
 }
 

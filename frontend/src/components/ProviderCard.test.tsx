@@ -18,6 +18,14 @@ describe('ProviderCard simulation', () => {
 		expect(screen.getByRole('button', { name: '重启监听' })).toBeInTheDocument()
 	})
 
+	it('shows Camera Provider media lifecycle and child-device action', () => {
+		const camera: Provider = { ...provider, id: 'camera-main', type: 'camera', name: '家庭摄像头', config: { cameras: [{ id: 'front-door', name: '门口', driver: 'rtsp' }] } }
+		render(<ProviderCard provider={camera} devices={[]} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} onManageDevices={vi.fn()} />)
+		expect(screen.getByText('1 台子设备')).toBeInTheDocument()
+		expect(screen.getByText('Media Worker / Camera Kernel 已按 Provider 启用')).toBeInTheDocument()
+		expect(screen.getByRole('button', { name: '管理摄像头' })).toBeInTheDocument()
+	})
+
 	it('shows renewable credential deadlines without exposing credential values', () => {
 		const xiaomi: Provider = { ...provider, id: 'xiaomi-main', type: 'xiaomi', config: { oauth: { clientId: '1', oauthUuid: 'uuid', virtualDid: '2' }, clientId: '2', clientCertificate: '********', privateKey: '********' }, credentials: { managed: true, refreshAt: '2026-07-16T10:00:00Z', tokenExpiresAt: '2026-07-16T12:00:00Z', certificateExpiresAt: '2026-08-16T12:00:00Z' }, credentialError: 'cloud unavailable', credentialRetryAt: '2026-07-16T10:01:00Z' }
 		render(<ProviderCard provider={xiaomi} devices={[]} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} />)

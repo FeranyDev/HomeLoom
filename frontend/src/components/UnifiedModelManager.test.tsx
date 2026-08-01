@@ -108,7 +108,7 @@ describe('UnifiedModelManager', () => {
   })
 
   it('edits enum options for built-in model properties', async () => {
-    const enumModel = {
+    const enumModel: ModelContract = {
       ...model,
       parameters: [{
         path: { endpointId: 'main', capabilityId: 'light', propertyId: 'mode' },

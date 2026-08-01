@@ -53,6 +53,7 @@ const (
 	TypePowerMeter                Type = "power-meter"
 	TypeEVCharger                 Type = "ev-charger"
 	TypeSpeaker                   Type = "speaker"
+	TypeCamera                    Type = "camera"
 	TypeRobotVacuum               Type = "robot-vacuum"
 )
 
@@ -111,6 +112,59 @@ func StringValue(value string) PropertyValue {
 }
 func EnumValue(value string) PropertyValue {
 	return PropertyValue{Type: ValueTypeEnum, String: &value}
+}
+
+// Equal reports whether two values carry the same typed payload. Nil payloads
+// never compare equal because a valid value always carries a concrete payload.
+func (p PropertyValue) Equal(other PropertyValue) bool {
+	if p.Type != other.Type {
+		return false
+	}
+	switch p.Type {
+	case ValueTypeBool:
+		return p.Bool != nil && other.Bool != nil && *p.Bool == *other.Bool
+	case ValueTypeInt:
+		return p.Int != nil && other.Int != nil && *p.Int == *other.Int
+	case ValueTypeNumber:
+		return p.Number != nil && other.Number != nil && *p.Number == *other.Number
+	case ValueTypeString, ValueTypeEnum:
+		return p.String != nil && other.String != nil && *p.String == *other.String
+	default:
+		return false
+	}
+}
+
+// HasSinglePayload reports whether exactly one typed payload is set and it
+// matches the declared value type.
+func (p PropertyValue) HasSinglePayload() bool {
+	payloads := 0
+	if p.Bool != nil {
+		payloads++
+	}
+	if p.Int != nil {
+		payloads++
+	}
+	if p.Number != nil {
+		payloads++
+	}
+	if p.String != nil {
+		payloads++
+	}
+	if payloads != 1 {
+		return false
+	}
+	switch p.Type {
+	case ValueTypeBool:
+		return p.Bool != nil
+	case ValueTypeInt:
+		return p.Int != nil
+	case ValueTypeNumber:
+		return p.Number != nil
+	case ValueTypeString, ValueTypeEnum:
+		return p.String != nil
+	default:
+		return false
+	}
 }
 
 type PropertyDefinition struct {
