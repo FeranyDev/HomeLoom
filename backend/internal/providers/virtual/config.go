@@ -110,7 +110,11 @@ func NewProviderFromConfig(item providerconfig.Config) (*Provider, error) {
 	if config.LatencyMS < 0 || config.LatencyMS > 60_000 {
 		return nil, errors.New("latencyMs must be between 0 and 60000")
 	}
-	if len(config.Devices) == 0 {
+	// Keep the historical defaults for legacy configurations that never had a
+	// devices field. An explicitly empty list is meaningful: it represents a
+	// newly-created Provider whose child devices will be added later through
+	// the visual device manager.
+	if config.Devices == nil {
 		return newProvider(item.ID, item.Name, config, defaultDevices(item.ID)), nil
 	}
 	devices := make(map[string]device.Device, len(config.Devices))

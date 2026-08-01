@@ -64,7 +64,7 @@ describe('ProviderForm', () => {
 		expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ type: 'mqtt', config: expect.objectContaining({ mode: 'client', brokerUrl: 'mqtt://broker.local:1883', username: 'homeloom', devices: [] }) }), false)
 	})
 
-	it('creates an independent camera provider without selecting an output target', async () => {
+  it('creates an independent camera provider without selecting an output target', async () => {
 		const onSave = vi.fn().mockResolvedValue(undefined)
 		render(<ProviderForm provider={null} onCancel={() => {}} onSave={onSave} />)
 		await userEvent.selectOptions(screen.getByLabelText('类型'), 'camera')
@@ -78,6 +78,15 @@ describe('ProviderForm', () => {
 			type: 'camera',
 			config: expect.objectContaining({ cameras: [] }),
 		}), false)
+  })
+
+	it('creates a Virtual Provider with an explicit empty child-device catalog', async () => {
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		render(<ProviderForm provider={null} onCancel={() => {}} onSave={onSave} />)
+		await userEvent.type(screen.getByLabelText(/ID/), 'virtual-lab')
+		await userEvent.type(screen.getByLabelText('名称'), '实验室虚拟设备')
+		await userEvent.click(screen.getByRole('button', { name: '保存并应用' }))
+		expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ type: 'virtual', config: expect.objectContaining({ devices: [] }) }), false)
 	})
 
 	it('tests an MQTT connection without saving', async () => {

@@ -56,6 +56,20 @@ func TestProviderUsesDatabaseDeviceConfiguration(t *testing.T) {
 	}
 }
 
+func TestProviderWithExplicitlyEmptyDeviceListStartsWithoutChildren(t *testing.T) {
+	provider, err := NewProviderFromConfig(providerconfig.Config{ID: "virtual-empty", Name: "Empty", Config: []byte(`{"devices":[]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := provider.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("devices = %#v, want no implicit children", items)
+	}
+}
+
 func TestProviderAddsConfiguredDeviceThroughLiveReconfiguration(t *testing.T) {
 	current, err := NewProviderFromConfig(providerconfig.Config{ID: "virtual-lab", Name: "Lab", Config: []byte(`{"devices":[{"id":"desk-switch","type":"switch","power":false}]}`)})
 	if err != nil {

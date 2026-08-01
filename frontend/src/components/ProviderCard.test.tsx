@@ -26,6 +26,14 @@ describe('ProviderCard simulation', () => {
 		expect(screen.getByRole('button', { name: '管理摄像头' })).toBeInTheDocument()
 	})
 
+	it('shows Virtual Provider child-device action even before its first child exists', async () => {
+		const onManageDevices = vi.fn()
+		render(<ProviderCard provider={{ ...provider, config: { devices: [] } }} devices={[]} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} onManageDevices={onManageDevices} />)
+		expect(screen.getByText('0 台子设备')).toBeInTheDocument()
+		await userEvent.click(screen.getByRole('button', { name: '管理虚拟设备' }))
+		expect(onManageDevices).toHaveBeenCalledWith(expect.objectContaining({ id: 'virtual-main', type: 'virtual', config: { devices: [] } }))
+	})
+
 	it('shows renewable credential deadlines without exposing credential values', () => {
 		const xiaomi: Provider = { ...provider, id: 'xiaomi-main', type: 'xiaomi', config: { oauth: { clientId: '1', oauthUuid: 'uuid', virtualDid: '2' }, clientId: '2', clientCertificate: '********', privateKey: '********' }, credentials: { managed: true, refreshAt: '2026-07-16T10:00:00Z', tokenExpiresAt: '2026-07-16T12:00:00Z', certificateExpiresAt: '2026-08-16T12:00:00Z' }, credentialError: 'cloud unavailable', credentialRetryAt: '2026-07-16T10:01:00Z' }
 		render(<ProviderCard provider={xiaomi} devices={[]} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} />)

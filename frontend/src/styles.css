@@ -1744,6 +1744,15 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .xiaomi-device-manager > details { padding: 18px; border: 1px solid #d2d0c7; background: rgba(250,249,245,.7); }
 .xiaomi-device-manager > details summary { cursor: pointer; }
 .xiaomi-device-manager > details .config-editor { margin-top: 15px; }
+.virtual-device-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 16px; border: 1px solid #d2d0c7; background: rgba(250,249,245,.62); }
+.virtual-device-fields > label { display: grid; gap: 6px; color: #6f746c; font-size: 11px; }
+.virtual-device-fields input, .virtual-device-fields select { min-width: 0; width: 100%; box-sizing: border-box; padding: 10px; border: 1px solid #c7c7bf; background: #fbfaf6; color: #3f433c; font: inherit; }
+.virtual-device-fields .enable-row { display: flex; align-items: center; gap: 7px; }
+.virtual-device-fields .enable-row input { width: auto; }
+.virtual-device-editor__hint { grid-column: 1 / -1; color: #777c73; line-height: 1.5; }
+.virtual-device-list > div:not(.command-heading) { grid-template-columns: auto minmax(120px, 1fr) minmax(150px, auto) minmax(140px, auto) auto auto; }
+.virtual-device-list button { padding: 7px 10px; border: 1px solid #c4c5bd; background: #f8f7f1; color: #545950; cursor: pointer; }
+.virtual-device-list button.is-danger { border-color: #b98b80; color: #945a4b; }
 .mqtt-device-manager { display: grid; gap: 20px; }
 .mqtt-device-manager > header { display: flex; justify-content: space-between; gap: 24px; align-items: start; padding: 28px 30px; border: 1px solid #cccac1; background: rgba(250,249,245,.76); }
 .mqtt-device-manager > header h3 { margin: 7px 0; font-size: clamp(25px, 4vw, 38px); }
@@ -1857,6 +1866,9 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 	.mqtt-route-editor { border-right: 0; border-bottom: 1px solid #d2d0c7; }
 	.mqtt-route-list article { grid-template-columns: auto 1fr; }
 	.mqtt-route-list article > div:nth-child(n+2) { grid-column: 2; }
+	.virtual-device-fields { grid-template-columns: 1fr; }
+	.virtual-device-list > div:not(.command-heading) { grid-template-columns: auto 1fr; }
+	.virtual-device-list > div:not(.command-heading) > small, .virtual-device-list > div:not(.command-heading) > button { grid-column: 2; justify-self: start; }
 	.mapping-form { border-right: 0; border-bottom: 1px solid #d2d0c7; }
 	.mapping-steps > div { grid-template-columns: 1fr; }
 }
