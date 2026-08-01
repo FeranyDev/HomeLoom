@@ -40,7 +40,6 @@ Core 启动 sidecar 时会设置以下环境变量；直接调试 sidecar 时也
 HOMELOOM_MATTER_LOG_LEVEL=debug HOMELOOM_MATTER_LOG_FORMAT=plain ./scripts/dev-env.sh sh -c 'cd backend && go run ./cmd/homeloom'
 ```
 
-
 `@matter/main` 0.17.7 的在线 factory reset 会在进程内重建 `ServerNode`，但该版本仍可能保留旧一代 shared mDNS 引用。sidecar 在 reset RPC 成功返回后会主动正常退出，由 Go Target supervisor 启动全新进程并执行握手与全量重放；这是身份轮换的一部分，不应被监控系统当作整套 HomeLoom 服务故障。
 
 ## IPC 与状态恢复

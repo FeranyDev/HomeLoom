@@ -1,5 +1,8 @@
 # HomeLoom 开发计划
 
+> 文档性质：早期架构基线与版本路线。当前完成状态以
+> [实施清单](implementation-checklist.md)及各专项方案为准；本文不再重复维护逐项进度。
+
 ## 1. 项目定位
 
 HomeLoom 是一个独立运行的智能设备聚合桥，将不同平台的设备转换为统一模型，并发布到 Apple Home。
@@ -18,7 +21,7 @@ Virtual / MQTT / Xiaomi / 其他平台
                Target
                  │
                  ▼
-             Apple Home
+             Apple Home / Matter / Camera Target
 ```
 
 项目不依赖 Home Assistant。首条主线只解决以下问题：
@@ -31,7 +34,7 @@ Virtual / MQTT / Xiaomi / 其他平台
 
 ## 2. 范围控制
 
-### 2.1 v0.1 范围
+### 2.1 v0.1 范围（历史版本定义）
 
 - Go 后台服务；
 - Virtual Provider；
@@ -43,7 +46,7 @@ Virtual / MQTT / Xiaomi / 其他平台
 - 健康检查、结构化日志和基础指标；
 - Docker 和 Linux ARM64 构建。
 
-### 2.2 v0.1 非目标
+### 2.2 v0.1 非目标（历史版本定义）
 
 - 米家接入；
 - Web 管理界面；
@@ -53,7 +56,7 @@ Virtual / MQTT / Xiaomi / 其他平台
 - Camera、Doorbell、Lock、Security System；
 - 复杂自动化和远程云管理。
 
-这些功能只在基础链路稳定后进入后续版本。
+这些功能后来已分别进入小米、Matter 和 Camera 专项；本节仅保留 v0.1 的范围决策记录。
 
 ## 3. 成功标准
 
@@ -113,7 +116,7 @@ Apple Home 写入后可以短暂显示乐观值，但必须等待 Provider 上�
 | MQTT | Eclipse Paho `autopaho`（客户端）+ Mochi MQTT（内嵌服务端） |
 | 日志 | `go.uber.org/zap` |
 | 指标 | Prometheus Client |
-| Apple HAP | 阶段 0 PoC 后确定库和封装边界 |
+| Apple HAP | `brutella/hap`，由 HomeKit Target 封装 |
 | 测试 | Go testing，按需使用 Testify |
 | 部署 | Docker / Docker Compose |
 
@@ -121,38 +124,20 @@ Apple Home 写入后可以短暂显示乐观值，但必须等待 Provider 上�
 
 ## 6. 目标目录结构
 
-初期只创建实际使用的目录：
+当前仓库按进程和前端分层：
 
 ```text
 HomeLoom/
-├── cmd/
-│   └── homeloom/
-├── internal/
-│   ├── config/
-│   ├── runtime/
-│   ├── device/
-│   ├── registry/
-│   ├── state/
-│   ├── command/
-│   ├── eventbus/
-│   ├── persistence/
-│   ├── mapping/
-│   ├── api/
-│   └── diagnostics/
-├── providers/
-│   ├── virtual/
-│   └── mqtt/
-├── targets/
-│   └── homekit/
-├── profiles/
-├── configs/
-├── testdata/
-├── Dockerfile
-├── compose.yaml
-└── go.mod
+├── backend/          # Go Core、Provider、Target 和 API
+├── frontend/         # React 管理界面源码
+├── matter-runtime/   # Matter Node.js sidecar
+├── camera-kernel/    # 受限摄像头媒体子进程
+├── deploy/           # 容器与部署文件
+├── docs/
+└── scripts/
 ```
 
-米家、Web、Matter 和插件目录在开始对应里程碑时再创建。
+具体实现入口和当前目录以仓库实际结构为准。
 
 ## 7. 核心模型
 
@@ -580,19 +565,6 @@ GET /metrics  Prometheus 指标
 | v0.5.0 | 第二 Provider、进程隔离、稳定性增强 |
 | v1.0.0 | 核心接口、数据模型、部署与文档稳定 |
 
-## 15. 近期执行清单
+## 15. 文档维护边界
 
-下一步只执行 M0：
-
-1. 初始化 Git 和 Go module；
-2. 建立最小 `cmd/homeloom`；
-3. 选择并锁定 HAP 库版本；
-4. 发布虚拟开关；
-5. 完成 Apple Home 配对；
-6. 将 pairing 和附件身份写入 PostgreSQL；
-7. 验证三次重启和设备改名；
-8. 验证 Docker 与 ARM64；
-9. 记录 PoC 结论和未解决风险；
-10. M0 验收通过后再开始核心抽象。
-
-项目的第一优先级不是平台数量，而是稳定身份、可靠状态和可恢复运行。只有这三点得到验证，后续 Provider、Web UI 和 Matter 扩展才有可靠基础。
+本文保留项目早期的定位、架构原则、版本路线和测试方法。当前待办、已完成项和真实环境验收只在[实施清单](implementation-checklist.md)、[Matter 方案](matter-target-plan.md)、[摄像头方案](HomeLoom_多协议摄像头接入实现计划_v3.md)和[小米 Provider 方案](xiaomi-cloud-mips-plan.md)中维护。

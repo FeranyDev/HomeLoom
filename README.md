@@ -7,7 +7,7 @@ HomeLoom 是一个源码层前后端分离、发布时合并为单二进制的�
 ```text
 backend/   Go + Echo API
 frontend/  React + TypeScript 管理界面
-docs/      项目计划与设计文档
+docs/      项目计划与设计文档（[文档索引](docs/README.md)）
 ```
 
 ## 本地运行

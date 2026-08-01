@@ -370,28 +370,13 @@ Provider 卡片展示两个独立通道：
 
 退出条件：页面能解释每台设备的真实状态路径，持续运行无重复连接、无明显漏事件、无高频云轮询。
 
-## 15. 预计修改文件
+## 15. 实现入口
 
-后端主要涉及：
+代码与自动化测试已经完成，当前只需按阶段 D 执行实体设备验收。实现细节以当前代码和以下文档为准：
 
-- `backend/internal/providers/xiaomi/cloud_mips_client.go`：新增云 MQTT 客户端（避免 `_mips.go` 被 Go 识别为 MIPS 架构文件）；
-- `backend/internal/providers/xiaomi/cloud_mips_client_test.go`：协议和生命周期测试；
-- `backend/internal/providers/xiaomi/provider.go`：统一生命周期、状态归并和补偿调度；
-- `backend/internal/providers/xiaomi/home_cloud.go`：批量初始/补偿读取；
-- `backend/internal/providers/xiaomi/credentials.go`：Token 热更新联动；
-- `backend/internal/providers/xiaomi/hub_devices.go`：目录变化和推送能力语义；
-- `backend/internal/domain/device/device.go`：可选状态传输字段；
-- `backend/internal/application/device_service.go`：准确的 `reported/polled` 来源；
-- `backend/internal/platform/httpapi/server.go` 与 `docs/openapi.yaml`：运行状态 API。
-
-前端主要涉及：
-
-- `frontend/src/types/device.ts`；
-- `frontend/src/types/provider.ts`；
-- `frontend/src/components/ProviderCard.tsx`；
-- `frontend/src/components/ProviderForm.tsx`；
-- `frontend/src/components/XiaomiDeviceManager.tsx`；
-- 对应组件测试。
+- [Xiaomi Provider 使用与边界](./xiaomi-provider.md)；
+- [统一实施清单](./implementation-checklist.md)；
+- [HTTP API](./http-api.md)。
 
 ## 16. 验收标准
 

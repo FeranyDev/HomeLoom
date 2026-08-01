@@ -2,7 +2,7 @@
 
 > 版本：v3.2
 >
-> 日期：2026-07-27
+> 日期：2026-08-01
 >
 > 目标：构建范围受控、可长期维护的摄像头接入体系。当前正式输入只支持 RTSP、ONVIF→RTSP 和 Xiaomi MISS；处理只支持项目内 FFmpeg 转码；对外只实现独立 HomeKit Camera 输出。HomeLoom Core 内嵌媒体 Runtime，负责账号、设备、长期凭据、云端授权、媒体会话与策略；每路摄像头仍由受限的 HomeLoom Camera Kernel 子进程隔离执行协议数据面。
 >
@@ -1628,18 +1628,14 @@ MC-5/MC-6 的发布门槛至少包括：
 6. 24 小时回归及 `TC_AVSM_*`、`TC_WEBRTC_*`、`TC_WEBRTCP_*` 通过。
 
 兼容矩阵只允许 `PASS`、`FAIL`、`BLOCKED`、`NOT RUN`。`PASS` 必须附版本、日志和媒体
-证据。Apple Home 当前没有官方 Matter Camera 支持承诺，不能作为 Matter Camera
+证据。Apple Home 当前没有 Matter Camera 的官方支持承诺，因此不能作为 Matter Camera
 发布门槛；面向 Apple Home 的实时视频继续使用独立 HAP Camera Target。
-
-Apple 官方当前的 Matter 设备类型列表和 Matter Framework 文档没有承诺 Matter Camera。
-因此 Apple Home 不能作为 Matter Camera 首版发布标准；Apple Home 实时视频继续使用
-独立 HAP Camera Target。
 
 ---
 
 ## 19. 开发阶段
 
-### 当前实现进度（更新至 2026-07-29）
+### 当前实现进度（更新至 2026-08-01）
 
 状态说明：`已完成` 表示代码和单元测试已落地；`进行中` 表示已有可运行骨架但尚未达到阶段验收；`未开始` 表示还没有产品实现。
 
@@ -1659,194 +1655,18 @@ Apple 官方当前的 Matter 设备类型列表和 Matter Framework 文档没有
 | Camera Targets 子分页 | 进行中（HomeKit 配对纵切已完成） | 桥接中心已拆分普通设备、HomeKit 摄像头、Matter 摄像头、其他摄像头四个子分页；HomeKit 页可从 Camera Provider 设备中选择一台摄像头创建独立 `homekit-camera` Target，展示来源 Provider、设备在线状态、实际 HAP 地址、扫码二维码、备用手动配对码和配对状态，且可直接打开设备中心实时预览；同时提供停用、删除及清除独立身份；后端校验一 Target 一 Camera，Target Manager 驱动 Runtime 发布/回收；前后端边界、生命周期单测及 Xiaomi 真机配对和截图已验证，实时流兼容修正版待重启复验；Matter 页已开放带实验性警告的创建、配置、二维码/状态、停用和删除入口 | 补 Source/Transcode/Publisher 分段健康状态和码流/音频策略；Matter 页在 MC-5/MC-6 通过前不得移除实验性警告，其他摄像头分页仍只展示能力说明 |
 | Matter Camera | 功能实现完成，实验性验证阶段 | 独立 Target/Node、Camera 0x0142、AV Stream 资源、JPEG Snapshot、Pion H.264/Opus WebRTC、Requestor Answer/ICE 回调、会话/资源清理和实验性 UI 均已接通并通过自动化测试；创建入口可用于 Controller 联调 | 本机缺少 `chip-camera-controller`，commissioning、五分钟 LiveView、真机 Snapshot、一致性用例、故障注入和 24 小时回归仍为 `NOT RUN`；完成对应矩阵前不能对目标平台标记正式可用 |
 
-本轮以“Xiaomi Provider Camera → MediaSource/Stream 持久化 → Core 内嵌授权服务 → 独立
-Camera Kernel → Apple Home Camera”链路打通最小纵切。正式控制链路现已迁移为“Camera Provider →
-Device Center → Camera Target”，不保留发现即发布行为。`chuangmi.camera.079ac1` 真机已经完成授权、
-CS2 局域网连接、关键帧读取，并曾完成旧纵切的 Apple Home 配对验证；该配对现已移除，
-只有用户在 HomeKit 摄像头子分页创建并启用 Target 时才会再次发布。当前关键帧实测为
-`video/mp4; codecs="hvc1.1.6.L153.B0"`。当前已按 go2rtc 推荐的多 Source 方式增加
-`ffmpeg:<stream>#video=h264`，并验证输出为持续的
-`video/mp4; codecs="avc1.640029,opus"`。macOS 上不启用该型号会失败的 VideoToolbox
-HEVC 硬件解码；后续又复现 VideoToolbox H.264 创建压缩会话失败 `-12908`，现统一采用
-软件 HEVC 解码 + 低延迟 `libx264` H.264 编码，优先保证 Runtime、设备中心和 HomeKit
-共享管线稳定。2026-07-29 针对“Apple Home 仅周期刷新预览图”的进一步诊断确认
-Controller 已完成 SetupEndpoints/SelectedRTP 且 Camera Kernel 持续发送 SRTP；先前尝试
-把共享输出强制为 Baseline/3.1、299 Kbps 并增加第二个 RTP Service，既没有恢复直播，
-又让画质明显低于原版 go2rtc。复核 go2rtc Issue/PR 后确认：iOS 26 的已发布修复只要求
-Microphone Service；当前上游经典 HomeKit 路径仍使用单 RTP Service、Main 3.1/4.0。
-因此本轮恢复上游附件数据库和 Source 顺序，优先原生 H.264，以 CRF 回退替代全局
-299 Kbps 限流；同时移植 PR #2305 的 IPv6 link-local SRTP zone 修复和 PR #2380 的
-FU-A 中途加入同步修复，保留 Opus 48kHz RTP clock、标准 SetupEndpoints 两步交换、
-NTP RTCP Sender Report、协商 MTU 和每 IDR 重复 SPS/PPS。随后继续对照 Scrypted
-`camera-streaming.ts`、`camera-streaming-ffmpeg.ts` 和 Homebridge Camera FFmpeg：
-两者都会在 SetupEndpoints 应答中回显 Controller 提供的 SRTP key/salt，并使用该材料
-加密发往 Controller 的媒体，而不是为应答另生成一套 Accessory key/salt；Scrypted 还把
-视频 MTU 收敛到 1200、为 UDP Socket 配置 1 MiB 读写缓冲区。Camera Kernel 已同步这些
-线上实现中更充分验证过的语义。首次真机复验表现为打开直播不再持续转圈，但仍可能提示
-“摄像头不可用”，因此继续按 Scrypted 的完整生命周期修正：视频、音频改用逐 Session
-独立 UDP Socket；Selected Stream `START` 不再同步等待 Stream/FFmpeg 启动，而是先完成
-HAP 应答，再在后台等待最多一秒的初始 RTCP 并启动媒体；首个 RTP 前立即发送 RTCP
-Sender Report；媒体 Consumer 与 HAP Transport 解耦，结束媒体不会抢先关闭控制连接；
-控制连接关闭、Controller 30 秒不再发送 RTCP 时主动回收会话，避免
-`StreamingStatus=InUse` 永久残留；新的 SetupEndpoints 只对真实活动会话返回 Busy。
-Opus 能力同步为 8/16/24 kHz，RTP timestamp 使用 Controller 选择的采样率，40/60 ms
-多帧包按 RFC 6716 只编码前 `M-1` 个帧长度。真机抓取进一步确认：Apple Home 打开实时
-页面期间 HAP TCP 已连接，但没有创建动态 UDP Socket，Setup/START/RTP/RTCP 均为零。
-这把问题定位在媒体能力协商之前。2026-07-29 的安全阶段日志进一步确认 Apple 已成功
-完成 Pair Verify、读取 `/accessories`，并持续请求 Snapshot，但从未写入 SetupEndpoints
-或 Selected Stream。复查 Scrypted 与 HAP-NodeJS 的实际序列化后确认，Scrypted 虽配置
-六组 Opus 采样率/码率选项，但 HAP-NodeJS 的兼容层会按 Codec Type 合并为一个 Parameter
-Block，并保留重复的 8/16/24 kHz 项。另一个兼容性问题是
-`SetupEndpoints` 和 `SelectedRTPStreamConfiguration` 的空字符串会被
-`hap.Character` 的 `json:",omitempty"` 从 `/accessories` 完全省略；HAP-NodeJS 则分别
-初始化为 Error 和 Suspend TLV。现已恢复 HAP-NodeJS 的合并 Opus 线格式、加入显式 RTP 控制初值，并补齐
-Main Level 3.2、960×540、640×360 等选择和严格布尔类型的 Microphone Mute。
-首次 `c#=9` 真机复验确认新数据库被读取，但 Apple 仍未进入 SetupEndpoints。继续对照后
-发现 Scrypted 明确发布 8 个 RTP Stream Management，而 HAP-NodeJS 注明非 HKSV 摄像头
-规范最低需要 2 个；HomeLoom 此前只有 1 个。同时旧 HAP PUT 解析器忽略 `ev` 字段，把
-事件订阅当成空 Value Write，StreamingStatus 也只在内存改值而不发送 HAP EVENT。现已按
-Scrypted 提供 8 个独立 RTP 管理服务，完整实现订阅、退订、断开清理和状态事件推送，并将
-Accessory `c#` 升至 10。Camera Kernel 同时增加仅在私有 API 白名单开放的
-`/api/homekit/session`：只返回 `prepared/answered/started/streaming`、协商宽高/帧率/码率、
-音视频 RTP 包数/字节数/写错误及 RTCP Datagram/成功/解密失败计数；活动会话结束后仍保留最近一次
-计数用于排查，但不返回地址、Session ID、key 或 salt。直播 START 的媒体生产也已由
-固定 1280×720 共享回退流改为逐 Session 管线：保留 Camera Provider 主流的预连接，
-每次再以本机 RTSP 读取该主流，并把 Controller 选择的 `width/height/framerate/max_bitrate`
-传给独立 FFmpeg H.264/Opus 输出。这样协商 1920×1080、1280×720 或 320×240 时，
-实际 H.264 SPS、帧率和码率约束与 HAP 应答一致；STOP、HAP 断开或 RTCP 超时会同时
-释放该次转码进程。`c#=10` 真机日志已经进一步确认控制面和网络面完全闭环：Apple
-成功完成 SetupEndpoints → Selected Stream START，初始 RTCP Return Path 验证成功；
-一次会话中 Camera Kernel 向 Controller 发送 9721 个视频 RTP 包、约 1.37 MiB，写错误为
-0，并成功解密 60 个 Controller RTCP 包，最后由 Apple 主动发送 END。因此剩余问题不再是
-配对、Characteristic、端口、防火墙或 SRTP 密钥，而是 Controller 收到媒体后没有接受
-编码参数。该次日志同时暴露出实际 FFmpeg 仍固定为 Main/4.0、Opus 16 kHz，而 Apple 选择了
-24 kHz Opus；299 Kbps 的 VBV Buffer 也只有 299 Kbits，持续产生 underflow。
+当前验证结论：
 
-现已按 Controller 选择值逐 Session 传递 H.264 Profile/Level、Opus 8/16/24 kHz、Packet
-Time 和音频码率；视频 VBV Buffer 改为目标码率的 2 倍，并采用 Scrypted 的不超过 4 秒
-GOP。会话诊断同时记录实际发出的 SPS/PPS/IDR 数量和最大加密 Datagram 大小，下一次
-真机复验可以直接区分“有 RTP”与“有完整可解码关键帧”。随后真机日志确认一次 30 秒会话
-已发出 8 组 SPS、8 组 PPS 和 80 个 IDR Slice，且最大加密 Datagram 为 1200 字节，但
-Apple 仍不呈现画面。继续逐字节对照 Scrypted 的 HomeKit H.264 Repacketizer 后发现：
-通用 go2rtc Payloader 按 RFC 6184 把 SPS/PPS STAP-A 的 NRI 设为聚合 NAL 的最大值，
-头字节为 `0x78`；Scrypted 明确记录 Apple Home 不接受这种 NRI 聚合，并在 HomeKit 路径
-强制使用 `F=0/NRI=0` 的 `0x18`。现仅在 HomeKit 输出路径清除此 STAP-A 上三位，不改变
-RTSP、预览、Matter 或通用 H.264 包化行为。HomeKit 的 MTU 表示加密 UDP Datagram 上限，因此 H.264 Payloader 会预留
-AES_CM_128_HMAC_SHA1_80 的 10 字节鉴权标签。首个 RTCP Sender Report 仍先于首个 RTP
-发送，但 RTP Timestamp 已预置为首包时间戳，避免用 0 建立错误的 NTP/RTP 时钟映射。
-替换修正版后，最新真机日志确认 `0x18` STAP-A 已生效，但 Apple 的表现没有改变：每次会话
-仍发出约 9000 个视频包、8 组 SPS/PPS、80 个 IDR Slice，并收到约 60 个可成功解密的
-Controller RTCP Datagram。继续对照 Scrypted 当前实现发现一个尚未对齐的网络细节：
-Scrypted 将每个视频和音频 UDP Socket 绑定到 SetupEndpoints 的 `sourceAddress`，HomeLoom
-此前仍绑定 `0.0.0.0`。在本次 Controller 地址为 `198.19.0.1` 的 HomeHub/VPN 路由中，
-通配绑定可以收到 RTCP，但内核为出站 RTP 选择的源地址仍可能与 SetupEndpoints 通告地址
-不同，Apple 会静默丢弃这种媒体。现已把逐 Session Socket 改为具体通告地址绑定；IPv6
-link-local 绑定会保留 HAP TCP 接口 Zone，而线上的 SetupEndpoints 地址仍按规范省略 Zone。
-同时 SRTCP 不再只统计“解密成功”，还会解析 Compound RTCP：日志和私有状态接口记录本地
-Video SSRC、Apple Report Block 指向的 SSRC、匹配报告数、Fraction/Cumulative Lost、
-Extended Highest Sequence、Jitter、Last SR 及 PLI/FIR/NACK。STAP-A 总数与 `NRI=0`
-数量也会单独输出。这样下一次真机复验可以直接确认 Apple 是否接受了实际 RTP 包，而不是
-仅凭周期 RTCP 推断。生成参数已由项目内 FFmpeg 实际执行验证；相关 HomeKit/SRTP 单元测试、
-race 和 vet 已通过，待替换 Camera Kernel 后完成 Apple Home 真机连续直播复验。
-
-2026-07-30 重启后的新日志进一步暴露出独立的会话管理错误。首个 Stream Slot 已完成
-Setup/START 并持续发送媒体，但 Apple Receiver Report 的 `matched_reports` 持续增长时，
-`last_sequence=0`、`last_sender_report=0`，随后 Apple 选择另一个显示为 Available 的
-RTP Stream Management Service 重试。Camera Kernel 虽然发布了 8 个 Service，内部却仍用
-单一全局 Consumer，因此错误返回 Busy；更严重的是紧接着的 SetupEndpoints GET 又从旧
-Consumer 重新生成 Success，应答中带回旧会话端口和密钥。Apple 随后用新 Session ID 发送
-START，HomeLoom 将其误报为媒体参数无效并停止旧流。现已将会话表改为以 RTP Service IID
-为键：每个 Slot 独立持有 Consumer 和 SetupEndpoints 线值；不同 Available Slot 可以并行
-准备/直播，同一 Slot Busy 后的 GET 保留该次 Busy，新 Session ID 的错误 START 不会影响
-其他会话，END、HAP 断开和媒体结束也只释放所属 Slot。结构化日志新增 `stream_slot`，
-用于把 Setup、START、RTCP 和结束统计关联到同一 Service。双 Slot、Busy GET、Session ID
-隔离和单 Slot 清理不影响相邻 StreamingStatus 的回归测试均已落地。
-
-同日后续真机日志已把媒体兼容与本地网络路由分离。HomePod 路径的 Controller 为
-`192.168.101.114`，Apple Receiver Report 的最高接收序号持续增长到 `15017`，同时出现
-PLI/FIR，用户已确认经 HomePod 远程可以查看实时画面；这证明 HAP、SRTP、H.264、动态
-FFmpeg 和多 Stream Slot 主链路已经闭环。本机 Home 路径则通过
-`192.168.101.197 → 192.168.101.197` 的 HAP TCP 连接发起，但 SetupEndpoints 把 Controller
-媒体地址报告为 `198.19.0.1`；该地址同时属于 Publisher 主机的 `utun8`。旧实现把媒体 Socket
-强制绑定到通告的物理地址 `192.168.101.197`，虽然能够收到和解密 Controller RTCP，也能
-持续无错误写出 RTP，但 Apple 的 Receiver Report 始终保持 `last_sequence=0`。这说明
-发往本机 TUN 目的地址的 RTP 被固定源接口送入了错误路径，而非编码或密钥回退。
-
-修正版在每次 SetupEndpoints 时检查 Controller 地址是否属于本机任一网络接口：普通
-HomePod、独立 iPhone 和真实远端地址继续绑定通告的物理接口；仅当 Controller 地址命中
-本机 VPN/TUN/loopback 时，为该 Session 创建显式通配的独立视频/音频 UDP Socket，让操作
-系统选择 Controller-facing 源接口，同时 SetupEndpoints 仍向 Apple 通告可达的物理 LAN
-地址。日志新增 `media_bind=advertised-address|wildcard-local-controller`、
-`initial_rtcp_wait_ms` 和 `rtcp_before_media`，最近会话状态也保留 `mediaBindMode`。鉴于
-当前 FFmpeg 首帧启动约需 2.4 秒，而 Controller RTCP 通常在约 0.5 秒到达，媒体启动前的
-串行 RTCP 等待由最多 1 秒缩短为 250 ms，既给 UDP Return Path 留出准备窗口，也减少本来
-叠加在转码启动前的固定延迟。接口地址匹配、通配 Socket 不继承具体基础地址、本地
-Controller 选择策略以及既有 HomeKit/SRTP 回归测试均已落地；等待用户重启新 Kernel 后，
-以 Receiver Report 的 `last_sequence > 0` 作为本机直连直播通过条件。
-
-2026-07-30 关闭 VPN 后的复核进一步收窄了问题：日志中的
-`192.168.101.197:52454 → 192.168.101.197:60272 broken pipe` 属于只读取附件和截图的
-HAP 短连接；直播 Setup/START 使用另一条连接，因此该错误不是直播失败根因。两次本地
-直播的 Receiver Report 已分别增长到 `last_sequence=13467/18479`，匹配 SSRC、零丢包且
-RTP 写入无错，证明 LAN SRTP 往返正常；但 Controller 分别发送了 67/101 次 FIR，而四秒
-GOP 只产生约 5/9 个关键帧。修正版只在 Controller 是本机另一个 TUN/loopback 地址时使用
-通配媒体 Socket；Controller 与通告地址相同（本次均为 `192.168.101.197`）时恢复精确 LAN
-绑定，稳定 SRTP 源地址与端口元组。HomeKit 动态 FFmpeg 会话改为固定一秒 IDR 周期，并
-显式设置相同的 `g/keyint_min` 与关闭场景切换，缩短 Apple 解码器在 FIR 后取得完整
-SPS/PPS+IDR 的等待。`EOF/EPIPE/ECONNRESET` 等由 Controller 主动结束的 HAP 连接降为
-Debug 的 `peer closed`，真实解密、协议和处理失败仍保留 Warn。
-
-为便于继续真机定位，Camera Publisher 已启用逐 Stream 文件诊断：
-`<media.runtime_dir>/<stream_id>/camera.log`。该文件同时接收 Core 的启动、监听、预热、
-停止和退出事件，以及 Camera Kernel 的 RTSP/ONVIF/Xiaomi MISS、Stream、HomeKit/SRTP
-和 FFmpeg 日志；Kernel 以 JSON Debug 级别输出，FFmpeg 自身限制为 Info，避免 Trace
-级包数据长期淹没关键会话事件。单文件上限 8 MiB，保留 `camera.log.1` 至
-`camera.log.4` 四份历史，目录保持 `0700`、所有日志保持 `0600`。Camera Kernel 在写出前
-对环境传入的完整源地址、账号 Token、HomeKit PIN 和附件私钥统一替换为 `***`；Core
-不会记录子进程环境变量。日志卷故障只停止后续日志写入，不会中断正在运行的视频流。
-首次日志真机复核发现 FFmpeg 每半秒输出的编码进度占据绝大多数记录，而 HomeKit 的附件
-读取和 Characteristic 访问仍停留在包含原始 TLV 的 Trace 日志，无法安全地直接打开。
-现已关闭 FFmpeg 周期进度但保留启动信息、警告和错误，并增加不含 Characteristic Value、
-Session ID、SRTP key/salt 的结构化 HAP 阶段事件：Pair Setup/Verify、加密连接关闭原因、
-附件数据库读取、Characteristic 名称和读写方向、SetupEndpoints、Selected Stream 命令、
-Snapshot、RTCP 检查及 RTP 统计。日志同时暴露并修复了 preview-only 启动仍加载磁盘中
-HomeKit 配置的问题：Camera Kernel 当前会初始化所有编译进二进制的模块，`app.modules`
-不能单独阻止顶层 `homekit:` 配置被加载。因此 preview-only 配置会先把旧 YAML pairing
-迁入 `0600` sidecar，再彻底移除运行时 `homekit:`、HAP 路由和 mDNS；再次启用 Target
-时从 sidecar 恢复 pairing 和身份，避免未注入 PIN 的占位符错误及一次无效 HAP 启动。
-
-独立 Camera Provider 迁移已开始落地：Provider Manager 只接受
-`Manifest.Type=camera` 的媒体源，MIoT Cloud 不再成为媒体 owner；旧纵切生成的
-`{"publisher":"apple-home","independent":true}` Stream 会迁移为
-`{"publisher":"none"}`。Core 内嵌 Runtime 只有在 Stream 明确指定
-`publisher=apple-home` 时才写入 HomeKit 配置并激活配对路由和身份环境变量；默认 Stream
-仅服务设备中心预览。首次运行态验证暴露了“复用完整 CloudProvider 会启动第二套设备
-轮询”的错误边界，现已改为只复用无轮询的 MISS 授权客户端。最终修正版已完成真机
-重启复验：Core Runtime 对瞬态 `stream update rejected` 有限重试，并重新启动受影响的
-Camera Kernel；go2rtc 预览在 20 秒内持续返回约 29 KB MP4 数据。
-
-2026-07-29 使用设备中心真机排查发现一次确定性的部署缺件：Camera Kernel 已与
-`chuangmi.camera.079ac1` 建立 MISS 长连接，但项目运行目录缺少 `backend/bin/ffmpeg`，
-因此每次创建 H.264 Consumer 都返回 `fork/exec .../ffmpeg: no such file or directory`。
-补齐固定版本、校验和保护的 FFmpeg 并重建独立 Camera Target 后，设备中心实时预览恢复为
-1280×720 连续播放，设备状态由离线回写为在线；Runtime 现增加 Publisher 启动前 FFmpeg
-可执行文件校验，缺件会在应用 Stream 时明确失败，不再留下“Provider 已连接、媒体必然失败”
-的假健康状态。排查时 HomeKit 摄像头分页为空，确认原 Target 已删除；已重新创建独立
-`homekit-camera` Target，后续验收从重新配对及 Apple Home 实时 SRTP 播放继续。
-
-本轮同时修复了历史映射占用：启动时会物理删除已不存在 Provider 或已从权威
-`devices`/`cameras` 配置移除的 Provider/Consumer Binding，Provider 保存和删除时也会
-即时执行同范围清理，并同步释放内存唯一性索引。`devices: null`/`cameras: null` 不视为
-权威空列表，避免异常配置误删。Matter Endpoint identity tombstone 不属于普通映射占用，
-继续保留到 Factory Reset；当前数据库实测清理 9 条孤儿 Binding，并保留 2 条 Matter
-tombstone。
+- Xiaomi MISS 已完成真机授权和长连接取流，设备中心可通过项目内 FFmpeg 输出 H.264 fragmented MP4；
+- Camera Provider 已成为媒体配置 owner，Xiaomi Provider 只提供账号、目录和授权引用，不再自动发布摄像头；
+- HomeKit Camera 使用独立 Target、HAP 身份和媒体会话，普通设备 Bridge 与 Camera Target 分离；
+- Camera Kernel、FFmpeg 和媒体日志均使用项目内缓存/制品，缺失依赖时 fail closed，不报告假健康；
+- 当前剩余工作集中在 HomeKit 本地/远程连续直播、更多 Xiaomi 型号、协议控制映射和 24/72 小时稳定性验收。
 
 ### 19.1 Xiaomi Token 复用边界
 
 - 现有 Xiaomi Home OAuth `accessToken/refreshToken` 不能直接作为摄像头内核 Token；
-- MIoT 的 `serviceToken + ssecurity` 不能直接替代 Camera Provider 获取 MISS
-  签名所需的完整账号会话；
-  `passToken`；
+- MIoT 的 `serviceToken + ssecurity` 不能直接替代 Camera Provider 获取 MISS 签名所需的完整账号会话或 `passToken`；
 - 可以复用同一次小米账号密码登录：登录结果同时保存 `userId`、MIoT 会话字段和
   `passToken`，之后 Core 从加密 Provider 配置签发短期、单次媒体 Lease；
 - `passToken` 只在 Core 解密内存中使用，不进入 Camera Kernel、Stream、URI、argv、日志或
@@ -1865,10 +1685,6 @@ tombstone。
 4. 当前纵切版本在 MIoT Cloud 的“管理设备”中选择 Camera，并自动生成
    `protocol=xiaomi-miss`、`subtype=hd` 和媒体 Profile。目标架构会把这一步迁移到
    “设备来源 → 摄像头 → 从 Xiaomi 目录导入”，MIoT Provider 本身不再发布 Camera。
-
-2026-08-01：Camera Provider 的子设备编辑器已增加 Xiaomi MISS `subtype` 可视化选择，支持
-`auto`、`sd`、`hd` 以及厂商码流 `0–5`，默认 `hd`。扫描导入的小米摄像头也显式写入默认值；
-后端在 Provider 加载时对同一枚举执行归一化和严格校验，高级 JSON 与可视化配置保持一致。
 5. 当前纵切版本会自动创建独立 Apple Home Stream；目标架构会迁移为
    “桥接中心 → HomeKit 摄像头 → 新建发布”。迁移完成前不要把自动发布行为作为正式
    产品契约。

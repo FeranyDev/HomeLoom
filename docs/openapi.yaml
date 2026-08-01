@@ -989,7 +989,7 @@ components:
       type: object
       required: [deviceType, endpointId, capabilityId, propertyId, enum]
       properties:
-        id: { type: string, description: Stable override ID. Generated as enum-{deviceType}-{endpoint}-{capability}-{property} when omitted. }
+        id: { type: string, description: "Stable override ID. Generated as enum-{deviceType}-{endpoint}-{capability}-{property} when omitted." }
         deviceType: { type: string }
         endpointId: { type: string }
         capabilityId: { type: string }

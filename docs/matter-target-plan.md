@@ -1,6 +1,6 @@
 # Matter 桥实施方案
 
-> 实施状态（2026-07-24）：第一轮代码基础与第一批 12 类标准 matter.js Endpoint 已落地，包括判别配置、加密身份、稳定 Endpoint、双向 IPC、增量状态、commissioning/Fabric/reset 管理、前端与自动测试。代码侧第二轮基础能力（双实例隔离、崩溃重连、全量重放、100 Endpoint 快照、状态 burst 背压）也已覆盖。Apple Home、`chip-tool`、真实 Multi-Admin、容器网络和连续重启仍需维护者在目标局域网验收；第二批高级设备及 CSA 认证准备仍按第三轮推进，不能以本地自动测试替代。
+> 实施状态（2026-08-01）：第一、二轮代码基础与 22 类标准 matter.js Endpoint 已落地，包括判别配置、加密身份、稳定 Endpoint、双向 IPC、增量状态、commissioning/Fabric/reset 管理、前端与自动测试。Apple Home、`chip-tool`、真实 Multi-Admin、容器网络和连续重启仍需维护者在目标局域网验收；剩余高级设备及 CSA 认证准备仍按后续阶段推进，不能以本地自动测试替代。
 
 状态图例：
 
@@ -271,42 +271,7 @@ Matter 不能只用 HomeKit 的 `paired: boolean` 表达运行状态。
 - [x] 更新项目实施清单；
 - [x] 明确测试 Vendor/Product 与正式 CSA 认证的区别。
 
-## 15. 模块难度与 5.6 子任务分配
-
-模型选择原则：
-
-- `gpt-5.6-sol`：用于协议语义、安全身份、跨进程恢复、官方 Cluster/Device Type 和复杂集成测试等高耦合任务；
-- `gpt-5.6-terra`：用于边界明确的 API、前端、文档、构建和机械性测试补齐；
-- `medium`：已有清晰接口和验收标准的局部任务；
-- `high`：涉及多层联调、状态机或异常路径；
-- `xhigh`：涉及协议正确性、安全边界或会影响持久身份的架构决策。
-
-| 子任务 | 范围与主要所有权 | 难度 | 模型 | 推理强度 | 状态与验收 |
-| --- | --- | --- | --- | --- | --- |
-| A. Target 配置与 IPC 合约 | Go 配置判别联合、sidecar 生命周期、JSON-RPC 合约、OpenAPI | 高 | `gpt-5.6-sol` | `high` | `[x]` Go 测试、IPC 契约和 OpenAPI 校验通过 |
-| B. 身份、Endpoint 与恢复 | 加密 KV、Target 隔离、稳定 Endpoint、tombstone、factory reset、全量重放 | 极高 | `gpt-5.6-sol` | `xhigh` | `[x]` 身份/并发/重启/race 测试通过；实机连续重启归入 H |
-| C. 第一批官方 Matter 驱动 | `matter-runtime` 的 12 类标准 Device Type、Cluster、属性、Command 与回写 | 极高 | `gpt-5.6-sol` | `xhigh` | `[x]` 类型检查和 12/12 官方 Endpoint 测试通过 |
-| D. Consumer Catalog 与映射 | Cluster 路径、正反向转换、默认映射、Catalog ↔ driver 对照 | 中高 | `gpt-5.6-terra` | `high` | `[x]` Catalog、映射和精确对照测试通过 |
-| E. 管理 API 与桥接中心 | commissioning/Fabric/reset API、Matter 表单、状态卡片、映射与确认交互 | 中高 | `gpt-5.6-terra` | `high` | `[x]` Go 与前端测试、lint、构建通过 |
-| F. 并发、隔离与故障注入 | 双 Target、sidecar 崩溃、背压、burst、100 Endpoint、审计安全 | 高 | `gpt-5.6-sol` | `high` | `[~]` 自动测试完成；真实双桥和 Controller 压力测试归入 H |
-| G. 工程化与文档 | 项目缓存、开发环境、容器网络、打包、备份、排障与实施文档 | 中 | `gpt-5.6-terra` | `medium` | `[~]` 文档和缓存完成；统一三进程开发入口待补 |
-| H. Controller 与实机验收 | matter.js Controller、`chip-tool`、Apple Home、Multi-Admin、重启与容器网络矩阵 | 高 | `gpt-5.6-sol` | `high` | `[ ]` 下一优先级；必须在目标局域网执行 |
-| I. 第二批高级设备 | 空气质量、能耗、阀门、泵、告警、媒体和机器人吸尘器等 | 极高 | `gpt-5.6-sol` | `xhigh` | `[ ]` 按设备逐类派发，不允许一次开放全部 Catalog |
-| J. 发布与认证准备 | 生产身份、设备证明链、CSA 决策、互操作性和发布审查 | 极高 | `gpt-5.6-sol` | `high` | `[ ]` 仅在确定正式产品化后启动 |
-
-子任务并行与合并规则：
-
-1. A、B 负责合同与持久身份，相关接口变更必须先合并，C、D、E 不得各自复制协议结构；
-2. C、D、E 可在合同冻结后并行，但每新增一种 Device Type，必须由 C 提供正式驱动、D 提供映射、E 确认管理端可配置；
-3. F 独立执行故障注入和回归，不在测试中修改生产协议行为；发现缺陷后回派给对应所有者；
-4. G 可与代码任务并行，只记录已验证的命令、端口和限制；
-5. H 需要真实 Controller、局域网和容器环境，不能用 mock 结果关闭验收项；
-6. I 每个设备类型拆成独立子任务，完成“驱动 + 映射 + 单测 + Controller 验收”后才允许合并；
-7. J 不与开发测试 Vendor/Product ID 混用，生产凭据不得进入仓库、日志或诊断包。
-
-并发上限建议为 3 个编码子任务加 1 个独立验证子任务；涉及同一文件的工作应串行，避免协议合约、Catalog 和驱动同时产生冲突。
-
-## 16. 推荐实施顺序
+## 15. 推荐实施顺序
 
 ### 第一轮：最小 Matter Demo（代码完成，实机退出条件待验收）
 
@@ -349,7 +314,7 @@ Matter 不能只用 HomeKit 的 `paired: boolean` 表达运行状态。
 5. 按“一个正式驱动 + 属性/命令测试 + Controller 验收”的门禁逐个接入第二批设备；
 6. 发布前单独决策 CSA 认证、生产 Vendor/Product ID 和设备证明凭据。
 
-## 17. 认证边界
+## 16. 认证边界
 
 matter.js 和 ConnectedHomeIP 都只是实现协议的 SDK，不会自动使 HomeLoom Matter Bridge 获得认证。开发阶段应使用明确标识的测试 Vendor ID、Product ID 和测试凭据；如果未来作为正式 Matter 产品发布，仍需满足 CSA 成员资格、设备证明凭据和产品认证要求。
 
@@ -361,7 +326,7 @@ matter.js 和 ConnectedHomeIP 都只是实现协议的 SDK，不会自动使 Hom
 
 在上述发布项完成前，当前实现仅作为开发和测试用 Matter Bridge，不应宣称为已认证产品。
 
-## 18. 实现与验证入口
+## 17. 实现与验证入口
 
 - 运行时、部署和排障：[matter-runtime.md](matter-runtime.md)
 - Go ↔ Matter IPC 与双段映射：[mapping-architecture.md](mapping-architecture.md)

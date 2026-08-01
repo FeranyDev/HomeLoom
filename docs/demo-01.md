@@ -1,5 +1,7 @@
 # Demo 01：Virtual Provider + Web + HomeKit
 
+> 代码和自动化回归已完成；Apple Home 与 MQTT 的局域网验收仍按[实施清单](implementation-checklist.md)单独记录。
+
 ## 已完成
 
 - 前后端分离目录；
@@ -46,7 +48,6 @@
 - REST 开关写入成功；
 - 服务重启后 HAP UUID 和 keypair 校验值保持一致；
 - 服务重启后由 Provider 重新建立设备状态；
-- 当前受限运行环境报告 netlink link-update 警告。
 
 ## 局域网验收
 
@@ -58,10 +59,8 @@
 6. 分别从 Web 和 Apple Home 控制开关；
 7. 重启后端并确认无需重新配对。
 
-## 下一步
+## 尚待验收
 
-- 完成 Apple Home 实机配对、双向控制和三次重启验收；
-- 为重新生成配对资料、清除身份等高风险操作加入独立二次确认；
-- 将已完成的 PostgreSQL 一致性备份/离线安全恢复接入管理员认证后的 Web 运维入口；
-- 使用真实 Mosquitto 验收 Broker 重启和网络中断恢复；
-- 完成 MQTT → Apple Home 与 Apple Home → MQTT 实机双向验收；
+- Apple Home 实机配对、双向控制、多桥和三次重启；
+- MQTT → Apple Home 与 Apple Home → MQTT 实机双向链路；
+- 真实 Mosquitto 的 Broker 重启和网络中断恢复。
