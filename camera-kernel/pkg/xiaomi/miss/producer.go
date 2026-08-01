@@ -57,6 +57,7 @@ func probe(client *Client, audio bool) ([]*core.Media, error) {
 	_ = client.SetDeadline(time.Now().Add(15 * time.Second))
 
 	var vcodec, acodec *core.Codec
+	var videoVPS, videoSPS, videoPPS []byte
 
 	for {
 		pkt, err := client.ReadPacket()
@@ -71,19 +72,11 @@ func probe(client *Client, audio bool) ([]*core.Media, error) {
 
 		switch pkt.CodecID {
 		case codecH264:
-			if vcodec == nil {
-				buf := annexb.EncodeToAVCC(pkt.Payload)
-				if h264.NALUType(buf) == h264.NALUTypeSPS {
-					vcodec = h264.AVCCToCodec(buf)
-				}
-			}
+			buf := annexb.EncodeToAVCC(pkt.Payload)
+			updateProbedVideoCodec(pkt.CodecID, buf, &vcodec, &videoVPS, &videoSPS, &videoPPS)
 		case codecH265:
-			if vcodec == nil {
-				buf := annexb.EncodeToAVCC(pkt.Payload)
-				if h265.NALUType(buf) == h265.NALUTypeVPS {
-					vcodec = h265.AVCCToCodec(buf)
-				}
-			}
+			buf := annexb.EncodeToAVCC(pkt.Payload)
+			updateProbedVideoCodec(pkt.CodecID, buf, &vcodec, &videoVPS, &videoSPS, &videoPPS)
 		case codecPCMA:
 			if acodec == nil {
 				acodec = &core.Codec{Name: core.CodecPCMA, ClockRate: 8000}
@@ -132,11 +125,11 @@ const timestamp40ms = 48000 * 0.040
 // reconnects, wall-clock rewrites, and large source jumps so FFmpeg does not
 // invent thousands of duplicated frames to fill a fake time gap.
 type videoTSNormalizer struct {
-	initialized  bool
-	sourceBase   int64
-	outputBase   int64
-	lastSource   int64
-	lastOutput   int64
+	initialized   bool
+	sourceBase    int64
+	outputBase    int64
+	lastSource    int64
+	lastOutput    int64
 	expectedDelta int64
 }
 
@@ -179,6 +172,28 @@ func (p *Producer) Start() error {
 	var audioTS uint32
 	var videoTS videoTSNormalizer
 	var vps, sps, pps []byte
+	// probe() may have consumed the only parameter-set packets before Start
+	// begins. Seed the cache from the codec's SDP so the first forwarded IDR
+	// still carries VPS/SPS/PPS even when the camera does not repeat them.
+	for _, media := range p.Medias {
+		if media == nil || media.Kind != core.KindVideo || len(media.Codecs) == 0 || media.Codecs[0] == nil {
+			continue
+		}
+		switch media.Codecs[0].Name {
+		case core.CodecH264:
+			sps, pps = h264.GetParameterSet(media.Codecs[0].FmtpLine)
+		case core.CodecH265:
+			vps, sps, pps = h265.GetParameterSet(media.Codecs[0].FmtpLine)
+		}
+		break
+	}
+	// probe() intentionally consumes packets while discovering the codec. The
+	// next packet is therefore not guaranteed to be the beginning of a GOP.
+	// Do not forward P/B pictures from that partial GOP: FFmpeg would conceal
+	// the missing references and encode the gray/mosaic frame that Apple Home
+	// displays when a live view is opened. Start each MISS connection at the
+	// first complete IDR access unit instead.
+	videoSynced := false
 
 	for {
 		_ = p.client.SetDeadline(time.Now().Add(10 * time.Second))
@@ -198,12 +213,18 @@ func (p *Producer) Start() error {
 			if pkt.CodecID == codecH264 {
 				name = core.CodecH264
 				cacheH264ParameterSets(payload, &sps, &pps)
+				if !acceptInitialVideoAccessUnit(pkt.CodecID, payload, &videoSynced) {
+					continue
+				}
 				if h264.IsKeyframe(payload) && (len(sps) > 0 || len(pps) > 0) {
 					payload = h264.Join(h264.JoinNALU(sps, pps), payload)
 				}
 			} else {
 				name = core.CodecH265
 				cacheH265ParameterSets(payload, &vps, &sps, &pps)
+				if !acceptInitialVideoAccessUnit(pkt.CodecID, payload, &videoSynced) {
+					continue
+				}
 				if h265.IsKeyframe(payload) && (len(vps) > 0 || len(sps) > 0 || len(pps) > 0) {
 					payload = h264.Join(h264.JoinNALU(vps, sps, pps), payload)
 				}
@@ -259,6 +280,50 @@ func (p *Producer) Stop() error {
 // TimeToRTP convert time in milliseconds to RTP time
 func TimeToRTP(timeMS, clockRate uint64) uint32 {
 	return uint32(timeMS * clockRate / 1000)
+}
+
+func updateProbedVideoCodec(codecID uint32, payload []byte, codec **core.Codec, vps, sps, pps *[]byte) {
+	if codec == nil || *codec != nil {
+		return
+	}
+	switch codecID {
+	case codecH264:
+		cacheH264ParameterSets(payload, sps, pps)
+		// Do not publish an SDP with only SPS. HomeKit/FFmpeg can join
+		// between parameter-set packets and then decode the first IDR with
+		// the wrong PPS, producing the gray startup frame.
+		if len(*sps) > 0 && len(*pps) > 0 {
+			*codec = h264.AVCCToCodec(h264.JoinNALU(*sps, *pps))
+		}
+	case codecH265:
+		cacheH265ParameterSets(payload, vps, sps, pps)
+		if len(*vps) > 0 && len(*sps) > 0 && len(*pps) > 0 {
+			*codec = h265.AVCCToCodec(h264.JoinNALU(*vps, *sps, *pps))
+		}
+	}
+}
+
+func acceptInitialVideoAccessUnit(codecID uint32, payload []byte, synced *bool) bool {
+	if synced == nil || *synced {
+		return true
+	}
+	if len(payload) < 5 {
+		return false
+	}
+	var keyframe bool
+	switch codecID {
+	case codecH264:
+		keyframe = h264.IsKeyframe(payload)
+	case codecH265:
+		keyframe = h265.IsKeyframe(payload)
+	default:
+		return false
+	}
+	if !keyframe {
+		return false
+	}
+	*synced = true
+	return true
 }
 
 func cacheH264ParameterSets(avcc []byte, sps, pps *[]byte) {

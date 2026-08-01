@@ -43,6 +43,7 @@ type Consumer struct {
 	setupFailed       atomic.Bool
 	videoSelection    VideoSelection
 	videoStarted      atomic.Bool
+	videoPrimed       atomic.Bool
 	videoSPSUnits     atomic.Uint64
 	videoPPSUnits     atomic.Uint64
 	videoIDRUnits     atomic.Uint64
@@ -461,13 +462,13 @@ func (c *Consumer) AddTrack(media *core.Media, codec *core.Codec, track *core.Re
 			writeRTP(packet)
 		})
 		// Drop until IDR so mid-GOP joins (always-on shared stream) do not
-		// feed Apple undecodable P-frames.
+		// feed Apple undecodable P-frames. The first IDR from a newly started
+		// FFmpeg pipeline is a warm-up frame: its decoder may still be
+		// recovering the upstream reference chain, so wait for the next IDR
+		// before exposing video to Apple.
 		waitKey := func(packet *rtp.Packet) {
-			if !c.videoStarted.Load() {
-				if packet == nil || len(packet.Payload) < 5 || !h264.IsKeyframe(packet.Payload) {
-					return
-				}
-				c.videoStarted.Store(true)
+			if !c.acceptHomeKitVideoKeyframe(packet) {
+				return
 			}
 			pay(packet)
 		}
@@ -597,6 +598,20 @@ func validSelectedStreamConfiguration(conf *camera.SelectedStreamConfiguration) 
 		len(conf.AudioCodec.RTPParams) != 1 {
 		return false
 	}
+	return true
+}
+
+func (c *Consumer) acceptHomeKitVideoKeyframe(packet *rtp.Packet) bool {
+	if c.videoStarted.Load() {
+		return true
+	}
+	if packet == nil || len(packet.Payload) < 5 || !h264.IsKeyframe(packet.Payload) {
+		return false
+	}
+	if !c.videoPrimed.Swap(true) {
+		return false
+	}
+	c.videoStarted.Store(true)
 	return true
 }
 

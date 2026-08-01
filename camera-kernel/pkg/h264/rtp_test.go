@@ -44,3 +44,25 @@ func TestRTPDepaySkipsNALUStartedBeforeConsumerAttach(t *testing.T) {
 		t.Fatalf("complete fragmented NAL produced %d packets", len(packets))
 	}
 }
+
+func TestRTPDepayDropsAccessUnitAfterSequenceGap(t *testing.T) {
+	codec := &core.Codec{Name: core.CodecH264}
+	var packets []*rtp.Packet
+	depay := RTPDepay(codec, func(packet *rtp.Packet) {
+		packets = append(packets, packet.Clone())
+	})
+
+	depay(fragmentedNALU(NALUTypeIFrame, true, false, 200, []byte{0x01}))
+	// Sequence 201 is missing. The tail of the incomplete IDR must not be
+	// emitted, even though it has the marker bit.
+	depay(fragmentedNALU(NALUTypeIFrame, false, true, 202, []byte{0x02}))
+	if len(packets) != 0 {
+		t.Fatalf("incomplete access unit produced %d packets", len(packets))
+	}
+
+	depay(fragmentedNALU(NALUTypeIFrame, true, false, 203, []byte{0x03}))
+	depay(fragmentedNALU(NALUTypeIFrame, false, true, 204, []byte{0x04}))
+	if len(packets) != 1 {
+		t.Fatalf("complete access unit after gap produced %d packets", len(packets))
+	}
+}

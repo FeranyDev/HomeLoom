@@ -26,8 +26,24 @@ func RTPDepay(codec *core.Codec, handler core.HandlerFunc) core.HandlerFunc {
 	// even though Apple cannot decode it. RFC 6184 requires discarding those
 	// fragments until the next partition head.
 	synced := false
+	var lastSequence uint16
+	haveSequence := false
 
 	return func(packet *rtp.Packet) {
+		if packet == nil || len(packet.Payload) == 0 {
+			return
+		}
+		// A lost packet inside an access unit must not be handed to the
+		// decoder as if it were a complete IDR. Reset the depacketizer at
+		// every RTP sequence gap and wait for a fresh partition head; this is
+		// especially important when a HomeKit consumer joins during the first
+		// keyframe burst.
+		if haveSequence && packet.SequenceNumber != lastSequence+1 {
+			buf = buf[:0]
+			synced = false
+		}
+		lastSequence = packet.SequenceNumber
+		haveSequence = true
 		if !synced {
 			if !depack.IsPartitionHead(packet.Payload) {
 				return

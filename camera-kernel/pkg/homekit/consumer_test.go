@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/AlexxIT/go2rtc/pkg/core"
+	"github.com/AlexxIT/go2rtc/pkg/h264"
 	"github.com/AlexxIT/go2rtc/pkg/hap/camera"
 	"github.com/AlexxIT/go2rtc/pkg/srtp"
 	"github.com/pion/rtp"
@@ -263,6 +264,25 @@ func TestConsumerObservesHomeKitH264ParameterSetsAndIDR(t *testing.T) {
 	}
 
 	consumer.observeH264Packet(&rtp.Packet{Payload: []byte{0x78, 0, 8, 0x67}})
+}
+
+func TestConsumerWaitsForSecondStartupIDR(t *testing.T) {
+	consumer := &Consumer{}
+	parameterSetsAndIDR := h264.JoinNALU([]byte{0x67, 1}, []byte{0x68, 2}, []byte{0x65, 3})
+	packet := &rtp.Packet{Payload: parameterSetsAndIDR}
+
+	if consumer.acceptHomeKitVideoKeyframe(packet) {
+		t.Fatal("first startup IDR was forwarded")
+	}
+	if consumer.videoStarted.Load() {
+		t.Fatal("consumer started on warm-up IDR")
+	}
+	if !consumer.acceptHomeKitVideoKeyframe(packet) {
+		t.Fatal("second startup IDR was not forwarded")
+	}
+	if !consumer.videoStarted.Load() {
+		t.Fatal("consumer did not start after a complete startup IDR")
+	}
 }
 
 func TestNormalizeHomeKitH264PacketUsesMaxNRI(t *testing.T) {
