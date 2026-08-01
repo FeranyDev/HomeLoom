@@ -1,10 +1,24 @@
 package api
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 )
+
+func TestHAPListenerUsesIPv4OnlyNetwork(t *testing.T) {
+	listener, err := net.Listen(hapListenNetwork, "0.0.0.0:0")
+	if err != nil {
+		t.Skipf("TCP listen not permitted in this environment: %v", err)
+	}
+	defer listener.Close()
+
+	address, ok := listener.Addr().(*net.TCPAddr)
+	if !ok || address.IP.To4() == nil {
+		t.Fatalf("HAP listener address = %v, want IPv4", listener.Addr())
+	}
+}
 
 func TestHAPOnlyHandlerRejectsMediaEndpoints(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

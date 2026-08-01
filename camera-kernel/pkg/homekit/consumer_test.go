@@ -166,6 +166,27 @@ func TestGetAnswerReportsSetupEndpointsSuccessAndReachableAddress(t *testing.T) 
 	}
 }
 
+func TestConsumerRejectsIPv6SetupOffer(t *testing.T) {
+	local, remote := net.Pipe()
+	defer local.Close()
+	defer remote.Close()
+
+	consumer := NewConsumer(local, srtp.NewServer("0.0.0.0:0"))
+	consumer.SetOffer(&camera.SetupEndpointsRequest{
+		SessionID: "ipv6-session",
+		Address: camera.Address{
+			IPVersion: 1, IPAddr: "fe80::1234", VideoRTPPort: 5000, AudioRTPPort: 5002,
+		},
+	})
+	answer := consumer.GetAnswer()
+	if answer.Status != camera.SetupEndpointsStatusError {
+		t.Fatalf("IPv6 setup offer status = %d, want error", answer.Status)
+	}
+	if answer.Address.IPVersion != 0 || answer.Address.IPAddr != "" || answer.Address.VideoRTPPort != 0 || answer.Address.AudioRTPPort != 0 {
+		t.Fatalf("IPv6 setup offer allocated an endpoint: %#v", answer.Address)
+	}
+}
+
 func TestSelectedStreamConfigurationCapsHomeKitMTU(t *testing.T) {
 	if !canListenHomeKitUDP() {
 		t.Skip("UDP listen not permitted in this environment")
@@ -359,24 +380,8 @@ func TestAdvertiseSRTPAddressRejectsWildcardListener(t *testing.T) {
 	if got := usableSRTPIP(net.ParseIP("192.0.2.20")); got != "192.0.2.20" {
 		t.Fatalf("usable unicast rejected: %q", got)
 	}
-	if got := usableSRTPIP(net.ParseIP("fe80::1234")); got != "fe80::1234" {
-		t.Fatalf("IPv6 link-local address rejected: %q", got)
-	}
-}
-
-func TestSRTPBindAddressPreservesIPv6LinkLocalZone(t *testing.T) {
-	local, remote := net.Pipe()
-	defer local.Close()
-	defer remote.Close()
-	conn := &tcpAddrConn{
-		Conn:  local,
-		local: &net.TCPAddr{IP: net.ParseIP("fe80::1234"), Port: 51826, Zone: "en0"},
-	}
-	if got := srtpBindAddress(conn, "fe80::1234"); got != "fe80::1234%en0" {
-		t.Fatalf("IPv6 link-local bind address = %q", got)
-	}
-	if got := srtpBindAddress(conn, "192.0.2.30"); got != "192.0.2.30" {
-		t.Fatalf("unrelated advertised address received interface zone: %q", got)
+	if got := usableSRTPIP(net.ParseIP("fe80::1234")); got != "" {
+		t.Fatalf("IPv6 address accepted: %q", got)
 	}
 }
 
@@ -384,12 +389,14 @@ func TestInterfaceAddressesContainControllerTUNAddress(t *testing.T) {
 	addrs := []net.Addr{
 		&net.IPNet{IP: net.ParseIP("192.168.101.197"), Mask: net.CIDRMask(24, 32)},
 		&net.IPAddr{IP: net.ParseIP("198.19.0.1")},
-		&net.IPAddr{IP: net.ParseIP("fe80::1234"), Zone: "utun8"},
 	}
-	for _, address := range []string{"198.19.0.1", "fe80::1234%utun8"} {
+	for _, address := range []string{"198.19.0.1"} {
 		if !interfaceAddressesContain(address, addrs) {
 			t.Fatalf("local interface address %q was not detected", address)
 		}
+	}
+	if interfaceAddressesContain("fe80::1234%utun8", addrs) {
+		t.Fatal("IPv6 interface address was treated as a local controller address")
 	}
 	if interfaceAddressesContain("192.168.101.114", addrs) {
 		t.Fatal("remote HomePod address was treated as a local interface")
@@ -443,20 +450,21 @@ func TestControllerMatchingAdvertisedAddressUsesConcreteSRTPBinding(t *testing.T
 	if !canListenHomeKitUDP() {
 		t.Skip("UDP listen not permitted in this environment")
 	}
+	advertised := firstPrivateIPv4()
 	local, remote := net.Pipe()
 	defer local.Close()
 	defer remote.Close()
 	consumer := NewConsumer(
 		&tcpAddrConn{
 			Conn:  local,
-			local: &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 51826},
+			local: &net.TCPAddr{IP: net.ParseIP(advertised), Port: 51826},
 		},
-		srtp.NewServer("127.0.0.1:8443"),
+		srtp.NewServer("0.0.0.0:8443"),
 	)
 	consumer.SetOffer(&camera.SetupEndpointsRequest{
 		SessionID: "0123456789abcdef",
 		Address: camera.Address{
-			IPVersion: 0, IPAddr: "127.0.0.1", VideoRTPPort: 5000, AudioRTPPort: 5002,
+			IPVersion: 0, IPAddr: advertised, VideoRTPPort: 5000, AudioRTPPort: 5002,
 		},
 		VideoCrypto: camera.SRTPCryptoSuite{
 			CryptoSuite: camera.CryptoAES_CM_128_HMAC_SHA1_80,

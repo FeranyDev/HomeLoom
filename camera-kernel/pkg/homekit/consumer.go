@@ -41,6 +41,7 @@ type Consumer struct {
 	stage             atomic.Uint32
 	statusMTU         atomic.Uint32
 	setupFailed       atomic.Bool
+	ipv4OnlyRejected  atomic.Bool
 	videoSelection    VideoSelection
 	videoStarted      atomic.Bool
 	videoPrimed       atomic.Bool
@@ -227,10 +228,21 @@ func (c *Consumer) Status() SessionStatus {
 }
 
 func (c *Consumer) SetOffer(offer *camera.SetupEndpointsRequest) {
+	if offer == nil || !validIPv4SetupOffer(offer) {
+		c.ipv4OnlyRejected.Store(true)
+		c.setupFailed.Store(true)
+		c.srtpBindMode = "ipv4-only-rejected"
+		c.videoSRTP = nil
+		c.audioSRTP = nil
+		c.videoSession = nil
+		c.audioSession = nil
+		return
+	}
+	c.ipv4OnlyRejected.Store(false)
+	c.setupFailed.Store(false)
 	c.sessionID = offer.SessionID
-	ipv6 := offer.Address.IPVersion == 1
 	c.localSRTPAddress = advertiseSRTPAddress(c.conn)
-	bindAddress := srtpBindAddress(c.conn, c.localSRTPAddress)
+	bindAddress := c.localSRTPAddress
 	c.srtpBindMode = "advertised-address"
 	if c.srtpBase != nil {
 		if shouldUseWildcardSRTPBind(offer.Address.IPAddr, c.localSRTPAddress) {
@@ -242,11 +254,11 @@ func (c *Consumer) SetOffer(offer *camera.SetupEndpointsRequest) {
 			// When the controller and advertised accessory address are equal,
 			// bind that concrete LAN address so the SRTP source tuple is stable.
 			c.srtpBindMode = "wildcard-local-controller"
-			c.videoSRTP = c.srtpBase.NewWildcardSessionServer(ipv6)
-			c.audioSRTP = c.srtpBase.NewWildcardSessionServer(ipv6)
+			c.videoSRTP = c.srtpBase.NewWildcardSessionServer(false)
+			c.audioSRTP = c.srtpBase.NewWildcardSessionServer(false)
 		} else {
-			c.videoSRTP = c.srtpBase.NewSessionServerAt(ipv6, bindAddress)
-			c.audioSRTP = c.srtpBase.NewSessionServerAt(ipv6, bindAddress)
+			c.videoSRTP = c.srtpBase.NewSessionServerAt(false, bindAddress)
+			c.audioSRTP = c.srtpBase.NewSessionServerAt(false, bindAddress)
 		}
 	}
 	c.videoSession = &srtp.Session{
@@ -271,7 +283,7 @@ func (c *Consumer) SetOffer(offer *camera.SetupEndpointsRequest) {
 func (c *Consumer) GetAnswer() *camera.SetupEndpointsResponse {
 	// Bind SRTP before advertising the accessory endpoint so Apple Home can
 	// dial a live UDP socket immediately after the SetupEndpoints response.
-	if c.videoSRTP == nil || c.audioSRTP == nil {
+	if c.ipv4OnlyRejected.Load() || c.videoSRTP == nil || c.audioSRTP == nil {
 		c.setupFailed.Store(true)
 		return &camera.SetupEndpointsResponse{
 			SessionID: c.sessionID,
@@ -306,11 +318,6 @@ func (c *Consumer) GetAnswer() *camera.SetupEndpointsResponse {
 	}
 	c.setupFailed.Store(false)
 	c.stage.Store(2)
-	ipVersion := byte(0) // IPv4 in HAP SetupEndpoints
-	if ip := net.ParseIP(c.videoSession.Local.Addr); ip != nil && ip.To4() == nil {
-		ipVersion = 1
-	}
-
 	return &camera.SetupEndpointsResponse{
 		SessionID: c.sessionID,
 		// SetupEndpoints status is not StreamingStatus. Apple Home aborts live
@@ -318,7 +325,7 @@ func (c *Consumer) GetAnswer() *camera.SetupEndpointsResponse {
 		// requests continue to work over HTTP /resource.
 		Status: camera.SetupEndpointsStatusSuccess,
 		Address: camera.Address{
-			IPVersion:    ipVersion,
+			IPVersion:    0,
 			IPAddr:       c.videoSession.Local.Addr,
 			VideoRTPPort: c.videoSession.Local.Port,
 			AudioRTPPort: c.audioSession.Local.Port,
@@ -336,6 +343,14 @@ func (c *Consumer) GetAnswer() *camera.SetupEndpointsResponse {
 		VideoSSRC: c.videoSession.Local.SSRC,
 		AudioSSRC: c.audioSession.Local.SSRC,
 	}
+}
+
+func validIPv4SetupOffer(offer *camera.SetupEndpointsRequest) bool {
+	if offer == nil || offer.Address.IPVersion != 0 {
+		return false
+	}
+	ip := net.ParseIP(offer.Address.IPAddr)
+	return ip != nil && ip.To4() != nil
 }
 
 func (c *Consumer) SetConfig(conf *camera.SelectedStreamConfiguration) bool {
@@ -388,13 +403,6 @@ func (c *Consumer) SetConfig(conf *camera.SelectedStreamConfiguration) bool {
 	if err := c.audioSRTP.AddSession(c.audioSession); err != nil {
 		c.videoSRTP.DelSession(c.videoSession)
 		return false
-	}
-	// Apple omits the interface zone from an IPv6 link-local SetupEndpoints
-	// address. Recover it from the HAP TCP connection after SRTP initialized
-	// the remote UDP endpoints, otherwise WriteTo(fe80::...) cannot route.
-	if local, ok := c.conn.LocalAddr().(*net.TCPAddr); ok && local != nil {
-		c.videoSession.SetZone(local.Zone)
-		c.audioSession.SetZone(local.Zone)
 	}
 	c.statusMTU.Store(uint32(c.videoMTU))
 	c.stage.Store(3)
@@ -718,21 +726,6 @@ func advertiseSRTPAddress(conn net.Conn) string {
 	return firstPrivateIPv4()
 }
 
-// srtpBindAddress returns the concrete interface address used for the media
-// socket. SetupEndpoints omits the IPv6 zone, but bind(2) needs it for a
-// link-local interface.
-func srtpBindAddress(conn net.Conn, advertised string) string {
-	if conn == nil || advertised == "" {
-		return advertised
-	}
-	local, ok := conn.LocalAddr().(*net.TCPAddr)
-	if !ok || local == nil || local.Zone == "" || local.IP == nil ||
-		!local.IP.IsLinkLocalUnicast() || local.IP.String() != advertised {
-		return advertised
-	}
-	return advertised + "%" + local.Zone
-}
-
 func isLocalInterfaceAddress(address string) bool {
 	addrs, err := net.InterfaceAddrs()
 	return err == nil && interfaceAddressesContain(address, addrs)
@@ -741,7 +734,7 @@ func isLocalInterfaceAddress(address string) bool {
 func shouldUseWildcardSRTPBind(controllerAddress, advertisedAddress string) bool {
 	controller := net.ParseIP(stripIPZone(controllerAddress))
 	advertised := net.ParseIP(stripIPZone(advertisedAddress))
-	if controller == nil || advertised == nil || controller.Equal(advertised) {
+	if controller == nil || controller.To4() == nil || advertised == nil || advertised.To4() == nil || controller.Equal(advertised) {
 		return false
 	}
 	return isLocalInterfaceAddress(controllerAddress)
@@ -756,7 +749,7 @@ func stripIPZone(address string) string {
 
 func interfaceAddressesContain(address string, addrs []net.Addr) bool {
 	target := net.ParseIP(stripIPZone(address))
-	if target == nil {
+	if target == nil || target.To4() == nil {
 		return false
 	}
 	for _, addr := range addrs {
@@ -785,24 +778,21 @@ func interfaceAddressesContain(address string, addrs []net.Addr) bool {
 }
 
 func usableSRTPIP(ip net.IP) string {
-	if ip == nil || ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() {
+	if ip == nil {
 		return ""
 	}
-	if v4 := ip.To4(); v4 != nil {
-		return v4.String()
+	v4 := ip.To4()
+	if v4 == nil || v4.IsUnspecified() || v4.IsLoopback() || v4.IsMulticast() {
+		return ""
 	}
-	return ip.String()
+	return v4.String()
 }
 
 func routeLocalIP(remote net.IP) string {
-	if remote == nil {
+	if remote == nil || remote.To4() == nil {
 		return ""
 	}
-	network := "udp4"
-	if remote.To4() == nil {
-		network = "udp6"
-	}
-	conn, err := net.DialUDP(network, nil, &net.UDPAddr{IP: remote, Port: 9})
+	conn, err := net.DialUDP("udp4", nil, &net.UDPAddr{IP: remote.To4(), Port: 9})
 	if err != nil {
 		return ""
 	}

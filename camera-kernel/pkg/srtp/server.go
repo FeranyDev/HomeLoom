@@ -11,6 +11,7 @@ import (
 
 type Server struct {
 	address  string
+	network  string
 	conn     net.PacketConn
 	sessions map[uint32]*Session
 	mu       sync.Mutex
@@ -19,6 +20,7 @@ type Server struct {
 func NewServer(address string) *Server {
 	return &Server{
 		address:  address,
+		network:  "udp",
 		sessions: map[uint32]*Session{},
 	}
 }
@@ -40,10 +42,12 @@ func (s *Server) NewSessionServer(ipv6 bool) *Server {
 // accessory address.
 func (s *Server) NewWildcardSessionServer(ipv6 bool) *Server {
 	host := "0.0.0.0"
+	network := "udp4"
 	if ipv6 {
 		host = "::"
+		network = "udp6"
 	}
-	return NewServer(net.JoinHostPort(host, "0"))
+	return newNetworkServer(network, net.JoinHostPort(host, "0"))
 }
 
 // NewSessionServerAt creates a per-media socket bound to the same concrete
@@ -52,8 +56,10 @@ func (s *Server) NewWildcardSessionServer(ipv6 bool) *Server {
 // for outbound RTP on VPN/HomeHub routes and Apple then silently discards it.
 func (s *Server) NewSessionServerAt(ipv6 bool, localAddress string) *Server {
 	host := "0.0.0.0"
+	network := "udp4"
 	if ipv6 {
 		host = "::"
+		network = "udp6"
 	}
 	if compatibleSessionHost(localAddress, ipv6) {
 		host = localAddress
@@ -64,7 +70,13 @@ func (s *Server) NewSessionServerAt(ipv6 bool, localAddress string) *Server {
 			host = configuredHost
 		}
 	}
-	return NewServer(net.JoinHostPort(host, "0"))
+	return newNetworkServer(network, net.JoinHostPort(host, "0"))
+}
+
+func newNetworkServer(network, address string) *Server {
+	server := NewServer(address)
+	server.network = network
+	return server
 }
 
 func compatibleSessionHost(host string, ipv6 bool) bool {
@@ -100,7 +112,7 @@ func (s *Server) EnsureListening() error {
 	if s.conn != nil {
 		return nil
 	}
-	conn, err := net.ListenPacket("udp", s.address)
+	conn, err := net.ListenPacket(s.network, s.address)
 	if err != nil {
 		return err
 	}
@@ -119,7 +131,7 @@ func (s *Server) AddSession(session *Session) error {
 	}
 
 	if s.conn == nil {
-		conn, err := net.ListenPacket("udp", s.address)
+		conn, err := net.ListenPacket(s.network, s.address)
 		if err != nil {
 			return err
 		}

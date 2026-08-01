@@ -115,6 +115,12 @@ func TestSessionServersBindIndependentPorts(t *testing.T) {
 	if video.Port() == audio.Port() {
 		t.Fatalf("video/audio session port = %d", video.Port())
 	}
+	if address, ok := video.conn.LocalAddr().(*net.UDPAddr); !ok || address.IP.To4() == nil {
+		t.Fatalf("IPv4 video session address = %v, want IPv4", video.conn.LocalAddr())
+	}
+	if address, ok := audio.conn.LocalAddr().(*net.UDPAddr); !ok || address.IP.To4() == nil {
+		t.Fatalf("IPv4 audio session address = %v, want IPv4", audio.conn.LocalAddr())
+	}
 }
 
 func TestSingleSessionSocketRoutesUnknownControllerSSRC(t *testing.T) {

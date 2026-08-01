@@ -18,6 +18,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const hapListenNetwork = "tcp4"
+
 func Init() {
 	var cfg struct {
 		Mod struct {
@@ -87,7 +89,7 @@ func Init() {
 	if cfg.Mod.HAPListen != "" {
 		_, port, _ := net.SplitHostPort(cfg.Mod.HAPListen)
 		Port, _ = strconv.Atoi(port)
-		go listenHandler("tcp", cfg.Mod.HAPListen, hapOnlyHandler(Handler))
+		go listenHandler(hapListenNetwork, cfg.Mod.HAPListen, hapOnlyHandler(Handler))
 	}
 
 	// Initialize the HTTPS server
