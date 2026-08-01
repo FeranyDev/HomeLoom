@@ -1,4 +1,5 @@
 :root {
+  --font-ui: 'MiSans', ui-sans-serif, sans-serif;
   --ink: #171a16;
   --muted: #6f746b;
   --faint: #989b94;
@@ -10,12 +11,15 @@
   --line: #d8d3c8;
   --line-strong: #c4beb1;
   --danger: #945a4b;
-  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-family: var(--font-ui);
   color: var(--ink);
   background: var(--paper);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
+
+/* Keep every visible control and content surface on the same MiSans family. */
+body, body * { font-family: var(--font-ui) !important; }
 
 /* 2026 editorial workspace refresh */
 body::before {
