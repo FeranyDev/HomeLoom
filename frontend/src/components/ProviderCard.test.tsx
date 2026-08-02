@@ -75,6 +75,14 @@ describe('ProviderCard simulation', () => {
 		expect(screen.getByRole('button', { name: '管理格力设备' })).toBeInTheDocument()
 	})
 
+	it('recognizes Home Assistant compatible Tuya sharing credentials as ready', () => {
+		const tuya: Provider = { ...provider, id: 'tuya-sharing', type: 'tuya', name: '涂鸦扫码云', config: { authType: 'sharing', uid: 'uid-1', endpoint: 'https://openapi.tuyaus.com', terminalId: 'terminal-1', accessToken: 'access-token', refreshToken: 'refresh-token', pollIntervalSeconds: 21600 } }
+		render(<ProviderCard provider={tuya} devices={[]} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} />)
+		expect(screen.getByText('0 台已发现')).toHaveClass('is-ready')
+		expect(screen.getByText(/轮询 21600 秒 · Home Assistant 兼容扫码/)).toBeInTheDocument()
+		expect(screen.getByRole('button', { name: 'Tuya 账号配置' })).toBeInTheDocument()
+	})
+
 	it('shows Virtual Provider child-device action even before its first child exists', async () => {
 		const onManageDevices = vi.fn()
 		render(<ProviderCard provider={{ ...provider, config: { devices: [] } }} devices={[]} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} onManageDevices={onManageDevices} />)

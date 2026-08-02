@@ -19,8 +19,19 @@ const providerAPI = vi.hoisted(() => ({
 	scanProviderNetwork: vi.fn(),
 }))
 
+const tuyaAPI = vi.hoisted(() => ({
+	startTuyaSharingLogin: vi.fn(),
+	pollTuyaSharingLogin: vi.fn(),
+	tuyaSharingQRCodeURL: (state: string) => `/api/v1/tuya/login/qr?state=${encodeURIComponent(state)}`,
+	startTuyaOAuth: vi.fn(),
+	completeTuyaOAuth: vi.fn(),
+	tuyaOAuthQRCodeURL: (state: string) => `/api/v1/tuya/oauth/qr?state=${encodeURIComponent(state)}`,
+	parseTuyaOAuthCallback: (value: unknown) => value && typeof value === 'object' && (value as Record<string, unknown>).type === 'homeloom-tuya-oauth' ? value : null,
+}))
+
 vi.mock('../api/xiaomi', () => xiaomiAPI)
 vi.mock('../api/providers', () => providerAPI)
+vi.mock('../api/tuya', () => tuyaAPI)
 
 describe('ProviderForm', () => {
 	beforeEach(() => {
@@ -33,6 +44,10 @@ describe('ProviderForm', () => {
 		xiaomiAPI.getXiaomiProviderAuthChallenge.mockResolvedValue(null)
 		xiaomiAPI.verifyXiaomiProviderAuthChallenge.mockResolvedValue({})
 		providerAPI.scanProviderNetwork.mockResolvedValue([])
+		tuyaAPI.startTuyaOAuth.mockResolvedValue({ authorizationUrl: 'https://auth.tuya.example/authorize?state=tuya-state', state: 'tuya-state', expiresAt: '2030-01-01T00:10:00Z' })
+		tuyaAPI.completeTuyaOAuth.mockResolvedValue({ accessToken: 'tuya-access', refreshToken: 'tuya-refresh', uid: 'tuya-user', expiresAt: '2030-01-01T01:00:00Z' })
+		tuyaAPI.startTuyaSharingLogin.mockResolvedValue({ state: 'sharing-state', qrData: 'tuyaSmart--qrLogin?token=qr-token', expiresAt: '2030-01-01T00:05:00Z' })
+		tuyaAPI.pollTuyaSharingLogin.mockResolvedValue({ status: 'pending' })
 	})
 
 	afterEach(() => vi.restoreAllMocks())
@@ -107,6 +122,64 @@ describe('ProviderForm', () => {
 			type: 'gree',
 			config: { devices: [], pollIntervalSeconds: 45, requestTimeoutSeconds: 8 },
 		}), false))
+	})
+
+	it('exposes and saves a Tuya cloud Provider configuration', async () => {
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		const onTest = vi.fn().mockResolvedValue(undefined)
+		render(<ProviderForm provider={null} initialType="tuya" onCancel={() => {}} onSave={onSave} onTest={onTest} />)
+		expect(screen.getByRole('option', { name: /Tuya 涂鸦云/ })).toBeInTheDocument()
+		expect(screen.getByText('Tuya 登录方式')).toBeInTheDocument()
+		await userEvent.selectOptions(screen.getByLabelText('Tuya 登录方式'), 'openapi')
+		await userEvent.type(screen.getByPlaceholderText('tuya-main'), 'tuya-main')
+		await userEvent.type(screen.getByLabelText('名称'), '涂鸦云')
+		await userEvent.type(screen.getByLabelText('Tuya Access ID'), 'access-id')
+		await userEvent.type(screen.getByLabelText('Tuya Access Secret'), 'access-secret')
+		await userEvent.type(screen.getByLabelText('Tuya 用户 UID'), 'uid-123')
+		await userEvent.click(screen.getByRole('button', { name: '测试 Tuya 连接' }))
+		await waitFor(() => expect(onTest).toHaveBeenCalledWith(expect.objectContaining({ type: 'tuya', config: expect.objectContaining({ region: 'cn', accessId: 'access-id', accessSecret: 'access-secret', uid: 'uid-123' }) })))
+		expect(screen.getByText('Tuya 云账号连接测试成功，设备目录可用。')).toBeInTheDocument()
+		await userEvent.click(screen.getByRole('button', { name: '保存并应用' }))
+		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ type: 'tuya', config: expect.objectContaining({ accessId: 'access-id', accessSecret: 'access-secret', uid: 'uid-123', pollIntervalSeconds: 21600 }) }), false))
+	})
+
+	it('completes Tuya OAuth through the QR callback message and fills the UID/token', async () => {
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		const popup = {} as Window
+		vi.spyOn(window, 'open').mockReturnValue(popup)
+		render(<ProviderForm provider={null} initialType="tuya" onCancel={() => {}} onSave={onSave} />)
+		await userEvent.selectOptions(screen.getByLabelText('Tuya 登录方式'), 'openapi')
+		await userEvent.type(screen.getByPlaceholderText('tuya-main'), 'tuya-main')
+		await userEvent.type(screen.getByLabelText('Tuya Access ID'), 'access-id')
+		await userEvent.type(screen.getByLabelText('Tuya Access Secret'), 'access-secret')
+		await userEvent.type(screen.getByLabelText('Tuya OAuth 授权页 URL'), 'https://auth.tuya.example/authorize')
+		await userEvent.click(screen.getByRole('button', { name: '开始 Tuya OAuth 授权' }))
+		await waitFor(() => expect(tuyaAPI.startTuyaOAuth).toHaveBeenCalledWith(expect.objectContaining({ accessId: 'access-id', accessSecret: 'access-secret', authorizationUrl: 'https://auth.tuya.example/authorize', redirectUrl: expect.stringContaining('/tuya/oauth/callback') })))
+		expect(screen.getByRole('img', { name: 'Tuya OAuth 扫码授权二维码' })).toHaveAttribute('src', '/api/v1/tuya/oauth/qr?state=tuya-state')
+		window.dispatchEvent(new MessageEvent('message', { origin: window.location.origin, data: { type: 'homeloom-tuya-oauth', code: 'auth-code', state: 'tuya-state' } }))
+		await waitFor(() => expect(tuyaAPI.completeTuyaOAuth).toHaveBeenCalledWith({ state: 'tuya-state', code: 'auth-code' }))
+		expect(await screen.findByText(/Tuya 扫码授权成功/)).toBeInTheDocument()
+		await userEvent.click(screen.getByRole('button', { name: '保存并应用' }))
+		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ uid: 'tuya-user', accessToken: 'tuya-access', refreshToken: 'tuya-refresh' }) }), false))
+	})
+
+	it('completes Home Assistant compatible Tuya QR login and fills sharing credentials', async () => {
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		tuyaAPI.pollTuyaSharingLogin
+			.mockResolvedValueOnce({ status: 'pending' })
+			.mockResolvedValueOnce({ status: 'complete', accessToken: 'sharing-access', refreshToken: 'sharing-refresh', uid: 'sharing-user', endpoint: 'https://openapi.tuyaus.com', terminalId: 'terminal-1', expiresAt: '2030-01-01T01:00:00Z' })
+		render(<ProviderForm provider={null} initialType="tuya" onCancel={() => {}} onSave={onSave} />)
+		await userEvent.type(screen.getByPlaceholderText('tuya-main'), 'tuya-main')
+		await userEvent.type(screen.getByLabelText('名称'), '涂鸦扫码云')
+		await userEvent.type(screen.getByLabelText('Tuya User Code'), 'user-code-1')
+		await userEvent.click(screen.getByRole('button', { name: '获取 Tuya 扫码二维码' }))
+		await waitFor(() => expect(tuyaAPI.startTuyaSharingLogin).toHaveBeenCalledWith('user-code-1'))
+		expect(screen.getByRole('img', { name: 'Tuya Home Assistant 扫码二维码' })).toHaveAttribute('src', '/api/v1/tuya/login/qr?state=sharing-state')
+		await waitFor(() => expect(tuyaAPI.pollTuyaSharingLogin).toHaveBeenCalledWith('sharing-state'))
+		tuyaAPI.pollTuyaSharingLogin.mockResolvedValue({ status: 'complete', accessToken: 'sharing-access', refreshToken: 'sharing-refresh', uid: 'sharing-user', endpoint: 'https://openapi.tuyaus.com', terminalId: 'terminal-1', expiresAt: '2030-01-01T01:00:00Z' })
+		expect(await screen.findByText(/Tuya 扫码登录成功/, {}, { timeout: 3000 })).toBeInTheDocument()
+		await userEvent.click(screen.getByRole('button', { name: '保存并应用' }))
+		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ authType: 'sharing', uid: 'sharing-user', endpoint: 'https://openapi.tuyaus.com', terminalId: 'terminal-1', accessToken: 'sharing-access', refreshToken: 'sharing-refresh' }) }), false))
 	})
 
 	it('keeps the Gree device JSON as a backward-compatible advanced import', async () => {

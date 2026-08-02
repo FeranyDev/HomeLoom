@@ -24,6 +24,7 @@ import (
 	cameraprovider "github.com/feranydev/homeloom/backend/internal/providers/camera"
 	"github.com/feranydev/homeloom/backend/internal/providers/gree"
 	mqttprovider "github.com/feranydev/homeloom/backend/internal/providers/mqtt"
+	"github.com/feranydev/homeloom/backend/internal/providers/tuya"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
 	"github.com/feranydev/homeloom/backend/internal/providers/xiaomi"
 	"github.com/feranydev/homeloom/backend/internal/runtime/providermanager"
@@ -154,6 +155,12 @@ func main() {
 		return gree.NewProviderFromConfig(config)
 	}); err != nil {
 		logger.Error("gree provider factory registration failed", zap.Error(err))
+		os.Exit(1)
+	}
+	if err := factory.Register(tuya.ProviderType, func(config providerconfig.Config) (providersdk.Provider, error) {
+		return tuya.NewProviderFromConfig(config)
+	}); err != nil {
+		logger.Error("tuya provider factory registration failed", zap.Error(err))
 		os.Exit(1)
 	}
 	xiaomiSpecs := xiaomi.NewSpecResolver(store)

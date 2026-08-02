@@ -29,10 +29,12 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/mapping"
 	"github.com/feranydev/homeloom/backend/internal/platform/subprocesslog"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
+	"github.com/feranydev/homeloom/backend/internal/providers/tuya"
 	"github.com/feranydev/homeloom/backend/internal/providers/xiaomi"
 	"github.com/feranydev/homeloom/backend/internal/webui"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"github.com/skip2/go-qrcode"
 	"go.uber.org/zap"
 )
 
@@ -52,6 +54,8 @@ type Server struct {
 	mediaRuntimeDir            string
 	logins                     *loginLimiter
 	cloudLogins                *xiaomi.CloudLoginService
+	tuyaOAuth                  *tuya.OAuthService
+	tuyaSharingLogin           *tuya.SharingLoginService
 	trustedProxies             []*net.IPNet
 	subprocessLogs             *subprocesslog.Store
 }
@@ -253,7 +257,7 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 	}
 	logger = logger.With(zap.String("module", "http-api"))
 	e := echo.New()
-	server := &Server{address: address, echo: e, devices: devices, logins: newLoginLimiter(), cloudLogins: xiaomi.NewCloudLoginService()}
+	server := &Server{address: address, echo: e, devices: devices, logins: newLoginLimiter(), cloudLogins: xiaomi.NewCloudLoginService(), tuyaOAuth: tuya.NewOAuthService(), tuyaSharingLogin: tuya.NewSharingLoginService()}
 	e.IPExtractor = server.clientIP
 	e.HideBanner = true
 	e.HidePort = true
@@ -1220,6 +1224,89 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
 		return c.JSON(http.StatusOK, map[string]any{"data": result})
 	})
+	e.POST("/api/v1/tuya/oauth/start", func(c echo.Context) error {
+		var request tuya.OAuthStartRequest
+		if err := c.Bind(&request); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid Tuya OAuth start request")
+		}
+		result, err := server.tuyaOAuth.Start(request)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+		return c.JSON(http.StatusOK, map[string]any{"data": result})
+	})
+	e.POST("/api/v1/tuya/oauth/complete", func(c echo.Context) error {
+		var request tuya.OAuthCompleteRequest
+		if err := c.Bind(&request); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid Tuya OAuth callback")
+		}
+		ctx, cancel := context.WithTimeout(c.Request().Context(), 90*time.Second)
+		defer cancel()
+		result, err := server.tuyaOAuth.Complete(ctx, request)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+		return c.JSON(http.StatusOK, map[string]any{"data": result})
+	})
+	e.GET("/api/v1/tuya/oauth/qr", func(c echo.Context) error {
+		authorizationURL, ok := server.tuyaOAuth.AuthorizationURL(c.QueryParam("state"))
+		if !ok {
+			return echo.NewHTTPError(http.StatusGone, "Tuya OAuth state is missing or expired; start login again")
+		}
+		image, err := qrcode.Encode(authorizationURL, qrcode.Medium, 320)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to generate Tuya OAuth QR code").SetInternal(err)
+		}
+		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+		return c.Blob(http.StatusOK, "image/png", image)
+	})
+	e.GET("/api/v1/tuya/oauth/callback", func(c echo.Context) error {
+		code, state, oauthError := c.QueryParam("code"), c.QueryParam("state"), c.QueryParam("error")
+		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+		return c.HTML(http.StatusOK, tuyaOAuthCallbackPage(code, state, oauthError))
+	})
+	e.POST("/api/v1/tuya/login/start", func(c echo.Context) error {
+		var request tuya.SharingLoginStartRequest
+		if err := c.Bind(&request); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid Tuya QR login request")
+		}
+		ctx, cancel := context.WithTimeout(c.Request().Context(), 30*time.Second)
+		defer cancel()
+		result, err := server.tuyaSharingLogin.Start(ctx, request)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+		return c.JSON(http.StatusOK, map[string]any{"data": result})
+	})
+	e.POST("/api/v1/tuya/login/poll", func(c echo.Context) error {
+		var request tuya.SharingLoginPollRequest
+		if err := c.Bind(&request); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid Tuya QR login poll request")
+		}
+		ctx, cancel := context.WithTimeout(c.Request().Context(), 30*time.Second)
+		defer cancel()
+		result, err := server.tuyaSharingLogin.Poll(ctx, request)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+		return c.JSON(http.StatusOK, map[string]any{"data": result})
+	})
+	e.GET("/api/v1/tuya/login/qr", func(c echo.Context) error {
+		qrData, ok := server.tuyaSharingLogin.QRData(c.QueryParam("state"))
+		if !ok {
+			return echo.NewHTTPError(http.StatusGone, "Tuya QR login session is missing or expired; start again")
+		}
+		image, err := qrcode.Encode(qrData, qrcode.Medium, 320)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to generate Tuya QR login code").SetInternal(err)
+		}
+		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+		return c.Blob(http.StatusOK, "image/png", image)
+	})
 	e.POST("/api/v1/xiaomi-miot-cloud/login/start", func(c echo.Context) error {
 		var request xiaomi.CloudLoginStartRequest
 		if err := c.Bind(&request); err != nil {
@@ -1877,11 +1964,21 @@ func requiresAuthentication(request *http.Request) bool {
 		return false
 	}
 	switch path {
-	case "/api/v1/system/version", "/api/v1/auth/status", "/api/v1/auth/setup", "/api/v1/auth/login":
+	case "/api/v1/system/version", "/api/v1/auth/status", "/api/v1/auth/setup", "/api/v1/auth/login", "/api/v1/tuya/oauth/callback":
 		return false
 	default:
 		return true
 	}
+}
+
+func tuyaOAuthCallbackPage(code, state, oauthError string) string {
+	payload, _ := json.Marshal(map[string]string{
+		"type":  "homeloom-tuya-oauth",
+		"code":  strings.TrimSpace(code),
+		"state": strings.TrimSpace(state),
+		"error": strings.TrimSpace(oauthError),
+	})
+	return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>HomeLoom · Tuya 授权</title><style>body{font:16px system-ui,sans-serif;max-width:560px;margin:15vh auto;padding:24px;color:#16202a}strong{display:block;margin-bottom:8px}small{color:#64748b}</style></head><body><strong>Tuya 授权结果已返回</strong><small>正在通知 HomeLoom 配置窗口；如果没有自动关闭，请返回原窗口继续。</small><script>const message=` + string(payload) + `;if(window.opener&&window.opener!==window){window.opener.postMessage(message,window.location.origin);window.setTimeout(()=>window.close(),250)}else{document.querySelector('small').textContent='请返回 HomeLoom 原窗口继续完成授权。'}</script></body></html>`
 }
 
 func directClientIP(request *http.Request) string {

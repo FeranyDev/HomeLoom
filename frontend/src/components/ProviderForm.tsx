@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Provider, ProviderInput } from '../types/provider'
 import { ApiError } from '../api/client'
+import { completeTuyaOAuth, parseTuyaOAuthCallback, pollTuyaSharingLogin, startTuyaOAuth, startTuyaSharingLogin, tuyaOAuthQRCodeURL, tuyaSharingQRCodeURL, type TuyaOAuthCallbackMessage, type TuyaOAuthStartResult, type TuyaSharingLoginPollResult, type TuyaSharingLoginStartResult } from '../api/tuya'
 import { completeXiaomiOAuth, discoverXiaomiGateways, getXiaomiProviderAuthChallenge, startXiaomiCloudLogin, startXiaomiOAuth, verifyXiaomiCloudLogin, verifyXiaomiProviderAuthChallenge, type XiaomiCloudLoginResult, type XiaomiGateway } from '../api/xiaomi'
 
 const xiaomiOAuthRedirectURL = 'http://homeassistant.local:8123'
+const tuyaOAuthDefaultRedirectURL = typeof window === 'undefined' ? 'http://homeassistant.local:8123/api/v1/tuya/oauth/callback' : `${window.location.origin}/api/v1/tuya/oauth/callback`
 const expandedVirtualExamples = [
 	['pressure', '室外气压', 'pressure-sensor'], ['noise', '客厅噪声', 'noise-sensor'],
 	['water-level', '水箱水位', 'water-level-sensor'], ['soil-moisture', '花园土壤湿度', 'soil-moisture-sensor'],
@@ -31,6 +33,10 @@ function createGreeExample() {
 	return { devices: [], pollIntervalSeconds: 60, requestTimeoutSeconds: 5 }
 }
 
+function createTuyaExample() {
+	return { authType: 'sharing', region: 'cn', userCode: '', uid: '', endpoint: '', terminalId: '', accessToken: '', refreshToken: '', requestTimeoutSeconds: 15, pollIntervalSeconds: 21600, mqtt: { enabled: false }, quirks: [] }
+}
+
 function createCameraExample() {
 	return { cameras: [] }
 }
@@ -44,7 +50,7 @@ function createMQTTExample(mode: 'client' | 'server' = 'client') {
 	return { mode, brokerUrl: 'mqtt://127.0.0.1:1883', username: '', password: '', clientId: '', keepAliveSeconds: 30, connectTimeoutSeconds: 10, sessionExpirySeconds: 86400, retainedStateMaxAgeSeconds: 300, tls: {}, devices: [] }
 }
 
-type ProviderSelection = 'virtual' | 'mqtt-client' | 'mqtt-server' | 'xiaomi' | 'xiaomi-miot-cloud' | 'gree' | 'camera'
+type ProviderSelection = 'virtual' | 'mqtt-client' | 'mqtt-server' | 'xiaomi' | 'xiaomi-miot-cloud' | 'gree' | 'tuya' | 'camera'
 
 function objectRecord(value: unknown): Record<string, unknown> {
 	return value && !Array.isArray(value) && typeof value === 'object' ? value as Record<string, unknown> : {}
@@ -127,13 +133,14 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 	const initialXiaomiConfig = createXiaomiExample()
 	const initialXiaomiCloudConfig = createXiaomiMIoTCloudExample()
 	const initialGreeConfig = createGreeExample()
+	const initialTuyaConfig = createTuyaExample()
 	const initialCameraConfig = createCameraExample()
 	const initialMQTTConfig = createMQTTExample(selectedInitialType === 'mqtt-server' ? 'server' : 'client')
   const [id, setID] = useState(provider?.id ?? '')
   const [name, setName] = useState(provider?.name ?? '')
   const [type, setType] = useState(selectedInitialType)
   const [enabled, setEnabled] = useState(provider?.enabled ?? true)
-	  const [config, setConfig] = useState(JSON.stringify(provider?.config ?? (selectedInitialType === 'mqtt-client' || selectedInitialType === 'mqtt-server' ? initialMQTTConfig : selectedInitialType === 'xiaomi' ? initialXiaomiConfig : selectedInitialType === 'xiaomi-miot-cloud' ? initialXiaomiCloudConfig : selectedInitialType === 'gree' ? initialGreeConfig : selectedInitialType === 'camera' ? initialCameraConfig : createVirtualExample()), null, 2))
+	  const [config, setConfig] = useState(JSON.stringify(provider?.config ?? (selectedInitialType === 'mqtt-client' || selectedInitialType === 'mqtt-server' ? initialMQTTConfig : selectedInitialType === 'xiaomi' ? initialXiaomiConfig : selectedInitialType === 'xiaomi-miot-cloud' ? initialXiaomiCloudConfig : selectedInitialType === 'gree' ? initialGreeConfig : selectedInitialType === 'tuya' ? initialTuyaConfig : selectedInitialType === 'camera' ? initialCameraConfig : createVirtualExample()), null, 2))
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<string | null>(null)
@@ -150,13 +157,23 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 	const [cloudVerificationCode, setCloudVerificationCode] = useState('')
 	const [cloudAuthenticating, setCloudAuthenticating] = useState(false)
 	const [cloudChallengeClock, setCloudChallengeClock] = useState(() => Date.now())
+	const [tuyaOAuthSession, setTuyaOAuthSession] = useState<TuyaOAuthStartResult | null>(null)
+	const [tuyaOAuthCallbackURL, setTuyaOAuthCallbackURL] = useState('')
+	const [tuyaOAuthBusy, setTuyaOAuthBusy] = useState(false)
+	const [tuyaSharingSession, setTuyaSharingSession] = useState<TuyaSharingLoginStartResult | null>(null)
+	const [tuyaSharingBusy, setTuyaSharingBusy] = useState(false)
 	const hasRedactedSecrets = Boolean(provider && JSON.stringify(provider.config).includes('********'))
   const example = { latencyMs: 0, rejectWrites: false, devices: [{ id: 'demo-switch', name: '客厅开关', type: 'switch', online: true, power: false }, { id: 'demo-light', name: '客厅灯', type: 'lightbulb', online: true, power: true, brightness: 80, colorTemperature: 250, hue: 35, saturation: 45 }, { id: 'demo-outlet', name: '书房插座', type: 'outlet', online: true, power: false, inUse: false, currentPower: 0, energy: 1.25 }, { id: 'demo-temperature', name: '客厅温度', type: 'temperature-sensor', online: true, temperature: 23.6, batteryLevel: 91, lowBattery: false }, { id: 'demo-humidity', name: '客厅湿度', type: 'humidity-sensor', online: true, humidity: 56.2, batteryLevel: 90, lowBattery: false }, { id: 'demo-climate', name: '客厅温湿度', type: 'temperature-humidity-sensor', online: true, temperature: 23.6, humidity: 56.2, batteryLevel: 87, lowBattery: false }, { id: 'demo-contact', name: '入户门', type: 'contact-sensor', online: true, contact: false, batteryLevel: 88, lowBattery: false, tampered: false }, { id: 'demo-motion', name: '走廊活动', type: 'motion-sensor', online: true, motion: false, batteryLevel: 84, lowBattery: false, tampered: false }, { id: 'demo-fan', name: '卧室风扇', type: 'fan', online: true, active: false, speed: 35, mode: 'manual', swingMode: true, direction: 'clockwise', controlLock: false }, { id: 'demo-air', name: '客厅净化器', type: 'air-purifier', online: true, active: true, speed: 60, mode: 'auto', swingMode: false, controlLock: false, airQuality: 'good', pm25: 12, voc: 80, filterLife: 82, filterChange: false }, { id: 'demo-shade', name: '南窗帘', type: 'window-covering', online: true, position: 50, obstruction: false }, ...expandedVirtualExamples] }
 	const xiaomiExample = initialXiaomiConfig
 	const xiaomiCloudExample = initialXiaomiCloudConfig
 	const greeExample = initialGreeConfig
-	let configObject: Record<string, unknown> = {}
-	try { const parsed = JSON.parse(config) as unknown; if (parsed && !Array.isArray(parsed) && typeof parsed === 'object') configObject = parsed as Record<string, unknown> } catch { /* validation is shown on submit */ }
+	const configObject = useMemo(() => {
+		try {
+			const parsed = JSON.parse(config) as unknown
+			if (parsed && !Array.isArray(parsed) && typeof parsed === 'object') return parsed as Record<string, unknown>
+		} catch { /* validation is shown on submit */ }
+		return {}
+	}, [config])
 	const tlsConfig = configObject.tls && !Array.isArray(configObject.tls) && typeof configObject.tls === 'object' ? configObject.tls as Record<string, unknown> : {}
 	const xiaomiOAuth = configObject.oauth && !Array.isArray(configObject.oauth) && typeof configObject.oauth === 'object' ? configObject.oauth as Record<string, unknown> : {}
 	const mqttSelected = type === 'mqtt-client' || type === 'mqtt-server'
@@ -166,6 +183,12 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 	const updateTLS = (key: string, value: unknown) => setConfig(JSON.stringify({ ...configObject, tls: { ...tlsConfig, [key]: value } }, null, 2))
 	const updateXiaomi = (key: string, value: unknown) => setConfig(JSON.stringify({ ...configObject, [key]: value }, null, 2))
 	const updateGreeRuntime = (key: string, value: unknown) => {
+		const nextConfig: Record<string, unknown> = { ...configObject }
+		if (value === undefined) delete nextConfig[key]
+		else nextConfig[key] = value
+		setConfig(JSON.stringify(nextConfig, null, 2))
+	}
+	const updateTuya = (key: string, value: unknown) => {
 		const nextConfig: Record<string, unknown> = { ...configObject }
 		if (value === undefined) delete nextConfig[key]
 		else nextConfig[key] = value
@@ -184,6 +207,109 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 	const cloudChallengeExpired = cloudChallengeExpiresAt !== null && cloudChallengeExpiresAt <= cloudChallengeClock
 	const providerNeedsCloudChallenge = Boolean(provider && provider.type === 'xiaomi-miot-cloud' && isCloudChallengeStatus(provider.status) && !cloudChallenge)
 	const providerID = provider?.id
+	const tuyaAuthType = String(configObject.authType ?? 'openapi').trim().toLowerCase() || 'openapi'
+	async function beginTuyaSharingLogin() {
+		const userCode = String(configObject.userCode ?? '').trim()
+		if (!userCode || userCode === '********') { setError('请重新填写 Tuya/Smart Life App 中的 User Code'); return }
+		setTuyaSharingBusy(true); setError(null); setTestResult(null)
+		try {
+			const result = await startTuyaSharingLogin(userCode)
+			setTuyaSharingSession(result)
+			setTestResult('Tuya 扫码二维码已生成，请使用 Tuya/Smart Life App 扫描并确认。')
+		} catch (cause) {
+			setError(cause instanceof Error ? cause.message : '无法生成 Tuya 扫码二维码')
+		} finally { setTuyaSharingBusy(false) }
+	}
+	useEffect(() => {
+		if (!tuyaSharingSession) return
+		let active = true
+		const poll = async () => {
+			try {
+				const result: TuyaSharingLoginPollResult = await pollTuyaSharingLogin(tuyaSharingSession.state)
+				if (!active) return
+				if (result.status === 'pending') return
+				if (result.status === 'expired') {
+					setTuyaSharingSession(null)
+					setError(result.message || 'Tuya 扫码会话已过期，请重新生成二维码')
+					return
+				}
+				if (result.status !== 'complete' || !result.accessToken || !result.refreshToken || !result.uid || !result.endpoint || !result.terminalId) {
+					setTuyaSharingSession(null)
+					setError(result.message || 'Tuya 扫码登录返回信息不完整，请重试')
+					return
+				}
+				setConfig(current => {
+					let parsed: Record<string, unknown> = {}
+					try {
+						const value = JSON.parse(current) as unknown
+						if (value && !Array.isArray(value) && typeof value === 'object') parsed = value as Record<string, unknown>
+					} catch { /* the editor will show validation on save */ }
+					return JSON.stringify({ ...parsed, authType: 'sharing', endpoint: result.endpoint, clientId: 'HA_3y9q4ak7g4ephrvke', terminalId: result.terminalId, accessToken: result.accessToken, refreshToken: result.refreshToken, uid: result.uid, tokenExpiresAt: result.expiresAt }, null, 2)
+				})
+				setTuyaSharingSession(null)
+				setTestResult('Tuya 扫码登录成功，UID 与会话 Token 已就绪；现在可以保存并启用 Provider。')
+			} catch (cause) {
+				if (!active) return
+				setTuyaSharingSession(null)
+				setError(cause instanceof Error ? cause.message : 'Tuya 扫码登录失败')
+			}
+		}
+		const timer = window.setInterval(() => void poll(), 2000)
+		void poll()
+		return () => { active = false; window.clearInterval(timer) }
+	}, [tuyaSharingSession])
+	const tuyaCallbackFromInput = useCallback((input: string): TuyaOAuthCallbackMessage | null => {
+		const value = input.trim()
+		if (!value) return null
+		try {
+			const callbackURL = new URL(value)
+			return parseTuyaOAuthCallback({ type: 'homeloom-tuya-oauth', code: callbackURL.searchParams.get('code') ?? '', state: callbackURL.searchParams.get('state') ?? '', error: callbackURL.searchParams.get('error') ?? '' })
+		} catch {
+			return parseTuyaOAuthCallback({ type: 'homeloom-tuya-oauth', code: value, state: tuyaOAuthSession?.state ?? '', error: '' })
+		}
+	}, [tuyaOAuthSession])
+	const completeTuyaAuthorization = useCallback(async (callback?: TuyaOAuthCallbackMessage) => {
+		const supplied = callback ?? tuyaCallbackFromInput(tuyaOAuthCallbackURL)
+		const state = String(supplied?.state ?? tuyaOAuthSession?.state ?? '').trim()
+		const code = String(supplied?.code ?? '').trim()
+		if (supplied?.error) { setError(`Tuya 授权失败：${supplied.error}`); return }
+		if (!state || !code) { setError('请先完成 Tuya 扫码授权，并粘贴回调 URL'); return }
+		if (!tuyaOAuthSession || state !== tuyaOAuthSession.state) { setError('Tuya OAuth state 不匹配，请从当前窗口重新开始扫码授权'); return }
+		setTuyaOAuthBusy(true); setError(null); setTestResult(null)
+		try {
+			const result = await completeTuyaOAuth({ state, code })
+			setConfig(JSON.stringify({ ...configObject, accessToken: result.accessToken, refreshToken: result.refreshToken, uid: result.uid, tokenExpiresAt: result.expiresAt, redirectUrl: String(configObject.redirectUrl ?? tuyaOAuthDefaultRedirectURL) }, null, 2))
+			setTuyaOAuthSession(null); setTuyaOAuthCallbackURL('')
+			setTestResult('Tuya 扫码授权成功，账号 Token 与 UID 已就绪；现在可以保存并启用 Provider。')
+		} catch (cause) {
+			setError(cause instanceof Error ? cause.message : 'Tuya OAuth 授权失败')
+		} finally { setTuyaOAuthBusy(false) }
+	}, [configObject, tuyaOAuthCallbackURL, tuyaOAuthSession, tuyaCallbackFromInput])
+	async function beginTuyaOAuth() {
+		const accessId = String(configObject.accessId ?? '').trim()
+		const accessSecret = String(configObject.accessSecret ?? '').trim()
+		const authorizationUrl = String(configObject.authorizationUrl ?? '').trim()
+		if (!accessId || !accessSecret || accessSecret === '********') { setError('开始 Tuya 扫码前，请填写真实的 Access ID 和 Access Secret'); return }
+		if (!authorizationUrl) { setError('请先填写 Tuya IoT Platform 生成的 OAuth H5 授权页 URL'); return }
+		setTuyaOAuthBusy(true); setError(null); setTestResult(null)
+		try {
+			const result = await startTuyaOAuth({ accessId, accessSecret, region: String(configObject.region ?? 'cn'), baseUrl: String(configObject.baseUrl ?? '') || undefined, authorizationUrl, redirectUrl: String(configObject.redirectUrl ?? tuyaOAuthDefaultRedirectURL) })
+			setTuyaOAuthSession(result)
+			const popup = typeof window !== 'undefined' ? window.open(result.authorizationUrl, 'homeloom-tuya-oauth', 'popup,width=720,height=760') : null
+			setTestResult(popup ? 'Tuya 授权页已打开；也可以使用下方二维码让 Tuya/Smart Life App 扫码。' : 'Tuya 授权已准备好，请使用下方二维码让 Tuya/Smart Life App 扫码。')
+		} catch (cause) {
+			setError(cause instanceof Error ? cause.message : '无法开始 Tuya OAuth 授权')
+		} finally { setTuyaOAuthBusy(false) }
+	}
+	useEffect(() => {
+		const listener = (event: MessageEvent) => {
+			if (typeof window === 'undefined' || event.origin !== window.location.origin) return
+			const callback = parseTuyaOAuthCallback(event.data)
+			if (callback) void completeTuyaAuthorization(callback)
+		}
+		window.addEventListener('message', listener)
+		return () => window.removeEventListener('message', listener)
+	}, [completeTuyaAuthorization])
 	useEffect(() => {
 		if (!providerNeedsCloudChallenge || !providerID) return
 		let active = true
@@ -337,8 +463,25 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 		}
 		if (!onTest) return
 		setTesting(true); setError(null); setTestResult(null)
-			try { await onTest({ id, name, type: providerType, enabled, config: parsed }); setTestResult(type === 'xiaomi-miot-cloud' ? '云账号登录成功，设备目录与 MIoT 属性接口可用。' : type === 'gree' ? 'Gree 局域网空调连接测试成功。' : mqttSelected ? mqttServer ? 'MQTT 服务端监听测试成功。保存 Provider 后外部设备可连接此地址。' : 'MQTT 客户端已连接外部 Broker。保存 Provider 后再配置设备 Topic。' : '连接成功，订阅已建立。') } catch (cause) { setError(cause instanceof Error ? cause.message : '连接测试失败') } finally { setTesting(false) }
+			try { await onTest({ id, name, type: providerType, enabled, config: parsed }); setTestResult(type === 'xiaomi-miot-cloud' ? '云账号登录成功，设备目录与 MIoT 属性接口可用。' : type === 'gree' ? 'Gree 局域网空调连接测试成功。' : type === 'tuya' ? 'Tuya 云账号连接测试成功，设备目录可用。' : mqttSelected ? mqttServer ? 'MQTT 服务端监听测试成功。保存 Provider 后外部设备可连接此地址。' : 'MQTT 客户端已连接外部 Broker。保存 Provider 后再配置设备 Topic。' : '连接成功，订阅已建立。') } catch (cause) { setError(cause instanceof Error ? cause.message : '连接测试失败') } finally { setTesting(false) }
 		}
+		const tuyaConfiguration = <div className="wide xiaomi-connection-flow">
+			<section className="xiaomi-connection-step"><div className="xiaomi-connection-step__heading"><span>01</span><div><strong>Tuya 登录方式</strong><small>默认使用 Home Assistant 同款的 User Code + Tuya/Smart Life App 扫码登录，不需要开发者账号。</small></div></div><div className="mqtt-config-grid">
+				<label className="wide">登录方式<select aria-label="Tuya 登录方式" value={tuyaAuthType} onChange={(event) => updateTuya('authType', event.target.value)}><option value="sharing">Home Assistant 扫码（推荐）</option><option value="openapi">Tuya OpenAPI OAuth / 手动凭据</option></select></label>
+				<label>云区域<select aria-label="Tuya 云区域" value={String(configObject.region ?? 'cn')} onChange={(event) => updateTuya('region', event.target.value)}><option value="cn">中国（cn）</option><option value="us">美国（us）</option><option value="eu">欧洲（eu）</option><option value="in">印度（in）</option><option value="sg">新加坡/亚太（sg）</option></select></label>
+				<label>用户 UID<input aria-label="Tuya 用户 UID" value={String(configObject.uid ?? '')} onChange={(event) => updateTuya('uid', event.target.value)} placeholder="扫码授权后自动填写；手动模式必填" /></label>
+				{tuyaAuthType === 'sharing' ? <label className="wide">Tuya User Code<input aria-label="Tuya User Code" required value={String(configObject.userCode ?? '')} onChange={(event) => updateTuya('userCode', event.target.value)} placeholder="Tuya/Smart Life App：我 → 设置 → 账号与安全" /><small>这是 App 里的 User Code，不是 Tuya IoT Platform 的 Access ID。</small></label> : <>
+					<label>Access ID<input aria-label="Tuya Access ID" required value={String(configObject.accessId ?? '')} onChange={(event) => updateTuya('accessId', event.target.value)} autoComplete="username" /></label>
+					<label>Access Secret<input aria-label="Tuya Access Secret" required type="password" value={String(configObject.accessSecret ?? '')} onChange={(event) => updateTuya('accessSecret', event.target.value)} autoComplete="new-password" />{hasRedactedSecrets && <small>保持 ******** 可沿用数据库中的 Secret。</small>}</label>
+				</>}
+				<label>轮询间隔（秒）<input aria-label="Tuya 轮询间隔" type="number" min="30" max="86400" value={Number(configObject.pollIntervalSeconds ?? 21600)} onChange={(event) => updateTuya('pollIntervalSeconds', Number(event.target.value))} /><small>默认 21600 秒；状态消息可通过高级 MQTT 配置补充。</small></label>
+				<label>请求超时（秒）<input aria-label="Tuya 请求超时" type="number" min="1" max="120" value={Number(configObject.requestTimeoutSeconds ?? 15)} onChange={(event) => updateTuya('requestTimeoutSeconds', Number(event.target.value))} /></label>
+				{tuyaAuthType === 'openapi' && <><label className="wide">自定义 API 地址（可选）<input aria-label="Tuya API 地址" value={String(configObject.baseUrl ?? '')} onChange={(event) => updateTuya('baseUrl', event.target.value)} placeholder="留空按区域自动选择 https://openapi.tuya..." /></label><label className="wide">OAuth H5 授权页 URL<input aria-label="Tuya OAuth 授权页 URL" value={String(configObject.authorizationUrl ?? '')} onChange={(event) => updateTuya('authorizationUrl', event.target.value)} placeholder="从 Tuya IoT Platform 获取 H5 授权页 URL" /><small>可选的 OAuth H5 兼容流程；Home Assistant 扫码方式不需要此项。</small></label><label className="wide">OAuth 回调地址<input aria-label="Tuya OAuth 回调地址" value={String(configObject.redirectUrl ?? tuyaOAuthDefaultRedirectURL)} onChange={(event) => updateTuya('redirectUrl', event.target.value)} /><small>默认回调：{tuyaOAuthDefaultRedirectURL}。</small></label></>}
+			</div></section>
+			{tuyaAuthType === 'sharing' ? <><div className="config-note"><span>Home Assistant 兼容扫码</span><strong>使用 Tuya/Smart Life App 扫描二维码</strong><p>输入 App 中的 User Code 后生成二维码，扫码确认后会自动回填 UID、Token 和设备云端 API 地址。</p></div><button type="button" className="example-button" disabled={tuyaSharingBusy || saving} onClick={() => void beginTuyaSharingLogin()}>{tuyaSharingBusy ? '正在生成二维码…' : '获取 Tuya 扫码二维码'}</button>{tuyaSharingSession && <section className="wide xiaomi-connection-flow" role="region" aria-label="Tuya Home Assistant 扫码授权"><div className="xiaomi-oauth-callback"><strong>请使用 Tuya/Smart Life App 扫描二维码</strong><img src={tuyaSharingQRCodeURL(tuyaSharingSession.state)} alt="Tuya Home Assistant 扫码二维码" /><small>二维码有效期至 {new Date(tuyaSharingSession.expiresAt).toLocaleTimeString()}；页面会自动等待手机确认。</small></div></section>}</> : <><div className="config-note"><span>OpenAPI OAuth</span><strong>使用 Tuya OAuth H5 授权页</strong><p>此模式需要 Tuya IoT Platform 的 Access ID/Secret，适合已有开发者项目的配置。</p></div><button type="button" className="example-button" disabled={tuyaOAuthBusy || saving} onClick={() => void beginTuyaOAuth()}>{tuyaOAuthBusy ? '正在准备 Tuya 授权…' : '开始 Tuya OAuth 授权'}</button>{tuyaOAuthSession && <section className="wide xiaomi-connection-flow" role="region" aria-label="Tuya OAuth 授权"><div className="xiaomi-oauth-callback"><strong>请使用 Tuya/Smart Life App 扫描二维码</strong><img src={tuyaOAuthQRCodeURL(tuyaOAuthSession.state)} alt="Tuya OAuth 扫码授权二维码" /><small>授权页有效期至 {new Date(tuyaOAuthSession.expiresAt).toLocaleTimeString()}。</small><a href={tuyaOAuthSession.authorizationUrl} target="_blank" rel="noreferrer">打开 Tuya 授权页</a><textarea aria-label="Tuya OAuth 回调 URL" rows={3} value={tuyaOAuthCallbackURL} onChange={(event) => setTuyaOAuthCallbackURL(event.target.value)} placeholder="扫码授权后若未自动返回，请粘贴完整回调 URL" spellCheck={false} /><button type="button" disabled={tuyaOAuthBusy || !tuyaOAuthCallbackURL.trim()} onClick={() => void completeTuyaAuthorization()}>{tuyaOAuthBusy ? '正在换取 Token…' : '解析回调并完成授权'}</button></div></section>}</>}
+			<details><summary>Tuya MQTT / DP 修补（高级 JSON）</summary><label className="wide config-editor"><span>Tuya 扩展配置（JSON）</span><textarea aria-label="Tuya 扩展配置 JSON" aria-invalid={Boolean(fieldErrors.config)} rows={11} value={config} onChange={(event) => setConfig(event.target.value)} spellCheck={false} />{fieldErrors.config && <small className="field-error">{fieldErrors.config}</small>}<small>可在此配置已授权的 MQTT 凭据（mqtt）或产品 DP 兼容修补（quirks）；日常接入只需填写上方账号字段。</small></label></details>
+			{onTest && <button type="button" className="example-button" disabled={testing || saving} onClick={() => void testConnection()}>{testing ? '连接测试中…' : '测试 Tuya 连接'}</button>}{testResult && <small className="wide test-success">{testResult}</small>}
+		</div>
 		const greeConfiguration = <div className="wide xiaomi-connection-flow">
 			<section className="xiaomi-connection-step"><div className="xiaomi-connection-step__heading"><span>01</span><div><strong>创建 Gree 局域网 Provider</strong><small>Provider 只负责局域网连接和轮询；保存后从 Provider 卡片进入“管理格力设备”，逐台扫描或添加空调。</small></div></div><div className="mqtt-config-grid">
 				<label>轮询间隔（pollIntervalSeconds）<input aria-label="Gree 轮询间隔" type="number" min="1" max="3600" value={configObject.pollIntervalSeconds === '' ? '' : Number(configObject.pollIntervalSeconds ?? 60)} onChange={(event) => updateGreeRuntime('pollIntervalSeconds', event.target.value === '' ? '' : Number(event.target.value))} /><small>Provider 全局轮询间隔，默认 60 秒。</small></label>
@@ -350,7 +493,7 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 		</div>
 		return <div className="modal-backdrop"><form className="target-form" role="dialog" aria-modal="true" aria-labelledby="provider-form-title" onSubmit={(event) => void submit(event)}>
 		<div className="form-heading"><div><p className="eyebrow">PROVIDER</p><h2 id="provider-form-title">{provider ? '编辑 Provider' : '新建 Provider'}</h2></div><button type="button" onClick={onCancel}>关闭</button></div>
-	            <div className="form-grid"><label>ID（留空自动生成）<input aria-invalid={Boolean(fieldErrors.id)} value={id} disabled={Boolean(provider)} onChange={(event) => setID(event.target.value)} placeholder={mqttSelected ? (mqttServer ? 'mqtt-server-main' : 'mqtt-client-main') : type === 'xiaomi' ? 'xiaomi-main' : type === 'xiaomi-miot-cloud' ? 'xiaomi-miot-cloud-main' : type === 'gree' ? 'gree-main' : type === 'camera' ? 'camera-main' : 'virtual-lab'} />{fieldErrors.id && <small className="field-error">{fieldErrors.id}</small>}</label><label>名称<input aria-invalid={Boolean(fieldErrors.name)} value={name} onChange={(event) => setName(event.target.value)} placeholder={mqttSelected ? (mqttServer ? '家庭 MQTT 服务端' : '家庭 MQTT 客户端') : type === 'xiaomi' ? '米家中枢网关' : type === 'xiaomi-miot-cloud' ? '小米 MIoT 云（第三方兼容）' : type === 'gree' ? '客厅格力空调' : type === 'camera' ? '家庭摄像头' : '实验室虚拟设备'} />{fieldErrors.name && <small className="field-error">{fieldErrors.name}</small>}</label><label className="wide">类型<select aria-invalid={Boolean(fieldErrors.type)} value={type} disabled={Boolean(provider)} onChange={(event) => { const next = event.target.value as ProviderSelection; setType(next); if (!provider) { const selected = next === 'mqtt-client' ? createMQTTExample('client') : next === 'mqtt-server' ? createMQTTExample('server') : next === 'xiaomi' ? xiaomiExample : next === 'xiaomi-miot-cloud' ? xiaomiCloudExample : next === 'gree' ? greeExample : next === 'camera' ? createCameraExample() : createVirtualExample(); setConfig(JSON.stringify(selected, null, 2)) } }}><option value="virtual">Virtual</option><option value="camera">Camera（独立摄像头来源）</option><option value="mqtt-client">MQTT Client（客户端 · 连接外部 Broker）</option><option value="mqtt-server">MQTT Server（服务端 · 接受设备连接）</option><option value="xiaomi">Xiaomi Central Hub（中枢网关）</option><option value="xiaomi-miot-cloud">Xiaomi MIoT Cloud（账号与设备目录）</option><option value="gree">Gree 局域网空调</option></select>{fieldErrors.type && <small className="field-error">{fieldErrors.type}</small>}</label>
+	            <div className="form-grid"><label>ID（留空自动生成）<input aria-invalid={Boolean(fieldErrors.id)} value={id} disabled={Boolean(provider)} onChange={(event) => setID(event.target.value)} placeholder={mqttSelected ? (mqttServer ? 'mqtt-server-main' : 'mqtt-client-main') : type === 'xiaomi' ? 'xiaomi-main' : type === 'xiaomi-miot-cloud' ? 'xiaomi-miot-cloud-main' : type === 'gree' ? 'gree-main' : type === 'tuya' ? 'tuya-main' : type === 'camera' ? 'camera-main' : 'virtual-lab'} />{fieldErrors.id && <small className="field-error">{fieldErrors.id}</small>}</label><label>名称<input aria-invalid={Boolean(fieldErrors.name)} value={name} onChange={(event) => setName(event.target.value)} placeholder={mqttSelected ? (mqttServer ? '家庭 MQTT 服务端' : '家庭 MQTT 客户端') : type === 'xiaomi' ? '米家中枢网关' : type === 'xiaomi-miot-cloud' ? '小米 MIoT 云（第三方兼容）' : type === 'gree' ? '客厅格力空调' : type === 'tuya' ? '涂鸦云设备' : type === 'camera' ? '家庭摄像头' : '实验室虚拟设备'} />{fieldErrors.name && <small className="field-error">{fieldErrors.name}</small>}</label><label className="wide">类型<select aria-invalid={Boolean(fieldErrors.type)} value={type} disabled={Boolean(provider)} onChange={(event) => { const next = event.target.value as ProviderSelection; setType(next); if (!provider) { const selected = next === 'mqtt-client' ? createMQTTExample('client') : next === 'mqtt-server' ? createMQTTExample('server') : next === 'xiaomi' ? xiaomiExample : next === 'xiaomi-miot-cloud' ? xiaomiCloudExample : next === 'gree' ? greeExample : next === 'tuya' ? initialTuyaConfig : next === 'camera' ? createCameraExample() : createVirtualExample(); setConfig(JSON.stringify(selected, null, 2)) } }}><option value="virtual">Virtual</option><option value="camera">Camera（独立摄像头来源）</option><option value="mqtt-client">MQTT Client（客户端 · 连接外部 Broker）</option><option value="mqtt-server">MQTT Server（服务端 · 接受设备连接）</option><option value="xiaomi">Xiaomi Central Hub（中枢网关）</option><option value="xiaomi-miot-cloud">Xiaomi MIoT Cloud（账号与设备目录）</option><option value="gree">Gree 局域网空调</option><option value="tuya">Tuya 涂鸦云（设备目录）</option></select>{fieldErrors.type && <small className="field-error">{fieldErrors.type}</small>}</label>
 	{mqttSelected ? <div className="wide mqtt-config-grid">
 		<div className="wide config-note"><span>MQTT Provider</span><strong>{mqttServer ? 'MQTT Server · 服务端' : 'MQTT Client · 客户端'}</strong><p>{mqttServer ? 'HomeLoom 内嵌 Broker 并监听 TCP 地址；设备主动连接 HomeLoom。' : 'HomeLoom 作为客户端连接现有 Mosquitto、EMQX 或其他 Broker。'}</p></div>
 		{mqttServer ? <>
@@ -373,7 +516,7 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 		</>}
 		{fieldErrors.config && <small className="field-error wide">{fieldErrors.config}</small>}<small className="wide">{mqttServer ? '这里启动内嵌 Broker 监听；未配置设备路由时 ACL 会拒绝全部设备 Topic。' : '这里建立到外部 Broker 的 MQTT 客户端连接。'}保存并启用后，从 Provider 卡片进入“管理设备”，逐台配置 Topic、QoS 和收发路由。配置保存到 PostgreSQL，密码由主密钥加密且由 API 脱敏返回。</small>
 		{onTest && <button type="button" className="example-button" disabled={testing || saving} onClick={() => void testConnection()}>{testing ? (mqttServer ? '监听测试中…' : '连接中…') : mqttServer ? '测试监听' : '测试连接'}</button>}{testResult && <small className="wide test-success">{testResult}</small>}
-		</div> : type === 'xiaomi' ? <div className="wide xiaomi-connection-flow">
+		</div> : type === 'tuya' ? tuyaConfiguration : type === 'xiaomi' ? <div className="wide xiaomi-connection-flow">
 			<section className="xiaomi-connection-step"><div className="xiaomi-connection-step__heading"><span>01</span><div><strong>OAuth 授权与证书</strong><small>先完成账号授权，由 HomeLoom 获取中枢 MQTT 客户端证书。</small></div></div><div className="mqtt-config-grid">
 				<label>OAuth Client ID<input aria-label="小米 OAuth Client ID" required value={String(xiaomiOAuth.clientId ?? '')} onChange={(event) => updateXiaomiOAuth('clientId', event.target.value)} placeholder="必须使用有权使用的数值型 Client ID" /></label>
 				<label>账号地区<select aria-label="小米账号地区" value={String(xiaomiOAuth.region ?? 'cn')} onChange={(event) => updateXiaomiOAuth('region', event.target.value)}><option value="cn">中国大陆</option><option value="de">欧洲</option><option value="us">美国</option><option value="ru">俄罗斯</option><option value="tw">台湾</option><option value="sg">新加坡</option><option value="in">印度</option></select></label>

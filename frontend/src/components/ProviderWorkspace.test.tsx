@@ -10,17 +10,19 @@ const providers: Provider[] = [
 	{ ...base, id: 'mqtt-main', type: 'mqtt', name: 'MQTT', config: { brokerUrl: 'mqtt://localhost:1883', devices: [{ id: 'lamp', topicPrefix: 'home/lamp', qos: 1 }] }, metrics: { messagesReceived: 12 } },
 	{ ...base, id: 'xiaomi-main', type: 'xiaomi', name: '家庭中枢', config: { host: '192.168.1.50', port: 8883, clientId: '123', clientCertificate: 'certificate', privateKey: 'key', oauth: { clientId: '1', oauthUuid: 'uuid', virtualDid: '123' }, devices: [] } },
 	{ ...base, id: 'xiaomi-miot-cloud-main', type: 'xiaomi-miot-cloud', name: 'MIoT 云', capabilities: { ...base.capabilities, events: false }, config: { region: 'cn', username: 'owner@example.com', password: '********', devices: [] } },
+	{ ...base, id: 'tuya-main', type: 'tuya', name: '涂鸦云', config: { region: 'cn', accessId: 'access-id', accessSecret: '********', uid: 'uid-123' } },
 ]
 
 describe('ProviderWorkspace', () => {
 	it('uses one lifecycle and full provider list for every type', () => {
 		render(<ProviderWorkspace providers={providers} devices={[]} onEdit={() => {}} onManageDevices={() => {}} onDelete={() => {}} onRestart={vi.fn()} onTest={vi.fn()} onSimulate={vi.fn()} />)
 		expect(screen.getByLabelText('Provider 运行流程')).toBeInTheDocument()
-		expect(screen.getAllByText('运行连接')).toHaveLength(4)
+		expect(screen.getAllByText('运行连接')).toHaveLength(5)
 		expect(screen.getByText('Virtual Runtime · virtual-main')).toBeInTheDocument()
 		expect(screen.getByText('MQTT 客户端（CLIENT） · HomeLoom v1 · mqtt-main')).toBeInTheDocument()
 		expect(screen.getByText('小米中枢网关 · xiaomi-main')).toBeInTheDocument()
 		expect(screen.getByText('小米 MIoT 云 · 第三方兼容 · xiaomi-miot-cloud-main')).toBeInTheDocument()
+		expect(screen.getByText('Tuya 涂鸦云 · tuya-main')).toBeInTheDocument()
 	})
 
 	it('keeps gateway discovery out of the provider overview and opens Xiaomi device management', async () => {

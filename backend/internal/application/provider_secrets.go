@@ -105,7 +105,7 @@ func sensitiveConfigKey(key string) bool {
 		}
 		return -1
 	}, key)
-	if normalized == "pwd" || normalized == "passwd" || normalized == "authorization" || normalized == "credential" || normalized == "credentials" || normalized == "encryptionkey" || normalized == "pin" || normalized == "pairingcode" || normalized == "setupuri" || normalized == "ssecurity" {
+	if normalized == "pwd" || normalized == "passwd" || normalized == "authorization" || normalized == "credential" || normalized == "credentials" || normalized == "encryptionkey" || normalized == "pin" || normalized == "pairingcode" || normalized == "setupuri" || normalized == "ssecurity" || normalized == "usercode" {
 		return true
 	}
 	for _, suffix := range []string{"password", "secret", "token", "apikey", "privatekey"} {
