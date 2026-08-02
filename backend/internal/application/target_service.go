@@ -803,7 +803,11 @@ func (s *TargetService) List() []TargetInfo {
 				info.Paired = s.runtime.IsPaired(config)
 			}
 			if runtime, ok := s.runtime.(TargetRuntimeInfo); ok && domaintarget.IsMatterType(config.Type) {
-				info = runtime.RuntimeInfo(config)
+				runtimeInfo := runtime.RuntimeInfo(config)
+				if runtimeInfo.Status == "error" && runtimeInfo.Error == "" {
+					runtimeInfo.Error = info.Error
+				}
+				info = runtimeInfo
 				registration := s.targets[id]
 				registration.Info = info
 				s.targets[id] = registration
@@ -1027,7 +1031,11 @@ func (s *TargetService) SetStatus(id, status string) {
 	registration.Info.Status = status
 	if config, exists := s.configs[id]; exists && domaintarget.IsMatterType(config.Type) {
 		if runtime, supported := s.runtime.(TargetRuntimeInfo); supported {
+			previousError := registration.Info.Error
 			registration.Info = runtime.RuntimeInfo(config)
+			if registration.Info.Status == "error" && registration.Info.Error == "" {
+				registration.Info.Error = previousError
+			}
 			registration.Info.Status = status
 		}
 	}

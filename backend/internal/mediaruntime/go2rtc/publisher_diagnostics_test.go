@@ -111,13 +111,11 @@ func TestPublisherConfigCapturesDetailedRedactedDiagnostics(t *testing.T) {
 	text := publisherYAML(config)
 	required := []string{
 		"log:\n",
-		"  output: stdout\n",
 		"  format: json\n",
 		"  level: debug\n",
 		"  time: ISO8601\n",
 		"  homekit: debug\n",
 		"  ffmpeg: debug\n",
-		"  exec: debug\n",
 		"  global: \"-hide_banner -nostats\"\n",
 		"${HOMELOOM_CAMERA_SOURCE_CAMERA_MAIN}",
 		"${HOMELOOM_HAP_PIN_CAMERA_MAIN}",
@@ -143,6 +141,10 @@ func TestPublisherConfigCapturesDetailedRedactedDiagnostics(t *testing.T) {
 	upgraded = applyPublisherLogConfig(upgraded, "debug")
 	if strings.Count(upgraded, "\nlog:\n") != 1 || strings.Count(upgraded, "  level: debug\n") != 1 {
 		t.Fatalf("publisher diagnostic upgrade is not idempotent:\n%s", upgraded)
+	}
+	upgraded = removePublisherAppConfig(upgraded)
+	if strings.Contains(upgraded, "\napp:\n") || strings.Contains(upgraded, "modules:") {
+		t.Fatalf("publisher upgrade retained redundant app modules:\n%s", upgraded)
 	}
 }
 

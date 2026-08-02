@@ -37,10 +37,13 @@ func TestPublisherConfigUsesProtectedPlaceholdersAndRetainsPairings(t *testing.T
 			t.Fatalf("publisher config contains a secret: %q", secret)
 		}
 	}
-	for _, required := range []string{"modules: [api, rtsp, srtp, homekit, xiaomi, streams, mp4, exec, ffmpeg]", "homekit: info", "ffmpeg: info", "exec: info", "allow_paths: [/pair-setup, /pair-verify, /api/stream.mp4, /api/frame.mp4, /api/frame.jpeg, /api/homekit/session, /api/matter/webrtc]", "exec:\n  allow_paths: [\"/opt/homeloom/ffmpeg\"]", "ffmpeg:\n  bin: \"/opt/homeloom/ffmpeg\"", "  global: \"-hide_banner -nostats\"", "ffmpeg:camera-main#video=h264", "${HOMELOOM_CAMERA_SOURCE_CAMERA_MAIN}"} {
+	for _, required := range []string{"format: json", "level: info", "homekit: info", "ffmpeg: info", "allow_paths: [/pair-setup, /pair-verify, /api/stream.mp4, /api/frame.mp4, /api/frame.jpeg, /api/homekit/session, /api/matter/webrtc]", "exec:\n  allow_paths: [\"/opt/homeloom/ffmpeg\"]", "ffmpeg:\n  bin: \"/opt/homeloom/ffmpeg\"", "  global: \"-hide_banner -nostats\"", "ffmpeg:camera-main#video=h264", "${HOMELOOM_CAMERA_SOURCE_CAMERA_MAIN}"} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("publisher config missing %q:\n%s", required, text)
 		}
+	}
+	if strings.Contains(text, "\napp:\n") || strings.Contains(text, "  modules:") || strings.Contains(text, "  output: stdout\n") || strings.Contains(text, "  exec: info\n") {
+		t.Fatalf("publisher config contains redundant defaults:\n%s", text)
 	}
 	if info, err := os.Stat(filepath.Dir(path)); err != nil || info.Mode().Perm() != 0o700 {
 		t.Fatalf("runtime dir permissions = %v, %v", info.Mode(), err)
@@ -179,7 +182,6 @@ func TestPreviewOnlyConfigIsPromotedToCompleteHomeKitPublisher(t *testing.T) {
 	}
 	text := string(content)
 	for _, required := range []string{
-		"modules: [api, rtsp, srtp, homekit, xiaomi, streams, mp4, exec, ffmpeg]",
 		"allow_paths: [/pair-setup, /pair-verify, /api/stream.mp4, /api/frame.mp4, /api/frame.jpeg, /api/homekit/session, /api/matter/webrtc]",
 		"\nhomekit:\n",
 		"    pin: \"${HOMELOOM_HAP_PIN_CAMERA_MAIN}\"",
@@ -258,10 +260,13 @@ func TestExistingPublisherConfigGainsPreviewWithoutLosingPairing(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(content)
-	for _, required := range []string{"streams, mp4, exec, ffmpeg]", "/api/stream.mp4", "client_id=controller", "ffmpeg:camera#video=h264#audio=opus/16000#width=1280#height=720"} {
+	for _, required := range []string{"/api/stream.mp4", "client_id=controller", "ffmpeg:camera#video=h264#audio=opus/16000#width=1280#height=720"} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("upgraded config missing %q:\n%s", required, text)
 		}
+	}
+	if strings.Contains(text, "\napp:\n") || strings.Contains(text, "modules:") {
+		t.Fatalf("upgraded config retained redundant app modules:\n%s", text)
 	}
 	if !strings.Contains(text, "${HOMELOOM_CAMERA_SOURCE_CAMERA}") {
 		t.Fatalf("upgraded config missing native source:\n%s", text)
@@ -696,7 +701,6 @@ func TestPreviewOnlyRestartPreservesHomeKitPairings(t *testing.T) {
 	}
 	reenabledText := string(reenabled)
 	for _, required := range []string{
-		"modules: [api, rtsp, srtp, homekit,",
 		"hap_listen:",
 		"/pair-setup",
 		"client_id=controller&client_public=abcd&permissions=1",

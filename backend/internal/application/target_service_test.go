@@ -34,6 +34,12 @@ type targetRuntimeStub struct {
 	removeErr       error
 }
 
+type targetRuntimeInfoStub struct{ targetRuntimeStub }
+
+func (s *targetRuntimeInfoStub) RuntimeInfo(item target.Config) TargetInfo {
+	return TargetInfo{ID: item.ID, Type: item.Type, Name: item.Name, Enabled: item.Enabled, Status: "error"}
+}
+
 type targetDeletionRuntimeStub struct {
 	targetRuntimeStub
 	deletedTargets []target.Config
@@ -662,6 +668,24 @@ func TestMatterRuntimeControlsUpdateRegistration(t *testing.T) {
 	}
 	if _, err := service.FactoryResetMatter(context.Background(), config.ID); err != nil || runtime.matterOperation != "factory-reset" {
 		t.Fatalf("factory reset = %q, %v", runtime.matterOperation, err)
+	}
+}
+
+func TestListRetainsMatterRuntimeStartupErrorForWebClients(t *testing.T) {
+	discriminator := uint16(1234)
+	config := target.Config{
+		ID: "matter-main", Type: "matter", Name: "Matter", Enabled: true,
+		MatterConfig: &target.MatterConfig{Discriminator: &discriminator},
+	}
+	service := NewTargetService([]TargetRegistration{{Info: TargetInfo{
+		ID: config.ID, Type: config.Type, Name: config.Name, Enabled: true,
+		Status: "error", Error: "Matter runtime unavailable: Node.js was not found",
+	}}}, &targetStoreStub{}, config)
+	service.SetRuntime(&targetRuntimeInfoStub{})
+
+	list := service.List()
+	if len(list) != 1 || list[0].Status != "error" || !strings.Contains(list[0].Error, "Node.js was not found") {
+		t.Fatalf("Matter target list = %#v", list)
 	}
 }
 

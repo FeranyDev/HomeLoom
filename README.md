@@ -108,13 +108,53 @@ PostgreSQL 使用 `gorm.io/driver/postgres`，SQLite 使用 `github.com/ncruces/
 ./scripts/cross-build.sh 0.1.0
 ```
 
-版本号是必填位置参数；commit 和构建时间默认由 Git 与当前 UTC 时间生成，可使用 `HOMELOOM_COMMIT` 和 `HOMELOOM_BUILD_TIME` 覆盖。多平台脚本生成 Linux、macOS、Windows 的 amd64/arm64 单二进制及 `SHA256SUMS`。运行时可通过 `GET /api/v1/system/version` 查看实际版本。
+版本号是必填位置参数；commit 和构建时间默认由 Git 与当前 UTC 时间生成，可使用 `HOMELOOM_COMMIT` 和 `HOMELOOM_BUILD_TIME` 覆盖。多平台脚本默认保留 Node.js + JS runtime 的普通方式，生成 Linux、macOS、Windows 的 amd64/arm64 制品及 `SHA256SUMS`；设置 `HOMELOOM_MATTER_RUNTIME_MODE=sea` 后会为每个平台额外生成无需 Node.js 的 Matter SEA runtime。运行时可通过 `GET /api/v1/system/version` 查看实际版本。
 
 ```bash
 backend/bin/homeloom -version
 ```
 
-发布二进制直接在后端管理端口提供 Web UI，不需要 Node.js、Nginx 或独立前端目录。详细说明见 [`docs/packaging.md`](docs/packaging.md)。
+发布 core 二进制直接在后端管理端口提供 Web UI，不需要 Nginx 或独立前端目录；Matter 是否需要 Node.js 取决于选择的 `js` 或 `sea` runtime 模式。详细说明见 [`docs/packaging.md`](docs/packaging.md)。
+
+### Matter runtime 运行与打包
+
+主程序启动 Matter 时按以下顺序选择 runtime：
+
+1. 优先使用 `matter-runtime/dist/src/cli.js` 和 Node.js；
+2. Node.js 不可用时，尝试同目录的 `homeloom-matter-runtime` SEA binary；
+3. 两者都不可用时，Target 状态变为 `error`，`TargetInfo.Error` 会包含安装 Node.js 或补充 SEA binary 的提示，Web 端可以直接展示该错误。
+
+普通 JS 模式保持开发和兼容部署方式：
+
+```bash
+./scripts/dev-env.sh sh -c 'cd matter-runtime && npm ci && npm test'
+./scripts/build.sh 0.1.0
+```
+
+也可以通过环境变量明确指定 JS 入口：
+
+```bash
+HOMELOOM_MATTER_RUNTIME=/opt/homeloom/matter-runtime/dist/src/cli.js \
+./backend/bin/homeloom
+```
+
+SEA 模式用于目标设备不安装 Node.js 的部署。本机 SEA 构建需要启用 SEA 的 Node.js `>=25.5`：
+
+```bash
+HOMELOOM_MATTER_RUNTIME_MODE=sea \
+HOMELOOM_SEA_NODE=/path/to/sea-enabled/node \
+./scripts/build.sh 0.1.0
+```
+
+多平台 SEA 构建会自动下载并校验对应平台的官方 Node binary，缓存位于项目 `.cache/`：
+
+```bash
+HOMELOOM_MATTER_RUNTIME_MODE=sea \
+HOMELOOM_SEA_BUILDER_NODE=/path/to/host/sea-enabled/node \
+./scripts/cross-build.sh 0.1.0
+```
+
+产物按平台放在 `dist/<os>_<arch>/`，例如 `dist/linux_amd64/homeloom` 和 `dist/linux_amd64/homeloom-matter-runtime`。SEA 仍与 Go 主程序保持两个进程；普通 JS 和 SEA 两种方式都由同一套 Unix socket IPC 合约驱动。
 
 对实际二进制执行启动、HTTP 和优雅停止烟雾测试：
 

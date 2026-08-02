@@ -2,17 +2,27 @@
 
 HomeLoom 保持 Go 后端与 React 前端的源码分层。未启用 Matter 时，Vite 静态资源仍通过 Go `embed` 打进同一个可执行文件，发布环境不需要 Nginx 或单独的前端目录。
 
-启用 Matter 后发布形态明确为两个持续运行的制品：Go 主服务和 `matter-runtime` Node.js sidecar。当前 sidecar 要求 Node.js 20+，不属于严格的单进程单二进制发布。`scripts/build.sh` 会同时构建 Go core 与 `matter-runtime/dist/src/cli.js`；部署者必须把整个 `matter-runtime/dist`、锁定依赖和 Node.js 20+ 一起交付。若将来恢复“设备上只运行一个自包含二进制”的硬约束，必须先完成 Node SEA 的逐平台验证，或切换 ConnectedHomeIP 原生路线，不能把当前 sidecar 描述为单二进制。
+启用 Matter 后仍是两个持续运行的进程：Go 主服务和 Matter runtime 子进程。打包脚本同时保留两种运行方式：默认 `js` 模式使用 Node.js + `matter-runtime/dist/src/cli.js`，`sea` 模式把后者制作成单文件可执行程序，因此 SEA 部署设备不需要安装 Node.js、npm 或携带 `node_modules`。这仍不是严格的单进程单二进制；sidecar 崩溃隔离和按 Target 重启能力保持不变。
+
+普通 JS runtime 构建要求 Node.js `>=20.19.0`。SEA 构建另外要求构建机使用启用了 SEA 的 Node.js `>=25.5`。Homebrew 等发行版可能在编译时关闭 SEA，可通过 `HOMELOOM_SEA_NODE` 指向官方 Node binary。macOS 构建会自动进行 ad-hoc 签名，也可以用 `HOMELOOM_CODESIGN_IDENTITY` 指定正式签名身份。构建缓存和生成的临时配置全部写入项目 `.cache/`。
 
 ## 本机平台
 
-版本号是必填位置参数：
+版本号是必填位置参数。默认输出为 `backend/bin/homeloom`，本机普通构建默认使用 JS runtime：
 
 ```bash
 ./scripts/build.sh 0.1.0
 ```
 
-默认输出为 `backend/bin/homeloom`。也可以指定输出位置：
+需要无 Node.js 的 SEA 制品时显式选择 `sea` 模式：
+
+```bash
+HOMELOOM_MATTER_RUNTIME_MODE=sea \
+HOMELOOM_SEA_NODE=/path/to/sea-enabled/node \
+./scripts/build.sh 0.1.0
+```
+
+也可以指定输出位置：
 
 ```bash
 ./scripts/build.sh 0.1.0 dist/homeloom
@@ -30,15 +40,32 @@ backend/bin/homeloom -version
 ./scripts/cross-build.sh 0.1.0
 ```
 
-默认在根目录 `dist/` 生成：
+默认在根目录 `dist/` 生成 Go 制品。普通 `js` 模式的输出目录如下：
 
-- `linux/amd64`；
-- `linux/arm64`；
-- `darwin/amd64`；
-- `darwin/arm64`；
-- `windows/amd64`；
-- `windows/arm64`；
+- `dist/linux_amd64/homeloom`；
+- `dist/linux_arm64/homeloom`；
+- `dist/darwin_amd64/homeloom`；
+- `dist/darwin_arm64/homeloom`；
+- `dist/windows_amd64/homeloom.exe`；
+- `dist/windows_arm64/homeloom.exe`；
 - `SHA256SUMS`。
+
+`js` 模式保持原来的普通运行方式，目标设备需要另外提供 Node.js 和 `matter-runtime/dist`。需要同时生成每个平台的无 Node.js SEA runtime 时：
+
+```bash
+HOMELOOM_MATTER_RUNTIME_MODE=sea \
+HOMELOOM_SEA_BUILDER_NODE=/path/to/host/sea-enabled/node \
+./scripts/cross-build.sh 0.1.0
+```
+
+SEA 模式会从 Node.js 官方发行站下载并校验目标平台的 Node binary，缓存到 `.cache/matter-runtime/node/v<version>/`，并将它与 Go binary 放入同一个平台目录，例如：
+
+```text
+dist/linux_amd64/homeloom
+dist/linux_amd64/homeloom-matter-runtime
+```
+
+`HOMELOOM_SEA_NODE_VERSION` 默认是 `26.5.0`，必须与 `HOMELOOM_SEA_BUILDER_NODE` 的版本一致。跨平台的 Linux、Windows 和非当前平台 macOS SEA 不做本机执行检查；发布签名应在目标平台 CI 中完成。当前 macOS host 对当前平台 macOS target 会进行 ad-hoc 签名和冒烟测试。
 
 第二个参数可以覆盖输出目录：
 
@@ -86,24 +113,37 @@ HOMELOOM_BUILD_TIME=2026-07-22T00:00:00Z \
 
 ## Matter sidecar
 
-安装锁定依赖并构建：
+普通 JS runtime 的安装、测试和构建：
 
 ```bash
-./scripts/dev-env.sh sh -c 'cd matter-runtime && npm ci && npm run build'
+./scripts/dev-env.sh sh -c 'cd matter-runtime && npm ci && npm test'
 ```
 
-Go 主服务为每个启用的 Matter Target 启动一个独立 sidecar、Unix Socket 和身份命名空间。默认入口为 `matter-runtime/dist/src/cli.js`，部署到其他位置时必须设置绝对路径：
+单独构建 SEA runtime：
 
 ```bash
+HOMELOOM_SEA_NODE=/path/to/sea-enabled/node \
+./scripts/dev-env.sh sh -c \
+  'cd matter-runtime && npm run build:sea -- --output backend/bin/homeloom-matter-runtime'
+```
+
+Go 主服务为每个启用的 Matter Target 启动一个独立 sidecar、Unix Socket 和身份命名空间。它默认先尝试 `node matter-runtime/dist/src/cli.js`，Node.js 不可用时再从 Go 可执行文件附近发现 `homeloom-matter-runtime`。也可以通过 `HOMELOOM_MATTER_RUNTIME` 指定 SEA binary 或 JavaScript 入口；两者都缺失时，Target 错误会进入 Web 端的 `TargetInfo.Error`：
+
+```bash
+# 普通方式
 HOMELOOM_MATTER_RUNTIME=/opt/homeloom/matter-runtime/dist/src/cli.js \
+./backend/bin/homeloom
+
+# SEA 方式
+HOMELOOM_MATTER_RUNTIME=/opt/homeloom/homeloom-matter-runtime \
 ./backend/bin/homeloom
 ```
 
-所有 npm、TypeScript 和 Matter Runtime 构建缓存都进入项目 `.cache/`。`@matter/main` 固定为 `0.17.7`，禁止自动漂移到 nightly。
+`@matter/main` 固定为 `0.17.7`，禁止自动漂移到 nightly。
 
 ## 容器镜像
 
-现有统一镜像仍只包含 HomeLoom core，因此只适合 Web/API、Provider 和 HomeKit；它不会静默把 Matter Target 回退到 HomeKit。Matter 容器发布需要后续镜像显式加入 Node.js 20+、锁定的 sidecar 文件和 host network/mDNS 配置。在此之前，生产 Matter 验收应直接运行双制品部署。
+现有统一镜像仍只包含 HomeLoom core，因此只适合 Web/API、Provider 和 HomeKit；它不会静默把 Matter Target 回退到 HomeKit。Matter 容器发布需要后续镜像显式加入对应平台的 SEA runtime 和 host network/mDNS 配置；SEA 镜像内不需要另装 Node.js。若使用普通 JS 模式，则镜像仍需显式加入 Node.js、锁定依赖和 `matter-runtime/dist`。
 
 ```bash
 docker build \
@@ -130,7 +170,9 @@ HOMELOOM_VERSION=0.1.0 docker compose up --build -d
 - API 路径不会被 SPA fallback 覆盖的测试；
 - 带 `embed_webui` 标签的真实 Vite 入口测试；
 - 本机二进制版本注入检查；
-- 六个平台实际交叉编译；
-- 每个多平台制品的 SHA-256 校验值。
+- JS 模式下六个平台实际交叉编译；
+- SEA 模式下每个目标平台的 Node binary 下载、SHA-256 校验和 SEA 生成；
+- 当前 host 平台的 SEA 运行时冒烟测试；
+- 每个 Go 与 Matter runtime 制品的 SHA-256 校验值。
 
 `CGO_ENABLED=0` 用于避免运行环境依赖额外的 C 动态库。SQLite 备选后端通过纯 Go 的 `github.com/ncruces/go-sqlite3/gormlite` 一并编入这六个平台的可执行文件，不要求目标设备安装 SQLite 或 C 运行库。跨平台构建成功只证明编译和资源嵌入有效；HomeKit mDNS、网络接口和防火墙行为仍需在相应操作系统上做实机验收。

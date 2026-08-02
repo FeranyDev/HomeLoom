@@ -30,6 +30,8 @@ import (
 
 const protocolVersion = "1.1"
 
+const defaultRuntimeBinary = "homeloom-matter-runtime"
+
 type EndpointStorage interface {
 	AllocateEndpoint(context.Context, string, string, device.Type) (uint16, error)
 	TombstoneEndpoint(context.Context, string, string) error
@@ -156,11 +158,19 @@ func New(config Config, devices *application.DeviceService, storage Storage, log
 		logger = zap.NewNop()
 	}
 	logger = logger.With(zap.String("module", "matter-target"))
-	if config.Executable == "" {
-		config.Executable = "node"
-	}
-	if config.ScriptPath == "" {
-		config.ScriptPath = runtimeScriptPath()
+	if config.Executable == "" && config.ScriptPath == "" {
+		var err error
+		config.Executable, config.ScriptPath, err = resolveRuntimeLaunch()
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		if config.Executable == "" {
+			config.Executable = "node"
+		}
+		if config.ScriptPath == "" && config.Executable == "node" {
+			config.ScriptPath = runtimeScriptPath()
+		}
 	}
 	if config.SocketPath == "" {
 		config.SocketPath = filepath.Join(".cache", "matter-runtime", config.ID+".sock")
@@ -263,8 +273,14 @@ func (t *Target) runOnce(ctx context.Context) (bool, error) {
 }
 
 func (t *Target) runtimeCommand(ctx context.Context) *exec.Cmd {
-	command := exec.CommandContext(ctx, t.config.Executable, t.config.ScriptPath,
-		"--socket", t.config.SocketPath, "--target", t.config.ID, "--identity-namespace", t.config.ID)
+	arguments := make([]string, 0, 9)
+	if t.config.ScriptPath != "" {
+		arguments = append(arguments, t.config.ScriptPath)
+	}
+	arguments = append(arguments,
+		"--socket", t.config.SocketPath, "--target", t.config.ID, "--identity-namespace", t.config.ID,
+	)
+	command := exec.CommandContext(ctx, t.config.Executable, arguments...)
 	if t.config.LogLevel != "" {
 		command.Env = append(os.Environ(), "HOMELOOM_MATTER_LOG_LEVEL="+t.config.LogLevel, "HOMELOOM_MATTER_LOG_FORMAT=json")
 	}
@@ -1240,10 +1256,38 @@ func removeStaleSocket(path string) error {
 
 func runtimeScriptPath() string {
 	if configured := strings.TrimSpace(os.Getenv("HOMELOOM_MATTER_RUNTIME")); configured != "" {
-		return configured
+		if isJavaScriptRuntimePath(configured) {
+			return configured
+		}
 	}
+	return firstExistingRuntimePath(runtimeScriptCandidates(), filepath.Join("matter-runtime", "dist", "src", "cli.js"))
+}
+
+func resolveRuntimeLaunch() (executable, scriptPath string, err error) {
+	scriptPath = firstExistingRuntimePath(runtimeScriptCandidates(), "")
+	nodeAvailable := nodeRuntimeAvailable()
+	if scriptPath != "" && nodeAvailable {
+		return "node", scriptPath, nil
+	}
+	if binary := firstExecutableRuntimePath(runtimeBinaryCandidates()); binary != "" {
+		return binary, "", nil
+	}
+	if scriptPath == "" {
+		return "", "", errors.New("Matter runtime unavailable: JavaScript entry was not found and executable homeloom-matter-runtime was not found; install Node.js with matter-runtime/dist/src/cli.js or place homeloom-matter-runtime next to HomeLoom")
+	}
+	if !nodeAvailable {
+		return "", "", fmt.Errorf("Matter runtime unavailable: JavaScript entry %q exists but Node.js was not found, and executable homeloom-matter-runtime was not found; install Node.js or place homeloom-matter-runtime next to HomeLoom", scriptPath)
+	}
+	return "", "", fmt.Errorf("Matter runtime unavailable: JavaScript entry %q could not be started and executable homeloom-matter-runtime was not found", scriptPath)
+}
+
+func runtimeScriptCandidates() []string {
 	relative := filepath.Join("matter-runtime", "dist", "src", "cli.js")
-	candidates := []string{relative, filepath.Join("..", relative)}
+	candidates := make([]string, 0, 8)
+	if configured := strings.TrimSpace(os.Getenv("HOMELOOM_MATTER_RUNTIME")); configured != "" && isJavaScriptRuntimePath(configured) {
+		candidates = append(candidates, configured)
+	}
+	candidates = append(candidates, relative, filepath.Join("..", relative))
 	if executable, err := os.Executable(); err == nil {
 		directory := filepath.Dir(executable)
 		candidates = append(candidates,
@@ -1252,6 +1296,27 @@ func runtimeScriptPath() string {
 			filepath.Join(directory, "..", "..", relative),
 		)
 	}
+	return candidates
+}
+
+func runtimeBinaryCandidates() []string {
+	candidates := make([]string, 0, 6)
+	if configured := strings.TrimSpace(os.Getenv("HOMELOOM_MATTER_RUNTIME")); configured != "" && !isJavaScriptRuntimePath(configured) {
+		candidates = append(candidates, configured)
+	}
+	candidates = append(candidates, defaultRuntimeBinary, filepath.Join("..", defaultRuntimeBinary))
+	if executable, err := os.Executable(); err == nil {
+		directory := filepath.Dir(executable)
+		candidates = append(candidates,
+			filepath.Join(directory, defaultRuntimeBinary),
+			filepath.Join(directory, "..", defaultRuntimeBinary),
+			filepath.Join(directory, "..", "..", defaultRuntimeBinary),
+		)
+	}
+	return candidates
+}
+
+func firstExistingRuntimePath(candidates []string, fallback string) string {
 	for _, candidate := range candidates {
 		absolute, err := filepath.Abs(candidate)
 		if err != nil {
@@ -1261,5 +1326,39 @@ func runtimeScriptPath() string {
 			return absolute
 		}
 	}
-	return relative
+	return fallback
+}
+
+func firstExecutableRuntimePath(candidates []string) string {
+	for _, candidate := range candidates {
+		absolute, err := filepath.Abs(candidate)
+		if err != nil {
+			continue
+		}
+		if info, err := os.Stat(absolute); err == nil && isExecutableRuntimeFile(absolute, info) {
+			return absolute
+		}
+	}
+	return ""
+}
+
+func isExecutableRuntimeFile(path string, info os.FileInfo) bool {
+	if !info.Mode().IsRegular() {
+		return false
+	}
+	return info.Mode()&0o111 != 0 || strings.EqualFold(filepath.Ext(path), ".exe")
+}
+
+func nodeRuntimeAvailable() bool {
+	_, err := exec.LookPath("node")
+	return err == nil
+}
+
+func isJavaScriptRuntimePath(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".js", ".mjs", ".cjs":
+		return true
+	default:
+		return false
+	}
 }

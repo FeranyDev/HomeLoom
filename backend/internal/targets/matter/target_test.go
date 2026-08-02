@@ -37,6 +37,113 @@ func TestRuntimeCommandCollectsOutputAndSetsConfiguredLevel(t *testing.T) {
 	}
 }
 
+func TestRuntimeCommandForBundledBinaryOmitsJavaScriptEntry(t *testing.T) {
+	target, _ := newTestTarget(t, nil)
+	target.config.Executable = "/opt/homeloom/homeloom-matter-runtime"
+	target.config.ScriptPath = ""
+
+	command := target.runtimeCommand(context.Background())
+	want := []string{
+		"/opt/homeloom/homeloom-matter-runtime",
+		"--socket", target.config.SocketPath,
+		"--target", target.config.ID,
+		"--identity-namespace", target.config.ID,
+	}
+	if strings.Join(command.Args, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("bundled runtime args = %#v, want %#v", command.Args, want)
+	}
+}
+
+func TestConfiguredMatterRuntimeBinaryDoesNotRequireNode(t *testing.T) {
+	runtimePath := filepath.Join(t.TempDir(), "homeloom-matter-runtime")
+	writeExecutable(t, runtimePath)
+	t.Setenv("HOMELOOM_MATTER_RUNTIME", runtimePath)
+	t.Setenv("PATH", t.TempDir())
+	target, _ := newTestTargetWithRuntime(t, nil, "", "")
+	if target.config.Executable != runtimePath {
+		t.Fatalf("runtime executable = %q", target.config.Executable)
+	}
+	if target.config.ScriptPath != "" {
+		t.Fatalf("runtime script path = %q, want empty for SEA", target.config.ScriptPath)
+	}
+}
+
+func TestConfiguredMatterRuntimeScriptStillUsesNode(t *testing.T) {
+	runtimePath := filepath.Join(t.TempDir(), "cli.js")
+	if err := os.WriteFile(runtimePath, []byte("export {};\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	nodeDirectory := t.TempDir()
+	writeExecutable(t, filepath.Join(nodeDirectory, "node"))
+	t.Setenv("HOMELOOM_MATTER_RUNTIME", runtimePath)
+	t.Setenv("PATH", nodeDirectory)
+	target, _ := newTestTargetWithRuntime(t, nil, "", "")
+	if target.config.Executable != "node" {
+		t.Fatalf("runtime executable = %q, want node", target.config.Executable)
+	}
+	if target.config.ScriptPath != runtimePath {
+		t.Fatalf("runtime script path = %q", target.config.ScriptPath)
+	}
+}
+
+func TestRuntimeLaunchPrefersJavaScriptOverBundledBinary(t *testing.T) {
+	workingDirectory := t.TempDir()
+	setWorkingDirectory(t, workingDirectory)
+	runtimePath := filepath.Join(t.TempDir(), "cli.js")
+	if err := os.WriteFile(runtimePath, []byte("export {};\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable(t, filepath.Join(workingDirectory, defaultRuntimeBinary))
+	nodeDirectory := t.TempDir()
+	writeExecutable(t, filepath.Join(nodeDirectory, "node"))
+	t.Setenv("HOMELOOM_MATTER_RUNTIME", runtimePath)
+	t.Setenv("PATH", nodeDirectory)
+
+	executable, scriptPath, err := resolveRuntimeLaunch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executable != "node" || scriptPath != runtimePath {
+		t.Fatalf("runtime launch = %q, %q; want node + %q", executable, scriptPath, runtimePath)
+	}
+}
+
+func TestRuntimeLaunchFallsBackToBundledBinaryWhenNodeIsMissing(t *testing.T) {
+	workingDirectory := t.TempDir()
+	setWorkingDirectory(t, workingDirectory)
+	runtimePath := filepath.Join(t.TempDir(), "cli.js")
+	if err := os.WriteFile(runtimePath, []byte("export {};\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	binaryPath := filepath.Join(workingDirectory, defaultRuntimeBinary)
+	writeExecutable(t, binaryPath)
+	t.Setenv("HOMELOOM_MATTER_RUNTIME", runtimePath)
+	t.Setenv("PATH", t.TempDir())
+
+	executable, scriptPath, err := resolveRuntimeLaunch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantBinary, err := filepath.EvalSymlinks(binaryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executable != wantBinary || scriptPath != "" {
+		t.Fatalf("runtime launch = %q, %q; want %q + no script", executable, scriptPath, wantBinary)
+	}
+}
+
+func TestRuntimeLaunchReturnsActionableErrorWhenBothRuntimesAreMissing(t *testing.T) {
+	setWorkingDirectory(t, t.TempDir())
+	t.Setenv("HOMELOOM_MATTER_RUNTIME", filepath.Join(t.TempDir(), "cli.js"))
+	t.Setenv("PATH", t.TempDir())
+
+	_, _, err := resolveRuntimeLaunch()
+	if err == nil || !strings.Contains(err.Error(), "Matter runtime unavailable") || !strings.Contains(err.Error(), "homeloom-matter-runtime") {
+		t.Fatalf("resolveRuntimeLaunch() error = %v", err)
+	}
+}
+
 type memoryStorage struct {
 	next       uint16
 	endpoints  map[string]domaintarget.MatterEndpointIdentity
@@ -122,6 +229,10 @@ func (s *memoryStorage) Clear(context.Context, string) error {
 }
 
 func newTestTarget(t *testing.T, virtuals []domaintarget.VirtualDevice) (*Target, *memoryStorage) {
+	return newTestTargetWithRuntime(t, virtuals, "node", "matter-runtime-test.js")
+}
+
+func newTestTargetWithRuntime(t *testing.T, virtuals []domaintarget.VirtualDevice, executable, scriptPath string) (*Target, *memoryStorage) {
 	t.Helper()
 	provider := virtual.NewProvider()
 	devices := application.NewDeviceService(provider)
@@ -129,7 +240,7 @@ func newTestTarget(t *testing.T, virtuals []domaintarget.VirtualDevice) (*Target
 	discriminator := uint16(1234)
 	storage := newMemoryStorage()
 	created, err := New(Config{
-		ID: "matter-test", Name: "Matter Test", Devices: virtuals,
+		ID: "matter-test", Name: "Matter Test", Devices: virtuals, Executable: executable, ScriptPath: scriptPath,
 		Matter: domaintarget.MatterConfig{
 			Discriminator: &discriminator, Passcode: "20202021",
 			VendorID: 0xfff1, ProductID: 0x8000, ProductName: "HomeLoom", SerialNumber: "matter-test",
@@ -140,6 +251,28 @@ func newTestTarget(t *testing.T, virtuals []domaintarget.VirtualDevice) (*Target
 		t.Fatal(err)
 	}
 	return created, storage
+}
+
+func writeExecutable(t *testing.T, path string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func setWorkingDirectory(t *testing.T, directory string) {
+	t.Helper()
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(directory); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
 }
 
 func TestDeviceSnapshotsUseStableEndpointAndMatterAttributes(t *testing.T) {
@@ -180,7 +313,7 @@ func TestCameraNodeUsesFixedEndpointAndMediaContractWithoutMappingAllocation(t *
 	storage := newMemoryStorage()
 	media := &cameraMediaStub{}
 	target, err := New(Config{
-		ID: "matter-camera", Name: "Camera", NodeKind: "camera",
+		ID: "matter-camera", Name: "Camera", NodeKind: "camera", Executable: "node", ScriptPath: "matter-runtime-test.js",
 		Matter: domaintarget.MatterConfig{
 			Discriminator: &discriminator, Passcode: "20202021", VendorID: 0xfff1,
 			ProductID: 0x8000, ProductName: "Camera", SerialNumber: "matter-camera",

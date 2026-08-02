@@ -2,7 +2,7 @@
 
 ## 发布形态
 
-Matter 模式采用 Go 主服务加 Node.js 20+ sidecar。每个 Matter Target 拥有独立进程、Unix Domain Socket、UDP 端口、discriminator 和数据库身份命名空间。sidecar 崩溃只触发该 Target 的重启与全量状态重放，不阻塞 Device Service 或其他 Target。
+Matter 模式采用 Go 主服务加独立 Matter runtime 进程。开发环境通过 Node.js 20.19+ 运行 JavaScript 入口，发布环境使用内嵌 Node 的 SEA 可执行文件；每个 Matter Target 拥有独立进程、Unix Domain Socket、UDP 端口、discriminator 和数据库身份命名空间。sidecar 崩溃只触发该 Target 的重启与全量状态重放，不阻塞 Device Service 或其他 Target。
 
 当前 `@matter/main` 固定为 `0.17.7`，其标准模型对应 Matter 1.6.0；管理界面的“协议版本”展示该规范版本。Go ↔ sidecar 的内部 IPC 合约另行固定为 `1.0`。开发、测试和构建统一通过 `scripts/dev-env.sh`，npm、Go、TypeScript 缓存全部写入项目 `.cache/`。
 
@@ -16,7 +16,7 @@ Matter 消费端设备类型只发布当前协议中的标准 Device Type。Home
 ./scripts/dev-env.sh sh -c 'cd backend && go test ./...'
 ```
 
-Go 默认从当前目录、当前目录的上一级，以及可执行文件目录附近查找 `matter-runtime/dist/src/cli.js`，因此从仓库根目录、`backend/` 或默认的 `backend/bin/` 启动均可发现 sidecar。其他部署布局必须设置 `HOMELOOM_MATTER_RUNTIME` 为绝对路径。`HOMELOOM_MATTER_ADAPTER=fake` 只允许 IPC 自动测试；真实部署必须使用 `matter-js`，且 driver 不可用时应 fail closed。
+Go 默认先查找 `matter-runtime/dist/src/cli.js` 并确认 `node` 可用；JS 入口无法启动时，再从当前目录、当前目录的上一级，以及可执行文件目录附近查找 `homeloom-matter-runtime`。两者都不可用时，Target 会进入 `error`，Web 端的 `TargetInfo.Error` 会提示补充 Node.js/JS runtime 或 SEA binary。`HOMELOOM_MATTER_RUNTIME` 仍可指定绝对路径；该变量以 `.js`/`.mjs`/`.cjs` 结尾时作为 JS 入口，否则作为 SEA binary 候选。`HOMELOOM_MATTER_ADAPTER=fake` 只允许 IPC 自动测试；真实部署必须使用 `matter-js`，且 driver 不可用时应 fail closed。
 
 ## 日志
 

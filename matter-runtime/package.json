@@ -5,10 +5,11 @@
   "description": "HomeLoom Matter sidecar and Unix socket IPC contract",
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=20.19.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:sea": "node scripts/build-sea.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/src/cli.js",
     "test": "npm run build && node --test --test-concurrency=1 dist/test/*.test.js",
@@ -20,6 +21,7 @@
   },
   "devDependencies": {
     "@types/node": "24.10.1",
+    "esbuild": "0.27.7",
     "typescript": "5.9.3"
   }
 }

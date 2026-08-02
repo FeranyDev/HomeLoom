@@ -773,7 +773,6 @@ func publisherYAML(config PublisherConfig) string {
 	config = config.withDefaults()
 	streamURI := "${" + sourceEnv(config) + "}"
 	var builder strings.Builder
-	builder.WriteString("app:\n  modules: [" + publisherModules(config.PublishHomeKit) + "]\n")
 	builder.WriteString(publisherLogConfig(config.LogLevel))
 	builder.WriteString("api:\n  listen: \"\"\n")
 	builder.WriteString("  unix_listen: " + yamlString(config.MediaUnixSocket) + "\n")
@@ -823,7 +822,7 @@ func upgradePublisherConfig(path string, config PublisherConfig) error {
 	if err != nil {
 		return fmt.Errorf("read publisher config: %w", err)
 	}
-	updated := applyPublisherModules(string(content), config.PublishHomeKit)
+	updated := removePublisherAppConfig(string(content))
 	updated = applyPublisherLogConfig(updated, config.LogLevel)
 	apiPrefix := "api:\n"
 	if index := strings.Index(updated, apiPrefix); index >= 0 {
@@ -878,13 +877,6 @@ func upgradePublisherConfig(path string, config PublisherConfig) error {
 	return nil
 }
 
-func publisherModules(publishHomeKit bool) string {
-	if publishHomeKit {
-		return "api, rtsp, srtp, homekit, xiaomi, streams, mp4, exec, ffmpeg"
-	}
-	return "api, rtsp, srtp, xiaomi, streams, mp4, exec, ffmpeg"
-}
-
 func publisherAllowedPaths(publishHomeKit bool) string {
 	if publishHomeKit {
 		return "/pair-setup, /pair-verify, /api/stream.mp4, /api/frame.mp4, /api/frame.jpeg, /api/homekit/session, /api/matter/webrtc"
@@ -892,27 +884,31 @@ func publisherAllowedPaths(publishHomeKit bool) string {
 	return "/api/stream.mp4, /api/frame.mp4, /api/frame.jpeg, /api/matter/webrtc"
 }
 
-func applyPublisherModules(content string, publishHomeKit bool) string {
+func removePublisherAppConfig(content string) string {
 	lines := strings.Split(content, "\n")
 	inApp := false
-	for index, line := range lines {
-		switch {
-		case line == "app:":
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if line == "app:" {
 			inApp = true
-		case inApp && strings.HasPrefix(line, "  modules:"):
-			lines[index] = "  modules: [" + publisherModules(publishHomeKit) + "]"
-			return strings.Join(lines, "\n")
-		case inApp && line != "" && !strings.HasPrefix(line, "  "):
-			return content
+			continue
 		}
+		if inApp {
+			if line == "" || strings.HasPrefix(line, "  ") {
+				continue
+			}
+			inApp = false
+		}
+		filtered = append(filtered, line)
 	}
-	return content
+	return strings.Join(filtered, "\n")
 }
 
 func publisherLogConfig(level string) string {
-	// Apply the configured child level to every camera-kernel subsystem. In
-	// particular, exec carries FFmpeg stderr and must not silently remain debug.
-	return "log:\n  output: stdout\n  format: json\n  level: " + level + "\n  time: ISO8601\n  homekit: " + level + "\n  ffmpeg: " + level + "\n  exec: " + level + "\n"
+	// output defaults to stdout and exec inherits the global level. FFmpeg is
+	// explicit because its setting also controls the child process `-v` flag.
+	// Keep HomeKit explicit because Camera Kernel's normal default is warn.
+	return "log:\n  format: json\n  level: " + level + "\n  time: ISO8601\n  homekit: " + level + "\n  ffmpeg: " + level + "\n"
 }
 
 func applyPublisherLogConfig(content, level string) string {

@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
 import { IPC_PROTOCOL_VERSION } from "./contract.js";
 import { FakeProtocolAdapter } from "./runtime/fake-adapter.js";
@@ -140,8 +141,9 @@ function assertSupportedNode(): void {
 }
 
 if (
-  process.argv[1] !== undefined &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+  isSea() ||
+  (process.argv[1] !== undefined &&
+    resolve(process.argv[1]) === fileURLToPath(import.meta.url))
 ) {
   void runCli(process.argv.slice(2)).catch((error: unknown) => {
     const message = error instanceof Error ? error.stack ?? error.message : String(error);

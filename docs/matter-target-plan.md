@@ -22,7 +22,7 @@ HomeLoom 已实现独立的 `matter` Target、Matter Consumer Catalog 和真实 
 
 相比通过 Cgo 直接嵌入 ConnectedHomeIP，独立运行时可以隔离协议栈崩溃、降低 Go 构建复杂度，并允许 Matter SDK 独立升级。matter.js 的依赖版本必须固定到稳定版，不使用 nightly。
 
-> 打包边界：当前发布形态已选择“Go 主服务 + Node.js 20+ sidecar”双制品，Go 二进制仍嵌入 React 管理界面。当前方案不满足严格的单进程单二进制约束；若未来恢复该硬约束，必须验证 Node SEA 独立制品或切换 ConnectedHomeIP 原生路线。
+> 打包边界：发布形态是“Go 主服务 + Matter runtime sidecar”双进程。普通开发/兼容模式使用 Node.js 20.19+ 加 JS 入口，SEA 发布模式将 Node runtime 注入各平台独立的 Matter 可执行文件；这仍不等同于严格的单进程单二进制。若未来恢复该硬约束，仍需切换 ConnectedHomeIP 原生路线。
 
 参考资料：
 
