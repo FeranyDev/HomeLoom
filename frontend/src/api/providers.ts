@@ -21,3 +21,17 @@ export async function restartProvider(id: string): Promise<Provider> {
 export async function testProviderConnection(input: ProviderInput): Promise<void> {
   await requestData<{ reachable: boolean }>('/api/v1/providers/test', { method: 'POST', body: JSON.stringify(input) })
 }
+
+export interface ProviderDiscoveryCandidate {
+  id?: string
+  providerType: string
+  name: string
+  host: string
+  port: number
+  mac: string
+  metadata?: Record<string, string>
+}
+
+export async function scanProviderNetwork(input: ProviderInput): Promise<ProviderDiscoveryCandidate[]> {
+  return requestData<ProviderDiscoveryCandidate[]>('/api/v1/providers/scan', { method: 'POST', body: JSON.stringify(input) })
+}

@@ -249,11 +249,11 @@ func (a *LifecycleAdapter) start(spec contract.StreamSpec) (activeSession, error
 	defer cancel()
 	source, err := a.resolve(ctx, spec)
 	if err != nil {
-		return activeSession{}, errors.New("media source resolution failed")
+		return activeSession{}, fmt.Errorf("media source resolution failed: %w", err)
 	}
 	session, err := producer.Start(ctx, spec, source)
 	if err != nil {
-		return activeSession{}, errors.New("media producer start failed")
+		return activeSession{}, fmt.Errorf("media producer start failed: %w", err)
 	}
 	if session == nil {
 		return activeSession{}, errors.New("media producer returned no session")
@@ -265,7 +265,7 @@ func (a *LifecycleAdapter) close(session Session) error {
 	ctx, cancel := context.WithTimeout(context.Background(), a.timeout)
 	defer cancel()
 	if err := session.Close(ctx); err != nil {
-		return errors.New("media producer stop failed")
+		return fmt.Errorf("media producer stop failed: %w", err)
 	}
 	return nil
 }

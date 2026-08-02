@@ -94,14 +94,16 @@ func (s *CloudLoginService) Start(ctx context.Context, request CloudLoginStartRe
 		now := s.now()
 		challenge := &cloudLoginChallenge{client: client, verificationURL: verification.URL, expiresAt: now.Add(cloudLoginChallengeTTL)}
 		s.mu.Lock()
-		s.cleanupLocked(now)
+		expired := s.cleanupLocked(now)
 		if len(s.challenges) >= cloudLoginMaxPending {
 			s.mu.Unlock()
-			client.config.Password = ""
+			clearCloudLoginPasswords(expired)
+			clearCloudLoginPassword(client)
 			return CloudLoginResult{}, errors.New("too many pending Xiaomi identity verifications; try again later")
 		}
 		s.challenges[id] = challenge
 		s.mu.Unlock()
+		clearCloudLoginPasswords(expired)
 		return CloudLoginResult{Status: "verification_required", ChallengeID: id, VerificationURL: verification.URL, ExpiresAt: &challenge.expiresAt}, nil
 	}
 	return cloudLoginSessionResult(client)
@@ -114,9 +116,10 @@ func (s *CloudLoginService) Verify(ctx context.Context, request CloudLoginVerify
 	}
 	now := s.now()
 	s.mu.Lock()
-	s.cleanupLocked(now)
+	expired := s.cleanupLocked(now)
 	challenge := s.challenges[id]
 	s.mu.Unlock()
+	clearCloudLoginPasswords(expired)
 	if challenge == nil {
 		return CloudLoginResult{}, errors.New("Xiaomi identity verification challenge is missing or expired; start login again")
 	}
@@ -163,21 +166,38 @@ func cloudLoginSessionResult(client *httpMiotCloudClient) (CloudLoginResult, err
 	}, nil
 }
 
-func (s *CloudLoginService) cleanupLocked(now time.Time) {
+func (s *CloudLoginService) cleanupLocked(now time.Time) []*httpMiotCloudClient {
+	var expired []*httpMiotCloudClient
 	for id, challenge := range s.challenges {
 		if !now.Before(challenge.expiresAt) {
+			expired = append(expired, challenge.client)
 			delete(s.challenges, id)
 		}
 	}
+	return expired
 }
 
 func (s *CloudLoginService) delete(id string, expected *cloudLoginChallenge) {
 	s.mu.Lock()
 	if s.challenges[id] == expected {
-		expected.client.config.Password = ""
 		delete(s.challenges, id)
+		s.mu.Unlock()
+		clearCloudLoginPassword(expected.client)
+		return
 	}
 	s.mu.Unlock()
+}
+
+func clearCloudLoginPassword(client *httpMiotCloudClient) {
+	client.mu.Lock()
+	client.config.Password = ""
+	client.mu.Unlock()
+}
+
+func clearCloudLoginPasswords(clients []*httpMiotCloudClient) {
+	for _, client := range clients {
+		clearCloudLoginPassword(client)
+	}
 }
 
 func randomCloudLoginID() (string, error) {

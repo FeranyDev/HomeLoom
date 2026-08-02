@@ -10,10 +10,57 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
+	"github.com/feranydev/homeloom/backend/internal/providers/xiaomi"
 	"github.com/feranydev/homeloom/backend/internal/runtime/providermanager"
 )
 
 type failingProvider struct{ id string }
+
+type authRequiredProvider struct {
+	initializations atomic.Int32
+	closes          atomic.Int32
+}
+
+func (*authRequiredProvider) Manifest() providersdk.Manifest {
+	return providersdk.Manifest{ID: "auth-required", Type: xiaomi.XiaomiMIoTCloudProviderType, Name: "Cloud"}
+}
+func (*authRequiredProvider) Capabilities() providersdk.Capabilities {
+	return providersdk.Capabilities{}
+}
+func (p *authRequiredProvider) Initialize(context.Context) error {
+	p.initializations.Add(1)
+	return &xiaomi.IdentityVerificationRequiredError{URL: "https://account.xiaomi.com/identity/authStart"}
+}
+func (p *authRequiredProvider) Close(context.Context) error {
+	p.closes.Add(1)
+	return nil
+}
+
+type authenticationRequiredProvider struct {
+	id              string
+	initializations atomic.Int32
+	closes          atomic.Int32
+}
+
+type authenticationRequiredError struct{}
+
+func (authenticationRequiredError) Error() string                { return "identity verification required" }
+func (authenticationRequiredError) AuthenticationRequired() bool { return true }
+
+func (p *authenticationRequiredProvider) Manifest() providersdk.Manifest {
+	return providersdk.Manifest{ID: p.id, Type: "xiaomi-miot-cloud", Name: p.id}
+}
+func (*authenticationRequiredProvider) Capabilities() providersdk.Capabilities {
+	return providersdk.Capabilities{}
+}
+func (p *authenticationRequiredProvider) Initialize(context.Context) error {
+	p.initializations.Add(1)
+	return authenticationRequiredError{}
+}
+func (p *authenticationRequiredProvider) Close(context.Context) error {
+	p.closes.Add(1)
+	return nil
+}
 
 type bindingProvider struct {
 	id       string
@@ -185,6 +232,32 @@ func TestManagerMergesAndDelegatesBoundCameraControls(t *testing.T) {
 	}
 	if control.lastCommand.DeviceID != "xiaomi-camera" {
 		t.Fatalf("delegated command = %#v", control.lastCommand)
+	}
+}
+
+func TestManagerMarksAuthenticationRequiredWithoutSchedulingRetries(t *testing.T) {
+	provider := &authRequiredProvider{}
+	manager, err := providermanager.New(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := manager.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close(ctx)
+	infos := manager.ProviderInfos()
+	if len(infos) != 1 || infos[0].Status != "auth_required" || infos[0].NextRetryAt != nil {
+		t.Fatalf("provider info=%#v", infos)
+	}
+	if got, ok := manager.ProviderAny(provider.Manifest().ID); !ok || got != provider {
+		t.Fatalf("ProviderAny()=%#v/%v", got, ok)
+	}
+	// An auth gate must remain paused rather than repeatedly re-posting the
+	// account password while the administrator is entering the code.
+	time.Sleep(20 * time.Millisecond)
+	if count := provider.initializations.Load(); count != 1 {
+		t.Fatalf("authentication retries=%d", count)
 	}
 }
 
@@ -925,6 +998,30 @@ func TestManagerIsolatesProviderInitializationFailure(t *testing.T) {
 	items, err := manager.DiscoverDevices(context.Background())
 	if err != nil || len(items) != 2 {
 		t.Fatalf("healthy discovery = %#v, %v", items, err)
+	}
+}
+
+func TestManagerPausesAuthenticationRequiredProviderWithoutRetry(t *testing.T) {
+	provider := &authenticationRequiredProvider{id: "cloud-auth"}
+	manager, err := providermanager.New(provider, virtual.NewProvider())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close(context.Background())
+	if err := manager.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	infos := manager.ProviderInfos()
+	if len(infos) != 2 || infos[0].Status != "auth_required" || infos[0].NextRetryAt != nil {
+		t.Fatalf("infos = %#v", infos)
+	}
+	initializations := provider.initializations.Load()
+	time.Sleep(1200 * time.Millisecond)
+	if provider.initializations.Load() != initializations {
+		t.Fatalf("authentication challenge was retried: initializations=%d -> %d", initializations, provider.initializations.Load())
+	}
+	if _, ok := manager.ProviderAny(provider.id); !ok {
+		t.Fatal("auth-required provider was not retained for challenge recovery")
 	}
 }
 

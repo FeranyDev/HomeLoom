@@ -185,6 +185,63 @@ func TestLifecycleAdapterReplaceReleasesChangedSessionBeforeRestart(t *testing.T
 	}
 }
 
+func TestLifecycleAdapterPreservesSourceResolutionCause(t *testing.T) {
+	registry := NewRegistry()
+	if err := registry.Register("rtsp", &fakeProducer{}); err != nil {
+		t.Fatal(err)
+	}
+	want := errors.New("provider unavailable")
+	adapter, err := NewLifecycleAdapter(registry, func(context.Context, contract.StreamSpec) (Source, error) {
+		return Source{}, want
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = adapter.Upsert(spec("front"))
+	if !errors.Is(err, want) {
+		t.Fatalf("source resolution error = %v, want wrapped cause %v", err, want)
+	}
+}
+
+func TestLifecycleAdapterPreservesProducerStartCause(t *testing.T) {
+	registry := NewRegistry()
+	want := errors.New("camera kernel unavailable")
+	if err := registry.Register("rtsp", &causeProducer{startErr: want}); err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := NewLifecycleAdapter(registry, func(context.Context, contract.StreamSpec) (Source, error) {
+		return Source{URI: "rtsp://camera.example/stream"}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = adapter.Upsert(spec("front"))
+	if !errors.Is(err, want) {
+		t.Fatalf("producer start error = %v, want wrapped cause %v", err, want)
+	}
+}
+
+func TestLifecycleAdapterPreservesProducerStopCause(t *testing.T) {
+	registry := NewRegistry()
+	want := errors.New("camera kernel stop failed")
+	if err := registry.Register("rtsp", &causeProducer{sessionErr: want}); err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := NewLifecycleAdapter(registry, func(context.Context, contract.StreamSpec) (Source, error) {
+		return Source{URI: "rtsp://camera.example/stream"}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.Upsert(spec("front")); err != nil {
+		t.Fatal(err)
+	}
+	err = adapter.Delete("front")
+	if !errors.Is(err, want) {
+		t.Fatalf("producer stop error = %v, want wrapped cause %v", err, want)
+	}
+}
+
 type fakeProducer struct {
 	starts, closed int
 	failFor        string
@@ -204,6 +261,21 @@ func (p *fakeProducer) Start(_ context.Context, input contract.StreamSpec, sourc
 type fakeSession struct{ onClose func() }
 
 func (s fakeSession) Close(context.Context) error { s.onClose(); return nil }
+
+type causeProducer struct {
+	startErr, sessionErr error
+}
+
+func (p *causeProducer) Start(context.Context, contract.StreamSpec, Source) (Session, error) {
+	if p.startErr != nil {
+		return nil, p.startErr
+	}
+	return causeSession{err: p.sessionErr}, nil
+}
+
+type causeSession struct{ err error }
+
+func (s causeSession) Close(context.Context) error { return s.err }
 
 type exclusiveProducer struct {
 	starts, closes int

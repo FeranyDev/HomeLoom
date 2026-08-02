@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/platform/subprocesslog"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
+	"github.com/feranydev/homeloom/backend/internal/providers/xiaomi"
 	"github.com/feranydev/homeloom/backend/internal/runtime/providermanager"
 	"github.com/labstack/echo/v4"
 )
@@ -30,6 +32,70 @@ type apiProviderStore struct {
 type unavailableDatabase struct{}
 
 type apiSettingsStore struct{ values map[string]string }
+
+type apiScanProvider struct{ id string }
+
+type apiAuthState struct {
+	sync.Mutex
+	verified bool
+	url      string
+}
+
+type apiAuthProvider struct {
+	id    string
+	state *apiAuthState
+}
+
+type apiAuthRuntime struct{ state *apiAuthState }
+
+func (p *apiAuthProvider) Manifest() providersdk.Manifest {
+	return providersdk.Manifest{ID: p.id, Type: xiaomi.XiaomiMIoTCloudProviderType, Name: "Cloud"}
+}
+func (*apiAuthProvider) Capabilities() providersdk.Capabilities { return providersdk.Capabilities{} }
+func (p *apiAuthProvider) Initialize(context.Context) error {
+	p.state.Lock()
+	defer p.state.Unlock()
+	if !p.state.verified {
+		return &xiaomi.IdentityVerificationRequiredError{URL: p.state.url}
+	}
+	return nil
+}
+func (*apiAuthProvider) Close(context.Context) error { return nil }
+func (p *apiAuthProvider) IdentityVerificationURL() (string, bool) {
+	p.state.Lock()
+	defer p.state.Unlock()
+	return p.state.url, !p.state.verified
+}
+func (p *apiAuthProvider) CompleteIdentityVerification(context.Context, string) (json.RawMessage, error) {
+	p.state.Lock()
+	p.state.verified = true
+	p.state.Unlock()
+	return json.RawMessage(`{"region":"cn","userId":"42","ssecurity":"security","serviceToken":"service-token","devices":[]}`), nil
+}
+func (r *apiAuthRuntime) Apply(ctx context.Context, provider providersdk.Provider) error {
+	return provider.Initialize(ctx)
+}
+func (*apiAuthRuntime) Remove(context.Context, string) error { return nil }
+func (r *apiAuthRuntime) ProviderInfos() []providersdk.RuntimeInfo {
+	r.state.Lock()
+	verified := r.state.verified
+	r.state.Unlock()
+	status := "auth_required"
+	if verified {
+		status = "running"
+	}
+	return []providersdk.RuntimeInfo{{Manifest: providersdk.Manifest{ID: "cloud-main", Type: xiaomi.XiaomiMIoTCloudProviderType}, Status: status}}
+}
+
+func (p *apiScanProvider) Manifest() providersdk.Manifest {
+	return providersdk.Manifest{ID: p.id, Type: "scan", Name: p.id}
+}
+func (*apiScanProvider) Capabilities() providersdk.Capabilities { return providersdk.Capabilities{} }
+func (*apiScanProvider) Initialize(context.Context) error       { return nil }
+func (*apiScanProvider) Close(context.Context) error            { return nil }
+func (*apiScanProvider) Scan(context.Context) ([]providersdk.DiscoveryCandidate, error) {
+	return []providersdk.DiscoveryCandidate{{Provider: "scan", Name: "LAN candidate", Host: "192.0.2.20", Port: 7000, MAC: "aabbccddeeff"}}, nil
+}
 
 func (s *apiSettingsStore) GetSetting(_ context.Context, key string) (string, bool, error) {
 	value, ok := s.values[key]
@@ -62,6 +128,20 @@ func (s *apiProviderStore) DeleteProvider(_ context.Context, id string) error {
 
 func newTestServer() *Server {
 	return newTestServerWithProvider(virtual.NewProvider())
+}
+
+func newProviderScanTestServer(t *testing.T) *Server {
+	t.Helper()
+	factory := providersdk.NewFactory()
+	if err := factory.Register("scan", func(item providerconfig.Config) (providersdk.Provider, error) {
+		return &apiScanProvider{id: item.ID}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	providers := application.NewProviderService(nil, nil, factory, nil)
+	devices := application.NewDeviceService(virtual.NewProvider())
+	t.Cleanup(func() { _ = devices.Close() })
+	return NewServer(":0", devices, application.NewTargetService(nil, nil), zap.NewNop(), providers)
 }
 
 func TestManagementAuthenticationLifecycleAndCSRF(t *testing.T) {
@@ -676,6 +756,16 @@ func TestValidationErrorsIncludeFieldLocations(t *testing.T) {
 	}
 }
 
+func TestProviderScanEndpointUsesTransientDiscoveryCapability(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/providers/scan", bytes.NewBufferString(`{"type":"scan","enabled":false,"config":{}}`))
+	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response := httptest.NewRecorder()
+	newProviderScanTestServer(t).Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"host":"192.0.2.20"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"mac":"aabbccddeeff"`)) {
+		t.Fatalf("provider scan response = %d %s", response.Code, response.Body.String())
+	}
+}
+
 func newProviderManagementTestServer(t *testing.T) *Server {
 	t.Helper()
 	ctx := context.Background()
@@ -770,6 +860,44 @@ func TestXiaomiMIoTCloudLoginAPIValidatesTwoStepRequests(t *testing.T) {
 	server.Handler().ServeHTTP(verifyResponse, verify)
 	if verifyResponse.Code != http.StatusBadRequest || !strings.Contains(verifyResponse.Body.String(), "challengeId and verification code are required") {
 		t.Fatalf("verify response = %d %s", verifyResponse.Code, verifyResponse.Body.String())
+	}
+}
+
+func TestXiaomiProviderAuthChallengeAPIReadsAndVerifiesWithoutSecrets(t *testing.T) {
+	state := &apiAuthState{url: "https://account.xiaomi.com/identity/authStart?context=short"}
+	factory := providersdk.NewFactory()
+	if err := factory.Register(xiaomi.XiaomiMIoTCloudProviderType, func(item providerconfig.Config) (providersdk.Provider, error) {
+		return &apiAuthProvider{id: item.ID, state: state}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store := &apiProviderStore{items: make(map[string]providerconfig.Config)}
+	service := application.NewProviderService(nil, store, factory, &apiAuthRuntime{state: state})
+	config := providerconfig.Config{ID: "cloud-main", Type: xiaomi.XiaomiMIoTCloudProviderType, Name: "Cloud", Enabled: true, Config: json.RawMessage(`{"region":"cn","username":"owner","password":"not-in-response","devices":[]}`)}
+	_, saveErr := service.Save(context.Background(), config)
+	if saveErr == nil {
+		t.Fatal("expected auth challenge from provider save")
+	}
+	server := NewServer(":0", application.NewDeviceService(virtual.NewProvider()), application.NewTargetService(nil, nil), zap.NewNop(), service)
+	challengeResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(challengeResponse, httptest.NewRequest(http.MethodGet, "/api/v1/xiaomi-miot-cloud/providers/cloud-main/auth-challenge", nil))
+	if challengeResponse.Code != http.StatusOK || strings.Contains(challengeResponse.Body.String(), "not-in-response") || !strings.Contains(challengeResponse.Body.String(), "challengeId") {
+		t.Fatalf("challenge response=%d %s", challengeResponse.Code, challengeResponse.Body.String())
+	}
+	var challengeBody struct {
+		Data struct {
+			ChallengeID string `json:"challengeId"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(challengeResponse.Body.Bytes(), &challengeBody); err != nil || challengeBody.Data.ChallengeID == "" {
+		t.Fatalf("challenge body=%s error=%v", challengeResponse.Body.String(), err)
+	}
+	verifyRequest := httptest.NewRequest(http.MethodPost, "/api/v1/xiaomi-miot-cloud/providers/cloud-main/auth-challenge/verify", strings.NewReader(`{"challengeId":"`+challengeBody.Data.ChallengeID+`","code":"123456"}`))
+	verifyRequest.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	verifyResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(verifyResponse, verifyRequest)
+	if verifyResponse.Code != http.StatusOK || !strings.Contains(verifyResponse.Body.String(), `"status":"running"`) || strings.Contains(verifyResponse.Body.String(), "not-in-response") {
+		t.Fatalf("verify response=%d %s", verifyResponse.Code, verifyResponse.Body.String())
 	}
 }
 

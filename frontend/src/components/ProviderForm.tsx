@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { Provider, ProviderInput } from '../types/provider'
 import { ApiError } from '../api/client'
-import { completeXiaomiOAuth, discoverXiaomiGateways, startXiaomiCloudLogin, startXiaomiOAuth, verifyXiaomiCloudLogin, type XiaomiCloudLoginResult, type XiaomiGateway } from '../api/xiaomi'
+import { completeXiaomiOAuth, discoverXiaomiGateways, getXiaomiProviderAuthChallenge, startXiaomiCloudLogin, startXiaomiOAuth, verifyXiaomiCloudLogin, verifyXiaomiProviderAuthChallenge, type XiaomiCloudLoginResult, type XiaomiGateway } from '../api/xiaomi'
 
 const xiaomiOAuthRedirectURL = 'http://homeassistant.local:8123'
 const expandedVirtualExamples = [
@@ -27,6 +27,10 @@ function createXiaomiMIoTCloudExample() {
 	return { region: 'cn', username: '', password: '', pollIntervalSeconds: 30, requestTimeoutSeconds: 15, devices: [] }
 }
 
+function createGreeExample() {
+	return { devices: [], pollIntervalSeconds: 60, requestTimeoutSeconds: 5 }
+}
+
 function createCameraExample() {
 	return { cameras: [] }
 }
@@ -40,19 +44,96 @@ function createMQTTExample(mode: 'client' | 'server' = 'client') {
 	return { mode, brokerUrl: 'mqtt://127.0.0.1:1883', username: '', password: '', clientId: '', keepAliveSeconds: 30, connectTimeoutSeconds: 10, sessionExpirySeconds: 86400, retainedStateMaxAgeSeconds: 300, tls: {}, devices: [] }
 }
 
-type ProviderSelection = 'virtual' | 'mqtt-client' | 'mqtt-server' | 'xiaomi' | 'xiaomi-miot-cloud' | 'camera'
+type ProviderSelection = 'virtual' | 'mqtt-client' | 'mqtt-server' | 'xiaomi' | 'xiaomi-miot-cloud' | 'gree' | 'camera'
+
+function objectRecord(value: unknown): Record<string, unknown> {
+	return value && !Array.isArray(value) && typeof value === 'object' ? value as Record<string, unknown> : {}
+}
+
+function firstGreeDevice(config: Record<string, unknown>): Record<string, unknown> {
+	const devices = Array.isArray(config.devices) ? config.devices : []
+	const first = objectRecord(devices[0])
+	if (Object.keys(first).length > 0) return first
+	return {
+		host: config.host ?? '',
+		port: config.port ?? 7000,
+		mac: config.mac ?? '',
+		name: config.name ?? '',
+		...(config.encryptionKey !== undefined ? { encryptionKey: config.encryptionKey } : {}),
+		...(config.encryptionVersion !== undefined ? { encryptionVersion: config.encryptionVersion } : {}),
+	}
+}
+
+function normalizeGreeConfig(config: Record<string, unknown>): string | null {
+	const hasLegacyDeviceFields = ['host', 'port', 'mac', 'name', 'encryptionKey', 'encryptionVersion'].some((field) => config[field] !== undefined && config[field] !== '')
+	const devices = Array.isArray(config.devices) ? config.devices : hasLegacyDeviceFields ? [firstGreeDevice(config)] : []
+	const first = objectRecord(devices[0])
+	if (config.pollIntervalSeconds === undefined && first.pollIntervalSeconds !== undefined) config.pollIntervalSeconds = first.pollIntervalSeconds
+	if (config.requestTimeoutSeconds === undefined && first.requestTimeoutSeconds !== undefined) config.requestTimeoutSeconds = first.requestTimeoutSeconds
+	for (let index = 0; index < devices.length; index += 1) {
+		const encryptionVersion = objectRecord(devices[index]).encryptionVersion
+		if (encryptionVersion !== undefined && encryptionVersion !== null && encryptionVersion !== '' && encryptionVersion !== 1 && encryptionVersion !== 2 && encryptionVersion !== '1' && encryptionVersion !== '2') {
+			const displayedValue = typeof encryptionVersion === 'string' ? JSON.stringify(encryptionVersion) : String(encryptionVersion)
+			return `Gree devices[${index}].encryptionVersion 配置无效：仅支持未设置、空字符串或 v1/v2（数字 1/2 / 字符串 "1"/"2"），当前值为 ${displayedValue}`
+		}
+	}
+	config.devices = devices.map((item) => {
+		const device = { ...objectRecord(item) }
+		for (const field of ['pollIntervalSeconds', 'requestTimeoutSeconds']) {
+			delete device[field]
+		}
+		if (device.encryptionVersion === '1') device.encryptionVersion = 1
+		else if (device.encryptionVersion === '2') device.encryptionVersion = 2
+		else if (device.encryptionVersion === undefined || device.encryptionVersion === null || device.encryptionVersion === '') delete device.encryptionVersion
+		return device
+	})
+	delete config.encryptionVersion
+	for (const field of ['pollIntervalSeconds', 'requestTimeoutSeconds']) {
+		if (config[field] === '') delete config[field]
+	}
+	return null
+}
+
+function challengeExpiryTimestamp(expiresAt?: string): number | null {
+	if (!expiresAt) return null
+	const timestamp = Date.parse(expiresAt)
+	return Number.isFinite(timestamp) ? timestamp : null
+}
+
+function normalizeCloudChallenge(value: unknown): XiaomiCloudLoginResult | null {
+	const source = objectRecord(value)
+	const nested = objectRecord(source.challenge ?? source.authChallenge ?? source.auth_challenge)
+	const raw = Object.keys(nested).length > 0 ? nested : source
+	const challengeId = String(raw.challengeId ?? raw.challenge_id ?? raw.id ?? '').trim()
+	if (!challengeId) return null
+	const verificationUrl = String(raw.verificationUrl ?? raw.verification_url ?? raw.url ?? '').trim()
+	const expiresAt = String(raw.expiresAt ?? raw.expires_at ?? '').trim()
+	const status = String(raw.status ?? 'auth_required').trim() || 'auth_required'
+	const message = String(raw.message ?? raw.description ?? '').trim()
+	return { status, challengeId, ...(verificationUrl ? { verificationUrl } : {}), ...(expiresAt ? { expiresAt } : {}), ...(message ? { message } : {}) }
+}
+
+function isCloudChallengeStatus(status: unknown): boolean {
+	return ['verification_required', 'auth_required', 'authentication_required', 'challenge', 'pending_verification'].includes(String(status ?? '').trim().toLowerCase())
+}
+
+function isExpiredCloudChallengeError(cause: unknown): boolean {
+	const message = cause instanceof Error ? cause.message : String(cause ?? '')
+	return /challenge.*(?:missing|expired)|expired.*challenge|start login again|too many .*attempts/i.test(message)
+}
 
 export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }: { provider: Provider | null; initialType?: ProviderSelection | 'mqtt'; onCancel: () => void; onSave: (input: ProviderInput, editing: boolean) => Promise<void>; onTest?: (input: ProviderInput) => Promise<void> }) {
 	const selectedInitialType: ProviderSelection = provider?.type === 'mqtt' ? (String(provider.config.mode ?? 'client') === 'server' ? 'mqtt-server' : 'mqtt-client') : initialType === 'mqtt' ? 'mqtt-client' : (provider?.type ?? initialType ?? 'virtual') as ProviderSelection
 	const initialXiaomiConfig = createXiaomiExample()
 	const initialXiaomiCloudConfig = createXiaomiMIoTCloudExample()
+	const initialGreeConfig = createGreeExample()
 	const initialCameraConfig = createCameraExample()
 	const initialMQTTConfig = createMQTTExample(selectedInitialType === 'mqtt-server' ? 'server' : 'client')
   const [id, setID] = useState(provider?.id ?? '')
   const [name, setName] = useState(provider?.name ?? '')
   const [type, setType] = useState(selectedInitialType)
   const [enabled, setEnabled] = useState(provider?.enabled ?? true)
-	  const [config, setConfig] = useState(JSON.stringify(provider?.config ?? (selectedInitialType === 'mqtt-client' || selectedInitialType === 'mqtt-server' ? initialMQTTConfig : selectedInitialType === 'xiaomi' ? initialXiaomiConfig : selectedInitialType === 'xiaomi-miot-cloud' ? initialXiaomiCloudConfig : selectedInitialType === 'camera' ? initialCameraConfig : createVirtualExample()), null, 2))
+	  const [config, setConfig] = useState(JSON.stringify(provider?.config ?? (selectedInitialType === 'mqtt-client' || selectedInitialType === 'mqtt-server' ? initialMQTTConfig : selectedInitialType === 'xiaomi' ? initialXiaomiConfig : selectedInitialType === 'xiaomi-miot-cloud' ? initialXiaomiCloudConfig : selectedInitialType === 'gree' ? initialGreeConfig : selectedInitialType === 'camera' ? initialCameraConfig : createVirtualExample()), null, 2))
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<string | null>(null)
@@ -63,13 +144,17 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 	const [oauthCallbackURL, setOAuthCallbackURL] = useState('')
 	const [gateways, setGateways] = useState<XiaomiGateway[]>([])
 	const [discoveringGateways, setDiscoveringGateways] = useState(false)
-	const [cloudChallenge, setCloudChallenge] = useState<XiaomiCloudLoginResult | null>(null)
+	const initialProviderCloudChallenge = normalizeCloudChallenge(provider?.authChallenge)
+	const [cloudChallenge, setCloudChallenge] = useState<XiaomiCloudLoginResult | null>(initialProviderCloudChallenge)
+	const [cloudChallengeSource, setCloudChallengeSource] = useState<'provider' | 'login' | null>(initialProviderCloudChallenge ? 'provider' : null)
 	const [cloudVerificationCode, setCloudVerificationCode] = useState('')
 	const [cloudAuthenticating, setCloudAuthenticating] = useState(false)
+	const [cloudChallengeClock, setCloudChallengeClock] = useState(() => Date.now())
 	const hasRedactedSecrets = Boolean(provider && JSON.stringify(provider.config).includes('********'))
   const example = { latencyMs: 0, rejectWrites: false, devices: [{ id: 'demo-switch', name: '客厅开关', type: 'switch', online: true, power: false }, { id: 'demo-light', name: '客厅灯', type: 'lightbulb', online: true, power: true, brightness: 80, colorTemperature: 250, hue: 35, saturation: 45 }, { id: 'demo-outlet', name: '书房插座', type: 'outlet', online: true, power: false, inUse: false, currentPower: 0, energy: 1.25 }, { id: 'demo-temperature', name: '客厅温度', type: 'temperature-sensor', online: true, temperature: 23.6, batteryLevel: 91, lowBattery: false }, { id: 'demo-humidity', name: '客厅湿度', type: 'humidity-sensor', online: true, humidity: 56.2, batteryLevel: 90, lowBattery: false }, { id: 'demo-climate', name: '客厅温湿度', type: 'temperature-humidity-sensor', online: true, temperature: 23.6, humidity: 56.2, batteryLevel: 87, lowBattery: false }, { id: 'demo-contact', name: '入户门', type: 'contact-sensor', online: true, contact: false, batteryLevel: 88, lowBattery: false, tampered: false }, { id: 'demo-motion', name: '走廊活动', type: 'motion-sensor', online: true, motion: false, batteryLevel: 84, lowBattery: false, tampered: false }, { id: 'demo-fan', name: '卧室风扇', type: 'fan', online: true, active: false, speed: 35, mode: 'manual', swingMode: true, direction: 'clockwise', controlLock: false }, { id: 'demo-air', name: '客厅净化器', type: 'air-purifier', online: true, active: true, speed: 60, mode: 'auto', swingMode: false, controlLock: false, airQuality: 'good', pm25: 12, voc: 80, filterLife: 82, filterChange: false }, { id: 'demo-shade', name: '南窗帘', type: 'window-covering', online: true, position: 50, obstruction: false }, ...expandedVirtualExamples] }
-		const xiaomiExample = initialXiaomiConfig
-		const xiaomiCloudExample = initialXiaomiCloudConfig
+	const xiaomiExample = initialXiaomiConfig
+	const xiaomiCloudExample = initialXiaomiCloudConfig
+	const greeExample = initialGreeConfig
 	let configObject: Record<string, unknown> = {}
 	try { const parsed = JSON.parse(config) as unknown; if (parsed && !Array.isArray(parsed) && typeof parsed === 'object') configObject = parsed as Record<string, unknown> } catch { /* validation is shown on submit */ }
 	const tlsConfig = configObject.tls && !Array.isArray(configObject.tls) && typeof configObject.tls === 'object' ? configObject.tls as Record<string, unknown> : {}
@@ -80,8 +165,14 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 	const updateMQTT = (key: string, value: unknown) => setConfig(JSON.stringify({ ...configObject, [key]: value }, null, 2))
 	const updateTLS = (key: string, value: unknown) => setConfig(JSON.stringify({ ...configObject, tls: { ...tlsConfig, [key]: value } }, null, 2))
 	const updateXiaomi = (key: string, value: unknown) => setConfig(JSON.stringify({ ...configObject, [key]: value }, null, 2))
+	const updateGreeRuntime = (key: string, value: unknown) => {
+		const nextConfig: Record<string, unknown> = { ...configObject }
+		if (value === undefined) delete nextConfig[key]
+		else nextConfig[key] = value
+		setConfig(JSON.stringify(nextConfig, null, 2))
+	}
 	const updateXiaomiOAuth = (key: string, value: unknown) => setConfig(JSON.stringify({ ...configObject, oauth: { ...xiaomiOAuth, [key]: value } }, null, 2))
-	const updateXiaomiCloudIdentity = (key: string, value: unknown) => { updateXiaomi(key, value); setCloudChallenge(null); setCloudVerificationCode('') }
+	const updateXiaomiCloudIdentity = (key: string, value: unknown) => { updateXiaomi(key, value); setCloudChallenge(null); setCloudChallengeSource(null); setCloudVerificationCode('') }
 	const cloudSessionReady = ['userId', 'ssecurity', 'serviceToken'].every((key) => typeof configObject[key] === 'string' && String(configObject[key]).length > 0)
 	const cloudMISSConfigured = Array.isArray(configObject.devices) && configObject.devices.some((item) => {
 		if (!item || Array.isArray(item) || typeof item !== 'object') return false
@@ -89,6 +180,39 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 		return Boolean(media && !Array.isArray(media) && typeof media === 'object' && (media as Record<string, unknown>).protocol === 'xiaomi-miss')
 	})
 	const cloudMediaSessionReady = !cloudMISSConfigured || (typeof configObject.passToken === 'string' && configObject.passToken.length > 0)
+	const cloudChallengeExpiresAt = challengeExpiryTimestamp(cloudChallenge?.expiresAt)
+	const cloudChallengeExpired = cloudChallengeExpiresAt !== null && cloudChallengeExpiresAt <= cloudChallengeClock
+	const providerNeedsCloudChallenge = Boolean(provider && provider.type === 'xiaomi-miot-cloud' && isCloudChallengeStatus(provider.status) && !cloudChallenge)
+	const providerID = provider?.id
+	useEffect(() => {
+		if (!providerNeedsCloudChallenge || !providerID) return
+		let active = true
+		void getXiaomiProviderAuthChallenge(providerID).then((challenge) => {
+			if (!active) return
+			const normalized = normalizeCloudChallenge(challenge)
+			if (normalized) {
+				setCloudChallenge(normalized)
+				setCloudChallengeSource('provider')
+				setTestResult('Provider 启动需要小米短信验证。请打开验证页发送验证码，再回到这里提交。')
+			}
+		}).catch((cause) => {
+			if (active) setError(cause instanceof Error ? cause.message : '读取小米验证会话失败')
+		})
+		return () => { active = false }
+	}, [providerNeedsCloudChallenge, providerID])
+	useEffect(() => {
+		if (cloudChallengeExpiresAt === null) return
+		const delay = cloudChallengeExpiresAt - Date.now()
+		if (delay <= 0) {
+			setCloudChallengeClock(Date.now())
+			return
+		}
+		// Browsers clamp setTimeout to a signed 32-bit duration. Challenges are
+		// normally ten minutes long, but keep fixtures or a clock-skewed server
+		// response from overflowing and firing immediately.
+		const timer = window.setTimeout(() => setCloudChallengeClock(Date.now()), Math.min(delay + 1, 2_147_483_647))
+		return () => window.clearTimeout(timer)
+	}, [cloudChallengeExpiresAt])
 	function applyCloudSession(result: XiaomiCloudLoginResult) {
 		if (result.status !== 'verified' || !result.userId || !result.ssecurity || !result.serviceToken) throw new Error('小米云登录未返回完整会话，请重新登录')
 		setConfig(JSON.stringify({
@@ -98,28 +222,60 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 			serviceToken: result.serviceToken,
 			...(result.passToken ? { passToken: result.passToken } : {}),
 		}, null, 2))
-		setCloudChallenge(null); setCloudVerificationCode('')
+		setCloudChallenge(null); setCloudChallengeSource(null); setCloudVerificationCode('')
 		setTestResult('小米云账号验证成功，会话凭据已就绪；现在可以保存并启用 Provider。')
 	}
 	async function beginCloudLogin() {
 		const username = String(configObject.username ?? '').trim()
 		const password = String(configObject.password ?? '')
 		if (!username || !password || password === '********') { setError('请输入当前的小米账号和真实密码后再登录'); return }
-		setCloudAuthenticating(true); setError(null); setTestResult(null); setCloudChallenge(null); setCloudVerificationCode('')
+		setCloudAuthenticating(true); setError(null); setTestResult(null); setCloudChallenge(null); setCloudChallengeSource(null); setCloudVerificationCode('')
 		try {
 			const result = await startXiaomiCloudLogin({ region: String(configObject.region ?? 'cn'), username, password, requestTimeoutSeconds: Number(configObject.requestTimeoutSeconds ?? 15) })
-			if (result.status === 'verification_required') {
-				if (!result.challengeId || !result.verificationUrl) throw new Error('小米要求身份验证，但没有返回验证入口')
-				setCloudChallenge(result)
+			const challenge = normalizeCloudChallenge(result)
+			if (challenge && isCloudChallengeStatus(result.status)) {
+				if (!challenge.verificationUrl) throw new Error('小米要求身份验证，但没有返回验证入口')
+				setCloudChallenge(challenge); setCloudChallengeSource('login')
 				setTestResult('小米要求身份验证。请打开验证页面发送短信或邮件验证码，然后回到这里填写。')
 			} else applyCloudSession(result)
 		} catch (cause) { setError(cause instanceof Error ? cause.message : '小米云登录失败') } finally { setCloudAuthenticating(false) }
 	}
 	async function completeCloudVerification() {
 		if (!cloudChallenge?.challengeId || !cloudVerificationCode.trim()) return
+		if (cloudChallengeExpired) {
+			setCloudChallenge(null)
+			setCloudChallengeSource(null)
+			setCloudVerificationCode('')
+			setError('小米验证会话已过期，请重新登录后再次获取验证码')
+			return
+		}
 		setCloudAuthenticating(true); setError(null)
-		try { applyCloudSession(await verifyXiaomiCloudLogin({ challengeId: cloudChallenge.challengeId, code: cloudVerificationCode.trim() })) }
-		catch (cause) { setError(cause instanceof Error ? cause.message : '小米验证码校验失败') }
+		try {
+			if (cloudChallengeSource === 'provider' && provider?.id) {
+				const updated = await verifyXiaomiProviderAuthChallenge(provider.id, { challengeId: cloudChallenge.challengeId, code: cloudVerificationCode.trim() })
+				const returnedConfig = objectRecord(updated.config)
+				// The provider endpoint persists the session server-side and redacts
+				// secrets in its response. Merge only non-redacted values so the
+				// editor never replaces an existing secret with a placeholder.
+				const nextConfig = { ...configObject }
+				for (const key of ['userId', 'ssecurity', 'serviceToken', 'passToken']) {
+					const value = returnedConfig[key]
+					if (typeof value === 'string' && value && value !== '********') nextConfig[key] = value
+					else if (value === '********' && !(key in nextConfig)) nextConfig[key] = value
+				}
+				setConfig(JSON.stringify(nextConfig, null, 2))
+				setCloudChallenge(null); setCloudChallengeSource(null); setCloudVerificationCode('')
+				setTestResult('小米短信验证成功，Provider 会话已更新；现在可以关闭此窗口。')
+			} else applyCloudSession(await verifyXiaomiCloudLogin({ challengeId: cloudChallenge.challengeId, code: cloudVerificationCode.trim() }))
+		}
+		catch (cause) {
+			setCloudVerificationCode('')
+			if (isExpiredCloudChallengeError(cause)) {
+				setCloudChallenge(null)
+				setCloudChallengeSource(null)
+				setError('小米验证会话已过期或已失效，请重新登录后再次获取验证码')
+			} else setError(cause instanceof Error ? cause.message : '小米验证码校验失败')
+		}
 		finally { setCloudAuthenticating(false) }
 	}
 	async function authorizeXiaomi() {
@@ -161,6 +317,10 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 		try { parsed = JSON.parse(config) as Record<string, unknown>; if (!parsed || Array.isArray(parsed)) throw new Error() } catch { setError('扩展配置必须是 JSON 对象'); setFieldErrors({ config: '必须是 JSON 对象' }); return }
 		if (mqttSelected) parsed.mode = mqttServer ? 'server' : 'client'
 		if ((mqttSelected || type === 'xiaomi' || type === 'xiaomi-miot-cloud') && !Array.isArray(parsed.devices)) parsed.devices = []
+		if (type === 'gree') {
+			const greeConfigError = normalizeGreeConfig(parsed)
+			if (greeConfigError) { setError(greeConfigError); setFieldErrors({ config: greeConfigError }); return }
+		}
 		if (type === 'virtual' && !provider && !Array.isArray(parsed.devices)) parsed.devices = []
 		if (type === 'camera' && !Array.isArray(parsed.cameras)) parsed.cameras = []
 		if (type === 'xiaomi-miot-cloud' && !['userId', 'ssecurity', 'serviceToken'].every((key) => typeof parsed[key] === 'string' && String(parsed[key]).length > 0)) { setError('请先完成“小米云账号登录”；如触发短信或邮件验证，请回填验证码后再保存'); return }
@@ -171,13 +331,26 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 		let parsed: Record<string, unknown>
 		try { parsed = JSON.parse(config) as Record<string, unknown>; if (!parsed || Array.isArray(parsed)) throw new Error() } catch { setError('扩展配置必须是 JSON 对象'); return }
 		if (mqttSelected) parsed.mode = mqttServer ? 'server' : 'client'
+		if (type === 'gree') {
+			const greeConfigError = normalizeGreeConfig(parsed)
+			if (greeConfigError) { setError(greeConfigError); setFieldErrors({ config: greeConfigError }); return }
+		}
 		if (!onTest) return
 		setTesting(true); setError(null); setTestResult(null)
-			try { await onTest({ id, name, type: providerType, enabled, config: parsed }); setTestResult(type === 'xiaomi-miot-cloud' ? '云账号登录成功，设备目录与 MIoT 属性接口可用。' : mqttSelected ? mqttServer ? 'MQTT 服务端监听测试成功。保存 Provider 后外部设备可连接此地址。' : 'MQTT 客户端已连接外部 Broker。保存 Provider 后再配置设备 Topic。' : '连接成功，订阅已建立。') } catch (cause) { setError(cause instanceof Error ? cause.message : '连接测试失败') } finally { setTesting(false) }
-	}
-	return <div className="modal-backdrop"><form className="target-form" role="dialog" aria-modal="true" aria-labelledby="provider-form-title" onSubmit={(event) => void submit(event)}>
+			try { await onTest({ id, name, type: providerType, enabled, config: parsed }); setTestResult(type === 'xiaomi-miot-cloud' ? '云账号登录成功，设备目录与 MIoT 属性接口可用。' : type === 'gree' ? 'Gree 局域网空调连接测试成功。' : mqttSelected ? mqttServer ? 'MQTT 服务端监听测试成功。保存 Provider 后外部设备可连接此地址。' : 'MQTT 客户端已连接外部 Broker。保存 Provider 后再配置设备 Topic。' : '连接成功，订阅已建立。') } catch (cause) { setError(cause instanceof Error ? cause.message : '连接测试失败') } finally { setTesting(false) }
+		}
+		const greeConfiguration = <div className="wide xiaomi-connection-flow">
+			<section className="xiaomi-connection-step"><div className="xiaomi-connection-step__heading"><span>01</span><div><strong>创建 Gree 局域网 Provider</strong><small>Provider 只负责局域网连接和轮询；保存后从 Provider 卡片进入“管理格力设备”，逐台扫描或添加空调。</small></div></div><div className="mqtt-config-grid">
+				<label>轮询间隔（pollIntervalSeconds）<input aria-label="Gree 轮询间隔" type="number" min="1" max="3600" value={configObject.pollIntervalSeconds === '' ? '' : Number(configObject.pollIntervalSeconds ?? 60)} onChange={(event) => updateGreeRuntime('pollIntervalSeconds', event.target.value === '' ? '' : Number(event.target.value))} /><small>Provider 全局轮询间隔，默认 60 秒。</small></label>
+				<label>请求超时（requestTimeoutSeconds）<input aria-label="Gree 请求超时" type="number" min="1" max="120" value={configObject.requestTimeoutSeconds === '' ? '' : Number(configObject.requestTimeoutSeconds ?? 5)} onChange={(event) => updateGreeRuntime('requestTimeoutSeconds', event.target.value === '' ? '' : Number(event.target.value))} /><small>Provider 全局请求超时，默认 5 秒。</small></label>
+			</div></section>
+			<div className="config-note"><span>下一步</span><strong>保存后管理格力设备</strong><p>Provider 保存并进入 running 后，卡片会显示“管理格力设备”；在那里可以扫描 UDP/7000、手动添加、编辑和移除多台空调。</p></div>
+			<details><summary>格力设备 JSON（高级兼容入口）</summary><label className="wide config-editor"><span>Gree devices 配置（JSON）</span><textarea aria-label="Gree 设备配置 JSON" aria-invalid={Boolean(fieldErrors.config)} rows={11} value={config} onChange={(event) => setConfig(event.target.value)} spellCheck={false} />{fieldErrors.config && <small className="field-error">{fieldErrors.config}</small>}<small>日常添加设备请使用 Provider 卡片中的管理器；此处仅用于导入历史配置。每项支持 host、port、mac、name，以及可选 encryptionKey、encryptionVersion。</small></label></details>
+			{fieldErrors.config && <small className="field-error">{fieldErrors.config}</small>}{hasRedactedSecrets && <small>敏感字段已显示为 ********；保持占位符即可沿用数据库中的原值。</small>}{testResult && <small className="test-success">{testResult}</small>}
+		</div>
+		return <div className="modal-backdrop"><form className="target-form" role="dialog" aria-modal="true" aria-labelledby="provider-form-title" onSubmit={(event) => void submit(event)}>
 		<div className="form-heading"><div><p className="eyebrow">PROVIDER</p><h2 id="provider-form-title">{provider ? '编辑 Provider' : '新建 Provider'}</h2></div><button type="button" onClick={onCancel}>关闭</button></div>
-	            <div className="form-grid"><label>ID（留空自动生成）<input aria-invalid={Boolean(fieldErrors.id)} value={id} disabled={Boolean(provider)} onChange={(event) => setID(event.target.value)} placeholder={mqttSelected ? (mqttServer ? 'mqtt-server-main' : 'mqtt-client-main') : type === 'xiaomi' ? 'xiaomi-main' : type === 'xiaomi-miot-cloud' ? 'xiaomi-miot-cloud-main' : type === 'camera' ? 'camera-main' : 'virtual-lab'} />{fieldErrors.id && <small className="field-error">{fieldErrors.id}</small>}</label><label>名称<input aria-invalid={Boolean(fieldErrors.name)} value={name} onChange={(event) => setName(event.target.value)} placeholder={mqttSelected ? (mqttServer ? '家庭 MQTT 服务端' : '家庭 MQTT 客户端') : type === 'xiaomi' ? '米家中枢网关' : type === 'xiaomi-miot-cloud' ? '小米 MIoT 云（第三方兼容）' : type === 'camera' ? '家庭摄像头' : '实验室虚拟设备'} />{fieldErrors.name && <small className="field-error">{fieldErrors.name}</small>}</label><label className="wide">类型<select aria-invalid={Boolean(fieldErrors.type)} value={type} disabled={Boolean(provider)} onChange={(event) => { const next = event.target.value as ProviderSelection; setType(next); if (!provider) { const selected = next === 'mqtt-client' ? createMQTTExample('client') : next === 'mqtt-server' ? createMQTTExample('server') : next === 'xiaomi' ? xiaomiExample : next === 'xiaomi-miot-cloud' ? xiaomiCloudExample : next === 'camera' ? createCameraExample() : createVirtualExample(); setConfig(JSON.stringify(selected, null, 2)) } }}><option value="virtual">Virtual</option><option value="camera">Camera（独立摄像头来源）</option><option value="mqtt-client">MQTT Client（客户端 · 连接外部 Broker）</option><option value="mqtt-server">MQTT Server（服务端 · 接受设备连接）</option><option value="xiaomi">Xiaomi Central Hub（中枢网关）</option><option value="xiaomi-miot-cloud">Xiaomi MIoT Cloud（账号与设备目录）</option></select>{fieldErrors.type && <small className="field-error">{fieldErrors.type}</small>}</label>
+	            <div className="form-grid"><label>ID（留空自动生成）<input aria-invalid={Boolean(fieldErrors.id)} value={id} disabled={Boolean(provider)} onChange={(event) => setID(event.target.value)} placeholder={mqttSelected ? (mqttServer ? 'mqtt-server-main' : 'mqtt-client-main') : type === 'xiaomi' ? 'xiaomi-main' : type === 'xiaomi-miot-cloud' ? 'xiaomi-miot-cloud-main' : type === 'gree' ? 'gree-main' : type === 'camera' ? 'camera-main' : 'virtual-lab'} />{fieldErrors.id && <small className="field-error">{fieldErrors.id}</small>}</label><label>名称<input aria-invalid={Boolean(fieldErrors.name)} value={name} onChange={(event) => setName(event.target.value)} placeholder={mqttSelected ? (mqttServer ? '家庭 MQTT 服务端' : '家庭 MQTT 客户端') : type === 'xiaomi' ? '米家中枢网关' : type === 'xiaomi-miot-cloud' ? '小米 MIoT 云（第三方兼容）' : type === 'gree' ? '客厅格力空调' : type === 'camera' ? '家庭摄像头' : '实验室虚拟设备'} />{fieldErrors.name && <small className="field-error">{fieldErrors.name}</small>}</label><label className="wide">类型<select aria-invalid={Boolean(fieldErrors.type)} value={type} disabled={Boolean(provider)} onChange={(event) => { const next = event.target.value as ProviderSelection; setType(next); if (!provider) { const selected = next === 'mqtt-client' ? createMQTTExample('client') : next === 'mqtt-server' ? createMQTTExample('server') : next === 'xiaomi' ? xiaomiExample : next === 'xiaomi-miot-cloud' ? xiaomiCloudExample : next === 'gree' ? greeExample : next === 'camera' ? createCameraExample() : createVirtualExample(); setConfig(JSON.stringify(selected, null, 2)) } }}><option value="virtual">Virtual</option><option value="camera">Camera（独立摄像头来源）</option><option value="mqtt-client">MQTT Client（客户端 · 连接外部 Broker）</option><option value="mqtt-server">MQTT Server（服务端 · 接受设备连接）</option><option value="xiaomi">Xiaomi Central Hub（中枢网关）</option><option value="xiaomi-miot-cloud">Xiaomi MIoT Cloud（账号与设备目录）</option><option value="gree">Gree 局域网空调</option></select>{fieldErrors.type && <small className="field-error">{fieldErrors.type}</small>}</label>
 	{mqttSelected ? <div className="wide mqtt-config-grid">
 		<div className="wide config-note"><span>MQTT Provider</span><strong>{mqttServer ? 'MQTT Server · 服务端' : 'MQTT Client · 客户端'}</strong><p>{mqttServer ? 'HomeLoom 内嵌 Broker 并监听 TCP 地址；设备主动连接 HomeLoom。' : 'HomeLoom 作为客户端连接现有 Mosquitto、EMQX 或其他 Broker。'}</p></div>
 		{mqttServer ? <>
@@ -229,16 +402,16 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 					<button type="button" className="example-button" disabled={cloudAuthenticating || saving} onClick={() => void beginCloudLogin()}>{cloudAuthenticating ? '正在登录…' : cloudSessionReady ? '重新登录小米云账号' : '登录小米云账号'}</button>
 					{cloudSessionReady && cloudMediaSessionReady && <small className="test-success">云会话已就绪。保存后 Provider 将直接复用此会话，不会重复登录。</small>}
 					{cloudSessionReady && !cloudMediaSessionReady && <small className="inline-error">MIoT 会话可用于普通设备；摄像头还需要使用账号密码重新登录以取得 passToken。</small>}
-					{cloudChallenge?.verificationUrl && <div className="wide xiaomi-oauth-callback"><strong>需要短信或邮件验证</strong><ol><li><a href={cloudChallenge.verificationUrl} target="_blank" rel="noreferrer">打开小米身份验证页面</a>。</li><li>在小米页面选择手机号或邮箱并发送验证码；收到后不要在小米页面提交。</li><li>回到 HomeLoom，在下方填写验证码并继续登录。</li></ol><label>短信 / 邮件验证码<input aria-label="小米 MIoT 云验证码" inputMode="numeric" autoComplete="one-time-code" value={cloudVerificationCode} onChange={(event) => setCloudVerificationCode(event.target.value)} /></label><button type="button" disabled={cloudAuthenticating || !cloudVerificationCode.trim()} onClick={() => void completeCloudVerification()}>{cloudAuthenticating ? '正在验证…' : '提交验证码并继续登录'}</button>{cloudChallenge.expiresAt && <small>此登录会话将在 {new Date(cloudChallenge.expiresAt).toLocaleTimeString()} 过期；过期后请重新登录。</small>}</div>}
+					{cloudChallenge && <div className="wide xiaomi-oauth-callback"><strong>{cloudChallengeSource === 'provider' ? 'Provider 启动需要短信验证' : '需要短信或邮件验证'}</strong><ol>{cloudChallenge.verificationUrl && <li><a href={cloudChallenge.verificationUrl} target="_blank" rel="noreferrer">打开小米身份验证页面</a>；在小米页面选择手机号或邮箱并发送验证码。</li>}<li>收到验证码后回到 HomeLoom，在下方填写并提交；收到后不要在小米页面提交验证码。</li></ol>{cloudChallengeExpired ? <div role="alert" className="inline-error">小米验证会话已过期，请重新登录后再次获取验证码。</div> : <><label>短信 / 邮件验证码<input aria-label="小米 MIoT 云验证码" inputMode="numeric" autoComplete="one-time-code" value={cloudVerificationCode} onChange={(event) => setCloudVerificationCode(event.target.value)} /></label><button type="button" disabled={cloudAuthenticating || !cloudVerificationCode.trim()} onClick={() => void completeCloudVerification()}>{cloudAuthenticating ? '正在验证…' : cloudChallengeSource === 'provider' ? '提交验证码并继续 Provider' : '提交验证码并继续登录'}</button></>}{cloudChallenge.message && <small>{cloudChallenge.message}</small>}{cloudChallenge.expiresAt && cloudChallengeExpiresAt !== null && <small>此登录会话将在 {new Date(cloudChallengeExpiresAt).toLocaleTimeString()} 过期；过期后请重新登录。</small>}</div>}
 					{onTest && cloudSessionReady && <button type="button" className="example-button" disabled={testing || saving || cloudAuthenticating} onClick={() => void testConnection()}>{testing ? '正在读取…' : '测试 MIoT 云连接'}</button>}
 				</div></section>
 				<div className="xiaomi-next-step"><strong>02 · 保存并选择云端设备</strong><p>登录完成后保存并启用 Provider，再从 Provider 卡片进入“管理设备”；系统复用当前云会话读取账号设备目录，不会重复登录。</p></div>
 				<details><summary>已有会话凭据（高级替代方案）</summary><div className="mqtt-tls-grid"><label>User ID（userId）<input aria-label="小米 MIoT 云 User ID" value={String(configObject.userId ?? '')} onChange={(event) => updateXiaomi('userId', event.target.value)} /></label><label>ssecurity<input aria-label="小米 MIoT 云 ssecurity" type="password" value={String(configObject.ssecurity ?? '')} onChange={(event) => updateXiaomi('ssecurity', event.target.value)} /></label><label>Service Token（serviceToken）<input aria-label="小米 MIoT 云 Service Token" type="password" value={String(configObject.serviceToken ?? '')} onChange={(event) => updateXiaomi('serviceToken', event.target.value)} /></label><label>Camera Pass Token（passToken）<input aria-label="小米 MIoT 云 Camera Pass Token" type="password" value={String(configObject.passToken ?? '')} onChange={(event) => updateXiaomi('passToken', event.target.value)} /></label><small>普通 MIoT 设备需要前三项；启用小米摄像头时还需要 passToken。凭据会加密保存，会话过期后需重新登录。</small></div></details>
 				<small>密码与云会话 Token 保存到 PostgreSQL 并加密。设备局域网 Token 仅在后端云目录运行时使用，不通过管理 API 返回；没有本地能力的设备继续使用云轮询。该接口不适合无线开关、人体传感器等瞬时事件设备。</small>
 				{fieldErrors.config && <small className="field-error">{fieldErrors.config}</small>}{testResult && <small className="test-success">{testResult}</small>}
-			</div> : type === 'camera' ? <div className="wide xiaomi-connection-flow"><section className="xiaomi-connection-step"><div className="xiaomi-connection-step__heading"><span>01</span><div><strong>创建 Camera Provider</strong><small>Camera Provider 建立独立媒体运行时边界；保存并启用后才启动 Media Worker。</small></div></div><div className="config-note"><span>子设备为空</span><strong>Camera Kernel 按 Provider 生命周期启停</strong><p>这里不再内嵌摄像头连接详情。保存 Provider 后，从 Provider 卡片进入“管理摄像头”，再逐台添加 RTSP、ONVIF 或 Xiaomi MISS 子设备。</p></div></section><div className="xiaomi-next-step"><strong>02 · 添加摄像头子设备</strong><p>Provider 状态变为 running 后进入独立子设备页面；保存子设备会重建媒体目录并通过 replay 实时应用。</p></div>{fieldErrors.config && <small className="field-error">{fieldErrors.config}</small>}</div> : type === 'virtual' ? <div className="wide xiaomi-connection-flow"><section className="xiaomi-connection-step"><div className="xiaomi-connection-step__heading"><span>01</span><div><strong>创建 Virtual Provider</strong><small>Virtual Provider 只负责模拟运行时；保存并启用后，再从 Provider 卡片可视化添加虚拟子设备。</small></div></div><div className="config-note"><span>子设备为空</span><strong>先创建 Provider，再添加虚拟设备</strong><p>这里不直接编辑设备数组。Provider 进入 running 后，进入“管理虚拟设备”选择统一模型、填写名称和初始状态，保存即可实时重建运行目录。</p></div></section><div className="xiaomi-next-step"><strong>02 · 可视化添加虚拟子设备</strong><p>可创建开关、灯泡、传感器、风扇、净化器、窗帘、电视等内置模型；运行时模拟仍在 Provider 卡片中使用。</p></div><details><summary>Provider 高级配置（JSON）</summary><label className="wide config-editor"><span>扩展配置（JSON）</span><textarea aria-label="Virtual Provider 高级配置" aria-invalid={Boolean(fieldErrors.config)} rows={8} value={config} onChange={(event) => setConfig(event.target.value)} spellCheck={false} />{fieldErrors.config && <small className="field-error">{fieldErrors.config}</small>}<small>高级配置仅用于调整 latencyMs、rejectWrites 或导入历史设备列表；日常添加子设备请使用“管理虚拟设备”。</small><button type="button" className="example-button" onClick={() => setConfig(JSON.stringify(example, null, 2))}>载入完整模型示例</button></label></details></div> : <label className="wide config-editor"><span>扩展配置（JSON）</span><textarea aria-invalid={Boolean(fieldErrors.config)} rows={11} value={config} onChange={(event) => setConfig(event.target.value)} spellCheck={false} />{fieldErrors.config && <small className="field-error">{fieldErrors.config}</small>}{hasRedactedSecrets && <small>敏感字段已显示为 ********；保持占位符即可沿用数据库中的原值，输入新值可进行替换。</small>}<small>支持 38 种内置统一模型及必须/可选参数；未进入标准契约的属性会标记为自定义参数。</small><button type="button" className="example-button" onClick={() => setConfig(JSON.stringify(example, null, 2))}>载入完整模型示例</button></label>}</div>
+			</div> : type === 'gree' ? greeConfiguration : type === 'camera' ? <div className="wide xiaomi-connection-flow"><section className="xiaomi-connection-step"><div className="xiaomi-connection-step__heading"><span>01</span><div><strong>创建 Camera Provider</strong><small>Camera Provider 建立独立媒体运行时边界；保存并启用后才启动 Media Worker。</small></div></div><div className="config-note"><span>子设备为空</span><strong>Camera Kernel 按 Provider 生命周期启停</strong><p>这里不再内嵌摄像头连接详情。保存 Provider 后，从 Provider 卡片进入“管理摄像头”，再逐台添加 RTSP、ONVIF 或 Xiaomi MISS 子设备。</p></div></section><div className="xiaomi-next-step"><strong>02 · 添加摄像头子设备</strong><p>Provider 状态变为 running 后进入独立子设备页面；保存子设备会重建媒体目录并通过 replay 实时应用。</p></div>{fieldErrors.config && <small className="field-error">{fieldErrors.config}</small>}</div> : type === 'virtual' ? <div className="wide xiaomi-connection-flow"><section className="xiaomi-connection-step"><div className="xiaomi-connection-step__heading"><span>01</span><div><strong>创建 Virtual Provider</strong><small>Virtual Provider 只负责模拟运行时；保存并启用后，再从 Provider 卡片可视化添加虚拟子设备。</small></div></div><div className="config-note"><span>子设备为空</span><strong>先创建 Provider，再添加虚拟设备</strong><p>这里不直接编辑设备数组。Provider 进入 running 后，进入“管理虚拟设备”选择统一模型、填写名称和初始状态，保存即可实时重建运行目录。</p></div></section><div className="xiaomi-next-step"><strong>02 · 可视化添加虚拟子设备</strong><p>可创建开关、灯泡、传感器、风扇、净化器、窗帘、电视等内置模型；运行时模拟仍在 Provider 卡片中使用。</p></div><details><summary>Provider 高级配置（JSON）</summary><label className="wide config-editor"><span>扩展配置（JSON）</span><textarea aria-label="Virtual Provider 高级配置" aria-invalid={Boolean(fieldErrors.config)} rows={8} value={config} onChange={(event) => setConfig(event.target.value)} spellCheck={false} />{fieldErrors.config && <small className="field-error">{fieldErrors.config}</small>}<small>高级配置仅用于调整 latencyMs、rejectWrites 或导入历史设备列表；日常添加子设备请使用“管理虚拟设备”。</small><button type="button" className="example-button" onClick={() => setConfig(JSON.stringify(example, null, 2))}>载入完整模型示例</button></label></details></div> : <label className="wide config-editor"><span>扩展配置（JSON）</span><textarea aria-invalid={Boolean(fieldErrors.config)} rows={11} value={config} onChange={(event) => setConfig(event.target.value)} spellCheck={false} />{fieldErrors.config && <small className="field-error">{fieldErrors.config}</small>}{hasRedactedSecrets && <small>敏感字段已显示为 ********；保持占位符即可沿用数据库中的原值，输入新值可进行替换。</small>}<small>支持 38 种内置统一模型及必须/可选参数；未进入标准契约的属性会标记为自定义参数。</small><button type="button" className="example-button" onClick={() => setConfig(JSON.stringify(example, null, 2))}>载入完整模型示例</button></label>}</div>
     {type === 'virtual' && hasRedactedSecrets && <small>敏感字段已显示为 ********；保持占位符即可沿用数据库中的原值，输入新值可进行替换。</small>}
     <label className="enable-row"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />立即启用（无需重启服务）</label>
-    {error && <p className="inline-error">{error}</p>}<div className="form-actions"><button type="button" onClick={onCancel}>取消</button><button className="primary" disabled={saving}>{saving ? '应用中…' : '保存并应用'}</button></div>
+	{error && <p role="alert" className="inline-error">{error}</p>}<div className="form-actions"><button type="button" onClick={onCancel}>取消</button><button className="primary" disabled={saving}>{saving ? '应用中…' : '保存并应用'}</button></div>
   </form></div>
 }

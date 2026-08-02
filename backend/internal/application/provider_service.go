@@ -44,7 +44,33 @@ type ProviderInfo struct {
 	Credentials       *providersdk.CredentialStatus `json:"credentials,omitempty"`
 	CredentialError   string                        `json:"credentialError,omitempty"`
 	CredentialRetryAt *time.Time                    `json:"credentialRetryAt,omitempty"`
+	AuthChallenge     *ProviderAuthChallenge        `json:"authChallenge,omitempty"`
 }
+
+// ProviderAuthChallenge is an in-memory, short-lived Xiaomi identity gate.
+// Challenge IDs and URLs are safe to return to the administrator; account
+// passwords and submitted verification codes are deliberately absent.
+type ProviderAuthChallenge struct {
+	Status          string    `json:"status"`
+	ChallengeID     string    `json:"challengeId"`
+	VerificationURL string    `json:"verificationUrl"`
+	ExpiresAt       time.Time `json:"expiresAt"`
+}
+
+// ProviderAuthChallengeError is returned by Save when Xiaomi paused provider
+// startup for SMS/email identity verification. The provider configuration has
+// already been durably saved (with its normal secret protection); callers can
+// query Challenge and submit the code through VerifyAuthChallenge.
+type ProviderAuthChallengeError struct {
+	Challenge ProviderAuthChallenge
+	cause     error
+}
+
+func (e *ProviderAuthChallengeError) Error() string {
+	return "Xiaomi MIoT cloud provider requires identity verification"
+}
+
+func (e *ProviderAuthChallengeError) Unwrap() error { return e.cause }
 
 type credentialRetry struct {
 	count        int
@@ -63,13 +89,318 @@ type ProviderService struct {
 	maintenanceWake   chan struct{}
 	credentialRun     sync.Mutex
 	credentialRetries map[string]credentialRetry
+	authRun           sync.Mutex
+	authChallenges    map[string]*providerAuthChallenge
 	changeHandler     func(context.Context, providerconfig.Config, bool) error
 }
+
+type providerAuthChallenge struct {
+	mu       sync.Mutex
+	provider providersdk.Provider
+	value    ProviderAuthChallenge
+	attempts int
+	config   []byte
+}
+
+const (
+	providerAuthChallengeTTL = 10 * time.Minute
+	providerAuthMaxAttempts  = 5
+	providerAuthMaxPending   = 128
+)
 
 func (s *ProviderService) SetChangeHandler(handler func(context.Context, providerconfig.Config, bool) error) {
 	s.mu.Lock()
 	s.changeHandler = handler
 	s.mu.Unlock()
+}
+
+type authChallengeProvider interface {
+	IdentityVerificationURL() (string, bool)
+	CompleteIdentityVerification(context.Context, string) (json.RawMessage, error)
+}
+
+type authChallengeExpiryProvider interface {
+	IdentityVerificationExpiresAt() time.Time
+}
+
+type authenticationRequiredError interface {
+	AuthenticationRequired() bool
+}
+
+type providerAnyRuntime interface {
+	ProviderAny(string) (providersdk.Provider, bool)
+}
+
+// GetAuthChallenge returns the current Xiaomi identity gate for one Provider.
+// Challenges live only in memory and are removed after TTL, max-attempt, or a
+// successful verification.
+func (s *ProviderService) GetAuthChallenge(id string) (ProviderAuthChallenge, bool) {
+	id = strings.TrimSpace(id)
+	s.cleanupAuthChallenges(time.Now())
+	s.syncRuntimeAuthChallenge(id, time.Now())
+	s.mu.RLock()
+	challenge := s.authChallenges[id]
+	s.mu.RUnlock()
+	if challenge == nil {
+		return ProviderAuthChallenge{}, false
+	}
+	challenge.mu.Lock()
+	defer challenge.mu.Unlock()
+	if !time.Now().Before(challenge.value.ExpiresAt) {
+		return ProviderAuthChallenge{}, false
+	}
+	return challenge.value, true
+}
+
+// GetXiaomiProviderAuthChallenge is the provider-specific alias used by
+// management adapters.
+func (s *ProviderService) GetXiaomiProviderAuthChallenge(id string) (ProviderAuthChallenge, bool) {
+	return s.GetAuthChallenge(id)
+}
+
+// VerifyAuthChallenge submits an SMS/email code to a pending Xiaomi cloud
+// Provider. Successful verification replaces only the durable credential
+// document, then applies a fresh Provider instance to the runtime. The
+// challenge is removed before Apply so a successful code is single-use even if
+// runtime reconciliation later fails.
+func (s *ProviderService) VerifyAuthChallenge(ctx context.Context, id, challengeID, code string) (ProviderInfo, error) {
+	id, challengeID, code = strings.TrimSpace(id), strings.TrimSpace(challengeID), strings.TrimSpace(code)
+	if id == "" || challengeID == "" || code == "" {
+		return ProviderInfo{}, errors.New("provider id, challengeId and verification code are required")
+	}
+	if s.factory == nil || s.store == nil || s.runtime == nil {
+		return ProviderInfo{}, errors.New("provider management is unavailable")
+	}
+	s.authRun.Lock()
+	defer s.authRun.Unlock()
+	now := time.Now()
+	s.cleanupAuthChallenges(now)
+	s.syncRuntimeAuthChallenge(id, now)
+	s.mu.RLock()
+	challenge := s.authChallenges[id]
+	current, exists := s.configs[id]
+	s.mu.RUnlock()
+	if challenge == nil || !exists {
+		return ProviderInfo{}, errors.New("Xiaomi provider authentication challenge is missing or expired; start login again")
+	}
+	challenge.mu.Lock()
+	if challenge.value.ChallengeID != challengeID || !time.Now().Before(challenge.value.ExpiresAt) {
+		challenge.mu.Unlock()
+		return ProviderInfo{}, errors.New("Xiaomi provider authentication challenge is missing or expired; start login again")
+	}
+	challenge.attempts++
+	if challenge.attempts > providerAuthMaxAttempts {
+		challenge.mu.Unlock()
+		s.deleteAuthChallenge(id, challenge)
+		return ProviderInfo{}, errors.New("too many Xiaomi provider authentication attempts; start login again")
+	}
+	verifier, ok := challenge.provider.(authChallengeProvider)
+	if !ok {
+		challenge.mu.Unlock()
+		s.deleteAuthChallenge(id, challenge)
+		return ProviderInfo{}, errors.New("Xiaomi provider does not support identity verification")
+	}
+	updatedConfig, err := verifier.CompleteIdentityVerification(ctx, code)
+	if err != nil {
+		attemptsExceeded := challenge.attempts >= providerAuthMaxAttempts
+		challenge.mu.Unlock()
+		if attemptsExceeded {
+			s.deleteAuthChallenge(id, challenge)
+		}
+		return ProviderInfo{}, err
+	}
+	// Do not let a stale challenge overwrite an edit made while the code was
+	// being entered. The comparison is performed before durable persistence.
+	if !bytes.Equal(current.Config, challenge.config) {
+		challenge.mu.Unlock()
+		s.deleteAuthChallenge(id, challenge)
+		return ProviderInfo{}, errors.New("Xiaomi provider configuration changed; start login again")
+	}
+	updated := current
+	updated.Config = append(json.RawMessage(nil), updatedConfig...)
+	replacement, err := s.factory.Create(updated)
+	if err != nil {
+		challenge.mu.Unlock()
+		return ProviderInfo{}, err
+	}
+	if err := s.store.SaveProvider(ctx, updated); err != nil {
+		challenge.mu.Unlock()
+		return ProviderInfo{}, err
+	}
+	s.mu.Lock()
+	s.configs[id] = updated
+	delete(s.authChallenges, id)
+	s.mu.Unlock()
+	challenge.mu.Unlock()
+	applyErr := s.runtime.Apply(ctx, replacement)
+	closeContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_ = challenge.provider.Close(closeContext)
+	cancel()
+	if applyErr != nil {
+		return ProviderInfo{}, applyErr
+	}
+	for _, info := range s.List() {
+		if info.ID == id {
+			return info, nil
+		}
+	}
+	return ProviderInfo{}, fmt.Errorf("provider %q was not verified", id)
+}
+
+// VerifyXiaomiAuthChallenge is a descriptive alias kept for HTTP adapters
+// that use the provider-specific naming in their route layer.
+func (s *ProviderService) VerifyXiaomiAuthChallenge(ctx context.Context, id, challengeID, code string) (ProviderInfo, error) {
+	return s.VerifyAuthChallenge(ctx, id, challengeID, code)
+}
+
+// VerifyXiaomiProviderAuthChallenge is a compatibility alias for callers that
+// keep the complete resource name in their application layer.
+func (s *ProviderService) VerifyXiaomiProviderAuthChallenge(ctx context.Context, id, challengeID, code string) (ProviderInfo, error) {
+	return s.VerifyAuthChallenge(ctx, id, challengeID, code)
+}
+
+func (s *ProviderService) syncRuntimeAuthChallenge(id string, now time.Time) {
+	if id == "" {
+		return
+	}
+	accessor, ok := s.runtime.(providerAnyRuntime)
+	if !ok {
+		return
+	}
+	provider, ok := accessor.ProviderAny(id)
+	if !ok {
+		return
+	}
+	authProvider, ok := provider.(authChallengeProvider)
+	if !ok {
+		return
+	}
+	url, ok := authProvider.IdentityVerificationURL()
+	if !ok || strings.TrimSpace(url) == "" {
+		return
+	}
+	s.mu.Lock()
+	configured, configuredOK := s.configs[id]
+	if !configuredOK {
+		s.mu.Unlock()
+		return
+	}
+	if _, exists := s.authChallenges[id]; exists {
+		s.mu.Unlock()
+		return
+	}
+	if len(s.authChallenges) >= providerAuthMaxPending {
+		s.mu.Unlock()
+		closeAuthProvider(provider)
+		return
+	}
+	challenge := newProviderAuthChallenge(provider, url, now)
+	if expiry, ok := provider.(authChallengeExpiryProvider); ok && expiry.IdentityVerificationExpiresAt().After(now) {
+		challenge.value.ExpiresAt = expiry.IdentityVerificationExpiresAt()
+	}
+	challenge.config = append([]byte(nil), configured.Config...)
+	s.authChallenges[id] = challenge
+	s.mu.Unlock()
+}
+
+func (s *ProviderService) captureAuthChallengeLocked(item providerconfig.Config, instance providersdk.Provider, cause error) (ProviderAuthChallenge, bool) {
+	if item.Type != "xiaomi-miot-cloud" {
+		return ProviderAuthChallenge{}, false
+	}
+	var marker authenticationRequiredError
+	if !errors.As(cause, &marker) || !marker.AuthenticationRequired() {
+		return ProviderAuthChallenge{}, false
+	}
+	provider, ok := instance.(authChallengeProvider)
+	if !ok {
+		return ProviderAuthChallenge{}, false
+	}
+	url, ok := provider.IdentityVerificationURL()
+	if !ok || strings.TrimSpace(url) == "" {
+		return ProviderAuthChallenge{}, false
+	}
+	now := time.Now()
+	s.cleanupAuthChallenges(now)
+	s.mu.Lock()
+	if len(s.authChallenges) >= providerAuthMaxPending {
+		s.mu.Unlock()
+		closeAuthProvider(instance)
+		return ProviderAuthChallenge{}, false
+	}
+	challenge := newProviderAuthChallenge(instance, url, now)
+	if expiry, ok := instance.(authChallengeExpiryProvider); ok && expiry.IdentityVerificationExpiresAt().After(now) {
+		challenge.value.ExpiresAt = expiry.IdentityVerificationExpiresAt()
+	}
+	challenge.config = append([]byte(nil), item.Config...)
+	s.authChallenges[item.ID] = challenge
+	s.mu.Unlock()
+	return challenge.value, true
+}
+
+func newProviderAuthChallenge(provider providersdk.Provider, url string, now time.Time) *providerAuthChallenge {
+	return &providerAuthChallenge{provider: provider, value: ProviderAuthChallenge{Status: "auth_required", ChallengeID: randomProviderAuthChallengeID(), VerificationURL: strings.TrimSpace(url), ExpiresAt: now.Add(providerAuthChallengeTTL)}}
+}
+
+func randomProviderAuthChallengeID() string {
+	var raw [24]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		// crypto/rand failure is exceptionally unlikely; returning a distinct
+		// process-local value still prevents challenge ID reuse in this process.
+		return fmt.Sprintf("provider-auth-%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(raw[:])
+}
+
+func (s *ProviderService) cleanupAuthChallenges(now time.Time) {
+	type expiredChallenge struct {
+		id string
+		*providerAuthChallenge
+	}
+	expired := make([]expiredChallenge, 0)
+	s.mu.Lock()
+	for id, challenge := range s.authChallenges {
+		if now.Before(challenge.value.ExpiresAt) {
+			continue
+		}
+		delete(s.authChallenges, id)
+		expired = append(expired, expiredChallenge{id: id, providerAuthChallenge: challenge})
+	}
+	s.mu.Unlock()
+	for _, item := range expired {
+		item.mu.Lock()
+		closeAuthProvider(item.provider)
+		item.mu.Unlock()
+	}
+}
+
+func (s *ProviderService) clearAuthChallengeLocked(id string) {
+	s.mu.Lock()
+	challenge := s.authChallenges[id]
+	delete(s.authChallenges, id)
+	s.mu.Unlock()
+	if challenge != nil {
+		challenge.mu.Lock()
+		closeAuthProvider(challenge.provider)
+		challenge.mu.Unlock()
+	}
+}
+
+func (s *ProviderService) deleteAuthChallenge(id string, expected *providerAuthChallenge) {
+	s.mu.Lock()
+	if s.authChallenges[id] == expected {
+		delete(s.authChallenges, id)
+	}
+	s.mu.Unlock()
+	closeAuthProvider(expected.provider)
+}
+
+func closeAuthProvider(provider providersdk.Provider) {
+	if provider == nil {
+		return
+	}
+	closeContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_ = provider.Close(closeContext)
+	cancel()
 }
 
 // ConfiguredProviderDeviceIDs returns the explicit Device IDs controlled by a
@@ -146,7 +477,7 @@ func (s *ProviderService) RuntimeProvider(id string) (providersdk.Provider, bool
 }
 
 func NewProviderService(configs []providerconfig.Config, store ProviderStore, factory *providersdk.Factory, runtime ProviderRuntime) *ProviderService {
-	s := &ProviderService{configs: make(map[string]providerconfig.Config), store: store, factory: factory, runtime: runtime, maintenanceWake: make(chan struct{}, 1), credentialRetries: make(map[string]credentialRetry)}
+	s := &ProviderService{configs: make(map[string]providerconfig.Config), store: store, factory: factory, runtime: runtime, maintenanceWake: make(chan struct{}, 1), credentialRetries: make(map[string]credentialRetry), authChallenges: make(map[string]*providerAuthChallenge)}
 	for _, item := range configs {
 		s.configs[item.ID] = item
 	}
@@ -154,6 +485,17 @@ func NewProviderService(configs []providerconfig.Config, store ProviderStore, fa
 }
 
 func (s *ProviderService) List() []ProviderInfo {
+	now := time.Now()
+	s.cleanupAuthChallenges(now)
+	s.mu.RLock()
+	runtimeIDs := make([]string, 0, len(s.configs))
+	for id := range s.configs {
+		runtimeIDs = append(runtimeIDs, id)
+	}
+	s.mu.RUnlock()
+	for _, id := range runtimeIDs {
+		s.syncRuntimeAuthChallenge(id, now)
+	}
 	configs := s.ExportConfigs()
 	runtimes := make(map[string]providersdk.RuntimeInfo)
 	if s.runtime != nil {
@@ -176,8 +518,20 @@ func (s *ProviderService) List() []ProviderInfo {
 		raw := s.configs[item.ID]
 		retry := s.credentialRetries[item.ID]
 		s.mu.RUnlock()
-		if status, ok := s.credentialStatus(raw, time.Now()); ok {
+		if status, ok := s.credentialStatus(raw, now); ok {
 			info.Credentials = &status
+		}
+		s.mu.RLock()
+		challenge := s.authChallenges[item.ID]
+		s.mu.RUnlock()
+		if challenge != nil {
+			challenge.mu.Lock()
+			if now.Before(challenge.value.ExpiresAt) {
+				value := challenge.value
+				info.AuthChallenge = &value
+				info.Status = value.Status
+			}
+			challenge.mu.Unlock()
 		}
 		if retry.err != "" {
 			info.CredentialError = retry.err
@@ -207,6 +561,8 @@ func (s *ProviderService) ExportConfigs() []providerconfig.Config {
 var validProviderID = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 func (s *ProviderService) Save(ctx context.Context, item providerconfig.Config) (ProviderInfo, error) {
+	s.authRun.Lock()
+	defer s.authRun.Unlock()
 	item.ID = strings.TrimSpace(item.ID)
 	item.Type = strings.TrimSpace(item.Type)
 	item.Name = strings.TrimSpace(item.Name)
@@ -276,9 +632,15 @@ func (s *ProviderService) Save(ctx context.Context, item providerconfig.Config) 
 	s.configs[item.ID] = item
 	delete(s.credentialRetries, item.ID)
 	s.mu.Unlock()
+	s.clearAuthChallengeLocked(item.ID)
 	s.wakeCredentialMaintenance()
 	if item.Enabled {
 		if err := s.runtime.Apply(ctx, instance); err != nil {
+			if challenge, ok := s.captureAuthChallengeLocked(item, instance, err); ok {
+				redacted := item
+				redacted.Config = redactProviderConfig(item.Config)
+				return ProviderInfo{Config: redacted, Status: challenge.Status, AuthChallenge: &challenge}, &ProviderAuthChallengeError{Challenge: challenge, cause: err}
+			}
 			return ProviderInfo{}, err
 		}
 	} else {
@@ -501,6 +863,8 @@ func earlierProviderTime(left, right time.Time) time.Time {
 }
 
 func (s *ProviderService) Delete(ctx context.Context, id string) error {
+	s.authRun.Lock()
+	defer s.authRun.Unlock()
 	s.mu.RLock()
 	item, exists := s.configs[id]
 	configs := make([]providerconfig.Config, 0, len(s.configs))
@@ -537,6 +901,7 @@ func (s *ProviderService) Delete(ctx context.Context, id string) error {
 	delete(s.configs, id)
 	delete(s.credentialRetries, id)
 	s.mu.Unlock()
+	s.clearAuthChallengeLocked(id)
 	s.wakeCredentialMaintenance()
 	s.mu.RLock()
 	changeHandler := s.changeHandler
@@ -742,13 +1107,81 @@ func (s *ProviderService) TestConnection(ctx context.Context, item providerconfi
 	if err != nil {
 		return NewValidationError("invalid provider configuration", map[string]string{"config": err.Error()})
 	}
-	if err := instance.Initialize(ctx); err != nil {
+	var connectionErr error
+	if tester, ok := instance.(providersdk.ConnectionTester); ok {
+		connectionErr = tester.TestConnection(ctx)
+	} else {
+		connectionErr = instance.Initialize(ctx)
+	}
+	if connectionErr != nil {
 		closeContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_ = instance.Close(closeContext)
 		cancel()
-		return err
+		return connectionErr
 	}
 	closeContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return instance.Close(closeContext)
+}
+
+// Scan creates a short-lived Provider and invokes its transient discovery
+// capability. The configuration is never persisted or applied to the runtime;
+// this is deliberately distinct from DiscoverDevices, which returns the
+// configured runtime catalog.
+func (s *ProviderService) Scan(ctx context.Context, item providerconfig.Config) ([]providersdk.DiscoveryCandidate, error) {
+	item.ID = strings.TrimSpace(item.ID)
+	item.Type = strings.TrimSpace(item.Type)
+	item.Name = strings.TrimSpace(item.Name)
+	if item.Type == "" {
+		item.Type = "virtual"
+	}
+	if item.ID == "" {
+		item.ID = item.Type + "-network-scan"
+	}
+	if item.Name == "" {
+		item.Name = item.Type + " network scan"
+	}
+	if len(item.Config) == 0 {
+		item.Config = json.RawMessage(`{}`)
+	}
+	var object map[string]any
+	if err := json.Unmarshal(item.Config, &object); err != nil || object == nil {
+		return nil, NewValidationError("invalid provider configuration", map[string]string{"config": "must be a JSON object"})
+	}
+	s.mu.RLock()
+	previous := s.configs[item.ID]
+	s.mu.RUnlock()
+	if err := restoreProviderSecrets(object, previous.Config); err != nil {
+		return nil, NewValidationError("invalid provider configuration", map[string]string{"config": err.Error()})
+	}
+	encoded, err := json.Marshal(object)
+	if err != nil {
+		return nil, NewValidationError("invalid provider configuration", map[string]string{"config": "could not be encoded"})
+	}
+	item.Config = encoded
+	if s.factory == nil {
+		return nil, errors.New("provider management is unavailable")
+	}
+	instance, err := s.factory.Create(item)
+	if err != nil {
+		return nil, NewValidationError("provider discovery is unavailable", map[string]string{"type": err.Error()})
+	}
+	scanner, ok := instance.(providersdk.DiscoveryScanner)
+	if !ok {
+		closeContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = instance.Close(closeContext)
+		cancel()
+		return nil, NewValidationError("provider discovery is unavailable", map[string]string{"type": "provider does not support transient network scanning"})
+	}
+	items, scanErr := scanner.Scan(ctx)
+	closeContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	closeErr := instance.Close(closeContext)
+	cancel()
+	if scanErr != nil {
+		return nil, scanErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	return items, nil
 }

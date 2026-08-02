@@ -2,7 +2,9 @@ package xiaomi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -50,6 +52,58 @@ type fakeMIoTLocal struct {
 	reads     int
 	writes    int
 	actions   int
+}
+
+type fakeIdentityCloud struct {
+	mu       sync.Mutex
+	login    int
+	verified bool
+}
+
+func (f *fakeIdentityCloud) Login(context.Context) error {
+	f.mu.Lock()
+	f.login++
+	verified := f.verified
+	f.mu.Unlock()
+	if !verified {
+		return &IdentityVerificationRequiredError{URL: "https://account.xiaomi.com/identity/authStart?context=short"}
+	}
+	return nil
+}
+func (*fakeIdentityCloud) DeviceList(context.Context) ([]HubDevice, error) { return nil, nil }
+func (*fakeIdentityCloud) GetProperties(context.Context, []cloudProperty) ([]cloudProperty, error) {
+	return nil, nil
+}
+func (*fakeIdentityCloud) SetProperties(context.Context, []cloudProperty) ([]cloudProperty, error) {
+	return nil, nil
+}
+func (*fakeIdentityCloud) Action(context.Context, cloudAction) error { return nil }
+func (f *fakeIdentityCloud) VerifyIdentity(_ context.Context, _, code string) error {
+	if strings.TrimSpace(code) == "bad" {
+		return errors.New("Xiaomi identity verification code was rejected")
+	}
+	f.mu.Lock()
+	f.verified = true
+	f.mu.Unlock()
+	return nil
+}
+func (f *fakeIdentityCloud) session() (string, string, string) {
+	f.mu.Lock()
+	verified := f.verified
+	f.mu.Unlock()
+	if !verified {
+		return "", "", ""
+	}
+	return "42", "security", "service-token"
+}
+func (f *fakeIdentityCloud) mediaSession() (string, string) {
+	f.mu.Lock()
+	verified := f.verified
+	f.mu.Unlock()
+	if !verified {
+		return "", ""
+	}
+	return "42", "pass-token"
 }
 
 func (f *fakeMIoTLocal) GetProperties(_ context.Context, _ miotLocalAccess, input []cloudProperty) ([]cloudProperty, error) {
@@ -162,6 +216,50 @@ func TestCloudProviderInitializeIsIdempotent(t *testing.T) {
 	defer fake.mu.Unlock()
 	if fake.login != 1 {
 		t.Fatalf("login count = %d", fake.login)
+	}
+}
+
+func TestCloudProviderRetainsIdentityChallengeAndBuildsSessionConfig(t *testing.T) {
+	fake := &fakeIdentityCloud{}
+	config := cloudTestConfig()
+	config.Username, config.Password = "owner@example.com", "secret-password"
+	config.UserID, config.Ssecurity, config.ServiceToken = "", "", ""
+	provider, err := newCloudProvider("xiaomi-miot-cloud-auth", "Cloud", config, func() miotCloudClient { return fake }, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	err = provider.Initialize(ctx)
+	var required *IdentityVerificationRequiredError
+	if !errors.As(err, &required) || required.URL == "" {
+		t.Fatalf("Initialize() error=%v", err)
+	}
+	url, ok := provider.IdentityVerificationURL()
+	if !ok || url != required.URL {
+		t.Fatalf("identity URL=%q ok=%v required=%q", url, ok, required.URL)
+	}
+	if err := provider.Initialize(ctx); !errors.As(err, &required) {
+		t.Fatalf("repeated Initialize() error=%v", err)
+	}
+	if _, err := provider.CompleteIdentityVerification(ctx, "bad"); err == nil || strings.Contains(err.Error(), "bad") {
+		t.Fatalf("bad code error=%v", err)
+	}
+	encoded, err := provider.CompleteIdentityVerification(ctx, "123456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted CloudConfig
+	if err := json.Unmarshal(encoded, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Password != "secret-password" || persisted.UserID != "42" || persisted.Ssecurity != "security" || persisted.ServiceToken != "service-token" || persisted.PassToken != "pass-token" {
+		t.Fatalf("persisted config=%#v", persisted)
+	}
+	if _, ok := provider.IdentityVerificationURL(); ok {
+		t.Fatal("identity URL remained after successful verification")
+	}
+	if err := provider.Close(ctx); err != nil {
+		t.Fatal(err)
 	}
 }
 

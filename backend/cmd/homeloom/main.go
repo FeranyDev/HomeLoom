@@ -22,6 +22,7 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/platform/subprocesslog"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	cameraprovider "github.com/feranydev/homeloom/backend/internal/providers/camera"
+	"github.com/feranydev/homeloom/backend/internal/providers/gree"
 	mqttprovider "github.com/feranydev/homeloom/backend/internal/providers/mqtt"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
 	"github.com/feranydev/homeloom/backend/internal/providers/xiaomi"
@@ -149,6 +150,12 @@ func main() {
 		logger.Error("mqtt provider factory registration failed", zap.Error(err))
 		os.Exit(1)
 	}
+	if err := factory.Register(gree.ProviderType, func(config providerconfig.Config) (providersdk.Provider, error) {
+		return gree.NewProviderFromConfig(config)
+	}); err != nil {
+		logger.Error("gree provider factory registration failed", zap.Error(err))
+		os.Exit(1)
+	}
 	xiaomiSpecs := xiaomi.NewSpecResolver(store)
 	var providerManager *providermanager.Manager
 	if err := factory.Register("xiaomi", func(config providerconfig.Config) (providersdk.Provider, error) {
@@ -165,22 +172,7 @@ func main() {
 	}
 	if err := factory.Register(cameraprovider.ProviderType, func(config providerconfig.Config) (providersdk.Provider, error) {
 		return cameraprovider.NewProviderFromConfigWithXiaomiCredentialResolver(config, func(id string) (xiaomi.CloudConfig, error) {
-			if providerManager == nil {
-				return xiaomi.CloudConfig{}, errors.New("provider runtime is not initialized")
-			}
-			instance, ok := providerManager.Provider(id)
-			if !ok {
-				return xiaomi.CloudConfig{}, errors.New("referenced provider is not running")
-			}
-			account, ok := instance.(interface{ CameraAccountCredentials() xiaomi.CloudConfig })
-			if !ok {
-				return xiaomi.CloudConfig{}, errors.New("referenced provider does not expose Xiaomi camera credentials")
-			}
-			credentials := account.CameraAccountCredentials()
-			if credentials.UserID == "" || credentials.PassToken == "" {
-				return xiaomi.CloudConfig{}, errors.New("referenced provider has no Xiaomi MISS userId/passToken session")
-			}
-			return credentials, nil
+			return resolveXiaomiCameraCredentials(providerManager, id)
 		})
 	}); err != nil {
 		logger.Error("camera provider factory registration failed", zap.Error(err))
@@ -420,4 +412,34 @@ func parseMainLogLevel(value string) (zapcore.Level, error) {
 		return 0, fmt.Errorf("invalid -log-level %q: expected debug, info, warn, or error", value)
 	}
 	return level, nil
+}
+
+// resolveXiaomiCameraCredentials resolves a Camera Provider's account
+// reference at authorization time. A configured Provider that is temporarily
+// not running is a recoverable runtime condition: media replay can be retried
+// once the Provider becomes available. Missing references and
+// malformed credentials remain structural errors so they continue to fail
+// startup rather than being silently deferred.
+func resolveXiaomiCameraCredentials(manager *providermanager.Manager, id string) (xiaomi.CloudConfig, error) {
+	if manager == nil {
+		return xiaomi.CloudConfig{}, errors.New("provider runtime is not initialized")
+	}
+	instance, ok := manager.Provider(id)
+	if !ok {
+		for _, info := range manager.ProviderInfos() {
+			if info.Manifest.ID == id {
+				return xiaomi.CloudConfig{}, fmt.Errorf("%w: referenced provider is not running", providersdk.ErrProviderUnavailable)
+			}
+		}
+		return xiaomi.CloudConfig{}, fmt.Errorf("referenced provider %q does not exist", id)
+	}
+	account, ok := instance.(interface{ CameraAccountCredentials() xiaomi.CloudConfig })
+	if !ok {
+		return xiaomi.CloudConfig{}, errors.New("referenced provider does not expose Xiaomi camera credentials")
+	}
+	credentials := account.CameraAccountCredentials()
+	if strings.TrimSpace(credentials.UserID) == "" || strings.TrimSpace(credentials.PassToken) == "" {
+		return xiaomi.CloudConfig{}, errors.New("referenced provider has no Xiaomi MISS userId/passToken session")
+	}
+	return credentials, nil
 }

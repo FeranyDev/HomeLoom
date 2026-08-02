@@ -1,12 +1,50 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { ProviderCard } from './ProviderCard'
 import type { Provider } from '../types/provider'
 
+const xiaomiAPI = vi.hoisted(() => ({
+	getXiaomiProviderAuthChallenge: vi.fn(),
+	verifyXiaomiProviderAuthChallenge: vi.fn(),
+}))
+
+vi.mock('../api/xiaomi', () => xiaomiAPI)
+
 const provider: Provider = { id: 'virtual-main', type: 'virtual', name: 'Virtual', enabled: true, config: {}, status: 'running', retryCount: 0, capabilities: { discovery: true, propertyRead: true, propertyWrite: true, events: true } }
 
 describe('ProviderCard simulation', () => {
+	it('shows and completes a Provider-level Xiaomi SMS challenge', async () => {
+		const challenged: Provider = { ...provider, id: 'xiaomi-cloud-main', type: 'xiaomi-miot-cloud', name: '小米云', status: 'auth_required', config: { username: 'owner@example.com', password: '********' }, authChallenge: { status: 'auth_required', challengeId: 'challenge-1', verificationUrl: 'https://account.xiaomi.com/verify', expiresAt: '2030-01-01T00:00:00Z' } }
+		const updated: Provider = { ...challenged, status: 'running', authChallenge: null }
+		const onAuthChallengeComplete = vi.fn().mockResolvedValue(undefined)
+		xiaomiAPI.verifyXiaomiProviderAuthChallenge.mockResolvedValueOnce(updated)
+		render(<ProviderCard provider={challenged} devices={[]} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} onAuthChallengeComplete={onAuthChallengeComplete} />)
+		expect(screen.getByRole('region', { name: '小米短信验证' })).toBeInTheDocument()
+		expect(screen.getByRole('link', { name: '打开小米身份验证页面' })).toHaveAttribute('href', 'https://account.xiaomi.com/verify')
+		expect(screen.getByText('需短信验证')).toBeInTheDocument()
+		await userEvent.type(screen.getByLabelText('Provider 小米短信验证码'), '123456')
+		await userEvent.click(screen.getByRole('button', { name: '提交验证码并继续' }))
+		await waitFor(() => expect(xiaomiAPI.verifyXiaomiProviderAuthChallenge).toHaveBeenCalledWith('xiaomi-cloud-main', { challengeId: 'challenge-1', code: '123456' }))
+		expect(await screen.findByRole('status')).toHaveTextContent('短信验证码验证成功')
+		expect(onAuthChallengeComplete).toHaveBeenCalledWith(updated)
+	})
+
+	it('marks an expired Provider challenge and prevents stale code submission', () => {
+		const challenged: Provider = { ...provider, id: 'xiaomi-cloud-expired', type: 'xiaomi-miot-cloud', status: 'auth_required', config: { username: 'owner@example.com', password: '********' }, authChallenge: { status: 'auth_required', challengeId: 'expired', verificationUrl: 'https://account.xiaomi.com/verify', expiresAt: '2020-01-01T00:00:00Z' } }
+		render(<ProviderCard provider={challenged} devices={[]} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} />)
+		expect(screen.getByRole('alert')).toHaveTextContent('验证会话已过期')
+		expect(screen.queryByLabelText('Provider 小米短信验证码')).not.toBeInTheDocument()
+	})
+
+	it('loads a runtime challenge when the Provider list only exposes auth_required', async () => {
+		const challenged: Provider = { ...provider, id: 'xiaomi-cloud-pending', type: 'xiaomi-miot-cloud', status: 'auth_required', config: { username: 'owner@example.com', password: '********' } }
+		xiaomiAPI.getXiaomiProviderAuthChallenge.mockResolvedValueOnce({ status: 'auth_required', challengeId: 'loaded-challenge', verificationUrl: 'https://account.xiaomi.com/verify' })
+		render(<ProviderCard provider={challenged} devices={[]} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} />)
+		await waitFor(() => expect(xiaomiAPI.getXiaomiProviderAuthChallenge).toHaveBeenCalledWith('xiaomi-cloud-pending'))
+		expect(await screen.findByLabelText('Provider 小米短信验证码')).toBeInTheDocument()
+	})
+
 	it('distinguishes MQTT client and server runtime modes', () => {
 		const server: Provider = { ...provider, id: 'mqtt-server', type: 'mqtt', name: '设备接入', config: { mode: 'server', listenAddress: '0.0.0.0:1883', devices: [] } }
 		render(<ProviderCard provider={server} devices={[]} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} onTest={vi.fn()} />)
@@ -24,6 +62,17 @@ describe('ProviderCard simulation', () => {
 		expect(screen.getByText('1 台子设备')).toBeInTheDocument()
 		expect(screen.getByText('Media Worker / Camera Kernel 已按 Provider 启用')).toBeInTheDocument()
 		expect(screen.getByRole('button', { name: '管理摄像头' })).toBeInTheDocument()
+	})
+
+	it('shows Gree LAN device and dedicated child-device management', () => {
+		const gree: Provider = { ...provider, id: 'gree-main', type: 'gree', name: '客厅空调来源', config: { devices: [{ host: '192.168.1.42', port: 7000, mac: 'AA:BB:CC:DD:EE:FF', name: '客厅格力空调' }], pollIntervalSeconds: 60, requestTimeoutSeconds: 5 } }
+		render(<ProviderCard provider={gree} devices={[]} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} onManageDevices={vi.fn()} />)
+		expect(screen.getByText('Gree 局域网空调 · gree-main')).toBeInTheDocument()
+		expect(screen.getByText('1 台设备')).toBeInTheDocument()
+		expect(screen.getByText('客厅格力空调 · 192.168.1.42:7000 · MAC AA:BB:CC:DD:EE:FF')).toBeInTheDocument()
+		expect(screen.getByText('192.168.1.42:7000 · 局域网轮询 60 秒 · 请求超时 5 秒')).toBeInTheDocument()
+		expect(screen.getByText('格力设备管理器配置')).toBeInTheDocument()
+		expect(screen.getByRole('button', { name: '管理格力设备' })).toBeInTheDocument()
 	})
 
 	it('shows Virtual Provider child-device action even before its first child exists', async () => {

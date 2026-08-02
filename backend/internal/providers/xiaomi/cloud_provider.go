@@ -38,20 +38,25 @@ type CloudProvider struct {
 	local    miotLocalClient
 	resolver *SpecResolver
 
-	mu            sync.RWMutex
-	client        miotCloudClient
-	directory     []HubDevice
-	devices       map[string]device.Device
-	sourceDevices map[string]device.Device
-	rawProperties map[string]PropertyMapping
-	rawActions    map[string]ActionMapping
-	catalog       map[string]providersdk.SourceCatalogMetadata
-	valueStatus   map[string]providersdk.SourceValueStatus
-	listeners     map[uint64]func(device.Device)
-	next          uint64
-	sequence      uint64
-	cancel        context.CancelFunc
-	done          chan struct{}
+	mu     sync.RWMutex
+	client miotCloudClient
+	// identityURL is retained when password login reaches Xiaomi's SMS/email
+	// gate. The client (including its cookie jar) must survive until the code
+	// is submitted, but no polling goroutine is started in that state.
+	identityURL       string
+	identityExpiresAt time.Time
+	directory         []HubDevice
+	devices           map[string]device.Device
+	sourceDevices     map[string]device.Device
+	rawProperties     map[string]PropertyMapping
+	rawActions        map[string]ActionMapping
+	catalog           map[string]providersdk.SourceCatalogMetadata
+	valueStatus       map[string]providersdk.SourceValueStatus
+	listeners         map[uint64]func(device.Device)
+	next              uint64
+	sequence          uint64
+	cancel            context.CancelFunc
+	done              chan struct{}
 
 	requests       atomic.Uint64
 	events         atomic.Uint64
@@ -59,6 +64,7 @@ type CloudProvider struct {
 	localRequests  atomic.Uint64
 	localFailures  atomic.Uint64
 	cloudFallbacks atomic.Uint64
+	identityMu     sync.Mutex
 }
 
 var (
@@ -132,9 +138,93 @@ func (p *CloudProvider) Capabilities() providersdk.Capabilities {
 	return providersdk.Capabilities{Discovery: true, PropertyRead: true, PropertyWrite: true, Commands: true, Events: false}
 }
 
+// IdentityVerificationURL reports the short-lived Xiaomi account URL held by
+// this provider after Initialize returned IdentityVerificationRequiredError.
+// The boolean is false once the challenge has been completed, discarded, or
+// expired by the application layer.
+func (p *CloudProvider) IdentityVerificationURL() (string, bool) {
+	p.mu.RLock()
+	url := p.identityURL
+	p.mu.RUnlock()
+	return url, strings.TrimSpace(url) != ""
+}
+
+// IdentityVerificationExpiresAt preserves the original server-side deadline
+// when ProviderService is initialized after the runtime has already observed
+// the authentication gate.
+func (p *CloudProvider) IdentityVerificationExpiresAt() time.Time {
+	p.mu.RLock()
+	expiresAt := p.identityExpiresAt
+	p.mu.RUnlock()
+	return expiresAt
+}
+
+// CompleteIdentityVerification submits a user-provided SMS/email code to the
+// retained Xiaomi session and returns a complete replacement configuration.
+// Passwords and codes are never included in errors. The application layer is
+// responsible for persisting the returned document and applying its runtime.
+func (p *CloudProvider) CompleteIdentityVerification(ctx context.Context, code string) (json.RawMessage, error) {
+	p.identityMu.Lock()
+	defer p.identityMu.Unlock()
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return nil, errors.New("Xiaomi identity verification code is required")
+	}
+	p.mu.RLock()
+	client, verificationURL := p.client, p.identityURL
+	config := p.config
+	p.mu.RUnlock()
+	if client == nil || strings.TrimSpace(verificationURL) == "" {
+		return nil, errors.New("Xiaomi identity verification challenge is missing or expired; start login again")
+	}
+	verifier, ok := client.(interface {
+		VerifyIdentity(context.Context, string, string) error
+		session() (string, string, string)
+		mediaSession() (string, string)
+	})
+	if !ok {
+		return nil, errors.New("Xiaomi cloud client does not support identity verification")
+	}
+	if err := verifier.VerifyIdentity(ctx, verificationURL, code); err != nil {
+		return nil, err
+	}
+	userID, ssecurity, serviceToken := verifier.session()
+	mediaUserID, passToken := verifier.mediaSession()
+	if userID == "" || ssecurity == "" || serviceToken == "" {
+		return nil, errors.New("Xiaomi cloud login completed without a full session")
+	}
+	if mediaUserID != "" && mediaUserID != userID {
+		return nil, errors.New("Xiaomi cloud login returned inconsistent account identities")
+	}
+	config.UserID, config.Ssecurity, config.ServiceToken, config.PassToken = userID, ssecurity, serviceToken, passToken
+	// Keep the configured password when one was supplied. The next service-token
+	// expiry must be able to clear the stale session and repeat password login;
+	// that is also what lets Xiaomi issue a fresh SMS challenge automatically.
+	// Provider configuration secrets are encrypted at rest and redacted from all
+	// management responses. Session-only configurations naturally keep this
+	// field empty.
+	config.Password = strings.TrimSpace(config.Password)
+	config.applyDefaults()
+	encoded, err := json.Marshal(config)
+	if err != nil {
+		return nil, fmt.Errorf("encode Xiaomi cloud credentials: %w", err)
+	}
+	p.mu.Lock()
+	if p.client == client {
+		p.identityURL, p.identityExpiresAt = "", time.Time{}
+	}
+	p.mu.Unlock()
+	return encoded, nil
+}
+
 func (p *CloudProvider) Initialize(ctx context.Context) error {
 	p.mu.Lock()
 	if p.client != nil {
+		if strings.TrimSpace(p.identityURL) != "" {
+			url := p.identityURL
+			p.mu.Unlock()
+			return &IdentityVerificationRequiredError{URL: url}
+		}
 		p.mu.Unlock()
 		return nil
 	}
@@ -144,14 +234,29 @@ func (p *CloudProvider) Initialize(ctx context.Context) error {
 	p.client, p.cancel, p.done = client, cancel, done
 	p.mu.Unlock()
 	if err := client.Login(ctx); err != nil {
+		var required *IdentityVerificationRequiredError
+		if errors.As(err, &required) {
+			p.mu.Lock()
+			if p.client == client {
+				p.identityURL, p.identityExpiresAt = strings.TrimSpace(required.URL), time.Now().Add(cloudLoginChallengeTTL)
+			}
+			p.mu.Unlock()
+			cancel()
+			// No polling loop owns done on this path. Close it explicitly so
+			// cleanup of a pending challenge cannot block forever.
+			close(done)
+			return fmt.Errorf("login Xiaomi MIoT cloud: %w", required)
+		}
 		p.clearClient(client)
 		cancel()
+		close(done)
 		return fmt.Errorf("login Xiaomi MIoT cloud: %w", err)
 	}
 	directory, err := client.DeviceList(ctx)
 	if err != nil {
 		p.clearClient(client)
 		cancel()
+		close(done)
 		return fmt.Errorf("request Xiaomi MIoT cloud device list: %w", err)
 	}
 	p.mu.Lock()
@@ -166,7 +271,7 @@ func (p *CloudProvider) Initialize(ctx context.Context) error {
 func (p *CloudProvider) clearClient(expected miotCloudClient) {
 	p.mu.Lock()
 	if p.client == expected {
-		p.client, p.cancel, p.done = nil, nil, nil
+		p.client, p.cancel, p.done, p.identityURL, p.identityExpiresAt = nil, nil, nil, "", time.Time{}
 	}
 	p.mu.Unlock()
 }
@@ -174,7 +279,7 @@ func (p *CloudProvider) clearClient(expected miotCloudClient) {
 func (p *CloudProvider) Close(ctx context.Context) error {
 	p.mu.Lock()
 	cancel, done := p.cancel, p.done
-	p.client, p.cancel, p.done = nil, nil, nil
+	p.client, p.cancel, p.done, p.identityURL, p.identityExpiresAt = nil, nil, nil, "", time.Time{}
 	p.mu.Unlock()
 	if cancel != nil {
 		cancel()

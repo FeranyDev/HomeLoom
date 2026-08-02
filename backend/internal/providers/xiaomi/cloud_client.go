@@ -16,10 +16,14 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const cloudUserAgent = "Android-7.1.1-1.0.0-ONEPLUS A3010-136-HOMELOOM APP/xiaomi.smarthome APPV/62830"
@@ -51,6 +55,11 @@ func (e *IdentityVerificationRequiredError) Error() string {
 	return "Xiaomi account requires identity verification: " + e.URL
 }
 
+// AuthenticationRequired marks a recoverable authentication gate. Runtime
+// managers use this marker to expose an auth_required state without putting
+// the provider on an automatic reconnect loop while a user enters the code.
+func (e *IdentityVerificationRequiredError) AuthenticationRequired() bool { return true }
+
 type cloudProperty struct {
 	DID   string `json:"did"`
 	SIID  int    `json:"siid"`
@@ -80,11 +89,12 @@ type httpMiotCloudClient struct {
 	accountBase string
 	apiBase     string
 
-	mu           sync.Mutex
-	userID       string
-	ssecurity    string
-	serviceToken string
-	passToken    string
+	mu              sync.Mutex
+	userID          string
+	ssecurity       string
+	serviceToken    string
+	passToken       string
+	identitySession string
 }
 
 func newHTTPMiotCloudClient(config CloudConfig) *httpMiotCloudClient {
@@ -110,7 +120,7 @@ func (c *httpMiotCloudClient) loginLocked(ctx context.Context, acceptStepOneSess
 	if c.userID != "" && c.ssecurity != "" && c.serviceToken != "" {
 		return nil
 	}
-	if c.config.Username == "" || c.config.Password == "" {
+	if !xiaomiCloudPasswordLoginAvailable(c.config) {
 		return errors.New("Xiaomi cloud session is incomplete and account password is unavailable")
 	}
 	step1, err := c.accountRequest(ctx, http.MethodGet, "/pass/serviceLogin", url.Values{"sid": {"xiaomiio"}, "_json": {"true"}}, nil)
@@ -233,30 +243,88 @@ func (c *httpMiotCloudClient) VerifyIdentity(ctx context.Context, verificationUR
 	if err != nil {
 		return err
 	}
-	marker := "/fe/service/identity/authStart"
-	if !strings.Contains(verification.Path, marker) {
+	// Xiaomi has used both /fe/service/identity/authStart and the shorter
+	// /identity/authStart endpoint for this flow.  Keep the query string (it
+	// carries the short-lived context) while normalizing either path to the
+	// identity method list endpoint below.
+	identityPath := strings.TrimRight(verification.Path, "/")
+	if identityPath != "/fe/service/identity/authStart" && identityPath != "/identity/authStart" {
 		return errors.New("Xiaomi returned an unsupported identity verification URL")
 	}
-	verification.Path = strings.Replace(verification.Path, marker, "/identity/list", 1)
-	data, responseCookies, err := c.accountRequestURL(ctx, http.MethodGet, verification.String(), nil, nil, nil)
+
+	// Opening authStart is part of Xiaomi's protocol, rather than merely a UI
+	// convenience: it establishes identity_session/ick cookies on the client
+	// jar for the subsequent list and verify calls.  Some shards already set
+	// identity_session during serviceLoginAuth2; replay it explicitly as well.
+	identityCookies := make([]*http.Cookie, 0, 2)
+	if c.identitySession != "" {
+		identityCookies = append(identityCookies, &http.Cookie{Name: "identity_session", Value: c.identitySession})
+	}
+	_, preloadCookies, err := c.accountRequestURL(ctx, http.MethodGet, verification.String(), nil, nil, identityCookies)
+	if err != nil {
+		return fmt.Errorf("open Xiaomi identity verification page: %w", err)
+	}
+	c.collectSessionCookies(preloadCookies)
+	verification.Path = "/identity/list"
+	listQuery := verification.Query()
+	if listQuery.Get("sid") == "" {
+		listQuery.Set("sid", "xiaomiio")
+	}
+	if listQuery.Get("_locale") == "" {
+		listQuery.Set("_locale", "en_US")
+	}
+	verification.RawQuery = listQuery.Encode()
+	identityCookies = identityCookies[:0]
+	if c.identitySession != "" {
+		identityCookies = append(identityCookies, &http.Cookie{Name: "identity_session", Value: c.identitySession})
+	}
+	data, responseCookies, err := c.accountRequestURL(ctx, http.MethodGet, verification.String(), nil, nil, identityCookies)
 	if err != nil {
 		return fmt.Errorf("load Xiaomi identity verification methods: %w", err)
 	}
+	c.collectSessionCookies(responseCookies)
 	var identity struct {
 		Flag        int    `json:"flag"`
 		Options     []int  `json:"options"`
 		Code        int    `json:"code"`
 		Description string `json:"description"`
+		Message     string `json:"message"`
 	}
 	if err := decodeXiaomiJSON(data, &identity); err != nil {
 		return fmt.Errorf("decode Xiaomi identity verification methods: %w", err)
 	}
+	// The identity/list endpoint is inconsistent across Xiaomi account
+	// shards.  In particular, the legacy password-login endpoint can return
+	// {"code":2} without a description (and sometimes without method fields)
+	// even though the SMS verification flow is still available.  The upstream
+	// Xiaomi client treats this response as a usable identity list and defaults
+	// a missing method list to the phone method (flag 4), so keep that
+	// compatibility behavior instead of rejecting a valid challenge here.
+	if identity.Code != 0 && identity.Code != 2 {
+		reason := strings.TrimSpace(identity.Description)
+		if reason == "" {
+			reason = strings.TrimSpace(identity.Message)
+		}
+		return fmt.Errorf("load Xiaomi identity verification methods failed (code %d): %s", identity.Code, reason)
+	}
+	// Xiaomi normally returns flag/options, but some account shards omit the
+	// fields while still exposing the phone verification flow. The upstream
+	// client defaults this response to SMS (flag 4), so retain that fallback.
+	if identity.Flag == 0 && len(identity.Options) == 0 {
+		identity.Flag = 4
+	}
 	if len(identity.Options) == 0 && identity.Flag != 0 {
 		identity.Options = []int{identity.Flag}
 	}
-	identitySession := cookieNamed(responseCookies, "identity_session")
+	identitySession := cookieNamed(preloadCookies, "identity_session")
+	if identitySession == "" {
+		identitySession = cookieNamed(responseCookies, "identity_session")
+	}
 	if identitySession == "" && c.http.Jar != nil {
 		identitySession = cookieNamed(c.http.Jar.Cookies(verification), "identity_session")
+	}
+	if identitySession == "" {
+		identitySession = c.identitySession
 	}
 	if identitySession == "" {
 		return errors.New("Xiaomi identity verification session cookie is missing; reopen the verification page and request a new code")
@@ -278,8 +346,14 @@ func (c *httpMiotCloudClient) VerifyIdentity(ctx context.Context, verificationUR
 		return fmt.Errorf("Xiaomi identity verification method is unsupported (flag %d, options %v)", identity.Flag, identity.Options)
 	}
 	query := url.Values{"_dc": {fmt.Sprint(time.Now().UnixMilli())}}
-	form := url.Values{"_flag": {fmt.Sprint(flag)}, "ticket": {ticket}, "trust": {"true"}, "_json": {"true"}}
-	verifyData, _, err := c.accountRequestURL(ctx, http.MethodPost, c.accountURL(endpoint), query, form, []*http.Cookie{{Name: "identity_session", Value: identitySession}})
+	form := url.Values{"_flag": {fmt.Sprint(flag)}, "ticket": {ticket}, "trust": {"false"}, "_json": {"true"}}
+	verifyCookies := []*http.Cookie{{Name: "identity_session", Value: identitySession}}
+	if c.http.Jar != nil {
+		if ick := cookieNamed(c.http.Jar.Cookies(verification), "ick"); ick != "" {
+			verifyCookies = append(verifyCookies, &http.Cookie{Name: "ick", Value: ick})
+		}
+	}
+	verifyData, _, err := c.accountRequestURL(ctx, http.MethodPost, c.accountURL(endpoint), query, form, verifyCookies)
 	if err != nil {
 		return fmt.Errorf("submit Xiaomi identity verification code: %w", err)
 	}
@@ -308,6 +382,7 @@ func (c *httpMiotCloudClient) VerifyIdentity(ctx context.Context, verificationUR
 	if response.StatusCode < 200 || response.StatusCode >= 400 {
 		return fmt.Errorf("Xiaomi identity verification redirect returned HTTP %d", response.StatusCode)
 	}
+	c.identitySession = ""
 	return c.loginLocked(ctx, true)
 }
 
@@ -354,12 +429,19 @@ func (c *httpMiotCloudClient) collectSessionCookies(cookies []*http.Cookie) {
 			if cookie.Value != "" {
 				c.passToken = cookie.Value
 			}
+		case "identity_session":
+			if cookie.Value != "" {
+				c.identitySession = cookie.Value
+			}
 		}
 	}
 }
 
 func (c *httpMiotCloudClient) accountRequest(ctx context.Context, method, path string, query, form url.Values) ([]byte, error) {
-	data, _, err := c.accountRequestURL(ctx, method, c.accountURL(path), query, form, nil)
+	data, cookies, err := c.accountRequestURL(ctx, method, c.accountURL(path), query, form, nil)
+	if err == nil {
+		c.collectSessionCookies(cookies)
+	}
 	return data, err
 }
 
@@ -397,9 +479,11 @@ func (c *httpMiotCloudClient) accountRequestURL(ctx context.Context, method, end
 	if err != nil {
 		return nil, response.Cookies(), err
 	}
-	if response.StatusCode < 200 || response.StatusCode >= 400 {
-		return nil, response.Cookies(), fmt.Errorf("unexpected HTTP status %d", response.StatusCode)
-	}
+	// Xiaomi occasionally returns an HTTP error status together with a valid
+	// JSON login envelope (notably 81003 identity verification). Preserve the
+	// body so callers can classify the challenge instead of losing it behind a
+	// generic status error. Callers that need strict status handling (for
+	// example the final redirect) perform that check themselves.
 	return data, response.Cookies(), nil
 }
 
@@ -679,7 +763,7 @@ func (c *httpMiotCloudClient) request(ctx context.Context, api string, payload, 
 		return err
 	}
 	c.mu.Lock()
-	userID, security, token := c.userID, c.ssecurity, c.serviceToken
+	userID, security, token, passToken := c.userID, c.ssecurity, c.serviceToken, c.passToken
 	c.mu.Unlock()
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -696,9 +780,22 @@ func (c *httpMiotCloudClient) request(ctx context.Context, api string, payload, 
 	}
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.Header.Set("User-Agent", cloudUserAgent)
+	// Xiaomi's legacy password-session API requires the same protocol marker
+	// emitted by the Mi Home clients. Without it, device-list and MIoT
+	// endpoints may reject an otherwise valid signed session with HTTP 426.
+	request.Header.Set("X-XIAOMI-PROTOCAL-FLAG-CLI", "PROTOCAL-HTTP2")
 	request.Header.Set("MIOT-ENCRYPT-ALGORITHM", "ENCRYPT-RC4")
 	request.Header.Set("Accept-Encoding", "identity")
-	for name, value := range map[string]string{"userId": userID, "serviceToken": token, "yetAnotherServiceToken": token, "locale": "zh_CN", "timezone": "GMT+08:00", "channel": "MI_APP_STORE"} {
+	for name, value := range map[string]string{
+		"userId":                 userID,
+		"serviceToken":           token,
+		"yetAnotherServiceToken": token,
+		"locale":                 "zh_CN",
+		"timezone":               "GMT+08:00",
+		"is_daylight":            "0",
+		"dst_offset":             "0",
+		"channel":                "MI_APP_STORE",
+	} {
 		request.AddCookie(&http.Cookie{Name: name, Value: value})
 	}
 	response, err := c.http.Do(request)
@@ -710,43 +807,312 @@ func (c *httpMiotCloudClient) request(ctx context.Context, api string, payload, 
 	if err != nil {
 		return err
 	}
-	if response.StatusCode == http.StatusUnauthorized {
-		err = errCloudAuthExpired
+	trimmed := strings.TrimSpace(string(raw))
+	if response.StatusCode >= 200 && response.StatusCode < 300 && !strings.HasPrefix(trimmed, "{") && !strings.HasPrefix(trimmed, "[") {
+		decoded, decodeErr := base64.StdEncoding.DecodeString(trimmed)
+		if decodeErr == nil {
+			raw = rc4CryptDrop1024(signedNonce, decoded)
+		}
+	}
+
+	// Xiaomi may return an API envelope with HTTP 426 (or another non-2xx
+	// status) while still using code=0. Inspect the bounded body before
+	// handling the status so SERVICETOKEN_EXPIRED/auth errors take the same
+	// relogin path as a normal 2xx envelope. Only the envelope metadata is
+	// decoded here; arbitrary result data is never unmarshaled on an error
+	// status.
+	envelope, envelopeErr := decodeXiaomiCloudEnvelope(raw)
+	if envelopeErr == nil && xiaomiCloudEnvelopeAuthExpired(envelope) {
+		err = fmt.Errorf("%w: %s", errCloudAuthExpired, xiaomiHTTPStatusDiagnostic(api, response, raw, userID, security, token, passToken))
+	} else if response.StatusCode == http.StatusUnauthorized {
+		err = fmt.Errorf("%w: %s", errCloudAuthExpired, xiaomiHTTPStatusDiagnostic(api, response, raw, userID, security, token, passToken))
 	} else if response.StatusCode < 200 || response.StatusCode >= 300 {
-		err = fmt.Errorf("Xiaomi cloud API returned HTTP %d", response.StatusCode)
+		err = errors.New(xiaomiHTTPStatusDiagnostic(api, response, raw, userID, security, token, passToken))
+	} else if envelopeErr != nil {
+		err = fmt.Errorf("decode Xiaomi cloud API response: %w", envelopeErr)
 	} else {
-		trimmed := strings.TrimSpace(string(raw))
-		if !strings.HasPrefix(trimmed, "{") && !strings.HasPrefix(trimmed, "[") {
-			decoded, decodeErr := base64.StdEncoding.DecodeString(trimmed)
-			if decodeErr == nil {
-				raw = rc4CryptDrop1024(signedNonce, decoded)
-			}
-		}
-		var envelope struct {
-			Code    int             `json:"code"`
-			Message string          `json:"message"`
-			Result  json.RawMessage `json:"result"`
-		}
-		if decodeErr := json.Unmarshal(raw, &envelope); decodeErr != nil {
-			err = fmt.Errorf("decode Xiaomi cloud API response: %w", decodeErr)
-		} else if envelope.Code == 2 || envelope.Code == 3 || strings.Contains(strings.ToLower(envelope.Message), "auth err") || envelope.Message == "SERVICETOKEN_EXPIRED" {
-			err = errCloudAuthExpired
-		} else if envelope.Code != 0 {
-			err = fmt.Errorf("Xiaomi cloud API error %d: %s", envelope.Code, envelope.Message)
+		code, _ := xiaomiCloudEnvelopeCode(envelope.Code)
+		if code != 0 {
+			err = fmt.Errorf("Xiaomi cloud API error %d: %s", code, envelope.Message)
 		} else if output != nil && len(envelope.Result) > 0 && string(envelope.Result) != "null" {
 			err = json.Unmarshal(envelope.Result, output)
 		}
 	}
-	if errors.Is(err, errCloudAuthExpired) && retry && c.config.Username != "" && c.config.Password != "" {
+	if errors.Is(err, errCloudAuthExpired) && retry && xiaomiCloudPasswordLoginAvailable(c.config) {
 		c.mu.Lock()
-		c.userID, c.ssecurity, c.serviceToken = "", "", ""
+		c.userID, c.ssecurity, c.serviceToken, c.passToken = "", "", "", ""
 		c.mu.Unlock()
 		if loginErr := c.Login(ctx); loginErr != nil {
 			return loginErr
 		}
 		return c.request(ctx, api, payload, output, false)
 	}
+	if errors.Is(err, errCloudAuthExpired) && !xiaomiCloudPasswordLoginAvailable(c.config) {
+		return fmt.Errorf("%w: Xiaomi cloud credentials expired; reauthorization or password credential refresh is required", err)
+	}
 	return err
+}
+
+func xiaomiCloudPasswordLoginAvailable(config CloudConfig) bool {
+	password := strings.TrimSpace(config.Password)
+	return strings.TrimSpace(config.Username) != "" && password != "" && password != "********"
+}
+
+// xiaomiCloudEnvelope is deliberately limited to fields needed for response
+// classification. Xiaomi has returned both numeric and string error codes,
+// so Code remains raw JSON and is normalized by xiaomiCloudEnvelopeCode.
+type xiaomiCloudEnvelope struct {
+	Code    json.RawMessage `json:"code"`
+	Message string          `json:"message"`
+	Result  json.RawMessage `json:"result"`
+}
+
+func decodeXiaomiCloudEnvelope(raw []byte) (xiaomiCloudEnvelope, error) {
+	data := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(raw)), "&&&START&&&"))
+	if data == "" {
+		return xiaomiCloudEnvelope{}, errors.New("empty Xiaomi cloud API response")
+	}
+	var envelope xiaomiCloudEnvelope
+	decoder := json.NewDecoder(strings.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&envelope); err != nil {
+		return xiaomiCloudEnvelope{}, err
+	}
+	return envelope, nil
+}
+
+func xiaomiCloudEnvelopeCode(raw json.RawMessage) (int, bool) {
+	value := strings.TrimSpace(string(raw))
+	if value == "" || value == "null" {
+		return 0, false
+	}
+	if value[0] == '"' {
+		var text string
+		if err := json.Unmarshal(raw, &text); err != nil {
+			return 0, false
+		}
+		code, err := strconv.Atoi(strings.TrimSpace(text))
+		return code, err == nil
+	}
+	code, err := strconv.Atoi(value)
+	return code, err == nil
+}
+
+func xiaomiCloudEnvelopeAuthExpired(envelope xiaomiCloudEnvelope) bool {
+	code, codeOK := xiaomiCloudEnvelopeCode(envelope.Code)
+	if codeOK {
+		switch code {
+		case 2, 3, http.StatusUnauthorized:
+			return true
+		}
+	}
+	message := strings.ToLower(strings.TrimSpace(envelope.Message))
+	return message == "servicetoken_expired" || strings.Contains(message, "auth err") || strings.Contains(message, "service token expired")
+}
+
+const xiaomiHTTPBodySummaryLimit = 512
+
+// xiaomiHTTPStatusDiagnostic creates a bounded, redacted diagnostic for a
+// non-successful cloud response. It deliberately reports only response
+// metadata that is useful when diagnosing protocol negotiation failures;
+// request headers, cookies, and signed form parameters are never included.
+func xiaomiHTTPStatusDiagnostic(api string, response *http.Response, raw []byte, sensitive ...string) string {
+	path := xiaomiAPIRelativePath(api)
+	diagnostic := fmt.Sprintf("Xiaomi cloud API %s returned HTTP %d", path, response.StatusCode)
+
+	if metadata := xiaomiHTTPResponseMetadata(response.Header, sensitive); metadata != "" {
+		diagnostic += " (" + metadata + ")"
+	}
+	if body := xiaomiHTTPBodySummary(raw, sensitive...); body != "" {
+		diagnostic += "; body=" + fmt.Sprintf("%q", body)
+	}
+	return diagnostic
+}
+
+func xiaomiAPIRelativePath(api string) string {
+	parsed, err := url.Parse(api)
+	path := ""
+	if err == nil {
+		path = parsed.Path
+	}
+	if path == "" {
+		path = api
+		if index := strings.IndexAny(path, "?#"); index >= 0 {
+			path = path[:index]
+		}
+	}
+	path = strings.Trim(path, "/")
+	if path == "" {
+		return "<unknown>"
+	}
+	return path
+}
+
+func xiaomiHTTPResponseMetadata(headers http.Header, sensitive []string) string {
+	// Keep this allowlist intentionally small. In particular, do not include
+	// Location, Set-Cookie, or arbitrary response headers: they may carry
+	// account/session material or redirect URLs containing sensitive query
+	// parameters. The *_SRV header is emitted by Xiaomi gateways when they
+	// describe the protocol expected by the endpoint.
+	known := []string{
+		"Content-Type",
+		"Server",
+		"Upgrade",
+		"X-XIAOMI-PROTOCAL-FLAG-SRV",
+		"X-XIAOMI-PROTOCAL-FLAG-CLI",
+		"X-XIAOMI-PROTOCAL-FLAG",
+		"MIOT-ENCRYPT-ALGORITHM",
+	}
+	parts := make([]string, 0, len(known))
+	for _, name := range known {
+		value := strings.TrimSpace(headers.Get(name))
+		if value == "" {
+			continue
+		}
+		value = xiaomiHTTPTextSummary(value, sensitive, 160)
+		if value == "" {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s=%q", name, value))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func xiaomiHTTPBodySummary(raw []byte, sensitive ...string) string {
+	if len(raw) == 0 {
+		return ""
+	}
+
+	// Redact exact session values before parsing or truncating. This covers a
+	// gateway that reflects a credential under an unexpected field name, while
+	// the key-based pass below handles common JSON/form/text representations.
+	text := string(raw)
+	for _, value := range sensitive {
+		if value != "" {
+			text = strings.ReplaceAll(text, value, "[REDACTED]")
+		}
+	}
+	text = xiaomiRedactHTTPFields(text)
+	return xiaomiHTTPTextSummary(text, nil, xiaomiHTTPBodySummaryLimit)
+}
+
+func xiaomiRedactHTTPFields(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed != "" {
+		var value any
+		decoder := json.NewDecoder(strings.NewReader(trimmed))
+		decoder.UseNumber()
+		if err := decoder.Decode(&value); err == nil {
+			xiaomiRedactJSONValue(value)
+			if encoded, marshalErr := json.Marshal(value); marshalErr == nil {
+				text = string(encoded)
+			}
+		}
+	}
+
+	// JSON parsing is intentionally only an optimization. Error pages and
+	// form-encoded responses are common for HTTP 426, so apply a conservative
+	// field-value pass to all response formats as well.
+	for _, key := range []string{
+		"access[_-]?token",
+		"auth(?:orization)?",
+		"cookie",
+		"id[_-]?token",
+		"pass(?:word|wd|token)?",
+		"pwd",
+		"rc4[_-]?hash__?",
+		"refresh[_-]?token",
+		"secret",
+		"service[_-]?token",
+		"signature",
+		"sign",
+		"ssecurity",
+		"security",
+		"token",
+		"user[_-]?id",
+		"user(?:name)?",
+		"yet[_-]?another[_-]?service[_-]?token",
+		"_nonce",
+	} {
+		text = redactXiaomiHTTPField(text, key)
+	}
+	return text
+}
+
+func xiaomiRedactJSONValue(value any) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if isSensitiveXiaomiHTTPField(key) {
+				typed[key] = "[REDACTED]"
+				continue
+			}
+			xiaomiRedactJSONValue(child)
+		}
+	case []any:
+		for _, child := range typed {
+			xiaomiRedactJSONValue(child)
+		}
+	}
+}
+
+func isSensitiveXiaomiHTTPField(key string) bool {
+	normalized := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			return unicode.ToLower(r)
+		}
+		return -1
+	}, key)
+	switch normalized {
+	case "accesstoken", "authorization", "cookie", "idtoken", "password", "passwd", "pass", "passtoken", "pwd", "rc4hash", "refreshtoken", "secret", "servicetoken", "signature", "sign", "ssecurity", "security", "token", "userid", "user", "username", "yetanotherservicetoken", "nonce":
+		return true
+	default:
+		return false
+	}
+}
+
+func redactXiaomiHTTPField(text, keyPattern string) string {
+	// First match quoted values (JSON and common log formats), then unquoted
+	// form/query values. The key is retained for context while its value is
+	// replaced; no request data is emitted by this helper.
+	quoted := regexp.MustCompile(`(?i)(["']?(?:` + keyPattern + `)["']?\s*[:=]\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')`)
+	text = quoted.ReplaceAllString(text, `${1}[REDACTED]`)
+	unquoted := regexp.MustCompile(`(?i)(["']?(?:` + keyPattern + `)["']?\s*[:=]\s*)([^&;,\s}\]]+)`)
+	return unquoted.ReplaceAllString(text, `${1}[REDACTED]`)
+}
+
+func xiaomiHTTPTextSummary(text string, sensitive []string, limit int) string {
+	for _, value := range sensitive {
+		if value != "" {
+			text = strings.ReplaceAll(text, value, "[REDACTED]")
+		}
+	}
+	text = strings.ToValidUTF8(text, "�")
+	var builder strings.Builder
+	for _, r := range text {
+		if unicode.IsControl(r) || unicode.IsSpace(r) {
+			builder.WriteByte(' ')
+			continue
+		}
+		builder.WriteRune(r)
+	}
+	text = strings.Join(strings.Fields(builder.String()), " ")
+	return truncateXiaomiHTTPText(text, limit)
+}
+
+func truncateXiaomiHTTPText(text string, limit int) string {
+	if limit <= 0 || len(text) <= limit {
+		return text
+	}
+	const suffix = "..."
+	if limit <= len(suffix) {
+		return text[:limit]
+	}
+	prefix := text[:limit-len(suffix)]
+	for len(prefix) > 0 && !utf8.ValidString(prefix) {
+		prefix = prefix[:len(prefix)-1]
+	}
+	return prefix + suffix
 }
 
 func cloudRC4Parameters(method, endpoint string, input map[string]string, security string) (url.Values, []byte, error) {

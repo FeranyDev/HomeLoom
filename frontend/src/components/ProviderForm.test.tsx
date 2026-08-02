@@ -11,9 +11,16 @@ const xiaomiAPI = vi.hoisted(() => ({
 	discoverXiaomiGateways: vi.fn(),
 	startXiaomiCloudLogin: vi.fn(),
 	verifyXiaomiCloudLogin: vi.fn(),
+	getXiaomiProviderAuthChallenge: vi.fn(),
+	verifyXiaomiProviderAuthChallenge: vi.fn(),
+}))
+
+const providerAPI = vi.hoisted(() => ({
+	scanProviderNetwork: vi.fn(),
 }))
 
 vi.mock('../api/xiaomi', () => xiaomiAPI)
+vi.mock('../api/providers', () => providerAPI)
 
 describe('ProviderForm', () => {
 	beforeEach(() => {
@@ -23,6 +30,9 @@ describe('ProviderForm', () => {
 		xiaomiAPI.discoverXiaomiGateways.mockResolvedValue([])
 		xiaomiAPI.startXiaomiCloudLogin.mockResolvedValue({ status: 'verified', userId: '42', ssecurity: 'security', serviceToken: 'service-token', passToken: 'camera-pass-token' })
 		xiaomiAPI.verifyXiaomiCloudLogin.mockResolvedValue({ status: 'verified', userId: '42', ssecurity: 'security', serviceToken: 'service-token', passToken: 'camera-pass-token' })
+		xiaomiAPI.getXiaomiProviderAuthChallenge.mockResolvedValue(null)
+		xiaomiAPI.verifyXiaomiProviderAuthChallenge.mockResolvedValue({})
+		providerAPI.scanProviderNetwork.mockResolvedValue([])
 	})
 
 	afterEach(() => vi.restoreAllMocks())
@@ -79,6 +89,67 @@ describe('ProviderForm', () => {
 			config: expect.objectContaining({ cameras: [] }),
 		}), false)
   })
+
+	it('creates an empty Gree Provider and defers device setup to its manager', async () => {
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		render(<ProviderForm provider={null} onCancel={() => {}} onSave={onSave} />)
+		await userEvent.selectOptions(screen.getByLabelText('类型'), 'gree')
+		expect(screen.getByRole('option', { name: 'Gree 局域网空调' })).toBeInTheDocument()
+		expect(screen.queryByLabelText('Gree 设备地址（host）')).not.toBeInTheDocument()
+		expect(screen.getByText('保存后管理格力设备')).toBeInTheDocument()
+		await userEvent.clear(screen.getByLabelText('Gree 轮询间隔'))
+		await userEvent.type(screen.getByLabelText('Gree 轮询间隔'), '45')
+		await userEvent.clear(screen.getByLabelText('Gree 请求超时'))
+		await userEvent.type(screen.getByLabelText('Gree 请求超时'), '8')
+		await userEvent.click(screen.getByRole('button', { name: '保存并应用' }))
+
+		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+			type: 'gree',
+			config: { devices: [], pollIntervalSeconds: 45, requestTimeoutSeconds: 8 },
+		}), false))
+	})
+
+	it('keeps the Gree device JSON as a backward-compatible advanced import', async () => {
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		render(<ProviderForm provider={null} initialType="gree" onCancel={() => {}} onSave={onSave} />)
+		const editor = screen.getByLabelText('Gree 设备配置 JSON')
+		fireEvent.change(editor, { target: { value: JSON.stringify({ devices: [{ host: '192.168.1.42', port: 7000, mac: 'AA:BB:CC:DD:EE:FF', name: '客厅格力空调' }], pollIntervalSeconds: 60, requestTimeoutSeconds: 5 }, null, 2) } })
+		await userEvent.click(screen.getByRole('button', { name: '保存并应用' }))
+
+		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+			type: 'gree',
+			config: { devices: [{ host: '192.168.1.42', port: 7000, mac: 'AA:BB:CC:DD:EE:FF', name: '客厅格力空调' }], pollIntervalSeconds: 60, requestTimeoutSeconds: 5 },
+		}), false))
+	})
+
+	it('accepts v2 encryptionVersion from the advanced Gree JSON and normalizes it', async () => {
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		render(<ProviderForm provider={null} initialType="gree" onCancel={() => {}} onSave={onSave} />)
+		const editor = screen.getByLabelText('Gree 设备配置 JSON')
+		fireEvent.change(editor, { target: { value: JSON.stringify({ devices: [{ host: '192.168.1.42', port: 7000, mac: 'AA:BB:CC:DD:EE:FF', name: '客厅格力空调', encryptionVersion: '2' }], pollIntervalSeconds: 60, requestTimeoutSeconds: 5 }, null, 2) } })
+
+		await userEvent.click(screen.getByRole('button', { name: '保存并应用' }))
+		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+			type: 'gree',
+			config: { devices: [{ host: '192.168.1.42', port: 7000, mac: 'AA:BB:CC:DD:EE:FF', name: '客厅格力空调', encryptionVersion: 2 }], pollIntervalSeconds: 60, requestTimeoutSeconds: 5 },
+		}), false))
+	})
+
+	it('blocks unsupported encryptionVersion from the advanced Gree JSON before saving or testing', async () => {
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		const onTest = vi.fn().mockResolvedValue(undefined)
+		render(<ProviderForm provider={null} initialType="gree" onCancel={() => {}} onSave={onSave} onTest={onTest} />)
+		const editor = screen.getByLabelText('Gree 设备配置 JSON')
+		fireEvent.change(editor, { target: { value: JSON.stringify({ devices: [{ host: '192.168.1.42', port: 7000, mac: 'AA:BB:CC:DD:EE:FF', name: '客厅格力空调', encryptionVersion: 3 }], pollIntervalSeconds: 60, requestTimeoutSeconds: 5 }, null, 2) } })
+
+		await userEvent.click(screen.getByRole('button', { name: '保存并应用' }))
+		expect(await screen.findAllByText(/Gree devices\[0\]\.encryptionVersion 配置无效/)).not.toHaveLength(0)
+		expect(editor).toHaveAttribute('aria-invalid', 'true')
+		expect(onSave).not.toHaveBeenCalled()
+
+		expect(screen.queryByRole('button', { name: '测试 Gree 局域网连接' })).not.toBeInTheDocument()
+		expect(onTest).not.toHaveBeenCalled()
+	})
 
 	it('creates a Virtual Provider with an explicit empty child-device catalog', async () => {
 		const onSave = vi.fn().mockResolvedValue(undefined)
@@ -172,6 +243,48 @@ describe('ProviderForm', () => {
 		expect(screen.getByText(/云会话已就绪/)).toBeInTheDocument()
 		await userEvent.click(screen.getByRole('button', { name: '保存并应用' }))
 			expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ userId: '42', serviceToken: 'service-token', passToken: 'camera-pass-token' }) }), false)
+		})
+
+		it('continues a Provider startup challenge through the Provider auth endpoint', async () => {
+			const challenged: Provider = {
+				id: 'xiaomi-cloud-main', type: 'xiaomi-miot-cloud', name: '小米云', enabled: true, status: 'auth_required', retryCount: 1,
+				capabilities: { discovery: true, propertyRead: true, propertyWrite: true, events: false },
+				config: { region: 'cn', username: 'owner@example.com', password: '********', devices: [] },
+				authChallenge: { status: 'auth_required', challengeId: 'provider-challenge', verificationUrl: 'https://account.xiaomi.com/verify', expiresAt: '2030-01-01T00:00:00Z' },
+			}
+			xiaomiAPI.verifyXiaomiProviderAuthChallenge.mockResolvedValueOnce({ ...challenged, status: 'running', authChallenge: null, config: { ...challenged.config, serviceToken: '********' } })
+			render(<ProviderForm provider={challenged} onCancel={() => {}} onSave={vi.fn()} />)
+			expect(screen.getByRole('link', { name: '打开小米身份验证页面' })).toHaveAttribute('href', 'https://account.xiaomi.com/verify')
+			await userEvent.type(screen.getByLabelText('小米 MIoT 云验证码'), '123456')
+			await userEvent.click(screen.getByRole('button', { name: '提交验证码并继续 Provider' }))
+			await waitFor(() => expect(xiaomiAPI.verifyXiaomiProviderAuthChallenge).toHaveBeenCalledWith('xiaomi-cloud-main', { challengeId: 'provider-challenge', code: '123456' }))
+			expect(await screen.findByText(/小米短信验证成功，Provider 会话已更新/)).toBeInTheDocument()
+		})
+
+		it('shows an expired challenge state without allowing a stale code submission', async () => {
+			xiaomiAPI.startXiaomiCloudLogin.mockResolvedValue({ status: 'verification_required', challengeId: 'expired-challenge', verificationUrl: 'https://account.xiaomi.com/fe/service/identity/authStart', expiresAt: '2020-01-01T00:00:00Z' })
+			render(<ProviderForm provider={null} initialType="xiaomi-miot-cloud" onCancel={() => {}} onSave={vi.fn()} />)
+			await userEvent.type(screen.getByLabelText('小米 MIoT 云账号'), 'owner@example.com')
+			await userEvent.type(screen.getByLabelText('小米 MIoT 云密码'), 'account-password')
+			await userEvent.click(screen.getByRole('button', { name: '登录小米云账号' }))
+			expect(await screen.findByRole('alert')).toHaveTextContent('验证会话已过期')
+			expect(screen.queryByLabelText('小米 MIoT 云验证码')).not.toBeInTheDocument()
+			expect(xiaomiAPI.verifyXiaomiCloudLogin).not.toHaveBeenCalled()
+		})
+
+		it('clears a failed verification code and asks to restart an invalid challenge', async () => {
+			xiaomiAPI.startXiaomiCloudLogin.mockResolvedValue({ status: 'verification_required', challengeId: 'challenge-invalid', verificationUrl: 'https://account.xiaomi.com/fe/service/identity/authStart', expiresAt: '2030-01-01T00:00:00Z' })
+			xiaomiAPI.verifyXiaomiCloudLogin.mockRejectedValueOnce(new Error('Xiaomi identity verification challenge expired; start login again'))
+			render(<ProviderForm provider={null} initialType="xiaomi-miot-cloud" onCancel={() => {}} onSave={vi.fn()} />)
+			await userEvent.type(screen.getByLabelText('小米 MIoT 云账号'), 'owner@example.com')
+			await userEvent.type(screen.getByLabelText('小米 MIoT 云密码'), 'account-password')
+			await userEvent.click(screen.getByRole('button', { name: '登录小米云账号' }))
+			const code = await screen.findByLabelText('小米 MIoT 云验证码')
+			await userEvent.type(code, '123456')
+			await userEvent.click(screen.getByRole('button', { name: '提交验证码并继续登录' }))
+			expect(await screen.findByRole('alert')).toHaveTextContent('验证会话已过期或已失效')
+			expect(screen.queryByLabelText('小米 MIoT 云验证码')).not.toBeInTheDocument()
+			expect(screen.getByRole('button', { name: '登录小米云账号' })).toBeInTheDocument()
 		})
 
 		it('requires a password-login passToken only when Xiaomi MISS cameras are configured', async () => {

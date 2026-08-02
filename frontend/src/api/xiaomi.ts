@@ -1,4 +1,5 @@
-import { requestData } from './client'
+import { ApiError, requestData } from './client'
+import type { Provider, ProviderAuthChallenge } from '../types/provider'
 
 export interface XiaomiOAuthStartInput {
 	clientId: string
@@ -52,8 +53,8 @@ export interface XiaomiHubDevice {
 	online?: boolean
 }
 
-export interface XiaomiCloudLoginResult {
-	status: 'verified' | 'verification_required'
+export interface XiaomiCloudLoginResult extends Partial<ProviderAuthChallenge> {
+	status: string
 	challengeId?: string
 	verificationUrl?: string
 	expiresAt?: string
@@ -77,6 +78,41 @@ export async function startXiaomiCloudLogin(input: { region: string; username: s
 
 export async function verifyXiaomiCloudLogin(input: { challengeId: string; code: string }): Promise<XiaomiCloudLoginResult> {
 	return requestData<XiaomiCloudLoginResult>('/api/v1/xiaomi-miot-cloud/login/verify', { method: 'POST', body: JSON.stringify(input) })
+}
+
+/**
+ * Reads the challenge retained by an already configured Provider. Runtime
+ * startup can encounter identity verification independently of the explicit
+ * account-login form, so this endpoint is intentionally separate from
+ * `/login/start` and does not require sending the account password again.
+ */
+export async function getXiaomiProviderAuthChallenge(providerId: string): Promise<XiaomiCloudLoginResult | null> {
+	const encoded = encodeURIComponent(providerId)
+	const xiaomiPath = `/api/v1/xiaomi-miot-cloud/providers/${encoded}/auth-challenge`
+	try {
+		return await requestData<XiaomiCloudLoginResult | null>(xiaomiPath)
+	} catch (cause) {
+		if (!(cause instanceof ApiError) || (cause.status !== 404 && cause.status !== 405)) throw cause
+		return requestData<XiaomiCloudLoginResult | null>(`/api/v1/providers/${encoded}/auth-challenge`)
+	}
+}
+
+/**
+ * Completes a runtime Provider challenge. The backend persists the resulting
+ * session and returns the refreshed Provider snapshot (secrets remain
+ * redacted by the normal Provider API contract).
+ */
+export async function verifyXiaomiProviderAuthChallenge(providerId: string, input: { challengeId: string; code: string }): Promise<Provider> {
+	const base = `/api/v1/xiaomi-miot-cloud/providers/${encodeURIComponent(providerId)}/auth-challenge`
+	try {
+		return await requestData<Provider>(`${base}/verify`, { method: 'POST', body: JSON.stringify(input) })
+	} catch (cause) {
+		// Older backend builds mounted POST on the challenge resource itself;
+		// retain a narrow fallback while deployments roll forward to the
+		// explicit `/verify` action route.
+		if (!(cause instanceof ApiError) || (cause.status !== 404 && cause.status !== 405)) throw cause
+		return requestData<Provider>(base, { method: 'POST', body: JSON.stringify(input) })
+	}
 }
 
 export async function discoverXiaomiGateways(): Promise<XiaomiGateway[]> {

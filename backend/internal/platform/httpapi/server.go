@@ -1004,6 +1004,50 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		}
 		return c.JSON(http.StatusOK, map[string]any{"data": devices.ProviderInfos()})
 	})
+	getProviderAuthChallenge := func(c echo.Context) error {
+		if providers == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "provider management is unavailable")
+		}
+		challenge, ok := providers.GetAuthChallenge(c.Param("id"))
+		if !ok {
+			return echo.NewHTTPError(http.StatusConflict, "Xiaomi provider authentication challenge is missing or expired; start login again")
+		}
+		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+		return c.JSON(http.StatusOK, map[string]any{"data": challenge})
+	}
+	postProviderAuthChallenge := func(c echo.Context) error {
+		if providers == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "provider management is unavailable")
+		}
+		var request struct {
+			ChallengeID string `json:"challengeId"`
+			Code        string `json:"code"`
+		}
+		if err := c.Bind(&request); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid Xiaomi provider verification request")
+		}
+		ctx, cancel := context.WithTimeout(c.Request().Context(), 90*time.Second)
+		defer cancel()
+		info, err := providers.VerifyAuthChallenge(ctx, c.Param("id"), request.ChallengeID, request.Code)
+		if err != nil {
+			message := err.Error()
+			status := http.StatusBadRequest
+			if strings.Contains(strings.ToLower(message), "missing or expired") || strings.Contains(strings.ToLower(message), "too many") {
+				status = http.StatusConflict
+			}
+			return echo.NewHTTPError(status, message)
+		}
+		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+		return c.JSON(http.StatusOK, map[string]any{"data": info})
+	}
+	e.GET("/api/v1/providers/:id/auth-challenge", getProviderAuthChallenge)
+	e.POST("/api/v1/providers/:id/auth-challenge", postProviderAuthChallenge)
+	e.POST("/api/v1/providers/:id/auth-challenge/verify", postProviderAuthChallenge)
+	// Keep the Xiaomi-scoped aliases for clients that group Provider actions
+	// under the third-party cloud API namespace.
+	e.GET("/api/v1/xiaomi-miot-cloud/providers/:id/auth-challenge", getProviderAuthChallenge)
+	e.POST("/api/v1/xiaomi-miot-cloud/providers/:id/auth-challenge", postProviderAuthChallenge)
+	e.POST("/api/v1/xiaomi-miot-cloud/providers/:id/auth-challenge/verify", postProviderAuthChallenge)
 	e.GET("/api/v1/events", func(c echo.Context) error {
 		response := c.Response()
 		response.Header().Set(echo.HeaderContentType, "text/event-stream")
@@ -1132,6 +1176,24 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
 		return c.JSON(http.StatusOK, map[string]any{"data": map[string]bool{"reachable": true}})
+	})
+	e.POST("/api/v1/providers/scan", func(c echo.Context) error {
+		if providers == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "provider management is unavailable")
+		}
+		var request providerconfig.Config
+		if err := c.Bind(&request); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid provider configuration")
+		}
+		items, err := providers.Scan(c.Request().Context(), request)
+		if err != nil {
+			var validationError *application.ValidationError
+			if errors.As(err, &validationError) {
+				return validationError
+			}
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": items})
 	})
 	e.POST("/api/v1/xiaomi/oauth/start", func(c echo.Context) error {
 		var request xiaomi.OAuthStartRequest

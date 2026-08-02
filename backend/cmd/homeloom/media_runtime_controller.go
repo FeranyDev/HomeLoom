@@ -9,9 +9,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	domainmedia "github.com/feranydev/homeloom/backend/internal/domain/media"
 	mediaruntime "github.com/feranydev/homeloom/backend/internal/mediaruntime"
+	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	"go.uber.org/zap"
 )
 
@@ -24,6 +26,9 @@ type embeddedMediaRuntime struct {
 	store   mediaReplayStore
 	logger  *zap.Logger
 	auth    directMediaAuthorizer
+
+	mu       sync.Mutex
+	deferred bool
 }
 
 type embeddedMediaConfig struct {
@@ -93,19 +98,39 @@ func newEmbeddedMediaRuntime(ctx context.Context, store mediaReplayStore, auth d
 	}
 	result := &embeddedMediaRuntime{runtime: runtime, store: store, logger: logger, auth: auth}
 	if err := result.Replay(ctx); err != nil {
-		_ = runtime.Close()
-		return nil, fmt.Errorf("initial media replay: %w", err)
+		if !isRecoverableInitialMediaReplayError(err) {
+			_ = runtime.Close()
+			return nil, fmt.Errorf("initial media replay: %w", err)
+		}
+		// Replay normally marks this while applying the worker snapshot. Keep
+		// the flag explicit here as well so a recoverable provider error raised
+		// while reading the persisted snapshot cannot let the next mutation hit
+		// an uninitialized generation.
+		result.mu.Lock()
+		result.deferred = true
+		result.mu.Unlock()
+		logger.Warn("initial media replay deferred; provider is unavailable", zap.Error(err))
+	} else {
+		logger.Info("embedded media runtime enabled")
 	}
-	logger.Info("embedded media runtime enabled")
 	return result, nil
+}
+
+func isRecoverableInitialMediaReplayError(err error) bool {
+	return errors.Is(err, providersdk.ErrProviderUnavailable)
 }
 
 func (r *embeddedMediaRuntime) Replay(ctx context.Context) error {
 	if r == nil || r.runtime == nil {
 		return errors.New("embedded media runtime is unavailable")
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	value, err := (mediaReplayProvider{store: r.store}).MediaReplay(ctx)
 	if err != nil {
+		if isRecoverableInitialMediaReplayError(err) {
+			r.deferred = true
+		}
 		return err
 	}
 	replay := value.(domainmedia.StreamReplay)
@@ -113,15 +138,36 @@ func (r *embeddedMediaRuntime) Replay(ctx context.Context) error {
 	for index := range replay.Streams {
 		streams[index] = embeddedStreamSpec(replay.Streams[index])
 	}
-	return r.runtime.Replay(mediaruntime.Replay{
+	err = r.runtime.Replay(mediaruntime.Replay{
 		SchemaVersion: replay.SchemaVersion, Generation: replay.Generation,
 		Revision: replay.Revision, Streams: streams,
 	})
+	if err == nil {
+		r.deferred = false
+	} else if isRecoverableInitialMediaReplayError(err) {
+		r.deferred = true
+	}
+	return err
 }
 
 func (r *embeddedMediaRuntime) PublishMediaStreamMutation(_ context.Context, mutation domainmedia.StreamMutation) error {
 	if r == nil || r.runtime == nil {
 		return errors.New("embedded media runtime is unavailable")
+	}
+	// A deferred runtime must still reject malformed mutations. The durable
+	// MediaService validates these before publishing in normal operation, but
+	// keeping the boundary strict prevents deferred mode from hiding contract
+	// errors for direct callers.
+	if err := mutation.Validate(); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.deferred {
+		// The mutation has already been persisted. Provider recovery triggers a
+		// fresh replay, which includes this desired state without fabricating a
+		// stream generation in the worker.
+		return nil
 	}
 	return r.runtime.Apply(mediaruntime.Mutation{
 		SchemaVersion: mutation.SchemaVersion, Generation: mutation.Generation,
@@ -131,13 +177,20 @@ func (r *embeddedMediaRuntime) PublishMediaStreamMutation(_ context.Context, mut
 }
 
 func (r *embeddedMediaRuntime) MediaRuntimeReady() bool {
-	return r != nil && r.runtime != nil && r.runtime.Ready()
+	if r == nil || r.runtime == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return !r.deferred && r.runtime.Ready()
 }
 
 func (r *embeddedMediaRuntime) Close() error {
 	if r == nil || r.runtime == nil {
 		return nil
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return r.runtime.Close()
 }
 

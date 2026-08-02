@@ -436,6 +436,40 @@ paths:
       responses:
         "200": { description: Connection and subscription succeeded, content: { application/json: { schema: { type: object, required: [data], properties: { data: { type: object, required: [reachable], properties: { reachable: { type: boolean, const: true } } } } } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
+  /api/v1/providers/scan:
+    post:
+      operationId: scanProviderNetwork
+      description: Invokes an optional transient Provider network scanner with the unsaved configuration. The request is neither persisted nor applied to the runtime catalog; this is distinct from DiscoverDevices.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ProviderInput" } } } }
+      responses:
+        "200": { description: Transient network discovery candidates, content: { application/json: { schema: { type: object, required: [data], properties: { data: { type: array, items: { $ref: "#/components/schemas/ProviderDiscoveryCandidate" } } } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+  /api/v1/providers/{providerId}/auth-challenge:
+    parameters: [{ name: providerId, in: path, required: true, schema: { type: string } }]
+    get:
+      operationId: getProviderAuthChallenge
+      description: Returns the short-lived Xiaomi SMS/email challenge retained during Provider startup. Passwords and verification codes are never returned.
+      responses:
+        "200": { description: Pending identity challenge, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/ProviderAuthChallenge" } } } } } }
+        "409": { description: Challenge missing or expired, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    post:
+      operationId: verifyProviderAuthChallengeLegacy
+      description: Compatibility action for completing a retained Provider identity challenge.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ProviderAuthChallengeVerification" } } } }
+      responses:
+        "200": { description: Provider with refreshed runtime session, content: { application/json: { schema: { $ref: "#/components/schemas/ObjectResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { description: Challenge missing, expired, or exhausted, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /api/v1/providers/{providerId}/auth-challenge/verify:
+    parameters: [{ name: providerId, in: path, required: true, schema: { type: string } }]
+    post:
+      operationId: verifyProviderAuthChallenge
+      description: Completes the retained Xiaomi identity challenge and reapplies the Provider with the returned session credentials.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ProviderAuthChallengeVerification" } } } }
+      responses:
+        "200": { description: Provider with refreshed runtime session, content: { application/json: { schema: { $ref: "#/components/schemas/ObjectResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { description: Challenge missing, expired, or exhausted, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /api/v1/xiaomi/oauth/start:
     post:
       operationId: startXiaomiOAuth
@@ -1138,6 +1172,31 @@ components:
         name: { type: string }
         enabled: { type: boolean }
         config: { type: object, additionalProperties: true, description: Sensitive values are returned as ********; submit the placeholder unchanged to preserve the stored value. }
+    ProviderDiscoveryCandidate:
+      type: object
+      required: [providerType, name, host, port, mac]
+      properties:
+        id: { type: string }
+        providerType: { type: string }
+        name: { type: string }
+        host: { type: string }
+        port: { type: integer, minimum: 1, maximum: 65535 }
+        mac: { type: string }
+        metadata: { type: object, additionalProperties: { type: string } }
+    ProviderAuthChallenge:
+      type: object
+      required: [status, challengeId, verificationUrl, expiresAt]
+      properties:
+        status: { type: string, enum: [auth_required] }
+        challengeId: { type: string }
+        verificationUrl: { type: string, format: uri }
+        expiresAt: { type: string, format: date-time }
+    ProviderAuthChallengeVerification:
+      type: object
+      required: [challengeId, code]
+      properties:
+        challengeId: { type: string }
+        code: { type: string, minLength: 1, maxLength: 32 }
     XiaomiOAuthStart:
       type: object
       required: [clientId, region]

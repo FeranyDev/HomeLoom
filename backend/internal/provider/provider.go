@@ -44,6 +44,14 @@ type Provider interface {
 	Close(context.Context) error
 }
 
+// ConnectionTester is an optional capability for Providers whose Initialize
+// method can succeed while retaining an offline, recoverable device catalog.
+// TestConnection must be safe before Initialize, perform a live check, and
+// return an error when the configured connection cannot reach any device.
+type ConnectionTester interface {
+	TestConnection(context.Context) error
+}
+
 // LiveReconfigurer lets a running provider adopt a compatible replacement
 // configuration without tearing down its network session. Providers with a
 // configurable child-device catalog must implement this contract so catalog
@@ -76,6 +84,27 @@ type CredentialMaintainer interface {
 
 type Discoverer interface {
 	DiscoverDevices(context.Context) ([]device.Device, error)
+}
+
+// DiscoveryCandidate is a transient device identity returned by a Provider
+// network scan. It is intentionally separate from device.Device: a scan is
+// used while editing a Provider and must not publish or mutate the configured
+// runtime device catalog.
+type DiscoveryCandidate struct {
+	ID       string            `json:"id,omitempty"`
+	Provider string            `json:"providerType"`
+	Name     string            `json:"name"`
+	Host     string            `json:"host"`
+	Port     int               `json:"port"`
+	MAC      string            `json:"mac"`
+	Metadata map[string]string `json:"metadata,omitempty"`
+}
+
+// DiscoveryScanner is an optional Provider capability for transient LAN or
+// protocol discovery. It must not be implemented by forwarding to
+// DiscoverDevices, which represents the already configured runtime catalog.
+type DiscoveryScanner interface {
+	Scan(context.Context) ([]DiscoveryCandidate, error)
 }
 
 // HiddenDeviceSource marks Provider-owned identities that exist only as

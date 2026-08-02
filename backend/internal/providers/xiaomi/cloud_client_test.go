@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -60,8 +61,24 @@ func TestHTTPMiotCloudClientEncryptsPropertyRequests(t *testing.T) {
 		if request.URL.Path != "/app/miotspec/prop/get" || request.Header.Get("MIOT-ENCRYPT-ALGORITHM") != "ENCRYPT-RC4" {
 			t.Errorf("request = %s %s %#v", request.Method, request.URL.Path, request.Header)
 		}
+		if got := request.Header.Get("X-XIAOMI-PROTOCAL-FLAG-CLI"); got != "PROTOCAL-HTTP2" {
+			t.Errorf("protocol flag = %q", got)
+		}
 		if cookie, err := request.Cookie("serviceToken"); err != nil || cookie.Value != "token" {
 			t.Errorf("service token cookie = %#v, %v", cookie, err)
+		}
+		for name, want := range map[string]string{
+			"yetAnotherServiceToken": "token",
+			"locale":                 "zh_CN",
+			"timezone":               "GMT+08:00",
+			"is_daylight":            "0",
+			"dst_offset":             "0",
+			"channel":                "MI_APP_STORE",
+		} {
+			cookie, err := request.Cookie(name)
+			if err != nil || cookie.Value != want {
+				t.Errorf("%s cookie = %#v, %v", name, cookie, err)
+			}
 		}
 		if err := request.ParseForm(); err != nil {
 			t.Error(err)
@@ -213,12 +230,223 @@ func TestHTTPMiotCloudClientKeepsDeviceListWhenHomeDirectoryFails(t *testing.T) 
 	}
 }
 
+func TestHTTPMiotCloudClientHTTP426ServiceTokenExpiredRetriesAfterPasswordLogin(t *testing.T) {
+	security := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef"))
+	apiCalls, serviceLoginCalls, serviceLoginAuthCalls, redirectCalls := 0, 0, 0, 0
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/app/miotspec/prop/get":
+			apiCalls++
+			if apiCalls == 1 {
+				response.WriteHeader(http.StatusUpgradeRequired)
+				_, _ = response.Write([]byte(`{"code":0,"message":"SERVICETOKEN_EXPIRED"}`))
+				return
+			}
+			_, _ = response.Write([]byte(`{"code":0,"result":[{"did":"device-1","siid":2,"piid":1,"value":true,"code":0}]}`))
+		case "/pass/serviceLogin":
+			serviceLoginCalls++
+			_, _ = response.Write([]byte(`&&&START&&&{"_sign":"sign","qs":"qs","callback":"callback"}`))
+		case "/pass/serviceLoginAuth2":
+			serviceLoginAuthCalls++
+			_, _ = response.Write([]byte(`&&&START&&&{"location":"` + server.URL + `/sts","userId":"42","ssecurity":"` + security + `"}`))
+		case "/sts":
+			redirectCalls++
+			http.SetCookie(response, &http.Cookie{Name: "serviceToken", Value: "fresh-service-token", Path: "/"})
+			_, _ = response.Write([]byte("ok"))
+		default:
+			response.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := newHTTPMiotCloudClient(CloudConfig{
+		Region: "cn", Username: "owner@example.com", Password: "password",
+		UserID: "stale-user", Ssecurity: security, ServiceToken: "stale-service-token", RequestTimeoutSec: 5,
+	})
+	client.accountBase, client.apiBase, client.http = server.URL, server.URL+"/app", server.Client()
+	result, err := client.GetProperties(context.Background(), []cloudProperty{{DID: "device-1", SIID: 2, PIID: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result) != 1 || result[0].Value != true {
+		t.Fatalf("result = %#v", result)
+	}
+	if apiCalls != 2 || serviceLoginCalls != 1 || serviceLoginAuthCalls != 1 || redirectCalls != 1 {
+		t.Fatalf("api calls=%d serviceLogin=%d auth2=%d redirect=%d", apiCalls, serviceLoginCalls, serviceLoginAuthCalls, redirectCalls)
+	}
+	if client.serviceToken != "fresh-service-token" || client.userID != "42" {
+		t.Fatalf("session after retry user=%q service token=%q", client.userID, client.serviceToken)
+	}
+}
+
+func TestHTTPMiotCloudClientHTTP426ServiceTokenExpiredWithoutPasswordRequestsReauthorization(t *testing.T) {
+	const serviceToken = "stale-service-token"
+	apiCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		apiCalls++
+		response.WriteHeader(http.StatusUpgradeRequired)
+		_, _ = response.Write([]byte(`{"code":0,"message":"SERVICETOKEN_EXPIRED"}`))
+	}))
+	defer server.Close()
+
+	client := newHTTPMiotCloudClient(CloudConfig{
+		Region: "cn", UserID: "session-user", Ssecurity: base64.StdEncoding.EncodeToString([]byte("0123456789abcdef")),
+		ServiceToken: serviceToken, RequestTimeoutSec: 5,
+	})
+	client.apiBase, client.http = server.URL+"/app", server.Client()
+	_, err := client.GetProperties(context.Background(), []cloudProperty{{DID: "device-1", SIID: 2, PIID: 1}})
+	if err == nil || !errors.Is(err, errCloudAuthExpired) {
+		t.Fatalf("error = %v, want errCloudAuthExpired", err)
+	}
+	message := strings.ToLower(err.Error())
+	if !strings.Contains(message, "reauthor") || !strings.Contains(message, "credential") {
+		t.Fatalf("error = %q, want reauthorization and credential guidance", err)
+	}
+	if strings.Contains(err.Error(), serviceToken) {
+		t.Fatalf("error leaked service token: %q", err)
+	}
+	if apiCalls != 1 {
+		t.Fatalf("api calls = %d, want one request without password retry", apiCalls)
+	}
+}
+
+func TestXiaomiCloudEnvelopeAuthExpiredCodes(t *testing.T) {
+	for _, body := range []string{
+		`{"code":2,"message":"request failed"}`,
+		`{"code":3,"message":"request failed"}`,
+		`{"code":401,"message":"request failed"}`,
+		`{"code":"401","message":"request failed"}`,
+		`{"code":0,"message":"SERVICETOKEN_EXPIRED"}`,
+	} {
+		envelope, err := decodeXiaomiCloudEnvelope([]byte(body))
+		if err != nil || !xiaomiCloudEnvelopeAuthExpired(envelope) {
+			t.Errorf("body %s: envelope=%#v err=%v", body, envelope, err)
+		}
+	}
+}
+
+func TestHTTPMiotCloudClientHTTP426DiagnosticRedactsTextResponse(t *testing.T) {
+	const (
+		userID       = "diagnostic-user-426"
+		security     = "ZGlhZ25vc3RpYy1zc2VjdXJpdHktNDI2"
+		serviceToken = "diagnostic-service-token-426"
+		passToken    = "diagnostic-pass-token-426"
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		response.Header().Set("Server", "xiaomi-gateway")
+		response.Header().Set("Upgrade", "h2c")
+		response.Header().Set("X-XIAOMI-PROTOCAL-FLAG-SRV", "PROTOCAL-HTTP2")
+		response.Header().Set("Location", "https://account.example.test/login?serviceToken="+serviceToken)
+		response.WriteHeader(http.StatusUpgradeRequired)
+		_, _ = response.Write([]byte("upgrade required\nserviceToken=" + serviceToken + " userId=" + userID + " ssecurity=" + security + " passToken=" + passToken + "\x00"))
+	}))
+	defer server.Close()
+
+	client := newHTTPMiotCloudClient(CloudConfig{
+		Region: "cn", UserID: userID, Ssecurity: security, ServiceToken: serviceToken,
+		PassToken: passToken, RequestTimeoutSec: 5,
+	})
+	client.apiBase, client.http = server.URL+"/app", server.Client()
+	err := client.request(context.Background(), "miotspec/prop/get", map[string]any{"params": []any{}}, nil, false)
+	if err == nil {
+		t.Fatal("expected HTTP 426 error")
+	}
+	got := err.Error()
+	for _, want := range []string{
+		"miotspec/prop/get", "HTTP 426", "Content-Type=", "text/plain", "Server=", "xiaomi-gateway",
+		"Upgrade=", "h2c", "X-XIAOMI-PROTOCAL-FLAG-SRV=", "PROTOCAL-HTTP2", "body=", "[REDACTED]",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("error %q does not contain %q", got, want)
+		}
+	}
+	for _, forbidden := range []string{serviceToken, userID, security, passToken, "Location", "account.example.test"} {
+		if strings.Contains(got, forbidden) {
+			t.Errorf("diagnostic leaks %q: %s", forbidden, got)
+		}
+	}
+	if strings.Contains(got, "\\n") || strings.Contains(got, "\\x00") {
+		t.Fatalf("diagnostic body is not single-line/clean: %q", got)
+	}
+}
+
+func TestHTTPMiotCloudClientHTTP426DiagnosticRedactsJSONResponse(t *testing.T) {
+	const (
+		userID       = "diagnostic-user-json"
+		security     = "ZGlhZ25vc3RpYy1zc2VjdXJpdHktanNvbg=="
+		serviceToken = "diagnostic-service-token-json"
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		response.WriteHeader(http.StatusUpgradeRequired)
+		_, _ = response.Write([]byte(`{"code":426,"message":"upgrade","userId":"` + userID + `","ssecurity":"` + security + `","serviceToken":"` + serviceToken + `","nested":{"token":"nested-secret"}}`))
+	}))
+	defer server.Close()
+
+	client := newHTTPMiotCloudClient(CloudConfig{Region: "cn", UserID: userID, Ssecurity: security, ServiceToken: serviceToken, RequestTimeoutSec: 5})
+	client.apiBase, client.http = server.URL+"/app", server.Client()
+	err := client.request(context.Background(), "home/device_list", map[string]any{"getVirtualModel": true}, nil, false)
+	if err == nil {
+		t.Fatal("expected HTTP 426 error")
+	}
+	got := err.Error()
+	for _, forbidden := range []string{userID, security, serviceToken, "nested-secret"} {
+		if strings.Contains(got, forbidden) {
+			t.Errorf("JSON diagnostic leaks %q: %s", forbidden, got)
+		}
+	}
+	if !strings.Contains(got, "home/device_list") || !strings.Contains(got, "application/json") || !strings.Contains(got, "[REDACTED]") {
+		t.Fatalf("JSON diagnostic missing path/content/redaction: %s", got)
+	}
+}
+
+func TestXiaomiHTTPBodySummaryTruncatesAndCleansText(t *testing.T) {
+	summary := xiaomiHTTPBodySummary([]byte(strings.Repeat("x", xiaomiHTTPBodySummaryLimit+100) + "\n\x00tail"))
+	if len(summary) > xiaomiHTTPBodySummaryLimit {
+		t.Fatalf("summary length = %d, want <= %d", len(summary), xiaomiHTTPBodySummaryLimit)
+	}
+	if !strings.HasSuffix(summary, "...") || strings.ContainsAny(summary, "\r\n\x00") {
+		t.Fatalf("summary = %q, want truncation marker and clean single line", summary)
+	}
+}
+
+func TestHTTPMiotCloudClientHTTP426DiagnosticWithoutBodyOrHeadersIsConcise(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.WriteHeader(http.StatusUpgradeRequired)
+	}))
+	defer server.Close()
+
+	client := newHTTPMiotCloudClient(CloudConfig{
+		Region: "cn", UserID: "user", Ssecurity: "security", ServiceToken: "token", RequestTimeoutSec: 5,
+	})
+	client.apiBase, client.http = server.URL+"/app", server.Client()
+	err := client.request(context.Background(), "miotspec/prop/get", map[string]any{}, nil, false)
+	if err == nil {
+		t.Fatal("expected HTTP 426 error")
+	}
+	got := err.Error()
+	if got != "Xiaomi cloud API miotspec/prop/get returned HTTP 426" {
+		t.Fatalf("diagnostic = %q", got)
+	}
+}
+
 func TestHTTPMiotCloudLoginFindsAppPathCookiesSetDuringRedirect(t *testing.T) {
 	security := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef"))
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/pass/serviceLogin":
+			if request.Header.Get("User-Agent") != cloudUserAgent {
+				t.Errorf("login user-agent = %q", request.Header.Get("User-Agent"))
+			}
+			for name, want := range map[string]string{"sdkVersion": "3.8.6", "deviceId": "homeloom"} {
+				cookie, err := request.Cookie(name)
+				if err != nil || cookie.Value != want {
+					t.Errorf("%s cookie = %#v, %v", name, cookie, err)
+				}
+			}
 			_, _ = response.Write([]byte(`&&&START&&&{"_sign":"sign","qs":"qs","callback":"callback"}`))
 		case "/pass/serviceLoginAuth2":
 			if err := request.ParseForm(); err != nil {

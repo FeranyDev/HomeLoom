@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,7 +13,9 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
+	"github.com/feranydev/homeloom/backend/internal/providers/gree"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
+	"github.com/feranydev/homeloom/backend/internal/providers/xiaomi"
 	"github.com/feranydev/homeloom/backend/internal/runtime/providermanager"
 )
 
@@ -32,12 +35,129 @@ type diagnosticRuntime struct{}
 
 type configOnlyProvider struct{ id string }
 
+type connectionTestProvider struct {
+	id          string
+	initialized *atomic.Int32
+	tested      *atomic.Int32
+	closed      *atomic.Int32
+	testError   error
+}
+
+type networkScanProvider struct {
+	id     string
+	scans  *atomic.Int32
+	closed *atomic.Int32
+}
+
+type authProviderState struct {
+	mu       sync.Mutex
+	verified bool
+	apply    int
+	close    int
+	url      string
+}
+
+type authProvider struct {
+	id    string
+	state *authProviderState
+}
+
+type authProviderRuntime struct {
+	state *authProviderState
+}
+
+func (p *authProvider) Manifest() providersdk.Manifest {
+	return providersdk.Manifest{ID: p.id, Type: xiaomi.XiaomiMIoTCloudProviderType, Name: "Cloud"}
+}
+func (*authProvider) Capabilities() providersdk.Capabilities { return providersdk.Capabilities{} }
+func (p *authProvider) Initialize(context.Context) error {
+	p.state.mu.Lock()
+	defer p.state.mu.Unlock()
+	if !p.state.verified {
+		return &xiaomi.IdentityVerificationRequiredError{URL: p.state.url}
+	}
+	return nil
+}
+func (p *authProvider) Close(context.Context) error {
+	p.state.mu.Lock()
+	p.state.close++
+	p.state.mu.Unlock()
+	return nil
+}
+func (p *authProvider) IdentityVerificationURL() (string, bool) {
+	p.state.mu.Lock()
+	url := p.state.url
+	verified := p.state.verified
+	p.state.mu.Unlock()
+	return url, !verified && url != ""
+}
+func (p *authProvider) CompleteIdentityVerification(_ context.Context, code string) (json.RawMessage, error) {
+	if code == "bad-code" {
+		return nil, errors.New("Xiaomi identity verification code was rejected")
+	}
+	p.state.mu.Lock()
+	p.state.verified = true
+	p.state.mu.Unlock()
+	return json.RawMessage(`{"region":"cn","userId":"42","ssecurity":"security","serviceToken":"service-token","devices":[]}`), nil
+}
+func (r *authProviderRuntime) Apply(ctx context.Context, item providersdk.Provider) error {
+	r.state.mu.Lock()
+	r.state.apply++
+	r.state.mu.Unlock()
+	return item.Initialize(ctx)
+}
+func (*authProviderRuntime) Remove(context.Context, string) error { return nil }
+func (r *authProviderRuntime) ProviderInfos() []providersdk.RuntimeInfo {
+	r.state.mu.Lock()
+	verified := r.state.verified
+	r.state.mu.Unlock()
+	if verified {
+		return []providersdk.RuntimeInfo{{Manifest: providersdk.Manifest{ID: "cloud-main", Type: xiaomi.XiaomiMIoTCloudProviderType}, Status: "running"}}
+	}
+	return []providersdk.RuntimeInfo{{Manifest: providersdk.Manifest{ID: "cloud-main", Type: xiaomi.XiaomiMIoTCloudProviderType}, Status: "auth_required"}}
+}
+
 func (p *configOnlyProvider) Manifest() providersdk.Manifest {
 	return providersdk.Manifest{ID: p.id, Type: "catalog", Name: p.id}
 }
 func (*configOnlyProvider) Capabilities() providersdk.Capabilities { return providersdk.Capabilities{} }
 func (*configOnlyProvider) Initialize(context.Context) error       { return nil }
 func (*configOnlyProvider) Close(context.Context) error            { return nil }
+
+func (p *connectionTestProvider) Manifest() providersdk.Manifest {
+	return providersdk.Manifest{ID: p.id, Type: "checked", Name: p.id}
+}
+func (*connectionTestProvider) Capabilities() providersdk.Capabilities {
+	return providersdk.Capabilities{}
+}
+func (p *connectionTestProvider) Initialize(context.Context) error {
+	p.initialized.Add(1)
+	return nil
+}
+func (p *connectionTestProvider) Close(context.Context) error {
+	p.closed.Add(1)
+	return nil
+}
+func (p *connectionTestProvider) TestConnection(context.Context) error {
+	p.tested.Add(1)
+	return p.testError
+}
+
+func (p *networkScanProvider) Manifest() providersdk.Manifest {
+	return providersdk.Manifest{ID: p.id, Type: "scan", Name: p.id}
+}
+func (*networkScanProvider) Capabilities() providersdk.Capabilities {
+	return providersdk.Capabilities{}
+}
+func (*networkScanProvider) Initialize(context.Context) error { return nil }
+func (p *networkScanProvider) Close(context.Context) error {
+	p.closed.Add(1)
+	return nil
+}
+func (p *networkScanProvider) Scan(context.Context) ([]providersdk.DiscoveryCandidate, error) {
+	p.scans.Add(1)
+	return []providersdk.DiscoveryCandidate{{Provider: "scan", Name: "LAN device", Host: "192.0.2.20", Port: 7000, MAC: "aabbccddeeff"}}, nil
+}
 
 func (*diagnosticRuntime) Apply(context.Context, providersdk.Provider) error { return nil }
 func (*diagnosticRuntime) Remove(context.Context, string) error              { return nil }
@@ -118,12 +238,182 @@ func TestProviderServiceRedactsAndRestoresSecrets(t *testing.T) {
 	}
 }
 
+func TestProviderServiceRedactsAndRestoresGreeEncryptionKey(t *testing.T) {
+	const encryptionKey = "0123456789abcdef"
+
+	original := providerconfig.Config{
+		ID: "gree-main", Type: gree.ProviderType, Name: "Gree", Config: json.RawMessage(`{
+			"devices":[{"id":"living-ac","name":"Living AC","host":"192.0.2.10","mac":"AA:BB:CC:DD:EE:FF","encryptionKey":"0123456789abcdef"}]
+		}`),
+	}
+	store := &providerStore{items: map[string]providerconfig.Config{original.ID: original}}
+	factory := providersdk.NewFactory()
+	if err := factory.Register(gree.ProviderType, func(item providerconfig.Config) (providersdk.Provider, error) {
+		return gree.NewProviderFromConfig(item)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := providermanager.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := application.NewProviderService([]providerconfig.Config{original}, store, factory, runtime)
+
+	listed := service.List()
+	if len(listed) != 1 {
+		t.Fatalf("listed providers = %#v", listed)
+	}
+	var listedConfig struct {
+		Devices []struct {
+			EncryptionKey string `json:"encryptionKey"`
+		} `json:"devices"`
+	}
+	if err := json.Unmarshal(listed[0].Config.Config, &listedConfig); err != nil {
+		t.Fatal(err)
+	}
+	if len(listedConfig.Devices) != 1 || listedConfig.Devices[0].EncryptionKey != "********" || strings.Contains(string(listed[0].Config.Config), encryptionKey) {
+		t.Fatalf("listed Gree config = %s", listed[0].Config.Config)
+	}
+
+	edited := listed[0].Config
+	edited.Config = json.RawMessage(`{
+		"devices":[{"id":"living-ac","name":"Living AC","host":"192.0.2.11","mac":"AA:BB:CC:DD:EE:FF","encryptionKey":"********"}]
+	}`)
+	info, err := service.Save(context.Background(), edited)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var storedConfig struct {
+		Devices []struct {
+			Host          string `json:"host"`
+			EncryptionKey string `json:"encryptionKey"`
+		} `json:"devices"`
+	}
+	if err := json.Unmarshal(store.items[original.ID].Config, &storedConfig); err != nil {
+		t.Fatal(err)
+	}
+	if len(storedConfig.Devices) != 1 || storedConfig.Devices[0].Host != "192.0.2.11" || storedConfig.Devices[0].EncryptionKey != encryptionKey {
+		t.Fatalf("stored Gree config = %s", store.items[original.ID].Config)
+	}
+	if strings.Contains(string(info.Config.Config), encryptionKey) || !strings.Contains(string(info.Config.Config), `"encryptionKey":"********"`) {
+		t.Fatalf("save response exposed Gree encryptionKey: %s", info.Config.Config)
+	}
+}
+
 func TestProviderServiceExposesSanitizedRuntimeDiagnostics(t *testing.T) {
 	config := providerconfig.Config{ID: "virtual-main", Type: "virtual", Name: "Virtual", Enabled: true, Config: json.RawMessage(`{"devices":[]}`)}
 	service := application.NewProviderService([]providerconfig.Config{config}, &providerStore{items: map[string]providerconfig.Config{config.ID: config}}, providersdk.NewFactory(), &diagnosticRuntime{})
 	items := service.List()
 	if len(items) != 1 || items[0].Diagnostics["cloudMqttState"] != "connected" {
 		t.Fatalf("provider diagnostics=%#v", items)
+	}
+}
+
+func TestProviderServiceRetainsAndCompletesXiaomiAuthChallenge(t *testing.T) {
+	ctx := context.Background()
+	state := &authProviderState{url: "https://account.xiaomi.com/identity/authStart?context=short"}
+	store := &providerStore{items: make(map[string]providerconfig.Config)}
+	factory := providersdk.NewFactory()
+	if err := factory.Register(xiaomi.XiaomiMIoTCloudProviderType, func(item providerconfig.Config) (providersdk.Provider, error) {
+		return &authProvider{id: item.ID, state: state}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &authProviderRuntime{state: state}
+	service := application.NewProviderService(nil, store, factory, runtime)
+	config := providerconfig.Config{ID: "cloud-main", Type: xiaomi.XiaomiMIoTCloudProviderType, Name: "Cloud", Enabled: true, Config: json.RawMessage(`{"region":"cn","username":"owner","password":"secret","devices":[]}`)}
+	info, err := service.Save(ctx, config)
+	var challengeErr *application.ProviderAuthChallengeError
+	if !errors.As(err, &challengeErr) || info.AuthChallenge == nil {
+		t.Fatalf("Save() info=%#v error=%v", info, err)
+	}
+	challenge := *info.AuthChallenge
+	if challenge.Status != "auth_required" || challenge.ChallengeID == "" || challenge.VerificationURL == "" || !challenge.ExpiresAt.After(time.Now()) {
+		t.Fatalf("challenge=%#v", challenge)
+	}
+	listed := service.List()
+	if len(listed) != 1 || listed[0].Status != "auth_required" || listed[0].AuthChallenge == nil || listed[0].AuthChallenge.ChallengeID != challenge.ChallengeID {
+		t.Fatalf("listed=%#v", listed)
+	}
+	if strings.Contains(string(listed[0].Config.Config), "secret") {
+		t.Fatalf("provider list leaked password: %s", listed[0].Config.Config)
+	}
+	if _, err := service.VerifyAuthChallenge(ctx, config.ID, challenge.ChallengeID, "bad-code"); err == nil || strings.Contains(err.Error(), "bad-code") {
+		t.Fatalf("bad-code error=%v", err)
+	}
+	if _, ok := service.GetAuthChallenge(config.ID); !ok {
+		t.Fatal("failed verification discarded challenge")
+	}
+	verified, err := service.VerifyAuthChallenge(ctx, config.ID, challenge.ChallengeID, "123456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified.Status != "running" || verified.AuthChallenge != nil {
+		t.Fatalf("verified provider=%#v", verified)
+	}
+	var stored struct {
+		Password     string `json:"password"`
+		UserID       string `json:"userId"`
+		Ssecurity    string `json:"ssecurity"`
+		ServiceToken string `json:"serviceToken"`
+	}
+	if err := json.Unmarshal(store.items[config.ID].Config, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Password != "" || stored.UserID != "42" || stored.Ssecurity != "security" || stored.ServiceToken != "service-token" {
+		t.Fatalf("stored credentials=%#v", stored)
+	}
+	if _, err := service.VerifyAuthChallenge(ctx, config.ID, challenge.ChallengeID, "123456"); err == nil || !strings.Contains(err.Error(), "missing or expired") {
+		t.Fatalf("challenge reuse error=%v", err)
+	}
+	state.mu.Lock()
+	applyCalls, closes := state.apply, state.close
+	state.mu.Unlock()
+	if applyCalls != 2 || closes == 0 {
+		t.Fatalf("runtime apply/close=%d/%d", applyCalls, closes)
+	}
+}
+
+func TestProviderServiceSerializesConcurrentXiaomiAuthSuccess(t *testing.T) {
+	state := &authProviderState{url: "https://account.xiaomi.com/identity/authStart"}
+	store := &providerStore{items: make(map[string]providerconfig.Config)}
+	factory := providersdk.NewFactory()
+	if err := factory.Register(xiaomi.XiaomiMIoTCloudProviderType, func(item providerconfig.Config) (providersdk.Provider, error) {
+		return &authProvider{id: item.ID, state: state}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service := application.NewProviderService(nil, store, factory, &authProviderRuntime{state: state})
+	config := providerconfig.Config{ID: "cloud-concurrent", Type: xiaomi.XiaomiMIoTCloudProviderType, Enabled: true, Config: json.RawMessage(`{"region":"cn","username":"owner","password":"secret","devices":[]}`)}
+	info, err := service.Save(context.Background(), config)
+	var challengeErr *application.ProviderAuthChallengeError
+	if !errors.As(err, &challengeErr) || info.AuthChallenge == nil {
+		t.Fatalf("Save() info=%#v error=%v", info, err)
+	}
+	challengeID := info.AuthChallenge.ChallengeID
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			_, verifyErr := service.VerifyAuthChallenge(context.Background(), config.ID, challengeID, "123456")
+			errs <- verifyErr
+		}()
+	}
+	var successes, failures int
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err == nil {
+			successes++
+		} else {
+			failures++
+		}
+	}
+	if successes != 1 || failures != 1 {
+		t.Fatalf("concurrent verification successes/failures=%d/%d", successes, failures)
+	}
+	state.mu.Lock()
+	applyCalls := state.apply
+	state.mu.Unlock()
+	if applyCalls != 2 {
+		t.Fatalf("runtime apply calls=%d", applyCalls)
 	}
 }
 
@@ -387,6 +677,57 @@ func TestProviderServiceConnectionTestDoesNotPersistOrApply(t *testing.T) {
 	}
 	if len(store.items) != 0 || len(service.List()) != 0 || len(runtime.ProviderInfos()) != 0 {
 		t.Fatalf("connection test changed desired or runtime state: store=%#v list=%#v runtime=%#v", store.items, service.List(), runtime.ProviderInfos())
+	}
+}
+
+func TestProviderServiceConnectionTestUsesOptionalProviderCheck(t *testing.T) {
+	testError := errors.New("live device unavailable")
+	initialized := &atomic.Int32{}
+	tested := &atomic.Int32{}
+	closed := &atomic.Int32{}
+	factory := providersdk.NewFactory()
+	if err := factory.Register("checked", func(item providerconfig.Config) (providersdk.Provider, error) {
+		return &connectionTestProvider{id: item.ID, initialized: initialized, tested: tested, closed: closed, testError: testError}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime, _ := providermanager.New()
+	service := application.NewProviderService(nil, &providerStore{items: make(map[string]providerconfig.Config)}, factory, runtime)
+	if err := service.TestConnection(context.Background(), providerconfig.Config{Type: "checked", Config: []byte("{}")}); !errors.Is(err, testError) {
+		t.Fatalf("TestConnection() error = %v, want %v", err, testError)
+	}
+	if initialized.Load() != 0 || tested.Load() != 1 || closed.Load() != 1 {
+		t.Fatalf("optional check lifecycle = initialized %d, tested %d, closed %d", initialized.Load(), tested.Load(), closed.Load())
+	}
+}
+
+func TestProviderServiceScansTransientProviderWithoutPersistingOrUsingRuntimeCatalog(t *testing.T) {
+	scans := &atomic.Int32{}
+	closed := &atomic.Int32{}
+	factory := providersdk.NewFactory()
+	if err := factory.Register("scan", func(item providerconfig.Config) (providersdk.Provider, error) {
+		return &networkScanProvider{id: item.ID, scans: scans, closed: closed}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store := &providerStore{items: make(map[string]providerconfig.Config)}
+	runtime, err := providermanager.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := application.NewProviderService(nil, store, factory, runtime)
+	items, err := service.Scan(context.Background(), providerconfig.Config{Type: "scan", Config: json.RawMessage(`{}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Host != "192.0.2.20" {
+		t.Fatalf("scan result = %#v", items)
+	}
+	if scans.Load() != 1 || closed.Load() != 1 {
+		t.Fatalf("transient scanner lifecycle = scans %d, closed %d", scans.Load(), closed.Load())
+	}
+	if len(store.items) != 0 || len(service.List()) != 0 || len(runtime.ProviderInfos()) != 0 {
+		t.Fatalf("scan changed desired or runtime state: store=%#v list=%#v runtime=%#v", store.items, service.List(), runtime.ProviderInfos())
 	}
 }
 

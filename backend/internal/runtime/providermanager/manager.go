@@ -2,6 +2,7 @@ package providermanager
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -93,6 +94,22 @@ func (m *Manager) Provider(id string) (providersdk.Provider, bool) {
 	m.mu.RLock()
 	current := m.providers[id]
 	if current == nil || current.status != "running" {
+		m.mu.RUnlock()
+		return nil, false
+	}
+	provider := current.provider
+	m.mu.RUnlock()
+	return provider, true
+}
+
+// ProviderAny returns a configured Provider regardless of whether it is
+// currently running. It is intentionally separate from Provider: callers that
+// need a live transport must continue to use Provider, while authentication
+// recovery can inspect a provider retained in auth_required state.
+func (m *Manager) ProviderAny(id string) (providersdk.Provider, bool) {
+	m.mu.RLock()
+	current := m.providers[id]
+	if current == nil {
 		m.mu.RUnlock()
 		return nil, false
 	}
@@ -1309,12 +1326,25 @@ func (m *Manager) broadcastCapabilityAvailability(event providersdk.CapabilityAv
 }
 
 func (m *Manager) markFailureLocked(current *managedProvider, err error) {
+	if isAuthenticationRequired(err) {
+		current.status, current.err, current.nextRetryAt, current.transitionedAt = "auth_required", err.Error(), time.Time{}, time.Now().UTC()
+		return
+	}
 	current.status, current.err, current.transitionedAt = "error", err.Error(), time.Now().UTC()
 	delay := time.Second << min(current.retryCount, 5)
 	if delay > 30*time.Second {
 		delay = 30 * time.Second
 	}
 	current.nextRetryAt = time.Now().UTC().Add(delay)
+}
+
+type authenticationRequiredError interface {
+	AuthenticationRequired() bool
+}
+
+func isAuthenticationRequired(err error) bool {
+	var marker authenticationRequiredError
+	return errors.As(err, &marker) && marker.AuthenticationRequired()
 }
 
 func (m *Manager) startRetryWorker() {
