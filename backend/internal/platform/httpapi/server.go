@@ -29,6 +29,7 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/mapping"
 	"github.com/feranydev/homeloom/backend/internal/platform/subprocesslog"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
+	sonoffcloud "github.com/feranydev/homeloom/backend/internal/providers/sonoff/cloud"
 	"github.com/feranydev/homeloom/backend/internal/providers/tuya"
 	"github.com/feranydev/homeloom/backend/internal/providers/xiaomi"
 	"github.com/feranydev/homeloom/backend/internal/webui"
@@ -85,6 +86,16 @@ const (
 type authRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
+}
+
+type sonoffLoginRequest struct {
+	Username    string `json:"username"`
+	Password    string `json:"password"`
+	CountryCode string `json:"countryCode"`
+	Region      string `json:"region"`
+	Endpoint    string `json:"endpoint"`
+	AppID       string `json:"appId"`
+	AppSecret   string `json:"appSecret"`
 }
 
 type confirmationRequest struct {
@@ -1291,6 +1302,23 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		result, err := server.tuyaSharingLogin.Poll(ctx, request)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+		return c.JSON(http.StatusOK, map[string]any{"data": result})
+	})
+	e.POST("/api/v1/sonoff/login", func(c echo.Context) error {
+		var request sonoffLoginRequest
+		if err := c.Bind(&request); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid Sonoff/eWeLink login request")
+		}
+		ctx, cancel := context.WithTimeout(c.Request().Context(), 30*time.Second)
+		defer cancel()
+		result, err := sonoffcloud.Login(ctx, http.DefaultClient, sonoffcloud.LoginCredentials{
+			Username: request.Username, Password: request.Password, CountryCode: request.CountryCode,
+			Region: request.Region, Endpoint: request.Endpoint, AppID: request.AppID, AppSecret: request.AppSecret,
+		}, 30*time.Second)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "Sonoff/eWeLink 登录失败").SetInternal(err)
 		}
 		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
 		return c.JSON(http.StatusOK, map[string]any{"data": result})

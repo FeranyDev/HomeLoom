@@ -161,6 +161,8 @@ HomeLoom 随程序提供 provider、capability 和 target 三类内置示例 Pro
 
 第三方 MIoT 云登录使用 `POST /api/v1/xiaomi-miot-cloud/login/start` 与 `POST /api/v1/xiaomi-miot-cloud/login/verify`。前者可能直接返回完整会话，也可能返回 `verification_required`、短时 `challengeId` 和小米验证 URL；用户在小米页面触发短信/邮件后，将验证码提交给后者。挑战仅在进程内保存 10 分钟并复用首次登录的 Cookie，成功后单次失效；两个响应均禁止缓存。
 
+Sonoff/eWeLink 登录使用受保护的 `POST /api/v1/sonoff/login`，请求包含 eWeLink 邮箱/手机号、密码、国家区号和可选区域；后端按 SonoffLAN 兼容的 `/v2/user/login` 签名流程返回区域、云端 Endpoint 和 Access Token，不返回设备密钥。登录响应禁止缓存，Provider 保存后由受保护的 Provider secret codec 加密账号密码与 Token。
+
 ## Provider 敏感配置
 
 Provider 配置仍以完整值保存在所选数据库中，但管理 API 会递归识别 password、secret、token、API key、private key、credential 和 Xiaomi `ssecurity` 字段，并以 `********` 返回。编辑时保留该占位符会沿用数据库中的原值；输入新值会替换原值。新建 Provider 时不能把占位符当作真实密钥提交。数组对象优先按稳定 `id` 恢复密钥，避免配置重排后发生错配。

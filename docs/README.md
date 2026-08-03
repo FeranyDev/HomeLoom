@@ -8,6 +8,7 @@
 - [Matter 桥实施方案](matter-target-plan.md)：Matter Target 的实现边界与剩余验收项。
 - [多协议摄像头接入实现计划](HomeLoom_多协议摄像头接入实现计划_v3.md)：Camera Provider、媒体 Runtime、HomeKit Camera 和 Matter Camera 的边界。
 - [小米 Provider](xiaomi-provider.md)：小米三类接入方式和实际配置流程。
+- [Sonoff/eWeLink Provider](sonoff-provider.md)：Sonoff LAN/云端双通道、常用 UIID 能力和安全配置边界。
 
 ## 稳定契约
 

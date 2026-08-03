@@ -44,6 +44,7 @@ function providerTypeName(type: string): string {
 	if (type === 'xiaomi-miot-cloud') return '小米 MIoT 云 · 第三方兼容'
 	if (type === 'gree') return 'Gree 局域网空调'
 	if (type === 'tuya') return 'Tuya 涂鸦云'
+	if (type === 'sonoff') return 'Sonoff/eWeLink · LAN 优先'
 	if (type === 'mqtt') return 'MQTT · HomeLoom v1'
 	if (type === 'virtual') return 'Virtual Runtime'
 	return type

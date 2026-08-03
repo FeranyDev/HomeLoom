@@ -67,7 +67,7 @@ func sensitiveKey(key string) bool {
 	if normalized == "ssecurity" {
 		return true
 	}
-	for _, part := range []string{"password", "passphrase", "passwd", "secret", "token", "apikey", "privatekey", "credential", "authorization", "pairingcode", "setupuri", "pin"} {
+	for _, part := range []string{"password", "passphrase", "passwd", "secret", "token", "apikey", "privatekey", "devicekey", "credential", "authorization", "pairingcode", "setupuri", "pin"} {
 		if strings.Contains(normalized, part) {
 			return true
 		}

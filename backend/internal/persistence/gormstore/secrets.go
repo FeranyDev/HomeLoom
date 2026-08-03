@@ -371,7 +371,7 @@ func providerConfigSecretKey(key string) bool {
 	if normalized == "ssecurity" {
 		return true
 	}
-	for _, suffix := range []string{"password", "passphrase", "secret", "token", "apikey", "privatekey"} {
+	for _, suffix := range []string{"password", "passphrase", "secret", "token", "apikey", "privatekey", "devicekey"} {
 		if strings.HasSuffix(normalized, suffix) {
 			return true
 		}

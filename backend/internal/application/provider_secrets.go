@@ -108,7 +108,7 @@ func sensitiveConfigKey(key string) bool {
 	if normalized == "pwd" || normalized == "passwd" || normalized == "authorization" || normalized == "credential" || normalized == "credentials" || normalized == "encryptionkey" || normalized == "pin" || normalized == "pairingcode" || normalized == "setupuri" || normalized == "ssecurity" || normalized == "usercode" {
 		return true
 	}
-	for _, suffix := range []string{"password", "secret", "token", "apikey", "privatekey"} {
+	for _, suffix := range []string{"password", "secret", "token", "apikey", "privatekey", "devicekey"} {
 		if strings.HasSuffix(normalized, suffix) {
 			return true
 		}

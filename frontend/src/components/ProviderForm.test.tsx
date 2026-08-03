@@ -29,9 +29,14 @@ const tuyaAPI = vi.hoisted(() => ({
 	parseTuyaOAuthCallback: (value: unknown) => value && typeof value === 'object' && (value as Record<string, unknown>).type === 'homeloom-tuya-oauth' ? value : null,
 }))
 
+const sonoffAPI = vi.hoisted(() => ({
+	loginSonoff: vi.fn(),
+}))
+
 vi.mock('../api/xiaomi', () => xiaomiAPI)
 vi.mock('../api/providers', () => providerAPI)
 vi.mock('../api/tuya', () => tuyaAPI)
+vi.mock('../api/sonoff', () => sonoffAPI)
 
 describe('ProviderForm', () => {
 	beforeEach(() => {
@@ -48,6 +53,7 @@ describe('ProviderForm', () => {
 		tuyaAPI.completeTuyaOAuth.mockResolvedValue({ accessToken: 'tuya-access', refreshToken: 'tuya-refresh', uid: 'tuya-user', expiresAt: '2030-01-01T01:00:00Z' })
 		tuyaAPI.startTuyaSharingLogin.mockResolvedValue({ state: 'sharing-state', qrData: 'tuyaSmart--qrLogin?token=qr-token', expiresAt: '2030-01-01T00:05:00Z' })
 		tuyaAPI.pollTuyaSharingLogin.mockResolvedValue({ status: 'pending' })
+		sonoffAPI.loginSonoff.mockResolvedValue({ accessToken: 'sonoff-access', region: 'cn', endpoint: 'https://cn-apia.coolkit.cn' })
 	})
 
 	afterEach(() => vi.restoreAllMocks())
@@ -141,6 +147,20 @@ describe('ProviderForm', () => {
 		expect(screen.getByText('Tuya 云账号连接测试成功，设备目录可用。')).toBeInTheDocument()
 		await userEvent.click(screen.getByRole('button', { name: '保存并应用' }))
 		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ type: 'tuya', config: expect.objectContaining({ accessId: 'access-id', accessSecret: 'access-secret', uid: 'uid-123', pollIntervalSeconds: 21600 }) }), false))
+	})
+
+	it('logs into eWeLink before saving a Sonoff Provider', async () => {
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		render(<ProviderForm provider={null} initialType="sonoff" onCancel={() => {}} onSave={onSave} />)
+		await userEvent.type(screen.getByPlaceholderText('sonoff-main'), 'sonoff-main')
+		await userEvent.type(screen.getByLabelText('名称'), '易微联设备')
+		await userEvent.type(screen.getByLabelText('eWeLink 账号'), 'user@example.com')
+		await userEvent.type(screen.getByLabelText('eWeLink 密码'), 'password-1')
+		await userEvent.click(screen.getByRole('button', { name: '登录 eWeLink 账号' }))
+		await waitFor(() => expect(sonoffAPI.loginSonoff).toHaveBeenCalledWith(expect.objectContaining({ username: 'user@example.com', password: 'password-1', countryCode: '+86', region: 'auto' })))
+		expect(screen.getByText(/eWeLink 登录成功/)).toBeInTheDocument()
+		await userEvent.click(screen.getByRole('button', { name: '保存并应用' }))
+		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ type: 'sonoff', config: expect.objectContaining({ mode: 'auto', region: 'cn', cloud: expect.objectContaining({ accessToken: 'sonoff-access', endpoint: 'https://cn-apia.coolkit.cn' }) }) }), false))
 	})
 
 	it('completes Tuya OAuth through the QR callback message and fills the UID/token', async () => {

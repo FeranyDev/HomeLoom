@@ -3,6 +3,7 @@ import type { Provider, ProviderInput } from '../types/provider'
 import { ApiError } from '../api/client'
 import { completeTuyaOAuth, parseTuyaOAuthCallback, pollTuyaSharingLogin, startTuyaOAuth, startTuyaSharingLogin, tuyaOAuthQRCodeURL, tuyaSharingQRCodeURL, type TuyaOAuthCallbackMessage, type TuyaOAuthStartResult, type TuyaSharingLoginPollResult, type TuyaSharingLoginStartResult } from '../api/tuya'
 import { completeXiaomiOAuth, discoverXiaomiGateways, getXiaomiProviderAuthChallenge, startXiaomiCloudLogin, startXiaomiOAuth, verifyXiaomiCloudLogin, verifyXiaomiProviderAuthChallenge, type XiaomiCloudLoginResult, type XiaomiGateway } from '../api/xiaomi'
+import { loginSonoff } from '../api/sonoff'
 
 const xiaomiOAuthRedirectURL = 'http://homeassistant.local:8123'
 const tuyaOAuthDefaultRedirectURL = typeof window === 'undefined' ? 'http://homeassistant.local:8123/api/v1/tuya/oauth/callback' : `${window.location.origin}/api/v1/tuya/oauth/callback`
@@ -37,6 +38,10 @@ function createTuyaExample() {
 	return { authType: 'sharing', region: 'cn', userCode: '', uid: '', endpoint: '', terminalId: '', accessToken: '', refreshToken: '', requestTimeoutSeconds: 15, pollIntervalSeconds: 21600, mqtt: { enabled: false }, quirks: [] }
 }
 
+function createSonoffExample() {
+	return { mode: 'auto', region: 'auto', requestTimeoutSeconds: 10, refreshIntervalSeconds: 60, cloud: { endpoint: '', accessToken: '', username: '', password: '', countryCode: '+86', appId: '', appSecret: '' }, devices: [] }
+}
+
 function createCameraExample() {
 	return { cameras: [] }
 }
@@ -50,7 +55,7 @@ function createMQTTExample(mode: 'client' | 'server' = 'client') {
 	return { mode, brokerUrl: 'mqtt://127.0.0.1:1883', username: '', password: '', clientId: '', keepAliveSeconds: 30, connectTimeoutSeconds: 10, sessionExpirySeconds: 86400, retainedStateMaxAgeSeconds: 300, tls: {}, devices: [] }
 }
 
-type ProviderSelection = 'virtual' | 'mqtt-client' | 'mqtt-server' | 'xiaomi' | 'xiaomi-miot-cloud' | 'gree' | 'tuya' | 'camera'
+type ProviderSelection = 'virtual' | 'mqtt-client' | 'mqtt-server' | 'xiaomi' | 'xiaomi-miot-cloud' | 'gree' | 'tuya' | 'sonoff' | 'camera'
 
 function objectRecord(value: unknown): Record<string, unknown> {
 	return value && !Array.isArray(value) && typeof value === 'object' ? value as Record<string, unknown> : {}
@@ -134,13 +139,14 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 	const initialXiaomiCloudConfig = createXiaomiMIoTCloudExample()
 	const initialGreeConfig = createGreeExample()
 	const initialTuyaConfig = createTuyaExample()
+	const initialSonoffConfig = createSonoffExample()
 	const initialCameraConfig = createCameraExample()
 	const initialMQTTConfig = createMQTTExample(selectedInitialType === 'mqtt-server' ? 'server' : 'client')
   const [id, setID] = useState(provider?.id ?? '')
   const [name, setName] = useState(provider?.name ?? '')
   const [type, setType] = useState(selectedInitialType)
   const [enabled, setEnabled] = useState(provider?.enabled ?? true)
-	  const [config, setConfig] = useState(JSON.stringify(provider?.config ?? (selectedInitialType === 'mqtt-client' || selectedInitialType === 'mqtt-server' ? initialMQTTConfig : selectedInitialType === 'xiaomi' ? initialXiaomiConfig : selectedInitialType === 'xiaomi-miot-cloud' ? initialXiaomiCloudConfig : selectedInitialType === 'gree' ? initialGreeConfig : selectedInitialType === 'tuya' ? initialTuyaConfig : selectedInitialType === 'camera' ? initialCameraConfig : createVirtualExample()), null, 2))
+	  const [config, setConfig] = useState(JSON.stringify(provider?.config ?? (selectedInitialType === 'mqtt-client' || selectedInitialType === 'mqtt-server' ? initialMQTTConfig : selectedInitialType === 'xiaomi' ? initialXiaomiConfig : selectedInitialType === 'xiaomi-miot-cloud' ? initialXiaomiCloudConfig : selectedInitialType === 'gree' ? initialGreeConfig : selectedInitialType === 'tuya' ? initialTuyaConfig : selectedInitialType === 'sonoff' ? initialSonoffConfig : selectedInitialType === 'camera' ? initialCameraConfig : createVirtualExample()), null, 2))
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<string | null>(null)
@@ -162,6 +168,7 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 	const [tuyaOAuthBusy, setTuyaOAuthBusy] = useState(false)
 	const [tuyaSharingSession, setTuyaSharingSession] = useState<TuyaSharingLoginStartResult | null>(null)
 	const [tuyaSharingBusy, setTuyaSharingBusy] = useState(false)
+	const [sonoffAuthenticating, setSonoffAuthenticating] = useState(false)
 	const hasRedactedSecrets = Boolean(provider && JSON.stringify(provider.config).includes('********'))
   const example = { latencyMs: 0, rejectWrites: false, devices: [{ id: 'demo-switch', name: '客厅开关', type: 'switch', online: true, power: false }, { id: 'demo-light', name: '客厅灯', type: 'lightbulb', online: true, power: true, brightness: 80, colorTemperature: 250, hue: 35, saturation: 45 }, { id: 'demo-outlet', name: '书房插座', type: 'outlet', online: true, power: false, inUse: false, currentPower: 0, energy: 1.25 }, { id: 'demo-temperature', name: '客厅温度', type: 'temperature-sensor', online: true, temperature: 23.6, batteryLevel: 91, lowBattery: false }, { id: 'demo-humidity', name: '客厅湿度', type: 'humidity-sensor', online: true, humidity: 56.2, batteryLevel: 90, lowBattery: false }, { id: 'demo-climate', name: '客厅温湿度', type: 'temperature-humidity-sensor', online: true, temperature: 23.6, humidity: 56.2, batteryLevel: 87, lowBattery: false }, { id: 'demo-contact', name: '入户门', type: 'contact-sensor', online: true, contact: false, batteryLevel: 88, lowBattery: false, tampered: false }, { id: 'demo-motion', name: '走廊活动', type: 'motion-sensor', online: true, motion: false, batteryLevel: 84, lowBattery: false, tampered: false }, { id: 'demo-fan', name: '卧室风扇', type: 'fan', online: true, active: false, speed: 35, mode: 'manual', swingMode: true, direction: 'clockwise', controlLock: false }, { id: 'demo-air', name: '客厅净化器', type: 'air-purifier', online: true, active: true, speed: 60, mode: 'auto', swingMode: false, controlLock: false, airQuality: 'good', pm25: 12, voc: 80, filterLife: 82, filterChange: false }, { id: 'demo-shade', name: '南窗帘', type: 'window-covering', online: true, position: 50, obstruction: false }, ...expandedVirtualExamples] }
 	const xiaomiExample = initialXiaomiConfig
@@ -194,6 +201,13 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 		else nextConfig[key] = value
 		setConfig(JSON.stringify(nextConfig, null, 2))
 	}
+	const sonoffCloud = configObject.cloud && !Array.isArray(configObject.cloud) && typeof configObject.cloud === 'object' ? configObject.cloud as Record<string, unknown> : {}
+	const updateSonoffCloud = (key: string, value: unknown) => {
+		const nextCloud: Record<string, unknown> = { ...sonoffCloud }
+		if (value === undefined) delete nextCloud[key]
+		else nextCloud[key] = value
+		setConfig(JSON.stringify({ ...configObject, cloud: nextCloud }, null, 2))
+	}
 	const updateXiaomiOAuth = (key: string, value: unknown) => setConfig(JSON.stringify({ ...configObject, oauth: { ...xiaomiOAuth, [key]: value } }, null, 2))
 	const updateXiaomiCloudIdentity = (key: string, value: unknown) => { updateXiaomi(key, value); setCloudChallenge(null); setCloudChallengeSource(null); setCloudVerificationCode('') }
 	const cloudSessionReady = ['userId', 'ssecurity', 'serviceToken'].every((key) => typeof configObject[key] === 'string' && String(configObject[key]).length > 0)
@@ -219,6 +233,21 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 		} catch (cause) {
 			setError(cause instanceof Error ? cause.message : '无法生成 Tuya 扫码二维码')
 		} finally { setTuyaSharingBusy(false) }
+	}
+	async function beginSonoffLogin() {
+		const username = String(sonoffCloud.username ?? '').trim()
+		const password = String(sonoffCloud.password ?? '').trim()
+		if (!username || !password || password === '********') { setError('请填写 eWeLink 邮箱/手机号和密码后再登录'); return }
+		setSonoffAuthenticating(true); setError(null); setTestResult(null)
+		try {
+			const result = await loginSonoff({
+				username, password, countryCode: String(sonoffCloud.countryCode ?? '+86'),
+				region: String(configObject.region ?? 'auto'), endpoint: String(sonoffCloud.endpoint ?? ''),
+				appId: String(sonoffCloud.appId ?? ''), appSecret: String(sonoffCloud.appSecret ?? ''),
+			})
+			setConfig(JSON.stringify({ ...configObject, region: result.region, cloud: { ...sonoffCloud, accessToken: result.accessToken, endpoint: result.endpoint } }, null, 2))
+			setTestResult('eWeLink 登录成功，云端设备目录和局域网 devicekey 已就绪。请保存 Provider。')
+		} catch (cause) { setError(cause instanceof Error ? cause.message : 'eWeLink 登录失败') } finally { setSonoffAuthenticating(false) }
 	}
 	useEffect(() => {
 		if (!tuyaSharingSession) return
@@ -449,6 +478,11 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 		}
 		if (type === 'virtual' && !provider && !Array.isArray(parsed.devices)) parsed.devices = []
 		if (type === 'camera' && !Array.isArray(parsed.cameras)) parsed.cameras = []
+		if (type === 'sonoff') {
+			const mode = String(parsed.mode ?? 'auto').toLowerCase()
+			const cloud = objectRecord(parsed.cloud)
+			if (mode !== 'local' && !String(cloud.accessToken ?? '').trim() && (!String(cloud.username ?? '').trim() || !String(cloud.password ?? '').trim())) { setError('Sonoff auto/cloud 模式请先完成 eWeLink 账号登录，或填写已有 Access Token'); return }
+		}
 		if (type === 'xiaomi-miot-cloud' && !['userId', 'ssecurity', 'serviceToken'].every((key) => typeof parsed[key] === 'string' && String(parsed[key]).length > 0)) { setError('请先完成“小米云账号登录”；如触发短信或邮件验证，请回填验证码后再保存'); return }
 		if (type === 'xiaomi-miot-cloud' && cloudMISSConfigured && (typeof parsed.passToken !== 'string' || parsed.passToken.length === 0)) { setError('已配置小米摄像头，请使用账号密码重新登录以取得摄像头所需的 passToken'); return }
 		setSaving(true); setError(null); setFieldErrors({}); try { await onSave({ id, name, type: providerType, enabled, config: parsed }, Boolean(provider)) } catch (cause) { setError(cause instanceof Error ? cause.message : '保存失败'); if (cause instanceof ApiError) setFieldErrors(cause.fields) } finally { setSaving(false) }
@@ -465,6 +499,22 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 		setTesting(true); setError(null); setTestResult(null)
 			try { await onTest({ id, name, type: providerType, enabled, config: parsed }); setTestResult(type === 'xiaomi-miot-cloud' ? '云账号登录成功，设备目录与 MIoT 属性接口可用。' : type === 'gree' ? 'Gree 局域网空调连接测试成功。' : type === 'tuya' ? 'Tuya 云账号连接测试成功，设备目录可用。' : mqttSelected ? mqttServer ? 'MQTT 服务端监听测试成功。保存 Provider 后外部设备可连接此地址。' : 'MQTT 客户端已连接外部 Broker。保存 Provider 后再配置设备 Topic。' : '连接成功，订阅已建立。') } catch (cause) { setError(cause instanceof Error ? cause.message : '连接测试失败') } finally { setTesting(false) }
 		}
+		const sonoffConfiguration = <div className="wide xiaomi-connection-flow">
+			<section className="xiaomi-connection-step"><div className="xiaomi-connection-step__heading"><span>01</span><div><strong>eWeLink 账号登录</strong><small>参考 SonoffLAN：登录后读取云端设备目录和 devicekey，局域网优先时不需要手工复制 Access Token。</small></div></div><div className="mqtt-config-grid">
+				<label>运行模式<select aria-label="Sonoff 运行模式" value={String(configObject.mode ?? 'auto')} onChange={(event) => setConfig(JSON.stringify({ ...configObject, mode: event.target.value }, null, 2))}><option value="auto">Auto（局域网优先，云端回退）</option><option value="local">Local（仅局域网）</option><option value="cloud">Cloud（仅云端）</option></select></label>
+				<label>账号国家区号<input aria-label="eWeLink 国家区号" value={String(sonoffCloud.countryCode ?? '+86')} onChange={(event) => updateSonoffCloud('countryCode', event.target.value)} placeholder="+86" /></label>
+				<label>eWeLink 邮箱 / 手机号<input aria-label="eWeLink 账号" value={String(sonoffCloud.username ?? '')} onChange={(event) => updateSonoffCloud('username', event.target.value)} autoComplete="username" placeholder="邮箱或手机号" /></label>
+				<label>eWeLink 密码<input aria-label="eWeLink 密码" type="password" value={String(sonoffCloud.password ?? '')} onChange={(event) => updateSonoffCloud('password', event.target.value)} autoComplete="current-password" />{hasRedactedSecrets && <small>保持 ******** 可沿用数据库中的加密密码。</small>}</label>
+				<button type="button" className="example-button" disabled={sonoffAuthenticating || saving} onClick={() => void beginSonoffLogin()}>{sonoffAuthenticating ? '正在登录 eWeLink…' : String(sonoffCloud.accessToken ?? '').trim() ? '重新登录并刷新设备密钥' : '登录 eWeLink 账号'}</button>
+				{String(sonoffCloud.accessToken ?? '').trim() && <small className="test-success">eWeLink 会话已就绪。保存后 Provider 会复用 Token；密码用于 Token 失效时自动重新登录。</small>}
+				<label>请求超时（秒）<input aria-label="Sonoff 请求超时" type="number" min="1" max="120" value={Number(configObject.requestTimeoutSeconds ?? 10)} onChange={(event) => setConfig(JSON.stringify({ ...configObject, requestTimeoutSeconds: Number(event.target.value) }, null, 2))} /></label>
+				<label>刷新间隔（秒）<input aria-label="Sonoff 刷新间隔" type="number" min="15" max="86400" value={Number(configObject.refreshIntervalSeconds ?? 60)} onChange={(event) => setConfig(JSON.stringify({ ...configObject, refreshIntervalSeconds: Number(event.target.value) }, null, 2))} /></label>
+			</div></section>
+			<div className="xiaomi-next-step"><strong>02 · 保存并发现设备</strong><p>登录成功后点击“保存并应用”，Provider 会自动读取云端设备；有 host/devicekey 的设备优先走局域网，其他设备回退云端。</p></div>
+			<details><summary>云端端点与已有 Token（高级）</summary><div className="mqtt-tls-grid"><label>云端区域<select aria-label="Sonoff 云端区域" value={String(configObject.region ?? 'auto')} onChange={(event) => setConfig(JSON.stringify({ ...configObject, region: event.target.value }, null, 2))}><option value="auto">自动</option><option value="cn">中国（cn）</option><option value="as">亚洲（as）</option><option value="us">美国（us）</option><option value="eu">欧洲（eu）</option></select></label><label>Endpoint<input aria-label="Sonoff 云端 Endpoint" value={String(sonoffCloud.endpoint ?? '')} onChange={(event) => updateSonoffCloud('endpoint', event.target.value)} placeholder="留空按区域选择" /></label><label>Access Token<input aria-label="Sonoff Access Token" type="password" value={String(sonoffCloud.accessToken ?? '')} onChange={(event) => updateSonoffCloud('accessToken', event.target.value)} /></label><label>自有 App ID（可选）<input aria-label="Sonoff App ID" value={String(sonoffCloud.appId ?? '')} onChange={(event) => updateSonoffCloud('appId', event.target.value)} /></label><label>自有 App Secret（可选）<input aria-label="Sonoff App Secret" type="password" value={String(sonoffCloud.appSecret ?? '')} onChange={(event) => updateSonoffCloud('appSecret', event.target.value)} /></label><small>通常不需要手工填写 Token 或 App 凭据；仅在使用自有 eWeLink 应用时覆盖默认兼容签名。</small></div></details>
+			<details><summary>设备映射与完整 JSON（高级）</summary><label className="wide config-editor"><span>Sonoff Provider 配置 JSON</span><textarea aria-label="Sonoff Provider 高级配置" rows={9} value={config} onChange={(event) => setConfig(event.target.value)} spellCheck={false} />{fieldErrors.config && <small className="field-error">{fieldErrors.config}</small>}<small>登录成功后请保存；devices 可留空，首次发现会从 eWeLink 云端读取。</small></label></details>
+			{testResult && <small className="test-success">{testResult}</small>}{error && <small className="inline-error">{error}</small>}
+		</div>
 		const tuyaConfiguration = <div className="wide xiaomi-connection-flow">
 			<section className="xiaomi-connection-step"><div className="xiaomi-connection-step__heading"><span>01</span><div><strong>Tuya 登录方式</strong><small>默认使用 Home Assistant 同款的 User Code + Tuya/Smart Life App 扫码登录，不需要开发者账号。</small></div></div><div className="mqtt-config-grid">
 				<label className="wide">登录方式<select aria-label="Tuya 登录方式" value={tuyaAuthType} onChange={(event) => updateTuya('authType', event.target.value)}><option value="sharing">Home Assistant 扫码（推荐）</option><option value="openapi">Tuya OpenAPI OAuth / 手动凭据</option></select></label>
@@ -493,7 +543,7 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 		</div>
 		return <div className="modal-backdrop"><form className="target-form" role="dialog" aria-modal="true" aria-labelledby="provider-form-title" onSubmit={(event) => void submit(event)}>
 		<div className="form-heading"><div><p className="eyebrow">PROVIDER</p><h2 id="provider-form-title">{provider ? '编辑 Provider' : '新建 Provider'}</h2></div><button type="button" onClick={onCancel}>关闭</button></div>
-	            <div className="form-grid"><label>ID（留空自动生成）<input aria-invalid={Boolean(fieldErrors.id)} value={id} disabled={Boolean(provider)} onChange={(event) => setID(event.target.value)} placeholder={mqttSelected ? (mqttServer ? 'mqtt-server-main' : 'mqtt-client-main') : type === 'xiaomi' ? 'xiaomi-main' : type === 'xiaomi-miot-cloud' ? 'xiaomi-miot-cloud-main' : type === 'gree' ? 'gree-main' : type === 'tuya' ? 'tuya-main' : type === 'camera' ? 'camera-main' : 'virtual-lab'} />{fieldErrors.id && <small className="field-error">{fieldErrors.id}</small>}</label><label>名称<input aria-invalid={Boolean(fieldErrors.name)} value={name} onChange={(event) => setName(event.target.value)} placeholder={mqttSelected ? (mqttServer ? '家庭 MQTT 服务端' : '家庭 MQTT 客户端') : type === 'xiaomi' ? '米家中枢网关' : type === 'xiaomi-miot-cloud' ? '小米 MIoT 云（第三方兼容）' : type === 'gree' ? '客厅格力空调' : type === 'tuya' ? '涂鸦云设备' : type === 'camera' ? '家庭摄像头' : '实验室虚拟设备'} />{fieldErrors.name && <small className="field-error">{fieldErrors.name}</small>}</label><label className="wide">类型<select aria-invalid={Boolean(fieldErrors.type)} value={type} disabled={Boolean(provider)} onChange={(event) => { const next = event.target.value as ProviderSelection; setType(next); if (!provider) { const selected = next === 'mqtt-client' ? createMQTTExample('client') : next === 'mqtt-server' ? createMQTTExample('server') : next === 'xiaomi' ? xiaomiExample : next === 'xiaomi-miot-cloud' ? xiaomiCloudExample : next === 'gree' ? greeExample : next === 'tuya' ? initialTuyaConfig : next === 'camera' ? createCameraExample() : createVirtualExample(); setConfig(JSON.stringify(selected, null, 2)) } }}><option value="virtual">Virtual</option><option value="camera">Camera（独立摄像头来源）</option><option value="mqtt-client">MQTT Client（客户端 · 连接外部 Broker）</option><option value="mqtt-server">MQTT Server（服务端 · 接受设备连接）</option><option value="xiaomi">Xiaomi Central Hub（中枢网关）</option><option value="xiaomi-miot-cloud">Xiaomi MIoT Cloud（账号与设备目录）</option><option value="gree">Gree 局域网空调</option><option value="tuya">Tuya 涂鸦云（设备目录）</option></select>{fieldErrors.type && <small className="field-error">{fieldErrors.type}</small>}</label>
+            <div className="form-grid"><label>ID（留空自动生成）<input aria-invalid={Boolean(fieldErrors.id)} value={id} disabled={Boolean(provider)} onChange={(event) => setID(event.target.value)} placeholder={mqttSelected ? (mqttServer ? 'mqtt-server-main' : 'mqtt-client-main') : type === 'xiaomi' ? 'xiaomi-main' : type === 'xiaomi-miot-cloud' ? 'xiaomi-miot-cloud-main' : type === 'gree' ? 'gree-main' : type === 'tuya' ? 'tuya-main' : type === 'sonoff' ? 'sonoff-main' : type === 'camera' ? 'camera-main' : 'virtual-lab'} />{fieldErrors.id && <small className="field-error">{fieldErrors.id}</small>}</label><label>名称<input aria-invalid={Boolean(fieldErrors.name)} value={name} onChange={(event) => setName(event.target.value)} placeholder={mqttSelected ? (mqttServer ? '家庭 MQTT 服务端' : '家庭 MQTT 客户端') : type === 'xiaomi' ? '米家中枢网关' : type === 'xiaomi-miot-cloud' ? '小米 MIoT 云（第三方兼容）' : type === 'gree' ? '客厅格力空调' : type === 'tuya' ? '涂鸦云设备' : type === 'sonoff' ? 'Sonoff/eWeLink 设备' : type === 'camera' ? '家庭摄像头' : '实验室虚拟设备'} />{fieldErrors.name && <small className="field-error">{fieldErrors.name}</small>}</label><label className="wide">类型<select aria-invalid={Boolean(fieldErrors.type)} value={type} disabled={Boolean(provider)} onChange={(event) => { const next = event.target.value as ProviderSelection; setType(next); if (!provider) { const selected = next === 'mqtt-client' ? createMQTTExample('client') : next === 'mqtt-server' ? createMQTTExample('server') : next === 'xiaomi' ? xiaomiExample : next === 'xiaomi-miot-cloud' ? xiaomiCloudExample : next === 'gree' ? greeExample : next === 'tuya' ? initialTuyaConfig : next === 'sonoff' ? initialSonoffConfig : next === 'camera' ? createCameraExample() : createVirtualExample(); setConfig(JSON.stringify(selected, null, 2)) } }}><option value="virtual">Virtual</option><option value="camera">Camera（独立摄像头来源）</option><option value="mqtt-client">MQTT Client（客户端 · 连接外部 Broker）</option><option value="mqtt-server">MQTT Server（服务端 · 接受设备连接）</option><option value="xiaomi">Xiaomi Central Hub（中枢网关）</option><option value="xiaomi-miot-cloud">Xiaomi MIoT Cloud（账号与设备目录）</option><option value="gree">Gree 局域网空调</option><option value="tuya">Tuya 涂鸦云（设备目录）</option><option value="sonoff">Sonoff/eWeLink（局域网优先）</option></select>{fieldErrors.type && <small className="field-error">{fieldErrors.type}</small>}</label>
 	{mqttSelected ? <div className="wide mqtt-config-grid">
 		<div className="wide config-note"><span>MQTT Provider</span><strong>{mqttServer ? 'MQTT Server · 服务端' : 'MQTT Client · 客户端'}</strong><p>{mqttServer ? 'HomeLoom 内嵌 Broker 并监听 TCP 地址；设备主动连接 HomeLoom。' : 'HomeLoom 作为客户端连接现有 Mosquitto、EMQX 或其他 Broker。'}</p></div>
 		{mqttServer ? <>
@@ -516,7 +566,7 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 		</>}
 		{fieldErrors.config && <small className="field-error wide">{fieldErrors.config}</small>}<small className="wide">{mqttServer ? '这里启动内嵌 Broker 监听；未配置设备路由时 ACL 会拒绝全部设备 Topic。' : '这里建立到外部 Broker 的 MQTT 客户端连接。'}保存并启用后，从 Provider 卡片进入“管理设备”，逐台配置 Topic、QoS 和收发路由。配置保存到 PostgreSQL，密码由主密钥加密且由 API 脱敏返回。</small>
 		{onTest && <button type="button" className="example-button" disabled={testing || saving} onClick={() => void testConnection()}>{testing ? (mqttServer ? '监听测试中…' : '连接中…') : mqttServer ? '测试监听' : '测试连接'}</button>}{testResult && <small className="wide test-success">{testResult}</small>}
-		</div> : type === 'tuya' ? tuyaConfiguration : type === 'xiaomi' ? <div className="wide xiaomi-connection-flow">
+		</div> : type === 'tuya' ? tuyaConfiguration : type === 'sonoff' ? sonoffConfiguration : type === 'xiaomi' ? <div className="wide xiaomi-connection-flow">
 			<section className="xiaomi-connection-step"><div className="xiaomi-connection-step__heading"><span>01</span><div><strong>OAuth 授权与证书</strong><small>先完成账号授权，由 HomeLoom 获取中枢 MQTT 客户端证书。</small></div></div><div className="mqtt-config-grid">
 				<label>OAuth Client ID<input aria-label="小米 OAuth Client ID" required value={String(xiaomiOAuth.clientId ?? '')} onChange={(event) => updateXiaomiOAuth('clientId', event.target.value)} placeholder="必须使用有权使用的数值型 Client ID" /></label>
 				<label>账号地区<select aria-label="小米账号地区" value={String(xiaomiOAuth.region ?? 'cn')} onChange={(event) => updateXiaomiOAuth('region', event.target.value)}><option value="cn">中国大陆</option><option value="de">欧洲</option><option value="us">美国</option><option value="ru">俄罗斯</option><option value="tw">台湾</option><option value="sg">新加坡</option><option value="in">印度</option></select></label>

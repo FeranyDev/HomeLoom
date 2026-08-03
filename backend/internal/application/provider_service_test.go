@@ -202,7 +202,7 @@ type providerStore struct {
 
 func TestProviderServiceRedactsAndRestoresSecrets(t *testing.T) {
 	ctx := context.Background()
-	original := providerconfig.Config{ID: "virtual-secret", Type: "virtual", Name: "Secret", Config: []byte(`{"password":"keep-me","ssecurity":"miot-security","nested":{"accessToken":"token-value","tokenExpiresAt":"public"},"accounts":[{"id":"a","password":"secret-a"},{"id":"b","password":"secret-b"}],"devices":[]}`)}
+	original := providerconfig.Config{ID: "virtual-secret", Type: "virtual", Name: "Secret", Config: []byte(`{"password":"keep-me","ssecurity":"miot-security","nested":{"accessToken":"token-value","deviceKey":"sonoff-key","tokenExpiresAt":"public"},"accounts":[{"id":"a","password":"secret-a"},{"id":"b","password":"secret-b"}],"devices":[]}`)}
 	store := &providerStore{items: map[string]providerconfig.Config{original.ID: original}}
 	factory := providersdk.NewFactory()
 	if err := factory.Register("virtual", func(item providerconfig.Config) (providersdk.Provider, error) {
@@ -213,11 +213,11 @@ func TestProviderServiceRedactsAndRestoresSecrets(t *testing.T) {
 	runtime, _ := providermanager.New()
 	service := application.NewProviderService([]providerconfig.Config{original}, store, factory, runtime)
 	listed := service.List()
-	if len(listed) != 1 || string(listed[0].Config.Config) != `{"accounts":[{"id":"a","password":"********"},{"id":"b","password":"********"}],"devices":[],"nested":{"accessToken":"********","tokenExpiresAt":"public"},"password":"********","ssecurity":"********"}` {
+	if len(listed) != 1 || string(listed[0].Config.Config) != `{"accounts":[{"id":"a","password":"********"},{"id":"b","password":"********"}],"devices":[],"nested":{"accessToken":"********","deviceKey":"********","tokenExpiresAt":"public"},"password":"********","ssecurity":"********"}` {
 		t.Fatalf("redacted config = %s", listed[0].Config.Config)
 	}
 	resolved, err := service.ResolveTransientConfig(listed[0].Config)
-	if err != nil || !strings.Contains(string(resolved.Config), `"password":"keep-me"`) || !strings.Contains(string(resolved.Config), `"accessToken":"token-value"`) || !strings.Contains(string(resolved.Config), `"ssecurity":"miot-security"`) {
+	if err != nil || !strings.Contains(string(resolved.Config), `"password":"keep-me"`) || !strings.Contains(string(resolved.Config), `"accessToken":"token-value"`) || !strings.Contains(string(resolved.Config), `"deviceKey":"sonoff-key"`) || !strings.Contains(string(resolved.Config), `"ssecurity":"miot-security"`) {
 		t.Fatalf("resolved transient config = %s, %v", resolved.Config, err)
 	}
 	listed[0].Config.Config = []byte(`{"password":"********","nested":{"accessToken":"********","tokenExpiresAt":"changed"},"accounts":[{"id":"b","password":"********"},{"id":"a","password":"********"}],"devices":[]}`)

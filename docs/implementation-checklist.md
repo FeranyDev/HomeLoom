@@ -703,6 +703,20 @@ M3 退出条件：MQTT 双向链路、断线恢复和命令确认全部通过。
 - [x] 第三方云账号密码/导入会话已实现；短信/邮箱二次验证使用 10 分钟内存挑战复用原登录 Cookie，页面引导用户在小米端发送验证码并回填完成登录；
 - [ ] 实机测试记录。
 
+### v0.3：Sonoff/eWeLink Provider 初版
+
+- [x] 注册 `sonoff` Provider 并接入统一 Provider 生命周期、设备发现、属性读写和命令接口；
+- [x] 支持 `auto/local/cloud` 三种传输模式，LAN 优先、云端 REST 兜底；
+- [x] 实现 `_ewelink._tcp.local.` TXT 数据拼接、DIY 明文和 `MD5(devicekey)` → AES-128-CBC/PKCS#7 编解码；
+- [x] 支持单路、多路开关、灯具、风扇、窗帘、功率计量、温湿度、门窗和运动等常用 UIID 能力；
+- [x] 未知原始参数保留在 `sonoff-raw` 原生能力中；
+- [x] 云端 REST 客户端支持家庭/设备目录、状态命令、Token 注入和敏感信息错误脱敏；
+- [x] `deviceKey` 纳入 Provider 配置加密、API 脱敏和日志脱敏；
+- [x] 为配置、能力映射、LAN/云端客户端和双通道路由补充单元测试；
+- [x] Provider 创建流程支持 eWeLink 账号密码登录、区域端点发现、Access Token 回填和保存后 Token 失效自动重新登录；
+- [~] LAN mDNS 自动发现、云端 WebSocket 实时推送和实机兼容性待后续完成；
+- [ ] Sonoff 真实设备、跨 VLAN mDNS、断网恢复和长时间功率数据实机记录。
+
 ### v0.4：Logical Device 和多 Provider 路由
 
 - [ ] Logical Device；
