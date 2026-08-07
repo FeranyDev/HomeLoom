@@ -21,6 +21,71 @@ func TestAccessoryConfigNumberTracksCurrentCameraSchema(t *testing.T) {
 	}
 }
 
+func TestFindHomeKitTranscodeSourceSkipsNativeAndUsesLatestH264Fallback(t *testing.T) {
+	sources := []string{
+		"${HOMELOOM_CAMERA_SOURCE_CAMERA_MAIN}",
+		"ffmpeg:camera-main#video=h264#audio=opus/16000#width=1280#height=720",
+		"ffmpeg:camera-main#video=h264#audio=opus/16000#width=640#height=360",
+	}
+	want := sources[2]
+	if got := findHomeKitTranscodeSource(sources); got != want {
+		t.Fatalf("H264 fallback = %q, want %q", got, want)
+	}
+	if got := findHomeKitTranscodeSource([]string{"${HOMELOOM_CAMERA_SOURCE_CAMERA_MAIN}"}); got != "" {
+		t.Fatalf("native-only stream unexpectedly produced fallback %q", got)
+	}
+}
+
+func TestNormalizeConnectionModeDefaultsToOnDemand(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  string
+	}{
+		{input: "", want: "on_demand"},
+		{input: "invalid", want: "on_demand"},
+		{input: "preload", want: "preload"},
+		{input: "always_on", want: "always_on"},
+	} {
+		if got := normalizeConnectionMode(test.input); got != test.want {
+			t.Fatalf("normalizeConnectionMode(%q) = %q, want %q", test.input, got, test.want)
+		}
+	}
+}
+
+func TestExpiredPreloadSessionReleasesTemporaryInput(t *testing.T) {
+	srv := &server{
+		stream:              "camera-main",
+		inputStream:         "camera-main__homeloom_h264",
+		connectionMode:      "preload",
+		previewPreloaded:    true,
+		previewExpired:      true,
+		activeMediaSessions: 0,
+	}
+
+	input, release := srv.acquireHomeKitSessionInput()
+	if input != "camera-main__homeloom_h264" {
+		t.Fatalf("session input = %q", input)
+	}
+	release()
+	if srv.inputStream != "camera-main" || srv.previewPreloaded {
+		t.Fatalf("expired preload input was not released: %#v", srv)
+	}
+}
+
+func TestAlwaysOnSessionInputDoesNotOwnPreviewLease(t *testing.T) {
+	srv := &server{
+		stream:         "camera-main",
+		inputStream:    "camera-main",
+		connectionMode: "always_on",
+	}
+
+	input, release := srv.acquireHomeKitSessionInput()
+	release()
+	if input != "camera-main" || srv.activeMediaSessions != 0 {
+		t.Fatalf("always_on session unexpectedly owned temporary input: input=%q sessions=%d", input, srv.activeMediaSessions)
+	}
+}
+
 func TestHAPConnectionCloseStopsOwnedMediaConsumer(t *testing.T) {
 	local, remote := net.Pipe()
 	defer local.Close()
@@ -167,7 +232,10 @@ func TestEndCommandStopsPreparedSessionAndRetainsDiagnostic(t *testing.T) {
 	defer local.Close()
 	defer remote.Close()
 	consumer := pkghomekit.NewConsumer(local, srtp.NewServer("127.0.0.1:0"))
-	consumer.SetOffer(&camera.SetupEndpointsRequest{SessionID: "session-1"})
+	consumer.SetOffer(&camera.SetupEndpointsRequest{
+		SessionID: "session-1",
+		Address:   camera.Address{IPVersion: 0, IPAddr: "127.0.0.1", VideoRTPPort: 5000, AudioRTPPort: 5002},
+	})
 	accessory := camera.NewAccessory("HomeLoom", "Camera", "Camera", "camera-1", "dev")
 	srv := &server{accessory: accessory}
 	slot, ok := srv.streamSlotForCharacteristic(accessory.Services[1].GetCharacter(camera.TypeSetupEndpoints))

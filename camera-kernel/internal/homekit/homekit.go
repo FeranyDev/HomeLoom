@@ -25,12 +25,13 @@ const accessoryConfigNumber = "10"
 func Init() {
 	var cfg struct {
 		Mod map[string]struct {
-			Pin           string   `yaml:"pin"`
-			Name          string   `yaml:"name"`
-			DeviceID      string   `yaml:"device_id"`
-			DevicePrivate string   `yaml:"device_private"`
-			CategoryID    string   `yaml:"category_id"`
-			Pairings      []string `yaml:"pairings"`
+			Pin            string   `yaml:"pin"`
+			Name           string   `yaml:"name"`
+			ConnectionMode string   `yaml:"connection_mode"`
+			DeviceID       string   `yaml:"device_id"`
+			DevicePrivate  string   `yaml:"device_private"`
+			CategoryID     string   `yaml:"category_id"`
+			Pairings       []string `yaml:"pairings"`
 		} `yaml:"homekit"`
 	}
 	app.LoadConfig(&cfg)
@@ -54,7 +55,6 @@ func Init() {
 			log.Warn("missing stream", zap.String("stream", id))
 			continue
 		}
-
 		if conf.Pin == "" {
 			conf.Pin = "19550224" // default PIN
 		}
@@ -70,9 +70,11 @@ func Init() {
 		setupID := calcSetupID(id)
 
 		srv := &server{
-			stream:   id,
-			pairings: loadDurablePairings(id, conf.Pairings),
-			setupID:  setupID,
+			stream:         id,
+			inputStream:    id,
+			connectionMode: normalizeConnectionMode(conf.ConnectionMode),
+			pairings:       loadDurablePairings(id, conf.Pairings),
+			setupID:        setupID,
 		}
 
 		srv.hap = &hap.Server{
@@ -124,6 +126,50 @@ func Init() {
 var log = zap.NewNop()
 var hosts map[string]*server
 var servers map[string]*server
+
+const homeKitInputStreamSuffix = "__homeloom_h264"
+
+// ensureHomeKitInputStream creates a named H.264 input when a temporary
+// HomeKit preview lease needs one. It deliberately does not preload the input;
+// the caller owns that lifecycle so on_demand and preload cameras remain idle
+// until a real HomeKit preview or live session needs media.
+func ensureHomeKitInputStream(streamID string, stream *streams.Stream) string {
+	inputID := streamID + homeKitInputStreamSuffix
+	if existing := streams.Get(inputID); existing != nil {
+		return inputID
+	}
+	var transcodeSource string
+	sources := stream.Sources()
+	transcodeSource = findHomeKitTranscodeSource(sources)
+	if transcodeSource == "" {
+		return streamID
+	}
+	if _, err := streams.New(inputID, transcodeSource); err != nil {
+		log.Warn("HomeKit stable H264 input initialization failed", zap.Error(err),
+			zap.String("stream", streamID), zap.String("source", transcodeSource))
+		return streamID
+	}
+	return inputID
+}
+
+func findHomeKitTranscodeSource(sources []string) string {
+	for index := len(sources) - 1; index >= 0; index-- {
+		source := sources[index]
+		if strings.HasPrefix(source, "ffmpeg:") && strings.Contains(source, "#video=h264") {
+			return source
+		}
+	}
+	return ""
+}
+
+func normalizeConnectionMode(mode string) string {
+	switch mode {
+	case "always_on", "preload", "on_demand":
+		return mode
+	default:
+		return "on_demand"
+	}
+}
 
 func streamHandler(rawURL string) (core.Producer, error) {
 	if srtp.Server == nil {

@@ -33,6 +33,12 @@ import (
 
 const initialControllerRTCPWait = 250 * time.Millisecond
 
+// HomeKit refreshes the camera tile periodically while the Home view is open.
+// Keeping the temporary H.264 producer alive for one minute avoids an
+// encoder start/stop cycle between those refreshes without making preload
+// cameras permanently consume an encoder when HomeKit is idle.
+const homeKitPreviewKeepalive = time.Minute
+
 type server struct {
 	hap  *hap.Server // server for HAP connection and encryption
 	mdns *mdns.ServiceEntry
@@ -41,12 +47,21 @@ type server struct {
 	conns    []any
 	mu       sync.Mutex
 
-	accessory   *hap.Accessory // HAP accessory
-	consumers   map[uint64]*homekit.Consumer
-	lastSession homekit.SessionStatus
-	proxyURL    string
-	setupID     string
-	stream      string // stream name from YAML
+	accessory      *hap.Accessory // HAP accessory
+	consumers      map[uint64]*homekit.Consumer
+	lastSession    homekit.SessionStatus
+	proxyURL       string
+	setupID        string
+	stream         string // stream name from YAML
+	inputStream    string // current shared H.264 input stream for HomeKit sessions
+	connectionMode string
+
+	mediaMu             sync.Mutex
+	previewTimer        *time.Timer
+	previewGeneration   uint64
+	previewPreloaded    bool
+	previewExpired      bool
+	activeMediaSessions int
 }
 
 func (s *server) MarshalJSON() ([]byte, error) {
@@ -70,6 +85,145 @@ func (s *server) MarshalJSON() ([]byte, error) {
 		v.SetupID = s.setupID
 	}
 	return json.Marshal(v)
+}
+
+func (s *server) currentInputStream() string {
+	s.mediaMu.Lock()
+	defer s.mediaMu.Unlock()
+	if s.inputStream == "" {
+		return s.stream
+	}
+	return s.inputStream
+}
+
+// touchHomeKitPreview starts or refreshes the temporary H.264 producer used by
+// preload cameras. always_on already has a permanent shared H.264 producer and
+// on_demand must not acquire any background media, so both modes are no-ops.
+func (s *server) touchHomeKitPreview() {
+	if s.connectionMode != "preload" {
+		return
+	}
+
+	source := streams.Get(s.stream)
+	if source == nil {
+		return
+	}
+
+	s.mediaMu.Lock()
+	if s.inputStream == "" {
+		s.inputStream = s.stream
+	}
+	if s.inputStream == s.stream {
+		inputID := ensureHomeKitInputStream(s.stream, source)
+		if inputID == s.stream {
+			s.mediaMu.Unlock()
+			log.Debug("HomeKit preview did not find an H264 fallback", zap.String("stream", s.stream))
+			return
+		}
+		s.inputStream = inputID
+	}
+
+	inputID := s.inputStream
+	s.previewGeneration++
+	generation := s.previewGeneration
+	s.previewExpired = false
+	if s.previewTimer != nil {
+		s.previewTimer.Stop()
+	}
+	s.previewTimer = time.AfterFunc(homeKitPreviewKeepalive, func() {
+		s.expireHomeKitPreview(generation)
+	})
+	startPreload := !s.previewPreloaded
+	s.previewPreloaded = true
+	s.mediaMu.Unlock()
+
+	if startPreload {
+		if err := streams.AddPreload(inputID, "video"); err != nil {
+			s.mediaMu.Lock()
+			if s.previewGeneration == generation {
+				s.previewPreloaded = false
+				s.previewExpired = false
+				s.inputStream = s.stream
+				if s.previewTimer != nil {
+					s.previewTimer.Stop()
+					s.previewTimer = nil
+				}
+			}
+			s.mediaMu.Unlock()
+			log.Warn("HomeKit temporary H264 preload failed", zap.Error(err), zap.String("stream", s.stream), zap.String("input_stream", inputID))
+			return
+		}
+		log.Info("HomeKit temporary H264 preload started", zap.String("stream", s.stream), zap.String("input_stream", inputID))
+	} else {
+		log.Debug("HomeKit temporary H264 preload refreshed", zap.String("stream", s.stream), zap.String("input_stream", inputID))
+	}
+}
+
+func (s *server) expireHomeKitPreview(generation uint64) {
+	s.mediaMu.Lock()
+	if generation != s.previewGeneration || !s.previewPreloaded {
+		s.mediaMu.Unlock()
+		return
+	}
+	s.previewExpired = true
+	if s.activeMediaSessions > 0 {
+		s.mediaMu.Unlock()
+		return
+	}
+	inputID := s.releaseHomeKitPreviewLocked()
+	s.mediaMu.Unlock()
+	s.removeHomeKitPreviewPreload(inputID)
+}
+
+func (s *server) releaseHomeKitPreviewLocked() string {
+	if !s.previewPreloaded || s.inputStream == "" || s.inputStream == s.stream {
+		return ""
+	}
+	inputID := s.inputStream
+	s.inputStream = s.stream
+	s.previewPreloaded = false
+	s.previewExpired = false
+	s.previewTimer = nil
+	return inputID
+}
+
+func (s *server) removeHomeKitPreviewPreload(inputID string) {
+	if inputID == "" || inputID == s.stream {
+		return
+	}
+	if err := streams.DelPreload(inputID); err != nil {
+		log.Debug("HomeKit temporary H264 preload already stopped", zap.Error(err), zap.String("stream", s.stream), zap.String("input_stream", inputID))
+		return
+	}
+	log.Info("HomeKit temporary H264 preload released", zap.String("stream", s.stream), zap.String("input_stream", inputID))
+}
+
+func (s *server) acquireHomeKitSessionInput() (string, func()) {
+	s.mediaMu.Lock()
+	inputID := s.inputStream
+	if inputID == "" {
+		inputID = s.stream
+	}
+	if s.connectionMode == "preload" && inputID != s.stream {
+		s.activeMediaSessions++
+	}
+	s.mediaMu.Unlock()
+
+	return inputID, func() {
+		s.mediaMu.Lock()
+		if s.connectionMode != "preload" || inputID == s.stream || s.activeMediaSessions == 0 {
+			s.mediaMu.Unlock()
+			return
+		}
+		s.activeMediaSessions--
+		if s.activeMediaSessions != 0 || !s.previewExpired {
+			s.mediaMu.Unlock()
+			return
+		}
+		released := s.releaseHomeKitPreviewLocked()
+		s.mediaMu.Unlock()
+		s.removeHomeKitPreviewPreload(released)
+	}
 }
 
 func (s *server) Handle(w http.ResponseWriter, r *http.Request) {
@@ -500,17 +654,20 @@ func (s *server) runConsumer(slot uint64, consumer *homekit.Consumer) {
 		zap.Int("audio_sample_rate_hz", selection.AudioSampleRate), zap.Uint8("audio_packet_time_ms", selection.AudioPacketTime),
 		zap.Uint16("audio_max_bitrate_kbps", selection.AudioMaxBitrate))
 	// Session-local software transcode matching the controller selection
-	// (width/height/bitrate). The always-on shared 720p stream is for preload
-	// only: feeding 720p@CRF into a 360p@132K HomeKit session causes FIR storms
-	// and unplayable video. Do not use VideoToolbox HEVC hard-decode here.
-	stream := streams.NewStream(homeKitSessionSources(s.stream, selection))
-	attached := false
+	// (width/height/bitrate). The shared input stream is only a warm, clean H264
+	// source; it is still resized here because feeding 720p@CRF directly into a
+	// 360p@132K HomeKit session causes FIR storms and unplayable video. Do not
+	// use VideoToolbox HEVC hard-decode here.
+	inputStream, releaseInput := s.acquireHomeKitSessionInput()
+	defer releaseInput()
+	stream := streams.NewStream(homeKitSessionSources(inputStream, selection))
 	defer func() {
-		if attached {
-			stream.RemoveConsumer(consumer)
-		} else {
-			_ = consumer.Stop()
-		}
+		// RemoveConsumer is idempotent for the HAP consumer and also stops any
+		// session-local FFmpeg producer when AddConsumer partially started it.
+		// This is important for always_on: the shared H.264 producer remains, but
+		// the controller-specific second transcode must not remain alive.
+		stream.RemoveConsumer(consumer)
+		log.Debug("HomeKit session transcode released", zap.String("stream", s.stream), zap.Uint64("stream_slot", slot))
 		status := consumer.Status()
 		s.rememberSessionStatus(status)
 		s.DelConn(consumer)
@@ -543,7 +700,6 @@ func (s *server) runConsumer(slot uint64, consumer *homekit.Consumer) {
 		log.Warn("start live stream consumer failed", zap.Error(err), zap.String("stream", s.stream), zap.Uint64("stream_slot", slot))
 		return
 	}
-	attached = true
 	startStatus := consumer.Status()
 	log.Info("live stream consumer started", zap.String("stream", s.stream), zap.Uint64("stream_slot", slot),
 		zap.Bool("rtcp_before_media", startStatus.VideoRTCPDatagrams > 0))
@@ -906,7 +1062,10 @@ func sessionStateRank(state string) int {
 func (s *server) GetImage(conn net.Conn, width, height int) []byte {
 	log.Debug("snapshot requested", zap.String("stream", s.stream), zap.Int("width", width), zap.Int("height", height))
 
-	stream := streams.Get(s.stream)
+	stream := streams.Get(s.currentInputStream())
+	if stream == nil {
+		return nil
+	}
 	cons := magic.NewKeyframe()
 
 	if err := stream.AddConsumer(cons); err != nil {
@@ -925,6 +1084,13 @@ func (s *server) GetImage(conn net.Conn, width, height int) []byte {
 		if b, err = ffmpeg.JPEGWithScale(b, width, height); err != nil {
 			return nil
 		}
+	}
+
+	if len(b) > 0 {
+		// Apple Home requests snapshots while the Home tab is visible. Treat a
+		// successful image as activity, not merely a request, so failed retries
+		// do not keep a temporary encoder alive indefinitely.
+		s.touchHomeKitPreview()
 	}
 
 	return b

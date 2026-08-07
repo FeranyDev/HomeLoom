@@ -790,12 +790,13 @@ func publisherYAML(config PublisherConfig) string {
 	}
 	// Follow go2rtc's documented codec-negotiation layout: preserve a native
 	// H.264 stream when available, then try OS hardware paths before software.
-	builder.WriteString("streams:\n  " + yamlString(config.StreamID) + ": " + streamProducerListYAML(streamURI, sharedTranscodeURIs(config.StreamID)) + "\n")
+	builder.WriteString("streams:\n  " + yamlString(config.StreamID) + ": " + streamProducerListYAML(streamURI, publisherTranscodeURIs(config.StreamID, config.ConnectionMode)) + "\n")
 	if query := preloadQuery(config.ConnectionMode, config.Audio); query != "" {
 		builder.WriteString("preload:\n  " + yamlString(config.StreamID) + ": " + yamlString(query) + "\n")
 	}
 	if config.PublishHomeKit {
 		builder.WriteString("homekit:\n  " + yamlString(config.StreamID) + ":\n")
+		builder.WriteString("    connection_mode: " + yamlString(config.ConnectionMode) + "\n")
 		builder.WriteString("    name: " + yamlString(config.HomeKit.Name) + "\n")
 		builder.WriteString("    pin: \"${" + homeKitPINEnv(config) + "}\"\n")
 		builder.WriteString("    device_id: " + yamlString(config.HomeKit.DeviceID) + "\n")
@@ -862,12 +863,13 @@ func upgradePublisherConfig(path string, config PublisherConfig) error {
 	lines := strings.Split(updated, "\n")
 	for index, line := range lines {
 		if strings.HasPrefix(line, streamPrefix) {
-			lines[index] = streamPrefix + streamProducerListYAML("${"+sourceEnv(config)+"}", sharedTranscodeURIs(config.StreamID))
+			lines[index] = streamPrefix + streamProducerListYAML("${"+sourceEnv(config)+"}", publisherTranscodeURIs(config.StreamID, config.ConnectionMode))
 			break
 		}
 	}
 	updated = strings.Join(lines, "\n")
 	updated = applyPreloadConfig(updated, config)
+	updated = applyHomeKitConnectionMode(updated, config)
 	if updated == string(content) {
 		return nil
 	}
@@ -943,6 +945,21 @@ func sharedTranscodeURIs(streamID string) []string {
 		"width=1280",
 		"height=720",
 	})
+}
+
+// alwaysOnTranscodeURIs is the permanent H.264 compatibility output. It does
+// not impose the 720p dimensions used by the on-demand preview fallback, so a
+// single always-on producer can be shared by web preview and HomeKit without
+// reducing the camera's source resolution or applying a controller bitrate.
+func alwaysOnTranscodeURIs(streamID string) []string {
+	return transcodeFallbackURIs(streamID, []string{"audio=opus/16000"})
+}
+
+func publisherTranscodeURIs(streamID, connectionMode string) []string {
+	if connectionMode == "always_on" {
+		return alwaysOnTranscodeURIs(streamID)
+	}
+	return sharedTranscodeURIs(streamID)
 }
 
 func streamProducerListYAML(native string, fallbacks []string) string {
@@ -1096,6 +1113,53 @@ func applyPreloadConfig(content string, config PublisherConfig) string {
 		return content[:marker] + section + content[marker:]
 	}
 	return strings.TrimRight(content, "\n") + "\n" + section
+}
+
+// applyHomeKitConnectionMode keeps an existing paired publisher in sync with
+// the media stream mode without rewriting its identity or pairings.
+func applyHomeKitConnectionMode(content string, config PublisherConfig) string {
+	if !config.PublishHomeKit {
+		return content
+	}
+
+	lines := strings.Split(content, "\n")
+	targets := map[string]struct{}{
+		"  " + yamlString(config.StreamID) + ":": {},
+		"  " + config.StreamID + ":":             {},
+	}
+	homeKit := -1
+	stream := -1
+	for index, line := range lines {
+		if line == "homekit:" {
+			homeKit = index
+			continue
+		}
+		if homeKit >= 0 && stream < 0 {
+			if _, ok := targets[line]; !ok {
+				continue
+			}
+			stream = index
+			continue
+		}
+		if stream < 0 {
+			continue
+		}
+		if strings.HasPrefix(line, "    connection_mode:") {
+			lines[index] = "    connection_mode: " + yamlString(config.ConnectionMode)
+			return strings.Join(lines, "\n")
+		}
+		if line != "" && !strings.HasPrefix(line, "    ") {
+			break
+		}
+	}
+	if stream < 0 {
+		return content
+	}
+	insert := "    connection_mode: " + yamlString(config.ConnectionMode)
+	lines = append(lines, "")
+	copy(lines[stream+2:], lines[stream+1:])
+	lines[stream+1] = insert
+	return strings.Join(lines, "\n")
 }
 
 func ffmpegH264Template() string {

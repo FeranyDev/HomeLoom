@@ -112,6 +112,20 @@ func (p *catalogControlProvider) SourceCatalog(context.Context) ([]providersdk.S
 	return result, nil
 }
 
+type catalogProvider struct {
+	bindingProvider
+	catalog []providersdk.SourceCatalogDevice
+}
+
+func (p *catalogProvider) SourceCatalog(context.Context) ([]providersdk.SourceCatalogDevice, error) {
+	result := make([]providersdk.SourceCatalogDevice, len(p.catalog))
+	for index := range p.catalog {
+		result[index] = p.catalog[index]
+		result[index].Device = p.catalog[index].Device.Clone()
+	}
+	return result, nil
+}
+
 func (p *controlProvider) Manifest() providersdk.Manifest {
 	return providersdk.Manifest{ID: p.id, Type: "xiaomi", Name: p.id}
 }
@@ -335,6 +349,44 @@ func TestManagerUsesNativeCatalogForControlOnlyCameraCapabilities(t *testing.T) 
 	if !catalog[0].Catalog.Complete || catalog[0].Catalog.Model != "vendor.camera.v1" ||
 		catalog[0].Catalog.Values[providersdk.SourceValueKey("main", "privacy", "enabled")].Known != true {
 		t.Fatalf("composed source catalog metadata = %#v", catalog[0].Catalog)
+	}
+}
+
+func TestManagerSourceCatalogPreservesNativePropertiesAlongsidePublicProjection(t *testing.T) {
+	public := device.Capability{ID: "switch", Type: "switch", Properties: []device.Property{{
+		Definition: device.PropertyDefinition{ID: "power", Name: "Power", Type: device.ValueTypeBool, Readable: true},
+		Value:      device.BoolValue(false),
+	}}}
+	native := device.Capability{ID: "native", Type: "vendor", Properties: []device.Property{{
+		Definition: device.PropertyDefinition{ID: "firmware-channel", Name: "Firmware Channel", Type: device.ValueTypeString, Readable: true},
+		Value:      device.StringValue("stable"),
+	}}}
+	provider := &catalogProvider{
+		bindingProvider: bindingProvider{id: "xiaomi-main", devices: []device.Device{cameraSnapshot("camera-one", "xiaomi-main", true, public)}},
+		catalog: []providersdk.SourceCatalogDevice{{
+			Device:  cameraSnapshot("camera-one", "xiaomi-main", true, native),
+			Catalog: providersdk.SourceCatalogMetadata{Complete: true, Source: "miot-spec-cache"},
+		}},
+	}
+	manager, err := providermanager.New(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := manager.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close(ctx)
+
+	catalog, err := manager.SourceCatalog(ctx)
+	if err != nil || len(catalog) != 1 {
+		t.Fatalf("source catalog = %#v, err=%v", catalog, err)
+	}
+	if _, ok := catalog[0].Property("main", "native", "firmware-channel"); !ok {
+		t.Fatalf("native source property was discarded: %#v", catalog[0].Device)
+	}
+	if _, ok := catalog[0].Property("main", "switch", "power"); !ok {
+		t.Fatalf("public projection property was not retained: %#v", catalog[0].Device)
 	}
 }
 

@@ -511,7 +511,16 @@ func (m *Manager) SourceCatalog(ctx context.Context) ([]providersdk.SourceCatalo
 				Complete: false, Source: "composed-discovery", Error: "canonical Provider source catalog is unavailable",
 			}}
 		}
-		composed.Device = item.Clone()
+		// Keep the native catalog as the source of truth. DiscoverDevices returns
+		// the deliberately narrow public projection, so replacing the catalog
+		// device with it would silently discard every unmapped native property.
+		// The public projection can still carry composed control capabilities that
+		// are not present in the canonical Provider catalog; merge those extras in.
+		if exists {
+			composed.Device = mergeSourceCatalogDevice(composed.Device, item)
+		} else {
+			composed.Device = item.Clone()
+		}
 		for sourceKey, canonicalDeviceID := range boundSources {
 			if canonicalDeviceID != item.ID {
 				continue
@@ -533,6 +542,84 @@ func (m *Manager) SourceCatalog(ctx context.Context) ([]providersdk.SourceCatalo
 		return result[i].ID < result[j].ID
 	})
 	return result, nil
+}
+
+// mergeSourceCatalogDevice preserves a Provider's complete native snapshot and
+// adds structural capabilities from the composed public snapshot. The latter
+// is needed for control-only sources (for example camera capabilities delegated
+// from a Xiaomi hub), while the native snapshot must remain authoritative for
+// source properties, values and definitions.
+func mergeSourceCatalogDevice(native, composed device.Device) device.Device {
+	merged := native.Clone()
+	merged.SchemaVersion = composed.SchemaVersion
+	merged.ID, merged.ProviderID = composed.ID, composed.ProviderID
+	merged.Name, merged.Type = composed.Name, composed.Type
+	merged.HomeID, merged.HomeName = composed.HomeID, composed.HomeName
+	merged.RoomID, merged.RoomName = composed.RoomID, composed.RoomName
+	merged.Availability, merged.Online = composed.Availability, composed.Online
+	merged.Sequence, merged.Disabled, merged.Removed = composed.Sequence, composed.Disabled, composed.Removed
+	merged.RuntimeMode, merged.StateTransport = composed.RuntimeMode, composed.StateTransport
+	if composed.LastUpdateAt.After(merged.LastUpdateAt) {
+		merged.LastUpdateAt = composed.LastUpdateAt
+	}
+
+	endpointIndexes := make(map[string]int, len(merged.Endpoints))
+	for index, endpoint := range merged.Endpoints {
+		endpointIndexes[endpoint.ID] = index
+	}
+	for _, composedEndpoint := range composed.Endpoints {
+		endpointIndex, exists := endpointIndexes[composedEndpoint.ID]
+		if !exists {
+			merged.Endpoints = append(merged.Endpoints, composedEndpoint)
+			endpointIndexes[composedEndpoint.ID] = len(merged.Endpoints) - 1
+			continue
+		}
+		mergedEndpoint := &merged.Endpoints[endpointIndex]
+		capabilityIndexes := make(map[string]int, len(mergedEndpoint.Capabilities))
+		for index, capability := range mergedEndpoint.Capabilities {
+			capabilityIndexes[capability.ID] = index
+		}
+		for _, composedCapability := range composedEndpoint.Capabilities {
+			capabilityIndex, exists := capabilityIndexes[composedCapability.ID]
+			if !exists {
+				mergedEndpoint.Capabilities = append(mergedEndpoint.Capabilities, composedCapability)
+				capabilityIndexes[composedCapability.ID] = len(mergedEndpoint.Capabilities) - 1
+				continue
+			}
+			mergedCapability := &mergedEndpoint.Capabilities[capabilityIndex]
+			propertyIDs := make(map[string]struct{}, len(mergedCapability.Properties))
+			for _, property := range mergedCapability.Properties {
+				propertyIDs[property.Definition.ID] = struct{}{}
+			}
+			for _, property := range composedCapability.Properties {
+				if _, exists := propertyIDs[property.Definition.ID]; !exists {
+					mergedCapability.Properties = append(mergedCapability.Properties, property)
+					propertyIDs[property.Definition.ID] = struct{}{}
+				}
+			}
+			commandIDs := make(map[string]struct{}, len(mergedCapability.Commands))
+			for _, command := range mergedCapability.Commands {
+				commandIDs[command.ID] = struct{}{}
+			}
+			for _, command := range composedCapability.Commands {
+				if _, exists := commandIDs[command.ID]; !exists {
+					mergedCapability.Commands = append(mergedCapability.Commands, command)
+					commandIDs[command.ID] = struct{}{}
+				}
+			}
+			eventIDs := make(map[string]struct{}, len(mergedCapability.Events))
+			for _, event := range mergedCapability.Events {
+				eventIDs[event.ID] = struct{}{}
+			}
+			for _, event := range composedCapability.Events {
+				if _, exists := eventIDs[event.ID]; !exists {
+					mergedCapability.Events = append(mergedCapability.Events, event)
+					eventIDs[event.ID] = struct{}{}
+				}
+			}
+		}
+	}
+	return merged
 }
 
 func mergeSourceCatalogMetadata(

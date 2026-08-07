@@ -353,6 +353,35 @@ func TestTranscodeSourceMatchesAdvertisedHomeKitMedia(t *testing.T) {
 	}
 }
 
+func TestAlwaysOnPublisherUsesUnscaledH264Fallback(t *testing.T) {
+	config := publisherTestConfig(t.TempDir())
+	config.ConnectionMode = "always_on"
+	text := publisherYAML(config)
+	for _, required := range []string{"connection_mode: \"always_on\"", "ffmpeg:camera-main#video=h264#audio=opus/16000"} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("always_on publisher config missing %q:\n%s", required, text)
+		}
+	}
+	for _, forbidden := range []string{"#width=1280", "#height=720", "#bitrate="} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("always_on publisher config retained shared quality clamp %q:\n%s", forbidden, text)
+		}
+	}
+}
+
+func TestOnlyAlwaysOnUsesUnscaledSharedTranscode(t *testing.T) {
+	for _, mode := range []string{"on_demand", "preload"} {
+		uris := publisherTranscodeURIs("camera-main", mode)
+		if len(uris) == 0 || !strings.Contains(uris[len(uris)-1], "#width=1280#height=720") {
+			t.Fatalf("%s changed its existing preview fallback: %#v", mode, uris)
+		}
+	}
+	uris := publisherTranscodeURIs("camera-main", "always_on")
+	if len(uris) == 0 || strings.Contains(uris[len(uris)-1], "#width=") || strings.Contains(uris[len(uris)-1], "#height=") {
+		t.Fatalf("always_on retained a fixed preview size: %#v", uris)
+	}
+}
+
 func TestTranscodeFallbackChainEndsWithSoftware(t *testing.T) {
 	uris := sharedTranscodeURIs("camera-main")
 	if len(uris) < 1 {
@@ -388,6 +417,22 @@ func TestExistingPublisherConfigReplacesOldVideoToolboxTemplate(t *testing.T) {
 	}
 	if strings.Contains(updated, "-g 50") || strings.Contains(updated, "videotoolbox") {
 		t.Fatalf("old encoder template was not replaced:\n%s", updated)
+	}
+}
+
+func TestApplyHomeKitConnectionModePreservesPairings(t *testing.T) {
+	content := "homekit:\n  camera-main:\n    name: Camera\n    pairings:\n      - client_id=controller\n"
+	config := publisherTestConfig(t.TempDir())
+	config.ConnectionMode = "always_on"
+	updated := applyHomeKitConnectionMode(content, config)
+	if !strings.Contains(updated, "    connection_mode: \"always_on\"\n") ||
+		!strings.Contains(updated, "      - client_id=controller\n") {
+		t.Fatalf("connection mode update lost HomeKit data:\n%s", updated)
+	}
+	config.ConnectionMode = "preload"
+	updated = applyHomeKitConnectionMode(updated, config)
+	if strings.Count(updated, "connection_mode:") != 1 || !strings.Contains(updated, "    connection_mode: \"preload\"\n") {
+		t.Fatalf("connection mode update was not idempotent:\n%s", updated)
 	}
 }
 
