@@ -20,6 +20,12 @@ import (
 )
 
 type clientFactory func() hubClient
+type recoveryClientFactory func(Config) (hubClient, error)
+
+type runtimeConfigChange struct {
+	previous    json.RawMessage
+	replacement json.RawMessage
+}
 
 type deviceRoute struct {
 	local bool
@@ -55,11 +61,16 @@ const (
 )
 
 type Provider struct {
-	id       string
-	name     string
-	config   Config
-	factory  clientFactory
-	resolver *SpecResolver
+	id                  string
+	name                string
+	config              Config
+	factory             clientFactory
+	recoveryFactory     recoveryClientFactory
+	discoverGateways    func(context.Context) ([]Gateway, error)
+	resolver            *SpecResolver
+	configDocument      json.RawMessage
+	pendingConfigChange *runtimeConfigChange
+	configChangeHandler func(previous, replacement json.RawMessage)
 
 	mu                       sync.RWMutex
 	client                   hubClient
@@ -144,6 +155,8 @@ func NewProviderFromConfigWithSpecResolver(item providerconfig.Config, resolver 
 	if err != nil {
 		return nil, err
 	}
+	provider.configDocument = append(json.RawMessage(nil), item.Config...)
+	provider.recoveryFactory = newRecoveryMIPSClient
 	if config.OAuth != nil && strings.TrimSpace(config.OAuth.AccessToken) != "" {
 		provider.cloud = newHTTPHomeCloudClient(*config.OAuth, &http.Client{Timeout: config.requestTimeout()})
 		provider.cloudMIPS, err = newCloudMIPSClient(*config.OAuth, config.requestTimeout())
@@ -159,7 +172,11 @@ func newProvider(id, name string, config Config, factory clientFactory) (*Provid
 }
 
 func newProviderWithResolver(id, name string, config Config, factory clientFactory, resolver *SpecResolver) (*Provider, error) {
-	provider := &Provider{id: id, name: name, config: config, factory: factory, resolver: resolver, devices: make(map[string]device.Device), sourceDevices: make(map[string]device.Device), byDID: make(map[string]string), routes: make(map[string]deviceRoute), rawProperties: make(map[string]PropertyMapping), rawActions: make(map[string]ActionMapping), propertyInterests: make(map[string]struct{}), catalog: make(map[string]providersdk.SourceCatalogMetadata), valueStatus: make(map[string]providersdk.SourceValueStatus), observations: make(map[string]propertyObservation), propertyFailures: make(map[string]propertyReadFailure), listeners: make(map[uint64]func(device.Device)), eventListeners: make(map[uint64]func(providersdk.DeviceEvent)), cloudDisconnectGrace: defaultCloudDisconnectGrace, cloudDirectoryInterval: defaultCloudDirectoryReconcile, directoryRefreshDebounce: 500 * time.Millisecond}
+	configDocument, err := json.Marshal(config)
+	if err != nil {
+		return nil, err
+	}
+	provider := &Provider{id: id, name: name, config: config, factory: factory, resolver: resolver, discoverGateways: DiscoverGateways, configDocument: configDocument, devices: make(map[string]device.Device), sourceDevices: make(map[string]device.Device), byDID: make(map[string]string), routes: make(map[string]deviceRoute), rawProperties: make(map[string]PropertyMapping), rawActions: make(map[string]ActionMapping), propertyInterests: make(map[string]struct{}), catalog: make(map[string]providersdk.SourceCatalogMetadata), valueStatus: make(map[string]providersdk.SourceValueStatus), observations: make(map[string]propertyObservation), propertyFailures: make(map[string]propertyReadFailure), listeners: make(map[uint64]func(device.Device)), eventListeners: make(map[uint64]func(providersdk.DeviceEvent)), cloudDisconnectGrace: defaultCloudDisconnectGrace, cloudDirectoryInterval: defaultCloudDirectoryReconcile, directoryRefreshDebounce: 500 * time.Millisecond}
 	for _, configured := range config.Devices {
 		item := buildDevice(id, configured)
 		applyCentralStalePolicy(&item, config.pollInterval())
@@ -207,11 +224,22 @@ func (p *Provider) Initialize(ctx context.Context) error {
 	p.pollIntervalChanges = make(chan time.Duration, 1)
 	p.mu.Unlock()
 	if err := client.Connect(lifecycle, ctx); err != nil {
-		cancel()
-		p.mu.Lock()
-		p.client, p.cancel, p.lifecycle = nil, nil, nil
-		p.mu.Unlock()
-		return fmt.Errorf("connect Xiaomi central hub: %w", err)
+		if recovered, recoveredConfig, recoveredFactory, recoveredOK := p.recoverGatewayAddress(ctx, lifecycle, client, err); recoveredOK {
+			client = recovered
+			p.mu.Lock()
+			p.client, p.config, p.factory = recovered, recoveredConfig, recoveredFactory
+			handler, change := p.recordGatewayAddressRecoveryLocked(recoveredConfig)
+			p.mu.Unlock()
+			if handler != nil && change != nil {
+				go handler(change.previous, change.replacement)
+			}
+		} else {
+			cancel()
+			p.mu.Lock()
+			p.client, p.cancel, p.lifecycle = nil, nil, nil
+			p.mu.Unlock()
+			return fmt.Errorf("connect Xiaomi central hub: %w", err)
+		}
 	}
 	requestCtx, requestCancel := context.WithTimeout(ctx, p.config.requestTimeout())
 	directory, err := p.refreshDirectory(requestCtx)
@@ -248,6 +276,147 @@ func (p *Provider) Initialize(ctx context.Context) error {
 	p.refreshAll(lifecycle, true)
 	go p.pollLoop(lifecycle)
 	return nil
+}
+
+const gatewayAddressRecoveryTimeout = 5 * time.Second
+
+// recoverGatewayAddress retries a timed-out local connection once using the
+// mDNS record of the already-selected gateway DID. It intentionally does not
+// match by name, role alone, or the first scan result: replacing an address
+// with a different central hub would also replace the mTLS/MIPS trust target.
+func (p *Provider) recoverGatewayAddress(ctx, lifecycle context.Context, current hubClient, cause error) (hubClient, Config, clientFactory, bool) {
+	if !errors.Is(cause, ErrGatewayInitialConnectionTimeout) {
+		return nil, Config{}, nil, false
+	}
+	p.mu.RLock()
+	config, recoveryFactory, discover := p.config, p.recoveryFactory, p.discoverGateways
+	p.mu.RUnlock()
+	if strings.TrimSpace(config.GatewayDID) == "" || recoveryFactory == nil || discover == nil {
+		return nil, Config{}, nil, false
+	}
+
+	closeCtx, closeCancel := context.WithTimeout(context.WithoutCancel(ctx), gatewayAddressRecoveryTimeout)
+	_ = current.Close(closeCtx)
+	closeCancel()
+
+	discoveryCtx, discoveryCancel := context.WithTimeout(ctx, gatewayAddressRecoveryTimeout)
+	gateways, err := discover(discoveryCtx)
+	discoveryCancel()
+	if err != nil {
+		return nil, Config{}, nil, false
+	}
+	for _, gateway := range gateways {
+		if gateway.DID != config.GatewayDID || !gateway.MQTTEnabled {
+			continue
+		}
+		host := strings.TrimSpace(gateway.PreferredAddress())
+		if host == "" || (host == config.Host && (gateway.Port == 0 || gateway.Port == config.Port)) {
+			continue
+		}
+		recovered := config
+		recovered.Host = host
+		if gateway.Port > 0 {
+			recovered.Port = gateway.Port
+		}
+		candidate, candidateErr := recoveryFactory(recovered)
+		if candidateErr != nil {
+			continue
+		}
+		candidate.SetIncomingHandler(p.handleIncoming)
+		if candidateErr = candidate.Connect(lifecycle, ctx); candidateErr != nil {
+			candidateCloseCtx, candidateCloseCancel := context.WithTimeout(context.WithoutCancel(ctx), gatewayAddressRecoveryTimeout)
+			_ = candidate.Close(candidateCloseCtx)
+			candidateCloseCancel()
+			continue
+		}
+		return candidate, recovered, newRecoveryClientFactory(recovered, recoveryFactory), true
+	}
+	return nil, Config{}, nil, false
+}
+
+func newRecoveryMIPSClient(config Config) (hubClient, error) {
+	brokerURL, err := config.validate()
+	if err != nil {
+		return nil, err
+	}
+	tlsConfig, err := config.tlsConfig()
+	if err != nil {
+		return nil, err
+	}
+	return newMIPSClient(config, brokerURL, tlsConfig), nil
+}
+
+func newRecoveryClientFactory(config Config, factory recoveryClientFactory) clientFactory {
+	return func() hubClient {
+		client, err := factory(config)
+		if err != nil {
+			return failedHubClient{err: err}
+		}
+		return client
+	}
+}
+
+type failedHubClient struct{ err error }
+
+func (c failedHubClient) Connect(context.Context, context.Context) error { return c.err }
+func (failedHubClient) Close(context.Context) error                      { return nil }
+func (failedHubClient) DeviceList(context.Context) (json.RawMessage, error) {
+	return nil, errors.New("Xiaomi gateway client was not created")
+}
+func (failedHubClient) GetProperty(context.Context, string, int, int) (json.RawMessage, error) {
+	return nil, errors.New("Xiaomi gateway client was not created")
+}
+func (failedHubClient) SetProperty(context.Context, string, int, int, any) (json.RawMessage, error) {
+	return nil, errors.New("Xiaomi gateway client was not created")
+}
+func (failedHubClient) Action(context.Context, string, int, int, []any) (json.RawMessage, error) {
+	return nil, errors.New("Xiaomi gateway client was not created")
+}
+func (failedHubClient) SetIncomingHandler(func(hubIncoming)) {}
+
+// SetRuntimeConfigChangeHandler lets the application persist an address
+// recovered by this running Provider. If recovery happened during process
+// startup before ProviderService existed, the latest update is delivered as
+// soon as the handler is attached.
+func (p *Provider) SetRuntimeConfigChangeHandler(handler func(previous, replacement json.RawMessage)) {
+	p.mu.Lock()
+	p.configChangeHandler = handler
+	pending := p.pendingConfigChange
+	if handler != nil {
+		p.pendingConfigChange = nil
+	}
+	p.mu.Unlock()
+	if handler != nil && pending != nil {
+		go handler(pending.previous, pending.replacement)
+	}
+}
+
+func (p *Provider) recordGatewayAddressRecoveryLocked(recovered Config) (func(previous, replacement json.RawMessage), *runtimeConfigChange) {
+	previous := append(json.RawMessage(nil), p.configDocument...)
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(previous, &document); err != nil || document == nil {
+		return nil, nil
+	}
+	host, err := json.Marshal(recovered.Host)
+	if err != nil {
+		return nil, nil
+	}
+	port, err := json.Marshal(recovered.Port)
+	if err != nil {
+		return nil, nil
+	}
+	document["host"], document["port"] = host, port
+	replacement, err := json.Marshal(document)
+	if err != nil {
+		return nil, nil
+	}
+	p.configDocument = replacement
+	change := &runtimeConfigChange{previous: previous, replacement: replacement}
+	if p.configChangeHandler == nil {
+		p.pendingConfigChange = change
+		return nil, change
+	}
+	return p.configChangeHandler, change
 }
 
 // refreshDirectory merges the gateway directory with the account directory.
@@ -407,7 +576,7 @@ func (p *Provider) Reconfigure(ctx context.Context, replacement providersdk.Prov
 		}
 		updatedSources[id] = item
 	}
-	p.name, p.config, p.factory, p.devices, p.sourceDevices = next.name, next.config, next.factory, updated, updatedSources
+	p.name, p.config, p.factory, p.configDocument, p.devices, p.sourceDevices = next.name, next.config, next.factory, append(json.RawMessage(nil), next.configDocument...), updated, updatedSources
 	p.rawProperties, p.rawActions, p.catalog = next.rawProperties, next.rawActions, next.catalog
 	p.byDID = make(map[string]string, len(next.byDID))
 	for did, id := range next.byDID {

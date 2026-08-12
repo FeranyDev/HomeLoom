@@ -32,6 +32,7 @@ const (
 type Config struct {
 	Host               string         `json:"host"`
 	Port               int            `json:"port,omitempty"`
+	GatewayDID         string         `json:"gatewayDid,omitempty"`
 	ClientID           string         `json:"clientId"`
 	CACertificate      string         `json:"caCertificate"`
 	ClientCertificate  string         `json:"clientCertificate"`
@@ -142,6 +143,7 @@ func decodeConfig(item providerconfig.Config) (Config, *url.URL, *tls.Config, er
 
 func (c *Config) applyDefaults() {
 	c.Host = strings.TrimSpace(c.Host)
+	c.GatewayDID = strings.TrimSpace(c.GatewayDID)
 	c.ClientID = strings.TrimSpace(c.ClientID)
 	c.ServerName = strings.TrimSpace(c.ServerName)
 	if c.Port == 0 {

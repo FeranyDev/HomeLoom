@@ -7,9 +7,8 @@ connectedhomeip `v1.5.1.0` 的官方
 [Camera App](https://github.com/project-chip/connectedhomeip/tree/v1.5.1.0/examples/camera-app)。
 
 截至 2026-07-29，本机未安装 `chip-camera-controller` 或 `chip-tool`，仓库中也没有相应
-可执行文件。因此以下内容是可执行验证步骤，不是通过记录。运行
-`scripts/check-matter-camera-controller.sh` 会在缺少二进制时以状态码 `2` 返回
-`NOT RUN`，不会把缺少工具记为成功。
+可执行文件。因此以下内容是可执行验证步骤，不是通过记录。缺少 Controller 二进制时
+不得继续验证，也不得将缺少工具记为成功。
 
 ## 1. 固定环境
 
@@ -20,12 +19,13 @@ connectedhomeip `v1.5.1.0` 的官方
   `matter-camera` Target；记录 Target ID、媒体 Stream ID 和源协议。
 - 首轮固定 Node ID 为 `1`，Camera Endpoint 为 `1`。后续 Controller 矩阵不得复用同一
   存储目录或 Fabric，避免历史会话影响结果。
-- 运行前执行 `scripts/check-matter-camera-controller.sh --controller <路径>`。只有输出
-  `READY` 才能继续；`READY` 仍不代表任何协议测试通过。
+- 运行前确认 `<路径>` 是 connectedhomeip `v1.5.1.0` 构建的可执行
+  `chip-camera-controller`，并记录其 SHA-256；准备完成仍不代表任何协议测试通过。
 
-Linux x64 的官方构建命令为：
+在 connectedhomeip 源码目录中，Linux x64 的官方构建命令为：
 
 ```text
+cd /path/to/connectedhomeip
 source scripts/activate.sh
 ./scripts/build/build_examples.py --target linux-x64-camera-controller build
 ```
@@ -41,7 +41,7 @@ source scripts/activate.sh
 2. 启动 Controller：
 
    ```text
-   scripts/check-matter-camera-controller.sh --controller <路径> --run
+   <路径>
    ```
 
 3. 在 Controller 交互提示符执行：

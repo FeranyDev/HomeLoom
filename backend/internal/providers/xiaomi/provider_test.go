@@ -3,6 +3,7 @@ package xiaomi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -19,6 +20,8 @@ type fakeHub struct {
 	handler     func(hubIncoming)
 	actions     int
 	connects    int
+	closes      int
+	connectErr  error
 	deviceLists int
 	deviceList  json.RawMessage
 }
@@ -36,10 +39,16 @@ func TestBuildDevicePreservesConfiguredLocation(t *testing.T) {
 func (f *fakeHub) Connect(context.Context, context.Context) error {
 	f.mu.Lock()
 	f.connects++
+	err := f.connectErr
+	f.mu.Unlock()
+	return err
+}
+func (f *fakeHub) Close(context.Context) error {
+	f.mu.Lock()
+	f.closes++
 	f.mu.Unlock()
 	return nil
 }
-func (f *fakeHub) Close(context.Context) error { return nil }
 func (f *fakeHub) DeviceList(context.Context) (json.RawMessage, error) {
 	f.mu.Lock()
 	f.deviceLists++
@@ -215,6 +224,87 @@ func TestProviderInitializeIsIdempotent(t *testing.T) {
 	hub.mu.Unlock()
 	if connects != 1 {
 		t.Fatalf("MQTT connection count = %d", connects)
+	}
+}
+
+func TestProviderRecoversGatewayAddressByDIDAfterInitialTimeout(t *testing.T) {
+	config := testConfig()
+	config.Host, config.Port, config.GatewayDID = "192.168.101.201", 8883, "123456789"
+	timedOut := &fakeHub{connectErr: ErrGatewayInitialConnectionTimeout}
+	recovered := &fakeHub{}
+	provider, err := newProvider("xiaomi-main", "米家", config, func() hubClient { return timedOut })
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.recoveryFactory = func(next Config) (hubClient, error) {
+		if next.Host != "192.168.101.200" || next.Port != 8883 || next.GatewayDID != config.GatewayDID {
+			t.Fatalf("recovery config = %#v", next)
+		}
+		return recovered, nil
+	}
+	provider.discoverGateways = func(context.Context) ([]Gateway, error) {
+		return []Gateway{
+			{DID: "another-hub", Addresses: []string{"192.168.101.202"}, Port: 8883, MQTTEnabled: true},
+			{DID: config.GatewayDID, Addresses: []string{"192.168.101.200"}, Port: 8883, MQTTEnabled: true},
+		}, nil
+	}
+	changes := make(chan struct {
+		previous    json.RawMessage
+		replacement json.RawMessage
+	}, 1)
+	provider.SetRuntimeConfigChangeHandler(func(previous, replacement json.RawMessage) {
+		changes <- struct {
+			previous    json.RawMessage
+			replacement json.RawMessage
+		}{previous: previous, replacement: replacement}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := provider.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close(ctx)
+	provider.mu.RLock()
+	activeHost := provider.config.Host
+	provider.mu.RUnlock()
+	if activeHost != "192.168.101.200" {
+		t.Fatalf("active host = %q", activeHost)
+	}
+	timedOut.mu.Lock()
+	closed := timedOut.closes
+	timedOut.mu.Unlock()
+	if closed != 1 {
+		t.Fatalf("timed out connection close count = %d", closed)
+	}
+	select {
+	case change := <-changes:
+		var updated map[string]any
+		if err := json.Unmarshal(change.replacement, &updated); err != nil || updated["host"] != "192.168.101.200" || updated["gatewayDid"] != config.GatewayDID {
+			t.Fatalf("recovered config = %s, %v", change.replacement, err)
+		}
+	case <-ctx.Done():
+		t.Fatal("missing recovered address update")
+	}
+}
+
+func TestProviderDoesNotRecoverGatewayAddressWithoutDID(t *testing.T) {
+	config := testConfig()
+	config.Host, config.Port = "192.168.101.201", 8883
+	timedOut := &fakeHub{connectErr: ErrGatewayInitialConnectionTimeout}
+	provider, err := newProvider("xiaomi-main", "米家", config, func() hubClient { return timedOut })
+	if err != nil {
+		t.Fatal(err)
+	}
+	discoveries := 0
+	provider.discoverGateways = func(context.Context) ([]Gateway, error) {
+		discoveries++
+		return nil, nil
+	}
+	if err := provider.Initialize(context.Background()); !errors.Is(err, ErrGatewayInitialConnectionTimeout) {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+	if discoveries != 0 {
+		t.Fatalf("mDNS discovery count = %d", discoveries)
 	}
 }
 

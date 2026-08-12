@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { ProfileManager } from './ProfileManager'
-import { storeProfileDraft } from '../profileDraft'
+import { openProfileWorkbench } from '../profileDraft'
 
 const builtIn = { schemaVersion: 1 as const, id: 'builtin-active-low', version: 1, kind: 'provider' as const, inputType: 'bool' as const, outputType: 'bool' as const, transforms: [{ type: 'invert' as const }], builtIn: true }
 const custom = { schemaVersion: 1 as const, id: 'custom-map', version: 1, kind: 'capability' as const, inputType: 'number' as const, outputType: 'number' as const, transforms: [{ type: 'scale' as const, factor: 2 }], builtIn: false }
@@ -59,9 +59,10 @@ describe('ProfileManager', () => {
     expect(api.importMany).toHaveBeenCalledWith([expect.objectContaining({ id: 'custom-profile', version: 1 })])
   })
 
-  it('opens a prefilled draft when arriving from a mapping mismatch jump', async () => {
+  it('opens the visual editor with both enum domains when arriving from a mapping mismatch tab', async () => {
     const api = { list: vi.fn().mockResolvedValue([]), create: vi.fn(), update: vi.fn(), remove: vi.fn(), importMany: vi.fn() }
-    storeProfileDraft({
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+    openProfileWorkbench({
       stage: 'provider',
       inputType: 'enum',
       outputType: 'enum',
@@ -70,6 +71,7 @@ describe('ProfileManager', () => {
       sourceLabel: 'fan-level',
       targetLabel: 'fan-speed',
     })
+    window.history.replaceState(null, '', open.mock.calls[0][0]!)
     render(<ProfileManager api={api} />)
     expect(await screen.findByLabelText('第 1 步来源值 1')).toHaveValue('Automatic')
     expect(screen.getByLabelText('第 1 步目标值 1')).toHaveValue('auto')

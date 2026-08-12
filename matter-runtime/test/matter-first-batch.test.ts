@@ -105,7 +105,7 @@ test("all Catalog types construct official endpoints and bridge state", async (t
     devices: firstBatchDevices(),
   });
 
-  assert.equal(driver.diagnostics().deviceCount, 23);
+  assert.equal(driver.diagnostics().deviceCount, 24);
   for (const device of firstBatchDevices()) {
     const deviceTypeList = await driver.readAttributeForTest(
       device.id,
@@ -128,6 +128,19 @@ test("all Catalog types construct official endpoints and bridge state", async (t
   assert.equal(
     await driver.readAttributeForTest("contact", "booleanState", "stateValue"),
     true,
+  );
+  assert.equal(
+    await driver.readAttributeForTest("network-device", "booleanState", "stateValue"),
+    true,
+  );
+  const networkDescriptor = await driver.readAttributeForTest(
+    "network-device",
+    "descriptor",
+    "deviceTypeList",
+  ) as Array<{ deviceType?: number }>;
+  assert.ok(
+    networkDescriptor.some(({ deviceType }) => deviceType === 0x15),
+    "network-device must use the official BooleanState-capable endpoint",
   );
   const motionOccupancy = await driver.readAttributeForTest(
     "motion",
@@ -343,12 +356,18 @@ test("all Catalog types construct official endpoints and bridge state", async (t
   await driver.updateAttributes([
     { deviceId: "fan", path: "FanControl.PercentSetting", value: 33 },
     { deviceId: "thermostat", path: "Thermostat.SystemMode", value: "auto" },
+    { deviceId: "network-device", path: "BooleanState.StateValue", value: false },
   ]);
+  assert.equal(
+    await driver.readAttributeForTest("network-device", "booleanState", "stateValue"),
+    false,
+  );
   assert.equal(writes.length, 7, "host replay must not loop back as controller writes");
 
   await driver.updateReachability([
     { deviceId: "humidity", reachable: false },
     { deviceId: "lock", reachable: false },
+    { deviceId: "network-device", reachable: false },
   ]);
   assert.equal(
     await driver.readAttributeForTest(
@@ -361,6 +380,14 @@ test("all Catalog types construct official endpoints and bridge state", async (t
   assert.equal(
     await driver.readAttributeForTest(
       "lock",
+      "bridgedDeviceBasicInformation",
+      "reachable",
+    ),
+    false,
+  );
+  assert.equal(
+    await driver.readAttributeForTest(
+      "network-device",
       "bridgedDeviceBasicInformation",
       "reachable",
     ),
@@ -395,6 +422,9 @@ function firstBatchDevices(): DeviceSnapshot[] {
     }),
     snapshot("humidity", 6, "humidity-sensor", {
       "RelativeHumidityMeasurement.MeasuredValue": 42.5,
+    }),
+    snapshot("network-device", 25, "network-device", {
+      "BooleanState.StateValue": true,
     }),
     snapshot("contact", 7, "contact-sensor", {
       "BooleanState.StateValue": true,

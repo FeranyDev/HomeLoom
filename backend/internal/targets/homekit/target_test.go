@@ -323,6 +323,28 @@ func TestAccessoryBindingsMapSupportedDeviceTypes(t *testing.T) {
 	}
 }
 
+func TestNetworkDeviceUsesContactOnlyAtHomeKitTargetBoundary(t *testing.T) {
+	item := device.Device{
+		SchemaVersion: device.SchemaVersion, ID: "nas", ProviderID: "network-main", Name: "NAS 网络状态", Type: device.TypeNetworkDevice,
+		Availability: device.AvailabilityOnline, Online: true, RuntimeMode: device.RuntimeModeLocal, StateTransport: device.StateTransportPending,
+		Endpoints: []device.Endpoint{{ID: "main", Name: "网络设备", Type: "network", Capabilities: []device.Capability{{
+			ID: "reachability", Type: "reachability", Properties: []device.Property{{
+				Definition: device.PropertyDefinition{ID: "reachable", Name: "在线状态", Type: device.ValueTypeBool, Readable: true, Notifiable: true}, Value: device.BoolValue(true),
+			}},
+		}}}},
+	}
+	if err := item.NormalizeModelParameters(); err != nil {
+		t.Fatal(err)
+	}
+	bindings := newAccessoryBindings([]device.Device{item}, nil, nil, application.NewDeviceService(virtual.NewProvider()), zap.NewNop())
+	if len(bindings.accessories) != 1 || bindings.contacts[item.ID] == nil {
+		t.Fatalf("network device HomeKit binding = %#v", bindings)
+	}
+	if bindings.contacts[item.ID].Value() != characteristic.ContactSensorStateContactDetected {
+		t.Fatalf("network reachability was not projected to HomeKit boolean state: %v", bindings.contacts[item.ID].Value())
+	}
+}
+
 func TestColorTemperaturePublishesDeviceRangeAndClampsUpdates(t *testing.T) {
 	provider, err := virtual.NewProviderFromConfig(providerconfig.Config{
 		ID: "room", Name: "Room",

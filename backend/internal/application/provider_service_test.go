@@ -49,6 +49,13 @@ type networkScanProvider struct {
 	closed *atomic.Int32
 }
 
+type configChangeProvider struct {
+	id      string
+	handler func(previous, replacement json.RawMessage)
+}
+
+type configChangeRuntime struct{ provider *configChangeProvider }
+
 type authProviderState struct {
 	mu       sync.Mutex
 	verified bool
@@ -138,6 +145,31 @@ func (p *connectionTestProvider) Close(context.Context) error {
 	p.closed.Add(1)
 	return nil
 }
+
+func (p *configChangeProvider) Manifest() providersdk.Manifest {
+	return providersdk.Manifest{ID: p.id, Type: "config-change", Name: p.id}
+}
+func (*configChangeProvider) Capabilities() providersdk.Capabilities {
+	return providersdk.Capabilities{}
+}
+func (*configChangeProvider) Initialize(context.Context) error { return nil }
+func (*configChangeProvider) Close(context.Context) error      { return nil }
+func (p *configChangeProvider) SetRuntimeConfigChangeHandler(handler func(previous, replacement json.RawMessage)) {
+	p.handler = handler
+}
+func (p *configChangeProvider) emit(previous, replacement json.RawMessage) {
+	if p.handler != nil {
+		p.handler(previous, replacement)
+	}
+}
+func (*configChangeRuntime) Apply(context.Context, providersdk.Provider) error { return nil }
+func (*configChangeRuntime) Remove(context.Context, string) error              { return nil }
+func (r *configChangeRuntime) ProviderInfos() []providersdk.RuntimeInfo {
+	return []providersdk.RuntimeInfo{{Manifest: r.provider.Manifest(), Status: "running"}}
+}
+func (r *configChangeRuntime) ProviderAny(id string) (providersdk.Provider, bool) {
+	return r.provider, r.provider.id == id
+}
 func (p *connectionTestProvider) TestConnection(context.Context) error {
 	p.tested.Add(1)
 	return p.testError
@@ -198,6 +230,28 @@ func (p *renewableProvider) RenewCredentials(context.Context) (json.RawMessage, 
 
 type providerStore struct {
 	items map[string]providerconfig.Config
+}
+
+func TestProviderServicePersistsRuntimeAddressRepairWithoutOverwritingNewerConfig(t *testing.T) {
+	original := providerconfig.Config{ID: "xiaomi-main", Type: "xiaomi", Name: "Xiaomi", Enabled: true, Config: json.RawMessage(`{"host":"192.168.101.201","port":8883,"gatewayDid":"123456789","privateKey":"secret"}`)}
+	store := &providerStore{items: map[string]providerconfig.Config{original.ID: original}}
+	provider := &configChangeProvider{id: original.ID}
+	service := application.NewProviderService([]providerconfig.Config{original}, store, providersdk.NewFactory(), &configChangeRuntime{provider: provider})
+
+	recovered := json.RawMessage(`{"host":"192.168.101.200","port":8883,"gatewayDid":"123456789","privateKey":"secret"}`)
+	provider.emit(original.Config, recovered)
+	if got := string(store.items[original.ID].Config); got != string(recovered) {
+		t.Fatalf("persisted recovered config = %s", got)
+	}
+	listed := service.List()
+	if len(listed) != 1 || !strings.Contains(string(listed[0].Config.Config), `"host":"192.168.101.200"`) {
+		t.Fatalf("listed config = %#v", listed)
+	}
+
+	provider.emit(original.Config, json.RawMessage(`{"host":"192.168.101.199"}`))
+	if got := string(store.items[original.ID].Config); got != string(recovered) {
+		t.Fatalf("stale update overwrote recovered config: %s", got)
+	}
 }
 
 func TestProviderServiceRedactsAndRestoresSecrets(t *testing.T) {

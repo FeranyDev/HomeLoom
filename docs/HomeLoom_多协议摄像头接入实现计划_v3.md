@@ -1613,10 +1613,9 @@ MC-1 的代码是 SDK 无关的控制契约，不代表已经能创建或配对 
 #### 18.2.5 MC-6 验证口径
 
 可重复验证命令、证据要求和 Controller 矩阵见
-[`Matter_Camera_MC6_验证清单.md`](Matter_Camera_MC6_验证清单.md)。执行前使用
-`scripts/check-matter-camera-controller.sh` 检查 connectedhomeip `v1.5.1.0`
-`chip-camera-controller`。工具不存在时脚本返回 `NOT RUN` 和非零状态，不得将单元测试、
-Matter 二维码可见或 mDNS 被发现替代为真机 Camera 验收。
+[`Matter_Camera_MC6_验证清单.md`](Matter_Camera_MC6_验证清单.md)。执行前确认
+connectedhomeip `v1.5.1.0` 的 `chip-camera-controller` 已准备就绪；工具不存在时不得将
+单元测试、Matter 二维码可见或 mDNS 被发现替代为真机 Camera 验收。
 
 MC-5/MC-6 的发布门槛至少包括：
 

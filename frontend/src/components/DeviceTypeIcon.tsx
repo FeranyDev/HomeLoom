@@ -7,6 +7,7 @@ export function DeviceTypeIcon({ type }: { type: DeviceType }) {
 				: type === 'outlet' || type === 'switch' ? <><rect x="11" y="9" width="26" height="30" rx="7" /><path d="M20 20v5M28 20v5M20 32h8" /></>
 				: type === 'temperature-humidity-sensor' || type === 'temperature-sensor' || type === 'humidity-sensor' ? <><circle cx="24" cy="24" r="15" /><path d="M18 28V17a3 3 0 0 1 6 0v11a5 5 0 1 1-6 0ZM31 18h3M31 24h3" /></>
 				: type === 'contact-sensor' ? <><rect x="10" y="11" width="18" height="27" rx="5" /><rect x="32" y="16" width="6" height="17" rx="2" /></>
+				: type === 'network-device' ? <><rect x="8" y="14" width="32" height="20" rx="4" /><path d="M14 24h1M20 24h1M26 24h1M32 24h1M18 34v4M30 34v4M13 39h22" /></>
 				: type === 'motion-sensor' ? <><circle cx="24" cy="24" r="15" /><circle cx="24" cy="24" r="5" /><path d="M11 14c4 3 7 4 13 4s9-1 13-4" /></>
 				: type === 'window-covering' ? <><path d="M10 10h28M13 14h22v24H13zM18 14v24M30 14v24" /></>
 				: type === 'fan' ? <><circle cx="24" cy="24" r="4" /><path d="M24 20c-5-7-1-12 3-10 4 2 2 8-3 10ZM28 24c7-5 12-1 10 3-2 4-8 2-10-3ZM24 28c5 7 1 12-3 10-4-2-2-8 3-10ZM20 24c-7 5-12 1-10-3 2-4 8-2 10 3Z" /></>

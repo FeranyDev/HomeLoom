@@ -54,6 +54,8 @@ HomeLoom 的 Xiaomi Provider 通过小米中枢网关的局域网 MQTT 5/MIPS �
 9. 从设备目录中选择要接入的设备、统一模型和设备级连接策略，再生成设备映射；页面同时展示“中枢本地可控”“OAuth 官方云可用”“中枢实时”“官方云实时/HTTP 补偿”能力；
 10. 在高级 JSON 中按设备 MIoT Spec 核对 `siid/piid/aiid`，保存后实时应用。
 
+选择中枢时会同时保存 mDNS 广播的 `gatewayDid`。如果已保存的局域网 IP 因 DHCP 变化而导致首次 MQTT 初始化超时，HomeLoom 会扫描 `_miot-central._tcp.local.`，只接受 DID 完全相同且声明支持 MQTT 的中枢地址，使用新地址重试一次；成功后自动写回数据库。旧配置没有 `gatewayDid`、发现到多个不一致身份或重试失败时不会猜测替换地址，管理页会保留连接错误供管理员处理。
+
 新建 Xiaomi Provider 时 `devices` 默认为空数组，不再生成 DID 为空的示例设备。Provider 配置页不展示、读取或修改子设备映射，防止在 OAuth、证书或 MQTT 尚未就绪时越级发现设备。网关目录提供设备身份、名称、房间、型号和可用的 `specType`；设备加入 HomeLoom 后，Provider 根据 `specType` 或 `model` 从 MIoT Spec V2 实例目录加载完整的 Property、Action 和 Event 定义并缓存到 PostgreSQL。自动生成的旧式映射仍只覆盖统一模型必需参数，但设备中心的来源目录不再受这些已配置属性限制。
 
 Provider 配置只写入 PostgreSQL，不生成 `auth.json`、`config.json` 或 `certs/` 目录。`accessToken`、`refreshToken` 和 `privateKey` 由 `storage.master_key` 指定的主密钥使用 AES-256-GCM 加密；管理 API 和诊断导出只返回 `********`。

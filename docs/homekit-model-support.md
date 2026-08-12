@@ -12,6 +12,7 @@ HomeLoom 只在 HAP 提供原生或语义一致的 Service 时发布设备。桥
 | `temperature-sensor` | Temperature Sensor | 完整支持 |
 | `humidity-sensor` | Humidity Sensor | 完整支持 |
 | `temperature-humidity-sensor` | Temperature Sensor + Humidity Sensor | 完整支持 |
+| `network-device` | Contact Sensor（目标端只读布尔状态降级） | 在线状态映射；不表示门窗接触 |
 | `contact-sensor` | Contact Sensor | 完整支持 |
 | `motion-sensor` | Motion Sensor | 完整支持 |
 | `illuminance-sensor` | Light Sensor | 完整支持 |
@@ -54,4 +55,5 @@ HomeLoom 只在 HAP 提供原生或语义一致的 Service 时发布设备。桥
 - Television 使用原生 Television Service；播放、暂停、停止和遥控按键会写回统一模型，Speaker 仍保持独立的 Speaker 语义。
 - Television 的音量通过 Television Service 的 Volume 特征双向同步。
 - Speaker Service 的展示方式取决于 Apple Home / Home Hub 版本；HomeLoom 不把扬声器伪装成 Television。
+- HomeKit 没有网络可达性 Service；`network-device` 只在此 Target 边界使用 Contact Sensor 承载 `reachable` 布尔值，Provider 和管理端仍保留“网络设备 / 在线状态”语义。
 - 气压、噪声、水位、土壤湿度、电力计量、水泵、热水器和充电桩仍可被 Web、API 和后续 Matter Consumer 使用；HomeKit 不会把它们降级伪装成开关。

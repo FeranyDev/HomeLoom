@@ -130,6 +130,63 @@ describe('ProviderForm', () => {
 		}), false))
 	})
 
+	it('configures network reachability monitoring and Wake-on-LAN', async () => {
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		const onTest = vi.fn().mockResolvedValue(undefined)
+		render(<ProviderForm provider={null} initialType="network" onCancel={() => {}} onSave={onSave} onTest={onTest} />)
+		expect(screen.getByRole('option', { name: '网络设备监测 / Wake-on-LAN' })).toBeInTheDocument()
+		expect(screen.getByText('配置局域网设备监测')).toBeInTheDocument()
+		expect(screen.getByLabelText('网络设备 1 ID')).toHaveValue('living-room-pc')
+		expect(screen.getByLabelText('网络设备 1 Host')).toHaveValue('192.168.1.100')
+		expect(screen.getByText('高级 JSON 导入 / 导出')).toBeInTheDocument()
+		await userEvent.clear(screen.getByLabelText('网络设备探测间隔'))
+		await userEvent.type(screen.getByLabelText('网络设备探测间隔'), '45')
+		await userEvent.clear(screen.getByLabelText('网络设备探测超时'))
+		await userEvent.type(screen.getByLabelText('网络设备探测超时'), '5')
+		await userEvent.click(screen.getByRole('button', { name: '添加网络设备' }))
+		await userEvent.clear(screen.getByLabelText('网络设备 2 ID'))
+		await userEvent.type(screen.getByLabelText('网络设备 2 ID'), 'bedroom-nas')
+		await userEvent.type(screen.getByLabelText('网络设备 2 名称'), '卧室 NAS')
+		await userEvent.type(screen.getByLabelText('网络设备 2 Host'), '192.168.1.20')
+		await userEvent.clear(screen.getByLabelText('网络设备 2 探测端口'))
+		await userEvent.type(screen.getByLabelText('网络设备 2 探测端口'), '443')
+		await userEvent.type(screen.getByLabelText('网络设备 2 MAC'), '11:22:33:44:55:66')
+		await userEvent.click(screen.getAllByText('单项高级覆盖（可选）')[1])
+		await userEvent.type(screen.getByLabelText('网络设备 2 离线阈值覆盖'), '3')
+		await userEvent.click(screen.getByRole('button', { name: '移除网络设备 1' }))
+		await userEvent.click(screen.getByRole('button', { name: '测试网络设备连接' }))
+		await waitFor(() => expect(onTest).toHaveBeenCalledWith(expect.objectContaining({
+			type: 'network',
+			config: expect.objectContaining({
+				probeIntervalSeconds: 45,
+				probeTimeoutSeconds: 5,
+				onlineThreshold: 1,
+				offlineThreshold: 2,
+				wolBroadcastAddress: '255.255.255.255',
+				wolPort: 9,
+				devices: [expect.objectContaining({ id: 'bedroom-nas', name: '卧室 NAS', host: '192.168.1.20', mac: '11:22:33:44:55:66', probePort: 443, offlineThreshold: 3 })],
+			}),
+		})))
+		expect(screen.getByText('网络设备探测测试成功，已验证当前配置的可达性。')).toBeInTheDocument()
+		await userEvent.click(screen.getByRole('button', { name: '保存并应用' }))
+		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+			type: 'network',
+			config: expect.objectContaining({ probeIntervalSeconds: 45, probeTimeoutSeconds: 5 }),
+		}), false))
+	})
+
+	it('imports network device JSON into the visual device list', async () => {
+		render(<ProviderForm provider={null} initialType="network" onCancel={() => {}} onSave={vi.fn()} />)
+		await userEvent.click(screen.getByText('高级 JSON 导入 / 导出'))
+		fireEvent.change(screen.getByLabelText('网络设备配置 JSON'), { target: { value: JSON.stringify({ probeIntervalSeconds: 60, devices: [{ id: 'office-pc', name: '书房电脑', host: '192.168.1.30', probePort: 3389, mac: 'AA:BB:CC:DD:EE:FF', wolPort: 7 }] }, null, 2) } })
+		expect(screen.getByLabelText('网络设备 1 ID')).toHaveValue('office-pc')
+		expect(screen.getByLabelText('网络设备 1 名称')).toHaveValue('书房电脑')
+		expect(screen.getByLabelText('网络设备 1 Host')).toHaveValue('192.168.1.30')
+		expect(screen.getByLabelText('网络设备 1 探测端口')).toHaveValue(3389)
+		await userEvent.click(screen.getByText('单项高级覆盖（可选）'))
+		expect(screen.getByLabelText('网络设备 1 WOL 端口覆盖')).toHaveValue(7)
+	})
+
 	it('exposes and saves a Tuya cloud Provider configuration', async () => {
 		const onSave = vi.fn().mockResolvedValue(undefined)
 		const onTest = vi.fn().mockResolvedValue(undefined)
@@ -299,13 +356,16 @@ describe('ProviderForm', () => {
 	it('discovers and selects a gateway only inside the Xiaomi central hub configuration', async () => {
 		xiaomiAPI.discoverXiaomiGateways.mockResolvedValue([{ instance: 'central-hub', hostName: 'hub.local', addresses: ['192.168.1.50'], port: 8883, did: 'hub-did', role: 1, mqttEnabled: true }])
 		const provider: Provider = { id: 'xiaomi-main', type: 'xiaomi', name: '家庭中枢', enabled: true, status: 'running', retryCount: 0, capabilities: { discovery: true, propertyRead: true, propertyWrite: true, events: true }, config: { host: '', port: 8883, clientId: '987654321', caCertificate: 'ca', clientCertificate: 'certificate', privateKey: 'private-key', oauth: { clientId: '1234567890', region: 'cn', redirectUrl: 'http://homeassistant.local:8123', oauthUuid: '0123456789abcdef0123456789abcdef', virtualDid: '987654321' }, devices: [] } }
-		render(<ProviderForm provider={provider} onCancel={() => {}} onSave={vi.fn()} />)
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		render(<ProviderForm provider={provider} onCancel={() => {}} onSave={onSave} />)
 		await userEvent.click(screen.getByRole('button', { name: '发现小米中枢网关' }))
 		await waitFor(() => expect(xiaomiAPI.discoverXiaomiGateways).toHaveBeenCalledOnce())
 		const candidate = await screen.findByRole('button', { name: /central-hub.*192\.168\.1\.50/ })
 		await userEvent.click(candidate)
 		expect(screen.getByLabelText('小米中枢网关地址')).toHaveValue('192.168.1.50')
 		expect(screen.getByLabelText('小米中枢网关端口')).toHaveValue(8883)
+		await userEvent.click(screen.getByRole('button', { name: '保存并应用' }))
+		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ gatewayDid: 'hub-did' }) }), true))
 	})
 
 	it('builds a distinctly labelled third-party MIoT cloud provider', async () => {

@@ -171,4 +171,21 @@ describe('ProfileVisualEditor', () => {
       })],
     }))
   })
+
+  it('keeps focus while editing an enum source value', async () => {
+    const user = userEvent.setup()
+    render(<ProfileVisualEditor initialProfile={{
+      ...identityProfile,
+      inputType: 'enum',
+      outputType: 'enum',
+      transforms: [{ type: 'enum', values: { low: 'quiet', high: 'loud' } }],
+    }} editing={false} saving={false} onClose={vi.fn()} onSave={vi.fn()} runPreview={vi.fn()} />)
+
+    const sourceInput = screen.getByLabelText('第 1 步来源值 1')
+    await user.click(sourceInput)
+    await user.type(sourceInput, '-mode')
+
+    expect(sourceInput).toHaveValue('low-mode')
+    expect(sourceInput).toHaveFocus()
+  })
 })

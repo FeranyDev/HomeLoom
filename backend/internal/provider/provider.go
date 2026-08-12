@@ -52,6 +52,17 @@ type ConnectionTester interface {
 	TestConnection(context.Context) error
 }
 
+// RuntimeConfigChangeSubscriber is implemented by Providers that can safely
+// repair a small part of their own durable configuration while running. The
+// callback is process-local: it is used by the application layer to persist a
+// validated replacement document and is never exposed through the API.
+//
+// The previous document lets the application reject a stale update when an
+// administrator has edited the Provider configuration in the meantime.
+type RuntimeConfigChangeSubscriber interface {
+	SetRuntimeConfigChangeHandler(func(previous, replacement json.RawMessage))
+}
+
 // LiveReconfigurer lets a running provider adopt a compatible replacement
 // configuration without tearing down its network session. Providers with a
 // configurable child-device catalog must implement this contract so catalog

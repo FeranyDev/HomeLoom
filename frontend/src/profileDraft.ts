@@ -13,6 +13,13 @@ export type ProfileDraftSeed = {
 }
 
 const STORAGE_KEY = 'homeloom:profile-draft'
+const HANDOFF_KEY_PREFIX = `${STORAGE_KEY}:handoff:`
+const HANDOFF_PARAMETER = 'profile-draft'
+
+type StoredProfileDraft = {
+  draft: MappingProfile
+  createdAt: number
+}
 
 function slugPart(value: string): string {
   return value
@@ -90,14 +97,12 @@ export function buildProfileDraft(seed: ProfileDraftSeed): MappingProfile {
 
 export function storeProfileDraft(seed: ProfileDraftSeed): MappingProfile {
   const draft = buildProfileDraft(seed)
-  sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ seed, draft, createdAt: Date.now() }))
+  window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ draft, createdAt: Date.now() } satisfies StoredProfileDraft))
   return draft
 }
 
-export function consumeProfileDraft(): MappingProfile | null {
-  const raw = sessionStorage.getItem(STORAGE_KEY)
+function parseStoredDraft(raw: string | null): MappingProfile | null {
   if (!raw) return null
-  sessionStorage.removeItem(STORAGE_KEY)
   try {
     const parsed = JSON.parse(raw) as { draft?: MappingProfile }
     if (!parsed.draft || typeof parsed.draft !== 'object') return null
@@ -107,12 +112,40 @@ export function consumeProfileDraft(): MappingProfile | null {
   }
 }
 
+function removeHandoffParameter() {
+  const url = new URL(window.location.href)
+  url.searchParams.delete(HANDOFF_PARAMETER)
+  window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+}
+
+function handoffID(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+}
+
+export function consumeProfileDraft(): MappingProfile | null {
+  const handoff = new URLSearchParams(window.location.search).get(HANDOFF_PARAMETER)
+  if (handoff) {
+    const key = `${HANDOFF_KEY_PREFIX}${handoff}`
+    const draft = parseStoredDraft(window.localStorage.getItem(key))
+    window.localStorage.removeItem(key)
+    removeHandoffParameter()
+    return draft
+  }
+  const raw = window.sessionStorage.getItem(STORAGE_KEY)
+  window.sessionStorage.removeItem(STORAGE_KEY)
+  return parseStoredDraft(raw)
+}
+
 export function openProfileWorkbench(seed: ProfileDraftSeed, options?: { newTab?: boolean }) {
-  storeProfileDraft(seed)
-  const target = '#/mapping/profiles'
   if (options?.newTab === false) {
+    storeProfileDraft(seed)
+    const target = '#/mapping/profiles'
     window.location.hash = target
     return
   }
-  window.open(target, '_blank', 'noopener,noreferrer')
+  const draft = buildProfileDraft(seed)
+  const key = `${HANDOFF_KEY_PREFIX}${handoffID()}`
+  window.localStorage.setItem(key, JSON.stringify({ draft, createdAt: Date.now() } satisfies StoredProfileDraft))
+  const handoff = key.slice(HANDOFF_KEY_PREFIX.length)
+  window.open(`?${HANDOFF_PARAMETER}=${encodeURIComponent(handoff)}#/mapping/profiles`, '_blank', 'noopener,noreferrer')
 }

@@ -12,30 +12,24 @@ docs/      项目计划与设计文档（[文档索引](docs/README.md)）
 
 ## 本地运行
 
-先用 macOS 的 Apple container 启动开发 PostgreSQL：
-
-```bash
-./scripts/apple-postgres.sh
-```
-
-默认连接为 `127.0.0.1:54329`，数据保存在 Apple container 命名卷 `homeloom-postgres-data`。
+先准备可用的 PostgreSQL，并将连接地址配置到 `HOMELOOM_DATABASE_URL`。
 
 后端：
 
 ```bash
-./scripts/dev-env.sh sh -c 'cd backend && go run ./cmd/homeloom'
+./scripts/dev-env.sh sh -c 'cd backend && go run ./cmd/homeloom -config configs/config.example.yaml'
 ```
 
 主程序日志只输出到启动终端，默认 `info`，可用运行参数调整：
 
 ```bash
-./scripts/dev-env.sh sh -c 'cd backend && go run ./cmd/homeloom -log-level debug'
+./scripts/dev-env.sh sh -c 'cd backend && go run ./cmd/homeloom -config configs/config.example.yaml -log-level debug'
 ```
 
 首次体验时可以选择为当前支持的每种模型各生成一个虚拟设备：
 
 ```bash
-./scripts/dev-env.sh sh -c 'cd backend && go run ./cmd/homeloom -init-all-virtual-models'
+./scripts/dev-env.sh sh -c 'cd backend && go run ./cmd/homeloom -config configs/config.example.yaml -init-all-virtual-models'
 ```
 
 该选项会把 10 个设备的显式配置写入所选数据库中的 `virtual-main` Provider，后续启动不再需要携带该参数。重复执行不会重复生成，也不会覆盖已有的自定义设备列表。
@@ -165,22 +159,6 @@ HOMELOOM_SEA_BUILDER_NODE=/path/to/host/sea-enabled/node \
 冒烟测试默认在临时目录使用 SQLite，并使用临时主密钥和动态 HAP 端口；它会验证双桥并行、Target API 增删改、三次连续重启、身份稳定以及备份恢复。也可通过 `HOMELOOM_SMOKE_DATABASE_URL` 指向一个可丢弃的 PostgreSQL 数据库或独立 schema。
 
 容器部署、host network 与数据卷说明见 [`deploy/README.md`](deploy/README.md)。
-
-数据库一致性逻辑备份（检查连接不会在源库运行 GORM `AutoMigrate`）：
-
-```bash
-./scripts/backup.sh
-```
-
-该脚本会生成可在 PostgreSQL 与 SQLite 间恢复的逻辑快照 `.json`，以及配套的 `.json.key` 主密钥文件；两者必须一起保管和恢复。灾难恢复 HomeKit 配对关系时，还必须备份相应的 HAP 身份目录。
-
-停止 HomeLoom 后可以恢复备份到 `HOMELOOM_DATABASE_URL` 指定的数据库：
-
-```bash
-HOMELOOM_DATABASE_URL='postgres://homeloom:secret@127.0.0.1:54329/homeloom?sslmode=disable' ./scripts/restore.sh backups/homeloom-20260716T000000Z.json --replace
-```
-
-恢复必须显式传入 `--replace`。流程先校验快照格式、当前 GORM schema 和主密钥解密能力，再用所选数据库的单个事务替换业务表并失效已恢复的浏览器 Session；操作前会在快照目录生成一份当前数据的恢复点。
 
 ## 当前 Demo 链路
 

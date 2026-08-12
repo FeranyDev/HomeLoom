@@ -1380,10 +1380,55 @@ func (s *DeviceService) mapSnapshot(item device.Device) (device.Device, error) {
 		target := ensureCapability(&result, projection.path, projection.endpointName, projection.endpointType, projection.capabilityType)
 		target.Properties = append(target.Properties, projection.property)
 	}
+	// Commands are addressed by the Provider-native endpoint and capability;
+	// mappings only transform properties. Retain declarations when that exact
+	// capability survived projection so DeviceService can validate and route the
+	// command without accidentally exposing an action on a relocated mapping.
+	preserveIdentityCommands(item, &result)
 	if err := result.NormalizeModelParameters(); err != nil {
 		return device.Device{}, fmt.Errorf("normalize mapped device %q: %w", item.ID, err)
 	}
 	return result, nil
+}
+
+func preserveIdentityCommands(source device.Device, target *device.Device) {
+	if target == nil {
+		return
+	}
+	for _, sourceEndpoint := range source.Endpoints {
+		for _, sourceCapability := range sourceEndpoint.Capabilities {
+			if len(sourceCapability.Commands) == 0 {
+				continue
+			}
+			var destination *device.Capability
+			for endpointIndex := range target.Endpoints {
+				if target.Endpoints[endpointIndex].ID != sourceEndpoint.ID {
+					continue
+				}
+				for capabilityIndex := range target.Endpoints[endpointIndex].Capabilities {
+					if target.Endpoints[endpointIndex].Capabilities[capabilityIndex].ID == sourceCapability.ID {
+						destination = &target.Endpoints[endpointIndex].Capabilities[capabilityIndex]
+						break
+					}
+				}
+				break
+			}
+			if destination == nil {
+				continue
+			}
+			seen := make(map[string]struct{}, len(destination.Commands))
+			for _, command := range destination.Commands {
+				seen[command.ID] = struct{}{}
+			}
+			for _, command := range sourceCapability.Commands {
+				if _, exists := seen[command.ID]; exists {
+					continue
+				}
+				destination.Commands = append(destination.Commands, command)
+				seen[command.ID] = struct{}{}
+			}
+		}
+	}
 }
 
 func (s *DeviceService) providerPropertyProjections(providerID, deviceID, endpointID, capabilityID, propertyID string, property device.Property) ([]ProviderPropertyProjection, error) {

@@ -112,7 +112,7 @@ func TestModelCatalogCoversEverySupportedType(t *testing.T) {
 		TypeSwitch: false, TypeLightbulb: false, TypeOutlet: false,
 		TypeTemperatureSensor: false, TypeHumiditySensor: false, TypeTemperatureHumiditySensor: false,
 		TypePressureSensor: false, TypeNoiseSensor: false, TypeWaterLevelSensor: false, TypeSoilMoistureSensor: false,
-		TypeContactSensor: false, TypeMotionSensor: false,
+		TypeNetworkDevice: false, TypeContactSensor: false, TypeMotionSensor: false,
 		TypeFan: false, TypeAirPurifier: false, TypeWindowCovering: false,
 		TypeIlluminanceSensor: false, TypeOccupancySensor: false, TypeLeakSensor: false,
 		TypeSmokeSensor: false, TypeCarbonMonoxideSensor: false, TypeCarbonDioxideSensor: false,
@@ -136,8 +136,8 @@ func TestModelCatalogCoversEverySupportedType(t *testing.T) {
 }
 
 func TestExpandedModelContractsExposeCompleteMetadata(t *testing.T) {
-	if got := len(ModelContracts()); got != 38 {
-		t.Fatalf("built-in model count = %d, want 38", got)
+	if got := len(ModelContracts()); got != 39 {
+		t.Fatalf("built-in model count = %d, want 39", got)
 	}
 	for _, contract := range ModelContracts() {
 		if contract.Name == "" || contract.Version < 1 || !contract.BuiltIn {

@@ -1,0 +1,186 @@
+package network
+
+import (
+	"context"
+	"errors"
+	"net"
+	"sync"
+	"testing"
+
+	"github.com/feranydev/homeloom/backend/internal/domain/device"
+	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
+	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
+)
+
+type sequenceProber struct {
+	mu        sync.Mutex
+	responses []error
+}
+
+func (p *sequenceProber) Probe(_ context.Context, _ string, _ int) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.responses) == 0 {
+		return nil
+	}
+	result := p.responses[0]
+	p.responses = p.responses[1:]
+	return result
+}
+
+type recordingWaker struct {
+	mu       sync.Mutex
+	requests []WakeRequest
+	err      error
+}
+
+func (w *recordingWaker) Wake(_ context.Context, request WakeRequest) error {
+	w.mu.Lock()
+	w.requests = append(w.requests, request)
+	err := w.err
+	w.mu.Unlock()
+	return err
+}
+
+func networkProviderConfig() providerconfig.Config {
+	return providerconfig.Config{
+		ID: "network-main", Type: ProviderType, Name: "LAN", Enabled: true,
+		Config: []byte(`{"onlineThreshold":2,"offlineThreshold":2,"devices":[{"id":"nas","name":"NAS","host":"192.0.2.10","probePort":443,"mac":"aa:bb:cc:dd:ee:ff"}]}`),
+	}
+}
+
+func TestProviderAppliesReachabilityThresholdsAndPublishesOnlyTransitions(t *testing.T) {
+	prober := &sequenceProber{responses: []error{nil, nil, errors.New("connection refused"), errors.New("connection refused"), nil, nil}}
+	provider, err := NewProviderWithDependencies(networkProviderConfig(), prober, &recordingWaker{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []device.Device
+	unsubscribe := provider.Subscribe(func(item device.Device) { events = append(events, item) })
+	defer unsubscribe()
+
+	for range 2 {
+		provider.probeDue(context.Background(), true)
+	}
+	items, err := provider.DiscoverDevices(context.Background())
+	if err != nil || len(items) != 1 || !items[0].IsOnline() {
+		t.Fatalf("after successful threshold: items=%#v err=%v", items, err)
+	}
+	reachability, ok := items[0].Property("main", "reachability", "reachable")
+	if items[0].Type != device.TypeNetworkDevice || !ok || reachability.Value.Bool == nil || !*reachability.Value.Bool {
+		t.Fatalf("online reachability state = %#v, type=%q, found=%v", reachability, items[0].Type, ok)
+	}
+
+	for range 2 {
+		provider.probeDue(context.Background(), true)
+	}
+	items, _ = provider.DiscoverDevices(context.Background())
+	if items[0].EffectiveAvailability() != device.AvailabilityOffline || items[0].Online {
+		t.Fatalf("after failed threshold: %#v", items[0])
+	}
+	reachability, _ = items[0].Property("main", "reachability", "reachable")
+	if reachability.Value.Bool == nil || *reachability.Value.Bool {
+		t.Fatalf("offline reachability state = %#v", reachability)
+	}
+
+	for range 2 {
+		provider.probeDue(context.Background(), true)
+	}
+	if len(events) != 3 { // online, offline, then online; intermediate probes do not flap.
+		t.Fatalf("published events = %d, want 3", len(events))
+	}
+	if events[0].EffectiveAvailability() != device.AvailabilityOnline || events[1].EffectiveAvailability() != device.AvailabilityOffline || events[2].EffectiveAvailability() != device.AvailabilityOnline {
+		t.Fatalf("availability events = %#v", events)
+	}
+	if stats := provider.ProviderMetrics(); stats["probes"] != 6 || stats["errors"] != 2 {
+		t.Fatalf("provider stats = %#v", stats)
+	}
+}
+
+func TestWakeCommandSendsMagicPacketWithoutChangingAvailability(t *testing.T) {
+	waker := &recordingWaker{}
+	provider, err := NewProviderWithDependencies(networkProviderConfig(), &sequenceProber{}, waker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := provider.DiscoverDevices(context.Background())
+	updated, err := provider.ExecuteCommand(context.Background(), providersdk.CommandRequest{DeviceID: "nas", EndpointID: "main", CapabilityID: "reachability", CommandID: "wake"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.EffectiveAvailability() != device.AvailabilityUnknown || before[0].Availability != updated.Availability {
+		t.Fatalf("wake must not claim online: before=%#v updated=%#v", before[0], updated)
+	}
+	waker.mu.Lock()
+	requests := append([]WakeRequest(nil), waker.requests...)
+	waker.mu.Unlock()
+	if len(requests) != 1 || requests[0].MAC.String() != "aa:bb:cc:dd:ee:ff" || requests[0].BroadcastAddress != defaultWOLAddress || requests[0].Port != defaultWOLPort {
+		t.Fatalf("wake request = %#v", requests)
+	}
+	if stats := provider.ProviderMetrics(); stats["wakes"] != 1 {
+		t.Fatalf("provider stats = %#v", stats)
+	}
+}
+
+func TestWakeCommandRejectsMonitorOnlyDevice(t *testing.T) {
+	config := networkProviderConfig()
+	config.Config = []byte(`{"devices":[{"id":"printer","name":"Printer","host":"192.0.2.11","probePort":631}]}`)
+	provider, err := NewProviderWithDependencies(config, &sequenceProber{}, &recordingWaker{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := provider.DiscoverDevices(context.Background())
+	if err != nil || len(items) != 1 || len(items[0].Endpoints[0].Capabilities[0].Commands) != 0 {
+		t.Fatalf("monitor-only device must not advertise wake: items=%#v err=%v", items, err)
+	}
+	_, err = provider.ExecuteCommand(context.Background(), providersdk.CommandRequest{DeviceID: "printer", EndpointID: "main", CapabilityID: "reachability", CommandID: "wake"})
+	if !errors.Is(err, providersdk.ErrCommandInvalid) {
+		t.Fatalf("wake error = %v, want invalid command", err)
+	}
+}
+
+func TestConnectionSucceedsWhenAnyConfiguredDeviceIsReachable(t *testing.T) {
+	prober := &sequenceProber{responses: []error{errors.New("offline"), nil}}
+	config := networkProviderConfig()
+	config.Config = []byte(`{"devices":[{"id":"nas","name":"NAS","host":"192.0.2.10","probePort":443},{"id":"pc","name":"PC","host":"192.0.2.11","probePort":3389}]}`)
+	provider, err := NewProviderWithDependencies(config, prober, &recordingWaker{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.TestConnection(context.Background()); err != nil {
+		t.Fatalf("connection test = %v", err)
+	}
+}
+
+func TestConfigValidationAndMagicPacket(t *testing.T) {
+	config := networkProviderConfig()
+	config.Config = []byte(`{"devices":[{"id":"NAS","name":"NAS","host":"192.0.2.10","probePort":443,"mac":"not-a-mac"}]}`)
+	if _, err := NewProviderFromConfig(config); err == nil {
+		t.Fatal("invalid network config was accepted")
+	}
+	provider, err := NewProviderWithDependencies(networkProviderConfig(), &sequenceProber{}, &recordingWaker{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := provider.DiscoverDevices(context.Background())
+	if err != nil || len(items) != 1 {
+		t.Fatalf("published network device = %#v, err=%v", items, err)
+	}
+	if validateErr := items[0].Validate(); validateErr != nil {
+		t.Fatalf("published network device must satisfy the model contract: %#v", validateErr)
+	}
+	packet := magicPacket(net.HardwareAddr{0, 1, 2, 3, 4, 5})
+	if len(packet) != 102 {
+		t.Fatalf("magic packet length = %d", len(packet))
+	}
+	for index := 0; index < 6; index++ {
+		if packet[index] != 0xff {
+			t.Fatalf("magic packet preamble[%d] = %x", index, packet[index])
+		}
+	}
+	for index := 6; index < len(packet); index += 6 {
+		if got := net.HardwareAddr(packet[index : index+6]); got.String() != "00:01:02:03:04:05" {
+			t.Fatalf("magic packet mac at %d = %s", index, got)
+		}
+	}
+}

@@ -215,6 +215,9 @@ var modelContracts = map[Type]ModelContract{
 		optionalMeasurement("soil-moisture", "conductivity", "土壤电导率", "microsiemens-per-centimeter", false, 0, 100000, 1),
 		optionalMeasurement("temperature", "current-temperature", "土壤温度", "celsius", false, -100, 200, 0.1),
 	}, sensorHealthParameters()...)},
+	TypeNetworkDevice: {DeviceType: TypeNetworkDevice, Name: "网络设备", Version: 1, Parameters: []ModelParameter{
+		required("reachability", "reachable", "在线状态", ValueTypeBool, false),
+	}},
 	TypeContactSensor: {DeviceType: TypeContactSensor, Name: "接触传感器", Version: 2, Parameters: append([]ModelParameter{
 		required("contact", "contact-detected", "接触状态", ValueTypeBool, false),
 		optionalInt("contact", "open-duration", "持续打开时长", "second", false, 0, 31536000, 1),

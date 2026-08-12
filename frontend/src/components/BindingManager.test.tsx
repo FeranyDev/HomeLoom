@@ -5,6 +5,7 @@ import type { Device } from '../types/device'
 import type { MappingBinding } from '../types/mapping'
 import { BindingManager } from './BindingManager'
 import { openProfileWorkbench } from '../profileDraft'
+import '../styles.css'
 
 vi.mock('../profileDraft', () => ({ openProfileWorkbench: vi.fn() }))
 
@@ -49,6 +50,15 @@ describe('BindingManager', () => {
     expect(screen.getAllByText('50 ～ 1000，步长 1 mired')).toHaveLength(2)
     expect(screen.getAllByText('140 ～ 500，步长 1 mired')).toHaveLength(2)
     expect(screen.getByText('140 ～ 500，步长 1 mired', { selector: '.is-effective code' })).toBeInTheDocument()
+  })
+
+  it('allows property-card text to be selected for copying', async () => {
+    render(<BindingManager device={device} api={{
+      listBindings: vi.fn(async () => []), listProfiles: vi.fn(async () => []), create: vi.fn(), update: vi.fn(), remove: vi.fn(), catalog,
+    }} providerOnly />)
+
+    const sourceProperty = await screen.findByRole('button', { name: /Virtual Switch.*Power/ })
+    expect(getComputedStyle(sourceProperty).userSelect).toBe('text')
   })
 
   it('shows an effective identity default and saves a device-specific override', async () => {

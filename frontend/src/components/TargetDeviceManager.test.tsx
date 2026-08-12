@@ -12,6 +12,10 @@ vi.mock('../api/mapping', async (importOriginal) => {
 	return { ...actual, listConsumerCatalogs: vi.fn() }
 })
 
+vi.mock('./BindingManager', () => ({
+	BindingManager: ({ device }: { device: { name: string } }) => <div data-testid="consumer-mapping-editor">{device.name} 属性映射</div>,
+}))
+
 const target: Target = { id: 'apple-main', type: 'apple-hap', name: '主桥', enabled: true, status: 'running', config: { address: ':51826', setupId: 'HLM1' }, pairing: { pairingCode: '001-02-003', paired: false }, deviceIds: [], devices: [] }
 const source: Device = { schemaVersion: 1, id: 'source-switch', providerId: 'virtual-main', name: '来源开关', type: 'switch', availability: 'online', online: true, lastUpdateAt: '2026-07-15T00:00:00Z', endpoints: [] }
 const robot: Device = { ...source, id: 'source-vacuum', name: '扫地机器人', type: 'robot-vacuum' }
@@ -31,6 +35,26 @@ describe('TargetDeviceManager', () => {
 		expect(screen.getAllByText(/source-switch/).length).toBeGreaterThan(0)
 		await userEvent.click(screen.getByRole('button', { name: '保存消费端设备并应用目标' }))
 		expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ devices: [expect.objectContaining({ id: 'apple-main-source-switch', sourceDeviceId: 'source-switch', type: 'switch' })] }))
+	})
+
+	it('expands each Consumer property mapping directly below its device entry', async () => {
+		const configuredTarget: Target = {
+			...target,
+			devices: [
+				{ id: 'living-switch', name: '客厅开关', type: 'switch', sourceDeviceId: source.id, enabled: true },
+				{ id: 'bedroom-switch', name: '卧室开关', type: 'switch', sourceDeviceId: source.id, enabled: true },
+			],
+		}
+		const { container } = render(<TargetDeviceManager target={configuredTarget} devices={[source]} onClose={() => {}} onSave={vi.fn()} />)
+
+		await userEvent.click(screen.getAllByRole('button', { name: '配置属性映射' })[0])
+		expect(await screen.findByText('客厅开关 · 多来源属性映射')).toBeInTheDocument()
+
+		const list = container.querySelector('.target-virtual-device-list')!
+		const [livingDevice, bedroomDevice] = list.querySelectorAll('article')
+		expect(livingDevice.querySelector('.target-source-mappings')).toBeInTheDocument()
+		expect([...list.children].some((child) => child.classList.contains('target-source-mappings'))).toBe(false)
+		expect(list.lastElementChild).toBe(bedroomDevice)
 	})
 
 	it('allows one unified source to back multiple independently scoped Consumer devices', async () => {

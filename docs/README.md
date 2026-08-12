@@ -9,6 +9,7 @@
 - [多协议摄像头接入实现计划](HomeLoom_多协议摄像头接入实现计划_v3.md)：Camera Provider、媒体 Runtime、HomeKit Camera 和 Matter Camera 的边界。
 - [小米 Provider](xiaomi-provider.md)：小米三类接入方式和实际配置流程。
 - [Sonoff/eWeLink Provider](sonoff-provider.md)：Sonoff LAN/云端双通道、常用 UIID 能力和安全配置边界。
+- [网络设备监测与 Wake-on-LAN Provider](network-provider.md)：局域网 TCP 在线监测和网络唤醒配置。
 
 ## 稳定契约
 

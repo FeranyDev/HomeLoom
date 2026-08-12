@@ -2,6 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { ProviderCard } from './ProviderCard'
+import type { Device } from '../types/device'
 import type { Provider } from '../types/provider'
 
 const xiaomiAPI = vi.hoisted(() => ({
@@ -73,6 +74,23 @@ describe('ProviderCard simulation', () => {
 		expect(screen.getByText('192.168.1.42:7000 · 局域网轮询 60 秒 · 请求超时 5 秒')).toBeInTheDocument()
 		expect(screen.getByText('格力设备管理器配置')).toBeInTheDocument()
 		expect(screen.getByRole('button', { name: '管理格力设备' })).toBeInTheDocument()
+	})
+
+	it('summarizes network reachability monitoring and Wake-on-LAN configuration', () => {
+		const network: Provider = { ...provider, id: 'network-main', type: 'network', name: '家庭网络设备', config: { probeIntervalSeconds: 45, probeTimeoutSeconds: 5, offlineThreshold: 2, wolBroadcastAddress: '255.255.255.255', devices: [{ id: 'living-room-pc', name: '客厅电脑', host: '192.168.1.100', mac: 'AA:BB:CC:DD:EE:FF', probePort: 445 }] } }
+		const devices: Device[] = [{
+			schemaVersion: 1, id: 'living-room-pc', providerId: network.id, name: '客厅电脑', type: 'network-device', availability: 'online', online: true, sequence: 3, lastUpdateAt: '',
+			endpoints: [{ id: 'main', name: '主端点', type: 'network-device', capabilities: [{ id: 'reachability', type: 'reachability', properties: [{ definition: { id: 'reachable', name: '在线状态', type: 'bool', readable: true, writable: false, notifiable: true }, value: { type: 'bool', bool: true } }], commands: [{ id: 'wake', name: '网络唤醒' }] }] }],
+		}]
+		render(<ProviderCard provider={network} devices={devices} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} />)
+		expect(screen.getByText('局域网设备监测 / Wake-on-LAN · network-main')).toBeInTheDocument()
+		expect(screen.getByText('1 台待监测')).toHaveClass('is-ready')
+		expect(screen.getByText('1 台设备 · TCP 可达性监测 · Wake-on-LAN 已配置')).toBeInTheDocument()
+		expect(screen.getByText('TCP 探测 45 秒 · 超时 5 秒 · 连续失败 2 次后离线')).toBeInTheDocument()
+		expect(screen.getByText('网络设备监测配置')).toBeInTheDocument()
+		expect(screen.getByRole('button', { name: '监测与唤醒配置' })).toBeInTheDocument()
+		expect(screen.getByText('网络设备 · 在线状态 · seq 3')).toBeInTheDocument()
+		expect(screen.queryByText('contact-sensor · seq 3')).not.toBeInTheDocument()
 	})
 
 	it('recognizes Home Assistant compatible Tuya sharing credentials as ready', () => {

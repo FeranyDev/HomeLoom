@@ -1,7 +1,7 @@
 export const builtInDeviceTypes = [
   'switch', 'temperature-sensor', 'humidity-sensor', 'temperature-humidity-sensor',
   'pressure-sensor', 'noise-sensor', 'water-level-sensor', 'soil-moisture-sensor', 'lightbulb', 'outlet',
-  'contact-sensor', 'motion-sensor', 'fan', 'air-purifier', 'window-covering',
+  'contact-sensor', 'motion-sensor', 'network-device', 'fan', 'air-purifier', 'window-covering',
   'illuminance-sensor', 'occupancy-sensor', 'leak-sensor', 'smoke-sensor',
   'carbon-monoxide-sensor', 'carbon-dioxide-sensor', 'air-quality-sensor',
   'thermostat', 'air-conditioner', 'heater-cooler', 'humidifier-dehumidifier', 'lock', 'garage-door',

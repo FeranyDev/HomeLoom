@@ -8,6 +8,7 @@ describe('Provider child-device routing', () => {
 		expect(supportsProviderChildDevices('virtual')).toBe(true)
 		expect(supportsProviderChildDevices('xiaomi')).toBe(true)
 		expect(supportsProviderChildDevices('gree')).toBe(true)
+		expect(supportsProviderChildDevices('network')).toBe(false)
 		expect(supportsProviderChildDevices('unknown')).toBe(false)
 	})
 })

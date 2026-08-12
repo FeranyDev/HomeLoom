@@ -279,15 +279,17 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 			bindings.extraFaults[item.ID] = append(bindings.extraFaults[item.ID], humidityFault)
 			bindings.accessories = append(bindings.accessories, a.A)
 			created = a.A
-		case device.TypeContactSensor:
+		case device.TypeContactSensor, device.TypeNetworkDevice:
 			a := accessory.NewContactSensor(info)
 			a.A.Id = accessoryIDs[item.ID]
 			fault := characteristic.NewStatusFault()
 			a.ContactSensor.AddC(fault.C)
-			if _, found := item.Property("main", "security", "tampered"); found {
-				current := characteristic.NewStatusTampered()
-				a.ContactSensor.AddC(current.C)
-				bindings.tampered[item.ID] = current
+			if item.Type == device.TypeContactSensor {
+				if _, found := item.Property("main", "security", "tampered"); found {
+					current := characteristic.NewStatusTampered()
+					a.ContactSensor.AddC(current.C)
+					bindings.tampered[item.ID] = current
+				}
 			}
 			bindings.contacts[item.ID], bindings.faults[item.ID] = a.ContactSensor.ContactSensorState, fault
 			bindings.accessories = append(bindings.accessories, a.A)
@@ -657,7 +659,11 @@ func (b *accessoryBindings) update(item device.Device) uint64 {
 		}
 	}
 	if current, ok := b.contacts[item.ID]; ok {
-		if property, found := item.Property("main", "contact", "contact-detected"); found && property.Value.Bool != nil {
+		capabilityID, propertyID := "contact", "contact-detected"
+		if item.Type == device.TypeNetworkDevice {
+			capabilityID, propertyID = "reachability", "reachable"
+		}
+		if property, found := item.Property("main", capabilityID, propertyID); found && property.Value.Bool != nil {
 			value := characteristic.ContactSensorStateContactNotDetected
 			if *property.Value.Bool {
 				value = characteristic.ContactSensorStateContactDetected

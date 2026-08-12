@@ -28,6 +28,7 @@ const (
 	TypeSoilMoistureSensor        Type = "soil-moisture-sensor"
 	TypeLightbulb                 Type = "lightbulb"
 	TypeOutlet                    Type = "outlet"
+	TypeNetworkDevice             Type = "network-device"
 	TypeContactSensor             Type = "contact-sensor"
 	TypeMotionSensor              Type = "motion-sensor"
 	TypeFan                       Type = "fan"

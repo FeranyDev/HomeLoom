@@ -66,6 +66,21 @@ describe('DeviceCard device types', () => {
     expect(screen.getByText(unit)).toBeInTheDocument()
   })
 
+	it('renders a network device as reachability instead of a contact sensor', () => {
+		const device = sensorDevice('network-device', 'reachability', 'reachable', { type: 'bool', bool: true })
+		render(<DeviceCard device={device} pending={false} onPowerChange={() => {}} onDetails={() => {}} />)
+		expect(screen.getByText(/网络设备.*network-device/)).toBeInTheDocument()
+		expect(screen.getByText('在线', { selector: 'strong' })).toBeInTheDocument()
+		expect(screen.getByText('NETWORK')).toBeInTheDocument()
+		expect(screen.queryByText('已闭合')).not.toBeInTheDocument()
+	})
+
+	it('keeps a network device unknown while reachability is being determined', () => {
+		const device = { ...sensorDevice('network-device', 'reachability', 'reachable', { type: 'bool', bool: false }), availability: 'unknown' as const, online: false }
+		render(<DeviceCard device={device} pending={false} onPowerChange={() => {}} onDetails={() => {}} />)
+		expect(screen.getByText('正在探测')).toBeInTheDocument()
+	})
+
 	it('renders both measurements for a temperature/humidity sensor', () => {
 		const device: Device = {
 			schemaVersion: 1, id: 'climate', providerId: 'virtual', name: '温湿度', type: 'temperature-humidity-sensor', availability: 'online', online: true, lastUpdateAt: new Date().toISOString(),

@@ -7,6 +7,7 @@ import (
 
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
+	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	"github.com/feranydev/homeloom/backend/internal/mapping"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
@@ -80,6 +81,61 @@ func TestPropertyBindingHotReloadsAndMapsBothDirections(t *testing.T) {
 	reloaded, err := application.NewProfileService(ctx, store)
 	if err != nil || len(reloaded.ListBindings()) != 0 {
 		t.Fatalf("reloaded bindings = %#v, error = %v", reloaded.ListBindings(), err)
+	}
+}
+
+func TestMappedSnapshotsRetainIdentityCommands(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, err := application.NewProfileService(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := virtual.NewProviderFromConfig(providerconfig.Config{
+		ID: "virtual-main", Name: "Virtual",
+		Config: []byte(`{"devices":[{"id":"purifier","name":"Purifier","type":"air-purifier","online":true,"active":true,"speed":60,"filterLife":8}]}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := application.NewDeviceService(provider, profiles)
+	defer service.Close()
+
+	items, err := service.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var purifier device.Device
+	for _, item := range items {
+		if item.ID == "purifier" {
+			purifier = item
+			break
+		}
+	}
+	filter, found := purifier.Property("main", "filter", "life-level")
+	if !found || filter.Value.Number == nil {
+		t.Fatalf("mapped filter property = %#v, found=%v", filter, found)
+	}
+	commands := []device.CommandDefinition(nil)
+	for _, endpoint := range purifier.Endpoints {
+		if endpoint.ID != "main" {
+			continue
+		}
+		for _, capability := range endpoint.Capabilities {
+			if capability.ID == "filter" {
+				commands = capability.Commands
+			}
+		}
+	}
+	if len(commands) != 1 || commands[0].ID != "reset-filter" {
+		t.Fatalf("mapped filter commands = %#v", commands)
+	}
+	if _, _, err := service.ExecuteCommand(ctx, providersdk.CommandRequest{DeviceID: purifier.ID, EndpointID: "main", CapabilityID: "filter", CommandID: "reset-filter"}); err != nil {
+		t.Fatalf("mapped reset-filter command = %v", err)
 	}
 }
 

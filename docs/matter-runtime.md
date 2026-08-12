@@ -6,7 +6,7 @@ Matter 模式采用 Go 主服务加独立 Matter runtime 进程。开发环境�
 
 当前 `@matter/main` 固定为 `0.17.7`，其标准模型对应 Matter 1.6.0；管理界面的“协议版本”展示该规范版本。Go ↔ sidecar 的内部 IPC 合约另行固定为 `1.0`。开发、测试和构建统一通过 `scripts/dev-env.sh`，npm、Go、TypeScript 缓存全部写入项目 `.cache/`。
 
-真实 driver 当前覆盖 23 类官方标准 Device Type：开关、插座、扩展彩灯、温度、湿度、接触、活动、占用、窗帘、风扇、恒温器、门锁、照度、气压、漏水、烟雾、一氧化碳、空气质量、阀门、水泵、空气净化器、扬声器、电视。电视使用 Basic Video Player Endpoint，并映射 Media Playback 的播放控制和 Keypad Input 的遥控按键（包括音量加/减）。Matter Basic Video Player 的标准 AudioOutput 不提供绝对音量属性，因此 Matter 侧不伪造音量滑杆；绝对音量仍由统一模型和 HomeKit Television Volume 提供。测试会直接读取 Go Matter Catalog，要求每个公开类型和 Cluster Attribute/Command 路径都能由官方 matter.js Endpoint 构造，避免管理端暴露运行时无法重放的类型。
+真实 driver 当前覆盖 24 类官方标准 Device Type：开关、插座、扩展彩灯、温度、湿度、接触、活动、占用、网络状态、窗帘、风扇、恒温器、门锁、照度、气压、漏水、烟雾、一氧化碳、空气质量、阀门、水泵、空气净化器、扬声器、电视。网络设备在统一模型中保留为 `network-device` 和“在线状态”；Matter 没有专用 LAN 可达性 Device Type，因此仅在目标边界使用官方 Contact Sensor Endpoint 的 BooleanState 承载该布尔状态。电视使用 Basic Video Player Endpoint，并映射 Media Playback 的播放控制和 Keypad Input 的遥控按键（包括音量加/减）。Matter Basic Video Player 的标准 AudioOutput 不提供绝对音量属性，因此 Matter 侧不伪造音量滑杆；绝对音量仍由统一模型和 HomeKit Television Volume 提供。测试会直接读取 Go Matter Catalog，要求每个公开类型和 Cluster Attribute/Command 路径都能由官方 matter.js Endpoint 构造，避免管理端暴露运行时无法重放的类型。
 
 Matter 消费端设备类型只发布当前协议中的标准 Device Type。HomeLoom 的 `temperature-humidity-sensor` 是统一模型逻辑类型，不是 Matter 标准聚合传感器，因此不会出现在 Matter 的“消费端设备类型”列表，后端也会拒绝直接保存该类型。需要导出温湿度来源时，用户可以显式创建标准的 `temperature-sensor` 或 `humidity-sensor` 消费端映射；系统不会自动拆分或隐式创建 Endpoint。
 
@@ -37,7 +37,7 @@ Core 启动 sidecar 时会设置以下环境变量；直接调试 sidecar 时也
 排障时可在 HomeLoom YAML 中将等级临时改成 `debug`；独立启动 sidecar 时也可直接设置环境变量：
 
 ```bash
-HOMELOOM_MATTER_LOG_LEVEL=debug HOMELOOM_MATTER_LOG_FORMAT=plain ./scripts/dev-env.sh sh -c 'cd backend && go run ./cmd/homeloom'
+HOMELOOM_MATTER_LOG_LEVEL=debug HOMELOOM_MATTER_LOG_FORMAT=plain ./scripts/dev-env.sh sh -c 'cd backend && go run ./cmd/homeloom -config configs/config.example.yaml'
 ```
 
 `@matter/main` 0.17.7 的在线 factory reset 会在进程内重建 `ServerNode`，但该版本仍可能保留旧一代 shared mDNS 引用。sidecar 在 reset RPC 成功返回后会主动正常退出，由 Go Target supervisor 启动全新进程并执行握手与全量重放；这是身份轮换的一部分，不应被监控系统当作整套 HomeLoom 服务故障。
@@ -83,7 +83,7 @@ Matter Fabric、NOC、密钥和计数器通过反向 `storage.*` RPC 保存到 P
 
 ## 验收边界
 
-日常 CI 覆盖 IPC 合约、背压、断线恢复、双实例隔离、当前已开放的 22 种标准 Matter Device Type、100 Endpoint Go 快照、Endpoint 稳定身份、数据库恢复和前端操作。以下项目需要维护者在真实局域网执行：
+日常 CI 覆盖 IPC 合约、背压、断线恢复、双实例隔离、当前已开放的 24 种标准 Matter Device Type、100 Endpoint Go 快照、Endpoint 稳定身份、数据库恢复和前端操作。以下项目需要维护者在真实局域网执行：
 
 - Apple Home 首次 commissioning、读写与订阅；
 - `chip-tool` commissioning/read/write/subscribe；

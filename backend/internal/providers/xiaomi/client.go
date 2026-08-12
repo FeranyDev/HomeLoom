@@ -24,6 +24,13 @@ const (
 	topicDeviceListChange = "master/appMsg/devListChange"
 )
 
+// ErrGatewayInitialConnectionTimeout means the local MQTT connection did not
+// complete its initial connect-and-subscribe handshake before the configured
+// deadline. It is deliberately distinct so Provider initialization can try a
+// DID-verified mDNS address refresh without treating other TLS/MQTT failures
+// as an address change.
+var ErrGatewayInitialConnectionTimeout = errors.New("Xiaomi gateway initial connection timed out")
+
 type hubIncoming struct {
 	Topic   string
 	Payload json.RawMessage
@@ -135,7 +142,7 @@ func (c *mipsClient) Connect(lifecycle, initial context.Context) error {
 	case err := <-ready:
 		return err
 	case <-time.After(c.config.requestTimeout()):
-		return errors.New("Xiaomi gateway initial connection timed out")
+		return ErrGatewayInitialConnectionTimeout
 	case <-initial.Done():
 		return initial.Err()
 	case <-lifecycle.Done():

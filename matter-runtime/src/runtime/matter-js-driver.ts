@@ -1832,6 +1832,10 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
         return sdk.temperatureSensor.TemperatureSensorDevice.with(BridgeInfo) as never;
       case "humidity":
         return sdk.humiditySensor.HumiditySensorDevice.with(BridgeInfo) as never;
+      // Matter has no dedicated LAN-reachability device type. Contact Sensor is
+      // the official endpoint that requires the BooleanState cluster we expose.
+      case "network":
+        return sdk.contactSensor.ContactSensorDevice.with(BridgeInfo) as never;
       case "contact":
         return sdk.contactSensor.ContactSensorDevice.with(BridgeInfo) as never;
       case "motion":
@@ -1976,7 +1980,7 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
       };
     }
 
-    if (deviceType === "contact") {
+    if (deviceType === "network" || deviceType === "contact") {
       state.booleanState = {
         stateValue: booleanValue(
           device.attributes["BooleanState.StateValue"] ?? false,
@@ -2850,6 +2854,7 @@ type NormalizedDeviceType =
   | "light"
   | "temperature"
   | "humidity"
+  | "network"
   | "contact"
   | "motion"
   | "occupancy"
@@ -2894,6 +2899,10 @@ function normalizeDeviceType(deviceType: string): NormalizedDeviceType {
     case "humidity-sensor":
     case "humiditysensor":
       return "humidity";
+    case "network":
+    case "network-device":
+    case "networkdevice":
+      return "network";
     case "contact":
     case "contact-sensor":
     case "contactsensor":
@@ -3486,6 +3495,7 @@ export const MATTER_DRIVER_CATALOG_DEVICE_TYPE_CONSTANTS = [
   "Lightbulb",
   "TemperatureSensor",
   "HumiditySensor",
+  "NetworkDevice",
   "ContactSensor",
   "MotionSensor",
   "OccupancySensor",

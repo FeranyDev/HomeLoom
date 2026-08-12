@@ -1024,6 +1024,7 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .target-virtual-device-list { border: 1px solid #d2d0c7; background: rgba(250,249,245,.7); }
 .target-virtual-device-list > p { margin: 0; padding: 25px; color: #92958e; }
 .target-virtual-device-list article { display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: center; padding: 15px 18px; border-top: 1px solid #dfddd5; }
+.target-virtual-device-list article > .target-source-mappings { grid-column: 1 / -1; margin: 0 -18px -15px; padding: 16px 18px 18px; border-top: 1px dashed #c7c8c0; }
 .target-virtual-device-list article > div:first-child { display: grid; grid-template-columns: auto minmax(150px, 1fr) minmax(150px, auto) minmax(220px, auto); gap: 10px; align-items: center; }
 .target-virtual-device-list article > div:last-child { display: flex; gap: 7px; }
 .target-virtual-device-list article input { min-width: 120px; padding: 7px 9px; border: 1px solid transparent; background: transparent; color: #454b43; font-weight: 650; }
@@ -1217,7 +1218,7 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .mapping-profile-jump { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 10px; padding-top: 10px; border-top: 1px dashed #cfcfc6; }
 .mapping-profile-jump small { color: #6c7369; font-size: 11px; line-height: 1.45; }
 .mapping-node-list { min-height: 0; height: 100%; max-height: none; box-sizing: border-box; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 8px 10px 16px; }
-.mapping-node-list button { display: grid; width: 100%; gap: 4px; margin-bottom: 6px; padding: 12px; border: 1px solid transparent; background: transparent; color: #3f443d; text-align: left; cursor: pointer; }
+.mapping-node-list button { display: grid; width: 100%; gap: 4px; margin-bottom: 6px; padding: 12px; border: 1px solid transparent; background: transparent; color: #3f443d; text-align: left; cursor: pointer; -webkit-user-select: text; user-select: text; }
 .mapping-node-list button:hover { border-color: #b6bbb2; background: #fff; }
 .mapping-node-list button:disabled { opacity: .38; cursor: not-allowed; }
 .mapping-node-list button.is-selected { border-color: #667465; background: #fff; box-shadow: 3px 3px 0 #c9d0c6; }

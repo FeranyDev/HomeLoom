@@ -152,6 +152,10 @@ func main() {
 		logger.Error("mqtt provider factory registration failed", zap.Error(err))
 		os.Exit(1)
 	}
+	if err := registerNetworkProvider(factory); err != nil {
+		logger.Error("network provider factory registration failed", zap.Error(err))
+		os.Exit(1)
+	}
 	if err := factory.Register(gree.ProviderType, func(config providerconfig.Config) (providersdk.Provider, error) {
 		return gree.NewProviderFromConfig(config)
 	}); err != nil {

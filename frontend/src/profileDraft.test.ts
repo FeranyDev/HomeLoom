@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildProfileDraft, consumeProfileDraft, openProfileWorkbench, storeProfileDraft } from './profileDraft'
 
 afterEach(() => {
-  sessionStorage.clear()
+  window.sessionStorage.clear()
+  window.localStorage.clear()
+  window.history.replaceState(null, '', '/')
   vi.restoreAllMocks()
 })
 
@@ -35,10 +37,14 @@ describe('profileDraft', () => {
     expect(consumeProfileDraft()).toBeNull()
   })
 
-  it('opens the profile workbench with a prefilled draft', () => {
+  it('opens a separate profile workbench tab with a one-shot prefilled draft', () => {
     const open = vi.spyOn(window, 'open').mockImplementation(() => null)
     openProfileWorkbench({ stage: 'provider', inputType: 'bool', outputType: 'bool' })
-    expect(open).toHaveBeenCalledWith('#/mapping/profiles', '_blank', 'noopener,noreferrer')
+    const target = open.mock.calls[0][0]!
+    expect(target).toMatch(/^\?profile-draft=.+#\/mapping\/profiles$/)
+    window.history.replaceState(null, '', target)
     expect(consumeProfileDraft()?.transforms[0]).toEqual({ type: 'invert' })
+    expect(window.location.search).toBe('')
+    expect(consumeProfileDraft()).toBeNull()
   })
 })

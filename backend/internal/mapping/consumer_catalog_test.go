@@ -70,6 +70,9 @@ func TestConsumerContractRegistryDoesNotFallBackToHomeKit(t *testing.T) {
 	if known, supported := ConsumerModelSupport("homekit", device.TypeSwitch); !known || !supported {
 		t.Fatalf("HomeKit switch support = known %v, supported %v", known, supported)
 	}
+	if property, found := FindConsumerProperty("homekit", device.TypeNetworkDevice, "ContactSensor.ContactSensorState"); !found || property.DefaultModelPath != (device.ParameterPath{EndpointID: "main", CapabilityID: "reachability", PropertyID: "reachable"}) {
+		t.Fatalf("HomeKit network reachability fallback = %#v, found=%v", property, found)
+	}
 	if known, supported := ConsumerModelSupport("homekit", device.TypeRobotVacuum); !known || supported {
 		t.Fatalf("HomeKit robot vacuum support = known %v, supported %v", known, supported)
 	}
@@ -130,6 +133,7 @@ func TestMatterFirstDeviceBatchIsExplicitlySupported(t *testing.T) {
 	supported := []device.Type{
 		device.TypeSwitch, device.TypeOutlet, device.TypeLightbulb,
 		device.TypeTemperatureSensor, device.TypeHumiditySensor,
+		device.TypeNetworkDevice,
 		device.TypeContactSensor, device.TypeMotionSensor, device.TypeOccupancySensor,
 		device.TypeWindowCovering, device.TypeFan, device.TypeThermostat, device.TypeLock,
 		device.TypeIlluminanceSensor, device.TypePressureSensor, device.TypeLeakSensor,

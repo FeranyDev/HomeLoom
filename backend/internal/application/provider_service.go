@@ -239,6 +239,7 @@ func (s *ProviderService) VerifyAuthChallenge(ctx context.Context, id, challenge
 	if applyErr != nil {
 		return ProviderInfo{}, applyErr
 	}
+	s.bindRuntimeConfigChanges(id)
 	for _, info := range s.List() {
 		if info.ID == id {
 			return info, nil
@@ -480,8 +481,60 @@ func NewProviderService(configs []providerconfig.Config, store ProviderStore, fa
 	s := &ProviderService{configs: make(map[string]providerconfig.Config), store: store, factory: factory, runtime: runtime, maintenanceWake: make(chan struct{}, 1), credentialRetries: make(map[string]credentialRetry), authChallenges: make(map[string]*providerAuthChallenge)}
 	for _, item := range configs {
 		s.configs[item.ID] = item
+		s.bindRuntimeConfigChanges(item.ID)
 	}
 	return s
+}
+
+// bindRuntimeConfigChanges connects a running Provider's narrowly-scoped
+// self-repair notifications to durable Provider configuration. This is used
+// for identities such as a Xiaomi gateway DID whose DHCP address may change;
+// Providers cannot write the database directly.
+func (s *ProviderService) bindRuntimeConfigChanges(id string) {
+	accessor, ok := s.runtime.(providerAnyRuntime)
+	if !ok {
+		return
+	}
+	instance, ok := accessor.ProviderAny(id)
+	if !ok {
+		return
+	}
+	subscriber, ok := instance.(providersdk.RuntimeConfigChangeSubscriber)
+	if !ok {
+		return
+	}
+	subscriber.SetRuntimeConfigChangeHandler(func(previous, replacement json.RawMessage) {
+		s.persistRuntimeConfigChange(id, previous, replacement)
+	})
+}
+
+func (s *ProviderService) persistRuntimeConfigChange(id string, previous, replacement json.RawMessage) {
+	if !json.Valid(previous) || !json.Valid(replacement) || s.store == nil {
+		return
+	}
+	// Save serializes administrator edits, so an auto-recovered endpoint can
+	// never overwrite a newer configuration submitted through the API.
+	s.authRun.Lock()
+	defer s.authRun.Unlock()
+	s.mu.RLock()
+	current, exists := s.configs[id]
+	s.mu.RUnlock()
+	if !exists || !bytes.Equal(current.Config, previous) {
+		return
+	}
+	updated := current
+	updated.Config = append(json.RawMessage(nil), replacement...)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	err := s.store.SaveProvider(ctx, updated)
+	cancel()
+	if err != nil {
+		return
+	}
+	s.mu.Lock()
+	if currentConfig, stillCurrent := s.configs[id]; stillCurrent && bytes.Equal(currentConfig.Config, previous) {
+		s.configs[id] = updated
+	}
+	s.mu.Unlock()
 }
 
 func (s *ProviderService) List() []ProviderInfo {
@@ -643,6 +696,7 @@ func (s *ProviderService) Save(ctx context.Context, item providerconfig.Config) 
 			}
 			return ProviderInfo{}, err
 		}
+		s.bindRuntimeConfigChanges(item.ID)
 	} else {
 		if existed && previous.Enabled {
 			if err := s.runtime.Remove(ctx, item.ID); err != nil {
@@ -784,6 +838,7 @@ func (s *ProviderService) RefreshDueCredentials(ctx context.Context, now time.Ti
 			}
 			continue
 		}
+		s.bindRuntimeConfigChanges(item.ID)
 		if renewed, ok := replacement.(providersdk.CredentialMaintainer); ok {
 			if renewedStatus, statusErr := renewed.CredentialStatus(now); statusErr == nil && renewedStatus.Managed {
 				next = earlierProviderTime(next, renewedStatus.RefreshAt)
@@ -1063,6 +1118,7 @@ func (s *ProviderService) Restart(ctx context.Context, id string) (ProviderInfo,
 	if err := s.runtime.Apply(ctx, instance); err != nil {
 		return ProviderInfo{}, err
 	}
+	s.bindRuntimeConfigChanges(id)
 	for _, info := range s.List() {
 		if info.ID == id {
 			return info, nil

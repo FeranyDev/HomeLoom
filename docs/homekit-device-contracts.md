@@ -11,6 +11,7 @@ HomeKit Target 只读取统一 Device Model，不依赖具体 Provider。Virtual
 | `humidity-sensor` | `humidity` | `current-humidity` | number，R/N | Current Relative Humidity |
 | `temperature-humidity-sensor` | `temperature` | `current-temperature` | number，R/N | Current Temperature |
 | `temperature-humidity-sensor` | `humidity` | `current-humidity` | number，R/N | Current Relative Humidity |
+| `network-device` | `reachability` | `reachable` | bool，R/N | Contact Sensor State（目标端降级） |
 | `contact-sensor` | `contact` | `contact-detected` | bool，R/N | Contact Sensor State |
 | `motion-sensor` | `motion` | `motion-detected` | bool，R/N | Motion Detected |
 | `fan` | `fan` | `active` | bool，R/W/N | Active |

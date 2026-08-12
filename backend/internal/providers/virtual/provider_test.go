@@ -135,6 +135,20 @@ func TestProviderSupportsHumidityContactAndMotionSensors(t *testing.T) {
 	}
 }
 
+func TestProviderSupportsNetworkDeviceReachability(t *testing.T) {
+	provider, err := NewProviderFromConfig(providerconfig.Config{ID: "network", Config: []byte(`{"devices":[{"id":"nas","type":"network-device","online":true,"reachable":true}]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := provider.List(context.Background())
+	if err != nil || len(items) != 1 {
+		t.Fatalf("items = %#v, error = %v", items, err)
+	}
+	if items[0].Type != device.TypeNetworkDevice || !boolProperty(items[0], "reachability", "reachable") {
+		t.Fatalf("network device = %#v", items[0])
+	}
+}
+
 func TestProviderSupportsFanAirPurifierFilterAndWindowCovering(t *testing.T) {
 	provider, err := NewProviderFromConfig(providerconfig.Config{ID: "advanced", Config: []byte(`{"devices":[{"id":"fan","type":"fan","active":true,"speed":35,"mode":"auto"},{"id":"purifier","type":"air-purifier","active":true,"speed":60,"filterLife":8},{"id":"shade","type":"window-covering","position":25}]}`)})
 	if err != nil {
