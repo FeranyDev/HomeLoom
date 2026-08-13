@@ -21,9 +21,9 @@ const (
 	defaultWOLPort       = 9
 )
 
-// Config owns the durable catalog for a LAN reachability Provider. Devices
-// can override each timing and Wake-on-LAN option so a sleeping computer does
-// not have to share the probing policy of an always-on NAS.
+// Config owns the durable catalog for a LAN power-state Provider. Devices can
+// override each timing and Wake-on-LAN option so a sleeping computer does not
+// have to share the probing policy of an always-on NAS.
 type Config struct {
 	Devices              []DeviceConfig `json:"devices"`
 	ProbeIntervalSeconds int            `json:"probeIntervalSeconds,omitempty"`

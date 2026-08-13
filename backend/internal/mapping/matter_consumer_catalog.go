@@ -38,7 +38,7 @@ func MatterConsumerContracts() []device.ConsumerModelContract {
 			required("humidity", "current-humidity", "RelativeHumidityMeasurement.MeasuredValue"),
 		}},
 		{ConsumerID: "matter", DeviceType: device.TypeNetworkDevice, Parameters: []device.ConsumerParameterMapping{
-			required("reachability", "reachable", "BooleanState.StateValue"),
+			required("switch", "power", "OnOff.OnOff"),
 		}},
 		{ConsumerID: "matter", DeviceType: device.TypeContactSensor, Parameters: []device.ConsumerParameterMapping{
 			required("contact", "contact-detected", "BooleanState.StateValue"),
@@ -145,6 +145,7 @@ func matterCommandProperties(contracts []device.ConsumerModelContract) []Consume
 		{device.TypeOutlet, path("switch", "power"), "OnOff.Off", "关闭"},
 		{device.TypeLightbulb, path("switch", "power"), "OnOff.On", "开启"},
 		{device.TypeLightbulb, path("switch", "power"), "OnOff.Off", "关闭"},
+		{device.TypeNetworkDevice, path("switch", "power"), "OnOff.On", "唤醒"},
 		{device.TypeLightbulb, path("light", "brightness"), "LevelControl.MoveToLevel", "移动到亮度"},
 		{device.TypeWindowCovering, path("window-covering", "target-position"), "WindowCovering.GoToLiftPercentage", "移动窗帘"},
 		{device.TypeWindowCovering, path("window-covering", "target-position"), "WindowCovering.StopMotion", "停止窗帘"},

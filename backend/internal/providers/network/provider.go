@@ -79,7 +79,7 @@ var (
 	_ providersdk.ConnectionTester    = (*Provider)(nil)
 	_ providersdk.Discoverer          = (*Provider)(nil)
 	_ providersdk.EventSubscriber     = (*Provider)(nil)
-	_ providersdk.CommandExecutor     = (*Provider)(nil)
+	_ providersdk.PropertyWriter      = (*Provider)(nil)
 	_ providersdk.MetricsReporter     = (*Provider)(nil)
 	_ providersdk.DiagnosticsReporter = (*Provider)(nil)
 )
@@ -124,7 +124,7 @@ func (p *Provider) Manifest() providersdk.Manifest {
 }
 
 func (*Provider) Capabilities() providersdk.Capabilities {
-	return providersdk.Capabilities{Discovery: true, Commands: true, Events: true}
+	return providersdk.Capabilities{Discovery: true, PropertyWrite: true, Events: true}
 }
 
 func (p *Provider) Initialize(ctx context.Context) error {
@@ -160,10 +160,10 @@ func (p *Provider) Close(context.Context) error {
 	return nil
 }
 
-// TestConnection is successful when at least one configured endpoint is
-// currently reachable. A Provider catalog can legitimately include sleeping
-// devices, so requiring every entry to be online would make configuration
-// testing unusable for Wake-on-LAN.
+// TestConnection is successful when at least one configured endpoint appears
+// powered on. A Provider catalog can legitimately include sleeping devices, so
+// requiring every entry to answer would make configuration testing unusable
+// for Wake-on-LAN.
 func (p *Provider) TestConnection(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -185,7 +185,7 @@ func (p *Provider) TestConnection(ctx context.Context) error {
 			return ctx.Err()
 		}
 	}
-	return fmt.Errorf("no configured network device is reachable: %w", lastErr)
+	return fmt.Errorf("no configured network device appears to be powered on: %w", lastErr)
 }
 
 func (p *Provider) DiscoverDevices(context.Context) ([]device.Device, error) {
@@ -218,9 +218,18 @@ func (p *Provider) Subscribe(handler func(device.Device)) func() {
 	}
 }
 
-func (p *Provider) ExecuteCommand(ctx context.Context, request providersdk.CommandRequest) (device.Device, error) {
-	if request.EndpointID != "main" || request.CapabilityID != "reachability" || request.CommandID != "wake" || len(request.Parameters) != 0 {
-		return device.Device{}, providersdk.ErrCommandUnsupported
+// WriteProperty binds Wake-on-LAN to the normal power-on operation. A probe is
+// still the authority for the reported power state, so a successful packet is
+// not treated as proof that the device has already started.
+func (p *Provider) WriteProperty(ctx context.Context, request providersdk.PropertyWriteRequest) (device.Device, error) {
+	if request.EndpointID != "main" || request.CapabilityID != "switch" || request.PropertyID != "power" {
+		return device.Device{}, providersdk.ErrPropertyUnsupported
+	}
+	if request.Value.Type != device.ValueTypeBool || request.Value.Bool == nil {
+		return device.Device{}, providersdk.ErrPropertyInvalid
+	}
+	if !*request.Value.Bool {
+		return device.Device{}, fmt.Errorf("%w: network monitoring can only turn a device on", providersdk.ErrPropertyUnsupported)
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -234,7 +243,7 @@ func (p *Provider) ExecuteCommand(ctx context.Context, request providersdk.Comma
 	configured, snapshot := runtime.configured, runtime.snapshot.Clone()
 	p.mu.RUnlock()
 	if len(configured.mac) != 6 {
-		return device.Device{}, fmt.Errorf("%w: device %q has no MAC address configured", providersdk.ErrCommandInvalid, request.DeviceID)
+		return device.Device{}, fmt.Errorf("%w: device %q has no MAC address configured", providersdk.ErrPropertyUnsupported, request.DeviceID)
 	}
 	if err := p.waker.Wake(ctx, WakeRequest{MAC: append(net.HardwareAddr(nil), configured.mac...), BroadcastAddress: configured.wolAddress, Port: configured.wolPort, Interface: configured.wolInterface}); err != nil {
 		p.errors.Add(1)
@@ -242,7 +251,7 @@ func (p *Provider) ExecuteCommand(ctx context.Context, request providersdk.Comma
 	}
 	p.wakes.Add(1)
 	// Magic Packets have no acknowledgement. Return the existing state and let
-	// the next TCP probe become the sole authority for availability.
+	// the next TCP probe become the sole authority for the power state.
 	return snapshot, nil
 }
 
@@ -354,7 +363,7 @@ func (p *Provider) recordProbe(id string, probeErr error) {
 		runtime.failures = 0
 		runtime.lastError = ""
 		if runtime.successes >= runtime.configured.onlineThreshold {
-			runtime.snapshot = updateReachability(runtime.snapshot, true)
+			runtime.snapshot = updatePowerState(runtime.snapshot, true)
 		}
 	} else {
 		p.errors.Add(1)
@@ -362,11 +371,11 @@ func (p *Provider) recordProbe(id string, probeErr error) {
 		runtime.successes = 0
 		runtime.lastError = probeErr.Error()
 		if runtime.failures >= runtime.configured.offlineThreshold {
-			runtime.snapshot = updateReachability(runtime.snapshot, false)
+			runtime.snapshot = updatePowerState(runtime.snapshot, false)
 		}
 	}
 	current := runtime.snapshot.Clone()
-	changed := previous.Availability != current.Availability || previous.Sequence != current.Sequence
+	changed := previous.Sequence != current.Sequence
 	listeners := make([]func(device.Device), 0, len(p.listeners))
 	if changed {
 		p.events.Add(1)
@@ -392,33 +401,31 @@ func (p *Provider) entries() []monitoredDevice {
 }
 
 func buildDevice(providerID string, configured monitoredDevice) device.Device {
-	reachability := device.Capability{
-		ID: "reachability", Type: "reachability",
+	power := device.Capability{
+		ID: "switch", Type: "switch",
 		Properties: []device.Property{{
-			Definition: device.PropertyDefinition{ID: "reachable", Name: "在线状态", Type: device.ValueTypeBool, Readable: true, Writable: false, Notifiable: true},
+			Definition: device.PropertyDefinition{ID: "power", Name: "电源状态", Type: device.ValueTypeBool, Readable: true, Writable: len(configured.mac) == 6, Notifiable: true},
 			Value:      device.BoolValue(false),
 		}},
-	}
-	if len(configured.mac) == 6 {
-		reachability.Commands = []device.CommandDefinition{{ID: "wake", Name: "网络唤醒", Idempotent: true}}
 	}
 	result := device.Device{
 		SchemaVersion: device.SchemaVersion, ID: configured.ID, ProviderID: providerID, Name: configured.Name,
 		Type: device.TypeNetworkDevice, RuntimeMode: device.RuntimeModeLocal, StateTransport: device.StateTransportPending,
-		Availability: device.AvailabilityUnknown, Online: false, Sequence: 1, LastUpdateAt: time.Now().UTC(),
+		// The Provider remains able to send WOL while the managed host is off.
+		Availability: device.AvailabilityOnline, Online: true, Sequence: 1, LastUpdateAt: time.Now().UTC(),
 		Endpoints: []device.Endpoint{{ID: "main", Name: "网络设备", Type: "network", Capabilities: []device.Capability{
-			reachability,
+			power,
 		}}},
 	}
 	return result
 }
 
-func updateReachability(item device.Device, online bool) device.Device {
-	if item.IsOnline() == online && item.EffectiveAvailability() != device.AvailabilityUnknown {
+func updatePowerState(item device.Device, power bool) device.Device {
+	property, found := item.Property("main", "switch", "power")
+	if found && property.Value.Bool != nil && *property.Value.Bool == power {
 		return item
 	}
-	item.SetOnline(online)
-	item.SetProperty("main", "reachability", "reachable", device.BoolValue(online))
+	item.SetProperty("main", "switch", "power", device.BoolValue(power))
 	item.Sequence++
 	item.LastUpdateAt = time.Now().UTC()
 	return item

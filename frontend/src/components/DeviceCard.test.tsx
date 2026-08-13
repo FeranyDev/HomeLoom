@@ -66,19 +66,24 @@ describe('DeviceCard device types', () => {
     expect(screen.getByText(unit)).toBeInTheDocument()
   })
 
-	it('renders a network device as reachability instead of a contact sensor', () => {
-		const device = sensorDevice('network-device', 'reachability', 'reachable', { type: 'bool', bool: true })
-		render(<DeviceCard device={device} pending={false} onPowerChange={() => {}} onDetails={() => {}} />)
+	it('renders a network device as a power state and wakes it from the on control', async () => {
+		const device = sensorDevice('network-device', 'switch', 'power', { type: 'bool', bool: false })
+		device.endpoints[0].capabilities[0].properties[0].definition.writable = true
+		const onPowerChange = vi.fn()
+		render(<DeviceCard device={device} pending={false} onPowerChange={onPowerChange} onDetails={() => {}} />)
 		expect(screen.getByText(/网络设备.*network-device/)).toBeInTheDocument()
-		expect(screen.getByText('在线', { selector: 'strong' })).toBeInTheDocument()
-		expect(screen.getByText('NETWORK')).toBeInTheDocument()
+		expect(screen.getByRole('button', { name: '已关闭 · 点击唤醒' })).toBeInTheDocument()
+		await userEvent.click(screen.getByRole('button', { name: '已关闭 · 点击唤醒' }))
+		expect(onPowerChange).toHaveBeenCalledWith(device, true)
 		expect(screen.queryByText('已闭合')).not.toBeInTheDocument()
 	})
 
-	it('keeps a network device unknown while reachability is being determined', () => {
-		const device = { ...sensorDevice('network-device', 'reachability', 'reachable', { type: 'bool', bool: false }), availability: 'unknown' as const, online: false }
+	it('keeps an off network device manageable even when its host cannot be reached', () => {
+		const device = { ...sensorDevice('network-device', 'switch', 'power', { type: 'bool', bool: false }), availability: 'online' as const, online: true }
+		device.endpoints[0].capabilities[0].properties[0].definition.writable = true
 		render(<DeviceCard device={device} pending={false} onPowerChange={() => {}} onDetails={() => {}} />)
-		expect(screen.getByText('正在探测')).toBeInTheDocument()
+		expect(screen.getByText('已关闭')).toBeInTheDocument()
+		expect(screen.getByRole('button', { name: '已关闭 · 点击唤醒' })).toBeEnabled()
 	})
 
 	it('renders both measurements for a temperature/humidity sensor', () => {

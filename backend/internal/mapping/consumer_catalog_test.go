@@ -70,8 +70,11 @@ func TestConsumerContractRegistryDoesNotFallBackToHomeKit(t *testing.T) {
 	if known, supported := ConsumerModelSupport("homekit", device.TypeSwitch); !known || !supported {
 		t.Fatalf("HomeKit switch support = known %v, supported %v", known, supported)
 	}
-	if property, found := FindConsumerProperty("homekit", device.TypeNetworkDevice, "ContactSensor.ContactSensorState"); !found || property.DefaultModelPath != (device.ParameterPath{EndpointID: "main", CapabilityID: "reachability", PropertyID: "reachable"}) {
-		t.Fatalf("HomeKit network reachability fallback = %#v, found=%v", property, found)
+	if property, found := FindConsumerProperty("homekit", device.TypeNetworkDevice, "Switch.On"); !found || property.DefaultModelPath != (device.ParameterPath{EndpointID: "main", CapabilityID: "switch", PropertyID: "power"}) || !property.Writable {
+		t.Fatalf("HomeKit network power mapping = %#v, found=%v", property, found)
+	}
+	if command, found := FindConsumerProperty("matter", device.TypeNetworkDevice, "OnOff.On"); !found || command.DefaultModelPath != (device.ParameterPath{EndpointID: "main", CapabilityID: "switch", PropertyID: "power"}) {
+		t.Fatalf("Matter network wake command = %#v, found=%v", command, found)
 	}
 	if known, supported := ConsumerModelSupport("homekit", device.TypeRobotVacuum); !known || supported {
 		t.Fatalf("HomeKit robot vacuum support = known %v, supported %v", known, supported)

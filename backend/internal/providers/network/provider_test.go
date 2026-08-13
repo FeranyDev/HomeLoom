@@ -49,7 +49,7 @@ func networkProviderConfig() providerconfig.Config {
 	}
 }
 
-func TestProviderAppliesReachabilityThresholdsAndPublishesOnlyTransitions(t *testing.T) {
+func TestProviderAppliesPowerThresholdsWithoutMarkingTheProviderOffline(t *testing.T) {
 	prober := &sequenceProber{responses: []error{nil, nil, errors.New("connection refused"), errors.New("connection refused"), nil, nil}}
 	provider, err := NewProviderWithDependencies(networkProviderConfig(), prober, &recordingWaker{})
 	if err != nil {
@@ -66,50 +66,53 @@ func TestProviderAppliesReachabilityThresholdsAndPublishesOnlyTransitions(t *tes
 	if err != nil || len(items) != 1 || !items[0].IsOnline() {
 		t.Fatalf("after successful threshold: items=%#v err=%v", items, err)
 	}
-	reachability, ok := items[0].Property("main", "reachability", "reachable")
-	if items[0].Type != device.TypeNetworkDevice || !ok || reachability.Value.Bool == nil || !*reachability.Value.Bool {
-		t.Fatalf("online reachability state = %#v, type=%q, found=%v", reachability, items[0].Type, ok)
+	power, ok := items[0].Property("main", "switch", "power")
+	if items[0].Type != device.TypeNetworkDevice || !ok || power.Value.Bool == nil || !*power.Value.Bool {
+		t.Fatalf("powered-on network state = %#v, type=%q, found=%v", power, items[0].Type, ok)
 	}
 
 	for range 2 {
 		provider.probeDue(context.Background(), true)
 	}
 	items, _ = provider.DiscoverDevices(context.Background())
-	if items[0].EffectiveAvailability() != device.AvailabilityOffline || items[0].Online {
-		t.Fatalf("after failed threshold: %#v", items[0])
+	if items[0].EffectiveAvailability() != device.AvailabilityOnline || !items[0].Online {
+		t.Fatalf("a powered-off host must remain manageable: %#v", items[0])
 	}
-	reachability, _ = items[0].Property("main", "reachability", "reachable")
-	if reachability.Value.Bool == nil || *reachability.Value.Bool {
-		t.Fatalf("offline reachability state = %#v", reachability)
+	power, _ = items[0].Property("main", "switch", "power")
+	if power.Value.Bool == nil || *power.Value.Bool {
+		t.Fatalf("powered-off network state = %#v", power)
 	}
 
 	for range 2 {
 		provider.probeDue(context.Background(), true)
 	}
-	if len(events) != 3 { // online, offline, then online; intermediate probes do not flap.
+	if len(events) != 3 { // power on, power off, then power on; initial off state needs no event.
 		t.Fatalf("published events = %d, want 3", len(events))
 	}
-	if events[0].EffectiveAvailability() != device.AvailabilityOnline || events[1].EffectiveAvailability() != device.AvailabilityOffline || events[2].EffectiveAvailability() != device.AvailabilityOnline {
-		t.Fatalf("availability events = %#v", events)
+	for _, event := range events {
+		if event.EffectiveAvailability() != device.AvailabilityOnline {
+			t.Fatalf("a power-state transition must not mark the Provider offline: %#v", event)
+		}
 	}
 	if stats := provider.ProviderMetrics(); stats["probes"] != 6 || stats["errors"] != 2 {
 		t.Fatalf("provider stats = %#v", stats)
 	}
 }
 
-func TestWakeCommandSendsMagicPacketWithoutChangingAvailability(t *testing.T) {
+func TestPowerOnSendsMagicPacketWithoutClaimingTheDeviceStarted(t *testing.T) {
 	waker := &recordingWaker{}
 	provider, err := NewProviderWithDependencies(networkProviderConfig(), &sequenceProber{}, waker)
 	if err != nil {
 		t.Fatal(err)
 	}
 	before, _ := provider.DiscoverDevices(context.Background())
-	updated, err := provider.ExecuteCommand(context.Background(), providersdk.CommandRequest{DeviceID: "nas", EndpointID: "main", CapabilityID: "reachability", CommandID: "wake"})
+	updated, err := provider.WriteProperty(context.Background(), providersdk.PropertyWriteRequest{DeviceID: "nas", EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Value: device.BoolValue(true)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.EffectiveAvailability() != device.AvailabilityUnknown || before[0].Availability != updated.Availability {
-		t.Fatalf("wake must not claim online: before=%#v updated=%#v", before[0], updated)
+	power, found := updated.Property("main", "switch", "power")
+	if updated.EffectiveAvailability() != device.AvailabilityOnline || before[0].Availability != updated.Availability || !found || power.Value.Bool == nil || *power.Value.Bool {
+		t.Fatalf("wake must not claim that the device started: before=%#v updated=%#v", before[0], updated)
 	}
 	waker.mu.Lock()
 	requests := append([]WakeRequest(nil), waker.requests...)
@@ -122,7 +125,7 @@ func TestWakeCommandSendsMagicPacketWithoutChangingAvailability(t *testing.T) {
 	}
 }
 
-func TestWakeCommandRejectsMonitorOnlyDevice(t *testing.T) {
+func TestPowerOnRejectsMonitorOnlyDeviceAndPowerOff(t *testing.T) {
 	config := networkProviderConfig()
 	config.Config = []byte(`{"devices":[{"id":"printer","name":"Printer","host":"192.0.2.11","probePort":631}]}`)
 	provider, err := NewProviderWithDependencies(config, &sequenceProber{}, &recordingWaker{})
@@ -130,12 +133,16 @@ func TestWakeCommandRejectsMonitorOnlyDevice(t *testing.T) {
 		t.Fatal(err)
 	}
 	items, err := provider.DiscoverDevices(context.Background())
-	if err != nil || len(items) != 1 || len(items[0].Endpoints[0].Capabilities[0].Commands) != 0 {
-		t.Fatalf("monitor-only device must not advertise wake: items=%#v err=%v", items, err)
+	if err != nil || len(items) != 1 || items[0].Endpoints[0].Capabilities[0].Properties[0].Definition.Writable {
+		t.Fatalf("monitor-only device must not advertise power-on: items=%#v err=%v", items, err)
 	}
-	_, err = provider.ExecuteCommand(context.Background(), providersdk.CommandRequest{DeviceID: "printer", EndpointID: "main", CapabilityID: "reachability", CommandID: "wake"})
-	if !errors.Is(err, providersdk.ErrCommandInvalid) {
-		t.Fatalf("wake error = %v, want invalid command", err)
+	_, err = provider.WriteProperty(context.Background(), providersdk.PropertyWriteRequest{DeviceID: "printer", EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Value: device.BoolValue(true)})
+	if !errors.Is(err, providersdk.ErrPropertyUnsupported) {
+		t.Fatalf("power-on error = %v, want unsupported property write", err)
+	}
+	_, err = provider.WriteProperty(context.Background(), providersdk.PropertyWriteRequest{DeviceID: "printer", EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Value: device.BoolValue(false)})
+	if !errors.Is(err, providersdk.ErrPropertyUnsupported) {
+		t.Fatalf("power-off error = %v, want unsupported", err)
 	}
 }
 

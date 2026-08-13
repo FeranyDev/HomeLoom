@@ -129,18 +129,15 @@ test("all Catalog types construct official endpoints and bridge state", async (t
     await driver.readAttributeForTest("contact", "booleanState", "stateValue"),
     true,
   );
-  assert.equal(
-    await driver.readAttributeForTest("network-device", "booleanState", "stateValue"),
-    true,
-  );
+  assert.equal(await driver.readAttributeForTest("network-device", "onOff", "onOff"), true);
   const networkDescriptor = await driver.readAttributeForTest(
     "network-device",
     "descriptor",
     "deviceTypeList",
   ) as Array<{ deviceType?: number }>;
   assert.ok(
-    networkDescriptor.some(({ deviceType }) => deviceType === 0x15),
-    "network-device must use the official BooleanState-capable endpoint",
+    networkDescriptor.some(({ deviceType }) => deviceType === 0x010a),
+    "network-device must use the official On/Off Plug-in Unit endpoint",
   );
   const motionOccupancy = await driver.readAttributeForTest(
     "motion",
@@ -356,10 +353,10 @@ test("all Catalog types construct official endpoints and bridge state", async (t
   await driver.updateAttributes([
     { deviceId: "fan", path: "FanControl.PercentSetting", value: 33 },
     { deviceId: "thermostat", path: "Thermostat.SystemMode", value: "auto" },
-    { deviceId: "network-device", path: "BooleanState.StateValue", value: false },
+    { deviceId: "network-device", path: "OnOff.OnOff", value: false },
   ]);
   assert.equal(
-    await driver.readAttributeForTest("network-device", "booleanState", "stateValue"),
+    await driver.readAttributeForTest("network-device", "onOff", "onOff"),
     false,
   );
   assert.equal(writes.length, 7, "host replay must not loop back as controller writes");
@@ -424,7 +421,7 @@ function firstBatchDevices(): DeviceSnapshot[] {
       "RelativeHumidityMeasurement.MeasuredValue": 42.5,
     }),
     snapshot("network-device", 25, "network-device", {
-      "BooleanState.StateValue": true,
+      "OnOff.OnOff": true,
     }),
     snapshot("contact", 7, "contact-sensor", {
       "BooleanState.StateValue": true,

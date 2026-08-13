@@ -249,10 +249,10 @@ func HomeKitConsumerContracts() []device.ConsumerModelContract {
 			required(device.TypeTemperatureHumiditySensor, "temperature", "current-temperature", "TemperatureSensor.CurrentTemperature"),
 			required(device.TypeTemperatureHumiditySensor, "humidity", "current-humidity", "HumiditySensor.CurrentRelativeHumidity"),
 		}, batteryStatus(device.TypeTemperatureHumiditySensor)...)},
-		// HomeKit has no reachability service. The adapter deliberately uses a
-		// ContactSensor only at this target boundary; the unified source remains
-		// a network-device with a reachability property.
-		{ConsumerID: "homekit", DeviceType: device.TypeNetworkDevice, Parameters: []device.ConsumerParameterMapping{required(device.TypeNetworkDevice, "reachability", "reachable", "ContactSensor.ContactSensorState")}},
+		// A network device is shown as a switch. Turning it on sends Wake-on-LAN;
+		// TCP probing reports the resulting power state without taking the local
+		// monitoring Provider offline.
+		{ConsumerID: "homekit", DeviceType: device.TypeNetworkDevice, Parameters: []device.ConsumerParameterMapping{required(device.TypeNetworkDevice, "switch", "power", "Switch.On")}},
 		{ConsumerID: "homekit", DeviceType: device.TypeContactSensor, Parameters: append([]device.ConsumerParameterMapping{required(device.TypeContactSensor, "contact", "contact-detected", "ContactSensor.ContactSensorState")}, sensorStatus(device.TypeContactSensor)...)},
 		{ConsumerID: "homekit", DeviceType: device.TypeMotionSensor, Parameters: append([]device.ConsumerParameterMapping{required(device.TypeMotionSensor, "motion", "motion-detected", "MotionSensor.MotionDetected")}, sensorStatus(device.TypeMotionSensor)...)},
 		{ConsumerID: "homekit", DeviceType: device.TypeFan, Parameters: []device.ConsumerParameterMapping{

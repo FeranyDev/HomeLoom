@@ -1832,10 +1832,10 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
         return sdk.temperatureSensor.TemperatureSensorDevice.with(BridgeInfo) as never;
       case "humidity":
         return sdk.humiditySensor.HumiditySensorDevice.with(BridgeInfo) as never;
-      // Matter has no dedicated LAN-reachability device type. Contact Sensor is
-      // the official endpoint that requires the BooleanState cluster we expose.
+      // Matter has no dedicated LAN power device type. Use the official
+      // On/Off Plug-in Unit endpoint so a controller's On action maps to WOL.
       case "network":
-        return sdk.contactSensor.ContactSensorDevice.with(BridgeInfo) as never;
+        return sdk.onOffPlugInUnit.OnOffPlugInUnitDevice.with(HostOnOffServer, BridgeInfo) as never;
       case "contact":
         return sdk.contactSensor.ContactSensorDevice.with(BridgeInfo) as never;
       case "motion":
@@ -1980,7 +1980,7 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
       };
     }
 
-    if (deviceType === "network" || deviceType === "contact") {
+    if (deviceType === "contact") {
       state.booleanState = {
         stateValue: booleanValue(
           device.attributes["BooleanState.StateValue"] ?? false,

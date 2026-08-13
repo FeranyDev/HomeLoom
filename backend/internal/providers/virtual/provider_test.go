@@ -135,8 +135,8 @@ func TestProviderSupportsHumidityContactAndMotionSensors(t *testing.T) {
 	}
 }
 
-func TestProviderSupportsNetworkDeviceReachability(t *testing.T) {
-	provider, err := NewProviderFromConfig(providerconfig.Config{ID: "network", Config: []byte(`{"devices":[{"id":"nas","type":"network-device","online":true,"reachable":true}]}`)})
+func TestProviderSupportsNetworkDevicePowerState(t *testing.T) {
+	provider, err := NewProviderFromConfig(providerconfig.Config{ID: "network", Config: []byte(`{"devices":[{"id":"nas","type":"network-device","online":true,"power":true}]}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestProviderSupportsNetworkDeviceReachability(t *testing.T) {
 	if err != nil || len(items) != 1 {
 		t.Fatalf("items = %#v, error = %v", items, err)
 	}
-	if items[0].Type != device.TypeNetworkDevice || !boolProperty(items[0], "reachability", "reachable") {
+	if items[0].Type != device.TypeNetworkDevice || !boolProperty(items[0], "switch", "power") {
 		t.Fatalf("network device = %#v", items[0])
 	}
 }

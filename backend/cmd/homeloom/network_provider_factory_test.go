@@ -25,7 +25,7 @@ func TestRegisterNetworkProviderCreatesConfiguredProvider(t *testing.T) {
 	if manifest := instance.Manifest(); manifest.ID != "network-main" || manifest.Type != network.ProviderType {
 		t.Fatalf("manifest = %#v", manifest)
 	}
-	if capabilities := instance.Capabilities(); !capabilities.Discovery || !capabilities.Commands || !capabilities.Events {
+	if capabilities := instance.Capabilities(); !capabilities.Discovery || !capabilities.PropertyWrite || capabilities.Commands || !capabilities.Events {
 		t.Fatalf("network Provider capabilities = %#v", capabilities)
 	}
 }

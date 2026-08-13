@@ -215,8 +215,11 @@ var modelContracts = map[Type]ModelContract{
 		optionalMeasurement("soil-moisture", "conductivity", "土壤电导率", "microsiemens-per-centimeter", false, 0, 100000, 1),
 		optionalMeasurement("temperature", "current-temperature", "土壤温度", "celsius", false, -100, 200, 0.1),
 	}, sensorHealthParameters()...)},
-	TypeNetworkDevice: {DeviceType: TypeNetworkDevice, Name: "网络设备", Version: 1, Parameters: []ModelParameter{
-		required("reachability", "reachable", "在线状态", ValueTypeBool, false),
+	TypeNetworkDevice: {DeviceType: TypeNetworkDevice, Name: "网络设备", Version: 2, Parameters: []ModelParameter{
+		// A failed network probe means that the managed device is powered off;
+		// it does not make the local monitoring Provider unavailable. Writing true
+		// is the explicit "turn on" operation and may send Wake-on-LAN.
+		required("switch", "power", "电源状态", ValueTypeBool, true),
 	}},
 	TypeContactSensor: {DeviceType: TypeContactSensor, Name: "接触传感器", Version: 2, Parameters: append([]ModelParameter{
 		required("contact", "contact-detected", "接触状态", ValueTypeBool, false),

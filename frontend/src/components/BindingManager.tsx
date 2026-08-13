@@ -191,6 +191,7 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
   const [editingID, setEditingID] = useState<string | null>(null)
   const [editingDefaultKey, setEditingDefaultKey] = useState<string | null>(null)
   const [editingEnabled, setEditingEnabled] = useState(true)
+  const [modelPropertyFilter, setModelPropertyFilter] = useState<'all' | 'publisher-bound'>('all')
   const [lockedProviderSourceKey, setLockedProviderSourceKey] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
@@ -281,6 +282,12 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
     }
     return keys
   }, [bindings, defaultProviderRoutes])
+  const visibleParameters = useMemo(() => (
+    stage === 'consumer' && modelPropertyFilter === 'publisher-bound'
+      ? parameters.filter((item) => publisherBoundModelKeys.has(pathKey(item.path)))
+      : parameters
+  ), [modelPropertyFilter, parameters, publisherBoundModelKeys, stage])
+  const publisherBoundParameterCount = parameters.filter((item) => publisherBoundModelKeys.has(pathKey(item.path))).length
   const effectiveRouteCount = listedBindings.filter((item) => item.enabled).length + visibleDefaultProviderRoutes.length
   const displayedRouteCount = listedBindings.length + visibleDefaultProviderRoutes.length
 
@@ -288,8 +295,8 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
     if (!sourceKey && sources[0]) setSourceKey(sources[0].key)
   }, [sourceKey, sources])
   useEffect(() => {
-    if (!parameters.some((item) => pathKey(item.path) === modelKey)) setModelKey(parameters[0] ? pathKey(parameters[0].path) : '')
-  }, [effectiveType, modelKey, parameters])
+    if (!visibleParameters.some((item) => pathKey(item.path) === modelKey)) setModelKey(visibleParameters[0] ? pathKey(visibleParameters[0].path) : '')
+  }, [effectiveType, modelKey, visibleParameters])
   useEffect(() => {
     if (stage === 'consumer' && !consumers.some((item) => `${item.consumer.id}/${item.property.id}` === consumerKey)) {
       const first = consumers[0]; setConsumerKey(first ? `${first.consumer.id}/${first.property.id}` : '')
@@ -333,8 +340,12 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
     } else {
       setLockedProviderSourceKey(null)
     }
-    if (item.stage === 'consumer') setConsumerKey(`${item.consumerId}/${item.consumerProperty}`)
-    setModelKey(pathKey({ endpointId: item.modelEndpointId, capabilityId: item.modelCapabilityId, propertyId: item.modelPropertyId }))
+    const itemModelKey = pathKey({ endpointId: item.modelEndpointId, capabilityId: item.modelCapabilityId, propertyId: item.modelPropertyId })
+    if (item.stage === 'consumer') {
+      setConsumerKey(`${item.consumerId}/${item.consumerProperty}`)
+      if (!publisherBoundModelKeys.has(itemModelKey)) setModelPropertyFilter('all')
+    }
+    setModelKey(itemModelKey)
     setProfileId(item.profileId ?? ''); setEditingID(item.id); setEditingDefaultKey(null); setEditingEnabled(item.enabled)
   }
 
@@ -380,12 +391,12 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
         {stage === 'provider' ? <><div className="mapping-node-list">{sources.map((item) => <button key={item.key} style={selectablePropertyCardStyle} className={item.key === sourceKey ? 'is-selected' : ''} disabled={Boolean(lockedProviderSourceKey && item.key !== lockedProviderSourceKey)} title={lockedProviderSourceKey && item.key !== lockedProviderSourceKey ? '编辑覆盖时来源属性保持不变；如需更换来源，请取消编辑后新建路由。' : undefined} onClick={() => setSourceKey(item.key)}><span>{item.deviceName}</span><strong>{propertyDisplayLabel(item.definition.name, item.propertyId)}</strong><em className={`source-current-value ${item.valueStatus.known && item.valueStatus.available ? 'is-current' : item.valueStatus.known ? 'is-stale' : 'is-unknown'}`}>{item.valueStatus.known ? `${item.valueStatus.available ? '当前' : '上次'} ${propertyValueText(item.value)}${item.definition.unit ? ` ${item.definition.unit}` : ''}` : '当前值未知'}</em><code>{item.providerId} / {item.endpointId}.{item.capabilityId}.{item.propertyId}</code><small>{valueTypeLabel(item.definition.type)}{item.definition.unit ? ` · 单位 ${item.definition.unit}` : ''} · {permissionLabel(item.definition.readable, item.definition.writable, item.definition.notifiable)}{item.valueStatus.observedAt ? ` · ${new Date(item.valueStatus.observedAt).toLocaleTimeString('zh-CN')}` : ''}</small>{item.definition.type === 'enum' && item.definition.enum?.length ? <small className="enum-domain-inline">来源枚举：{item.definition.enum.join(' / ')}</small> : null}{item.valueStatus.error && <small className="catalog-error">{item.valueStatus.error}</small>}</button>)}</div>{(sourceCommands.length > 0 || sourceEvents.length > 0) && <details className="source-definition-summary"><summary>查看全部动作（Action）/ 事件（Event）</summary>{sourceCommands.map(({ endpoint, capability, command }) => <div key={`${endpoint.id}/${capability.id}/${command.id}`}><b>动作（Action）· {command.name}</b><code>{endpoint.id}.{capability.id}.{command.id}</code><small>{command.parameters?.length ?? 0} 个输入参数</small></div>)}{sourceEvents.map(({ endpoint, capability, event }) => <div key={`${endpoint.id}/${capability.id}/${event.id}`}><b>事件（Event）· {event.name}</b><code>{endpoint.id}.{capability.id}.{event.id}</code><small>{valueTypeLabel(event.payload)}</small></div>)}</details>}</> : <div className="mapping-context"><b>提供端边界（Provider）</b><p>消费端（Consumer）不直接读取提供端（Provider）字段，避免平台之间形成隐式耦合。</p></div>}
       </section>
       <div className="mapping-arrow"><span>→</span><small>{stage === 'provider' ? profileId || 'identity' : '统一语义'}</small></div>
-      <section className="mapping-lane is-model"><header><span>统一模型（UNIFIED MODEL）</span><strong>端点 / 能力 / 属性（Endpoint / Capability / Property）三级基准</strong><label>当前设备<input aria-label="当前映射设备" value={`${device.name} · ${device.providerId} / ${device.id}`} disabled /></label><label>设备模型（deviceType）<select aria-label="统一设备模型" value={effectiveType} disabled>{catalog.models.map((item) => <option key={item.deviceType} value={item.deviceType}>{deviceTypeLabel(item.deviceType)}</option>)}</select></label></header>
-        <div className="mapping-node-list">{parameters.map((item) => {
+      <section className="mapping-lane is-model"><header><span>统一模型（UNIFIED MODEL）</span><strong>端点 / 能力 / 属性（Endpoint / Capability / Property）三级基准</strong><label>当前设备<input aria-label="当前映射设备" value={`${device.name} · ${device.providerId} / ${device.id}`} disabled /></label><div className="mapping-model-controls"><label>设备模型（deviceType）<select aria-label="统一设备模型" value={effectiveType} disabled>{catalog.models.map((item) => <option key={item.deviceType} value={item.deviceType}>{deviceTypeLabel(item.deviceType)}</option>)}</select></label>{stage === 'consumer' && <label className="mapping-model-filter"><span className="mapping-model-filter-heading"><span>发布者属性筛选</span><small className="mapping-model-filter-count">{visibleParameters.length} / {parameters.length} 个属性可见</small></span><select aria-label="发布者属性筛选" value={modelPropertyFilter} onChange={(event) => setModelPropertyFilter(event.target.value as 'all' | 'publisher-bound')}><option value="all">全部统一模型属性（{parameters.length}）</option><option value="publisher-bound">仅已绑定发布者（{publisherBoundParameterCount}）</option></select></label>}</div></header>
+        <div className="mapping-node-list">{visibleParameters.map((item) => {
           const key = pathKey(item.path)
           const publisherBound = stage === 'consumer' && publisherBoundModelKeys.has(key)
           return <button key={key} style={selectablePropertyCardStyle} className={`${key === modelKey ? 'is-selected' : ''}${publisherBound ? ' is-publisher-bound' : ''}`.trim()} onClick={() => setModelKey(key)}><span className={`parameter-level is-${item.level}`}>{parameterLevelLabel(item.level)}</span>{publisherBound && <span className="publisher-bound-mark" title="该统一模型属性已有发布者绑定，可从提供端投影到此属性">已绑定发布者</span>}<strong>{propertyDisplayLabel(item.name, item.path.propertyId)}</strong><code>{item.path.endpointId} / {item.path.capabilityId} / {item.path.propertyId}</code><small>{valueTypeLabel(item.type)}{item.unit ? ` · 单位 ${item.unit}` : ''} · {permissionLabel(item.readable, item.writable, item.notifiable)}</small>{item.type === 'enum' && item.enum?.length ? <small className="enum-domain-inline">模型枚举：{item.enum.join(' / ')}</small> : null}</button>
-        })}</div>
+        })}{stage === 'consumer' && modelPropertyFilter === 'publisher-bound' && visibleParameters.length === 0 && <p className="mapping-filter-empty">当前设备没有已绑定发布者的统一模型属性，请先配置第一段路由。</p>}</div>
       </section>
       <div className="mapping-arrow"><span>→</span><small>{stage === 'consumer' ? profileId || 'identity' : '统一状态'}</small></div>
       <section className={`mapping-lane ${stage === 'consumer' ? '' : 'is-context'}`}><header><span>消费端（CONSUMERS）</span><strong>{consumerCatalogs.map((item) => item.name).join(' / ') || consumerId || '目标完整属性'}</strong><small>{consumers.length} 个属性</small></header>

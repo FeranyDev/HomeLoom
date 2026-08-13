@@ -28,7 +28,6 @@ type DeviceConfig struct {
 	Humidity     *float64            `json:"humidity,omitempty"`
 	Contact      *bool               `json:"contact,omitempty"`
 	Motion       *bool               `json:"motion,omitempty"`
-	Reachable    *bool               `json:"reachable,omitempty"`
 	BatteryLevel *int64              `json:"batteryLevel,omitempty"`
 	LowBattery   *bool               `json:"lowBattery,omitempty"`
 	Tampered     *bool               `json:"tampered,omitempty"`
@@ -73,7 +72,7 @@ func AllModelDeviceConfigs() []DeviceConfig {
 		{ID: "virtual-water-level-1", Name: "水箱水位", Type: "water-level-sensor", Online: boolValue(true)},
 		{ID: "virtual-soil-moisture-1", Name: "花园土壤湿度", Type: "soil-moisture-sensor", Online: boolValue(true)},
 		{ID: "virtual-contact-1", Name: "入户门", Type: "contact-sensor", Online: boolValue(true), Contact: boolValue(false), BatteryLevel: intValue(88), LowBattery: boolValue(false), Tampered: boolValue(false)},
-		{ID: "virtual-network-1", Name: "家庭 NAS", Type: "network-device", Online: boolValue(true), Reachable: boolValue(true)},
+		{ID: "virtual-network-1", Name: "家庭 NAS", Type: "network-device", Online: boolValue(true), Power: boolValue(true)},
 		{ID: "virtual-motion-1", Name: "走廊活动", Type: "motion-sensor", Online: boolValue(true), Motion: boolValue(false), BatteryLevel: intValue(84), LowBattery: boolValue(false), Tampered: boolValue(false)},
 		{ID: "virtual-fan-1", Name: "卧室风扇", Type: "fan", Online: boolValue(true), Active: boolValue(false), Speed: numberValue(35), Mode: "manual", SwingMode: boolValue(true), Direction: "clockwise", ControlLock: boolValue(false)},
 		{ID: "virtual-air-purifier-1", Name: "客厅净化器", Type: "air-purifier", Online: boolValue(true), Active: boolValue(true), Speed: numberValue(60), Mode: "auto", SwingMode: boolValue(false), ControlLock: boolValue(false), AirQuality: "good", PM25: numberValue(12), VOC: numberValue(80), FilterLife: numberValue(82), FilterChange: boolValue(false)},
@@ -247,15 +246,15 @@ func configuredDevice(providerID string, item DeviceConfig) (device.Device, erro
 		}
 		return finish(created), nil
 	case "network-device":
-		reachable := online
-		if item.Reachable != nil {
-			reachable = *item.Reachable
+		power := false
+		if item.Power != nil {
+			power = *item.Power
 		}
 		created, err := contractDevice(item.ID, providerID, item.Name, device.TypeNetworkDevice, online)
 		if err != nil {
 			return device.Device{}, err
 		}
-		created.SetProperty("main", "reachability", "reachable", device.BoolValue(reachable))
+		created.SetProperty("main", "switch", "power", device.BoolValue(power))
 		return finish(created), nil
 	case "fan":
 		active, speed, mode, err := configurableActiveDeviceValues(item)

@@ -130,7 +130,7 @@ describe('ProviderForm', () => {
 		}), false))
 	})
 
-	it('configures network reachability monitoring and Wake-on-LAN', async () => {
+	it('configures network power monitoring and Wake-on-LAN', async () => {
 		const onSave = vi.fn().mockResolvedValue(undefined)
 		const onTest = vi.fn().mockResolvedValue(undefined)
 		render(<ProviderForm provider={null} initialType="network" onCancel={() => {}} onSave={onSave} onTest={onTest} />)

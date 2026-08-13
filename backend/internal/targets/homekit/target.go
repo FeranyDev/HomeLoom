@@ -161,7 +161,7 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 		route := routes[item.ID]
 		var created *accessory.A
 		switch item.Type {
-		case device.TypeSwitch:
+		case device.TypeSwitch, device.TypeNetworkDevice:
 			a := accessory.NewSwitch(info)
 			a.A.Id = accessoryIDs[item.ID]
 			fault := characteristic.NewStatusFault()
@@ -279,7 +279,7 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 			bindings.extraFaults[item.ID] = append(bindings.extraFaults[item.ID], humidityFault)
 			bindings.accessories = append(bindings.accessories, a.A)
 			created = a.A
-		case device.TypeContactSensor, device.TypeNetworkDevice:
+		case device.TypeContactSensor:
 			a := accessory.NewContactSensor(info)
 			a.A.Id = accessoryIDs[item.ID]
 			fault := characteristic.NewStatusFault()
@@ -659,11 +659,7 @@ func (b *accessoryBindings) update(item device.Device) uint64 {
 		}
 	}
 	if current, ok := b.contacts[item.ID]; ok {
-		capabilityID, propertyID := "contact", "contact-detected"
-		if item.Type == device.TypeNetworkDevice {
-			capabilityID, propertyID = "reachability", "reachable"
-		}
-		if property, found := item.Property("main", capabilityID, propertyID); found && property.Value.Bool != nil {
+		if property, found := item.Property("main", "contact", "contact-detected"); found && property.Value.Bool != nil {
 			value := characteristic.ContactSensorStateContactNotDetected
 			if *property.Value.Bool {
 				value = characteristic.ContactSensorStateContactDetected

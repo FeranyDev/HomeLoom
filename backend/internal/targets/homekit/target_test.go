@@ -323,13 +323,13 @@ func TestAccessoryBindingsMapSupportedDeviceTypes(t *testing.T) {
 	}
 }
 
-func TestNetworkDeviceUsesContactOnlyAtHomeKitTargetBoundary(t *testing.T) {
+func TestNetworkDeviceUsesSwitchAtHomeKitTargetBoundary(t *testing.T) {
 	item := device.Device{
-		SchemaVersion: device.SchemaVersion, ID: "nas", ProviderID: "network-main", Name: "NAS 网络状态", Type: device.TypeNetworkDevice,
+		SchemaVersion: device.SchemaVersion, ID: "nas", ProviderID: "network-main", Name: "NAS", Type: device.TypeNetworkDevice,
 		Availability: device.AvailabilityOnline, Online: true, RuntimeMode: device.RuntimeModeLocal, StateTransport: device.StateTransportPending,
 		Endpoints: []device.Endpoint{{ID: "main", Name: "网络设备", Type: "network", Capabilities: []device.Capability{{
-			ID: "reachability", Type: "reachability", Properties: []device.Property{{
-				Definition: device.PropertyDefinition{ID: "reachable", Name: "在线状态", Type: device.ValueTypeBool, Readable: true, Notifiable: true}, Value: device.BoolValue(true),
+			ID: "switch", Type: "switch", Properties: []device.Property{{
+				Definition: device.PropertyDefinition{ID: "power", Name: "电源状态", Type: device.ValueTypeBool, Readable: true, Writable: true, Notifiable: true}, Value: device.BoolValue(true),
 			}},
 		}}}},
 	}
@@ -337,11 +337,11 @@ func TestNetworkDeviceUsesContactOnlyAtHomeKitTargetBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	bindings := newAccessoryBindings([]device.Device{item}, nil, nil, application.NewDeviceService(virtual.NewProvider()), zap.NewNop())
-	if len(bindings.accessories) != 1 || bindings.contacts[item.ID] == nil {
+	if len(bindings.accessories) != 1 || bindings.switches[item.ID] == nil {
 		t.Fatalf("network device HomeKit binding = %#v", bindings)
 	}
-	if bindings.contacts[item.ID].Value() != characteristic.ContactSensorStateContactDetected {
-		t.Fatalf("network reachability was not projected to HomeKit boolean state: %v", bindings.contacts[item.ID].Value())
+	if !bindings.switches[item.ID].Value() {
+		t.Fatalf("network power state was not projected to the HomeKit switch: %v", bindings.switches[item.ID].Value())
 	}
 }
 

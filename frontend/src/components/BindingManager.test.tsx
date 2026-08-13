@@ -209,6 +209,65 @@ describe('BindingManager', () => {
     expect(screen.queryByText('数据库覆盖（P → M）')).not.toBeInTheDocument()
   })
 
+  it('filters second-stage model properties to attributes bound by a publisher route', async () => {
+    const baseCatalog = await catalog()
+    const unboundParameter = {
+      ...baseCatalog.models[0].parameters[0],
+      path: { endpointId: 'main', capabilityId: 'status', propertyId: 'unpublished-status' },
+      name: '未发布状态',
+    }
+    const api = {
+      listBindings: vi.fn(async () => []), listProfiles: vi.fn(async () => []),
+      create: vi.fn(), update: vi.fn(), remove: vi.fn(),
+      catalog: vi.fn(async () => ({
+        ...baseCatalog,
+        models: [{ ...baseCatalog.models[0], parameters: [unboundParameter, ...baseCatalog.models[0].parameters] }],
+      })),
+    }
+
+    const { container } = render(<BindingManager device={device} api={api} initialStage="consumer" consumerOnly consumerId="homekit" targetId="apple-main" consumerDeviceId="living-switch" />)
+    const modelLane = container.querySelector('.mapping-lane.is-model') as HTMLElement
+    expect(await within(modelLane).findByText(/未发布状态/)).toBeInTheDocument()
+    const modelControls = modelLane.querySelector('.mapping-model-controls') as HTMLElement
+    expect(modelControls).toContainElement(screen.getByLabelText('统一设备模型'))
+    expect(modelControls).toContainElement(screen.getByLabelText('发布者属性筛选'))
+    expect(modelControls.querySelectorAll(':scope > label > select')).toHaveLength(2)
+    const filterHeading = modelControls.querySelector('.mapping-model-filter-heading') as HTMLElement
+    expect(filterHeading).toHaveTextContent('发布者属性筛选2 / 2 个属性可见')
+    expect(filterHeading.querySelector('small')).toHaveClass('mapping-model-filter-count')
+    expect(screen.getByLabelText('发布者属性筛选')).toHaveValue('all')
+    expect(screen.getByRole('option', { name: '仅已绑定发布者（1）' })).toBeInTheDocument()
+
+    await userEvent.selectOptions(screen.getByLabelText('发布者属性筛选'), 'publisher-bound')
+
+    await waitFor(() => expect(within(modelLane).queryByText(/未发布状态/)).not.toBeInTheDocument())
+    expect(within(modelLane).getByText('1 / 2 个属性可见')).toBeInTheDocument()
+    const publishedProperty = within(modelLane).getByRole('button', { name: /开关.*power/ })
+    expect(publishedProperty).toHaveClass('is-publisher-bound', 'is-selected')
+  })
+
+  it('explains when the publisher-bound filter has no matching property', async () => {
+    const baseCatalog = await catalog()
+    const api = {
+      listBindings: vi.fn(async () => []), listProfiles: vi.fn(async () => []),
+      create: vi.fn(), update: vi.fn(), remove: vi.fn(),
+      catalog: vi.fn(async () => ({
+        ...baseCatalog,
+        models: [{ ...baseCatalog.models[0], parameters: [{
+          ...baseCatalog.models[0].parameters[0],
+          path: { endpointId: 'main', capabilityId: 'status', propertyId: 'unpublished-status' },
+          name: '未发布状态',
+        }] }],
+      })),
+    }
+
+    render(<BindingManager device={device} api={api} initialStage="consumer" consumerOnly consumerId="homekit" />)
+    await userEvent.selectOptions(await screen.findByLabelText('发布者属性筛选'), 'publisher-bound')
+
+    expect(await screen.findByText('当前设备没有已绑定发布者的统一模型属性，请先配置第一段路由。')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /保存第.*二.*段路由/ })).toBeDisabled()
+  })
+
   it('creates Consumer routes for one concrete device', async () => {
     const create = vi.fn(async (input) => ({ ...input, id: 'consumer-one' }))
     const api = { listBindings: vi.fn(async () => []), listProfiles: vi.fn(async () => []), create, update: vi.fn(), remove: vi.fn(), catalog }

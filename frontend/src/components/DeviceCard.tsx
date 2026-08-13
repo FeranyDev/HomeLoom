@@ -13,9 +13,11 @@ interface DeviceCardProps {
 }
 
 export function DeviceCard({ device, pending, onPowerChange, onDetails, onMapping, onEnabledChange }: DeviceCardProps) {
-  const hasPower = device.type === 'switch' || device.type === 'lightbulb' || device.type === 'outlet'
+  const networkDevice = device.type === 'network-device'
+  const hasPower = device.type === 'switch' || device.type === 'lightbulb' || device.type === 'outlet' || networkDevice
   const kind = deviceTypeLabel(device.type)
   const power = deviceProperty(device, 'switch', 'power')?.bool ?? false
+	const networkWakeEnabled = device.endpoints.some((endpoint) => endpoint.capabilities.some((capability) => capability.id === 'switch' && capability.properties.some((property) => property.definition.id === 'power' && property.definition.writable)))
   const temperature = deviceProperty(device, 'temperature', 'current-temperature')?.number
   const humidity = deviceProperty(device, 'humidity', 'current-humidity')?.number
 	const measurement = device.type === 'temperature-sensor' ? { value: temperature, unit: '°C' }
@@ -39,7 +41,7 @@ export function DeviceCard({ device, pending, onPowerChange, onDetails, onMappin
     <article className={`device-card is-${device.type}`} aria-labelledby={headingID}>
       <div className="device-card__topline">
         <span className={`status-dot is-${device.availability}`} />
-        <span>{device.removed ? '来源已删除' : device.disabled ? '已禁用' : availabilityLabel(device.availability)}</span>
+		<span>{device.removed ? '来源已删除' : device.disabled ? '已禁用' : networkDevice ? (power ? '已开启' : '已关闭') : availabilityLabel(device.availability)}</span>
 		{device.runtimeMode && <span className={`device-runtime-mode is-${device.runtimeMode}`}>{runtimeModeLabel(device.runtimeMode, device.stateTransport)}</span>}
 		<span className="provider">{device.providerId}</span>
       </div>
@@ -51,10 +53,10 @@ export function DeviceCard({ device, pending, onPowerChange, onDetails, onMappin
 	  <div className="device-card__value">{hasPower ? (
         <button
           className={`power-button ${power ? 'is-on' : ''}`}
-          disabled={pending || !device.online}
-          onClick={() => onPowerChange(device, !power)}
+          disabled={pending || (networkDevice ? power || !networkWakeEnabled : !device.online)}
+          onClick={() => onPowerChange(device, networkDevice ? true : !power)}
         >
-          <span>{pending ? '同步中' : !device.online ? '不可用' : power ? '已开启' : '已关闭'}</span>
+		  <span>{pending ? (networkDevice ? '正在唤醒' : '同步中') : networkDevice ? (power ? '已开启' : networkWakeEnabled ? '已关闭 · 点击唤醒' : '已关闭 · 仅监测') : !device.online ? '不可用' : power ? '已开启' : '已关闭'}</span>
           <span className="switch-track"><span /></span>
         </button>
       ) : measurement ? (
@@ -65,7 +67,6 @@ export function DeviceCard({ device, pending, onPowerChange, onDetails, onMappin
       ) : device.type === 'temperature-humidity-sensor' ? <div className="dual-sensor"><div><strong>{device.online ? temperature?.toFixed(1) : '—'}</strong><span>°C</span></div><div><strong>{device.online ? humidity?.toFixed(1) : '—'}</strong><span>%</span></div></div>
         : device.type === 'fan' || device.type === 'air-purifier' ? <div className={`sensor-state ${device.online && active ? 'is-active' : ''}`}><strong>{!device.online ? '不可用' : `${active ? '运行中' : '已停止'} · ${speed?.toFixed(0) ?? 0}%`}</strong><span>{device.type === 'fan' ? 'FAN' : `AIR · 滤芯 ${filterLife?.toFixed(0) ?? '—'}%`}</span></div>
         : device.type === 'window-covering' ? <div className="temperature"><strong>{device.online ? position ?? '—' : '—'}</strong><span>%</span></div>
-        : device.type === 'network-device' ? <div className={`sensor-state ${device.online ? 'is-active' : ''}`}><strong>{device.availability === 'unknown' ? '正在探测' : device.online ? '在线' : '离线'}</strong><span>NETWORK</span></div>
         : device.type === 'contact-sensor' || device.type === 'motion-sensor' ? <div className={`sensor-state ${device.online && (contact || motion) ? 'is-active' : ''}`}><strong>{!device.online ? '不可用' : device.type === 'contact-sensor' ? (contact ? '已闭合' : '已打开') : (motion ? '检测到活动' : '无活动')}</strong><span>{device.type === 'contact-sensor' ? 'CONTACT' : 'MOTION'}</span></div>
         : <div className={`sensor-state ${device.online ? 'is-active' : ''}`}><strong>{device.online ? '状态可用' : '不可用'}</strong><span>{String(device.type).toUpperCase()}</span></div>
       }</div>
