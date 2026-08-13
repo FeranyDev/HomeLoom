@@ -332,6 +332,41 @@ paths:
       operationId: listDevices
       responses:
         "200": { description: Device snapshots, content: { application/json: { schema: { type: object, required: [data], properties: { data: { type: array, items: { $ref: "#/components/schemas/Device" } } } } } } }
+  /api/v1/locations:
+    get:
+      operationId: listDeviceLocationHomes
+      description: Lists the HomeLoom-owned canonical home and room directory used by unified-device location selection. Provider source locations with normalized matching names use these canonical IDs while their source IDs remain available on the Device.
+      responses:
+        "200": { description: Configured homes with nested rooms, content: { application/json: { schema: { type: object, required: [data], properties: { data: { type: array, items: { $ref: "#/components/schemas/DeviceLocationHome" } } } } } } }
+  /api/v1/locations/homes:
+    post:
+      operationId: createDeviceLocationHome
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string, minLength: 1, maxLength: 80 } } } } } }
+      responses: { "201": { description: Home created }, "400": { $ref: "#/components/responses/BadRequest" }, "409": { description: Home name already exists } }
+  /api/v1/locations/homes/{homeId}:
+    parameters: [{ name: homeId, in: path, required: true, schema: { type: string } }]
+    put:
+      operationId: updateDeviceLocationHome
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string, minLength: 1, maxLength: 80 } } } } } }
+      responses: { "200": { description: Home renamed and assigned device names refreshed }, "404": { $ref: "#/components/responses/NotFound" }, "409": { description: Home name already exists } }
+    delete:
+      operationId: deleteDeviceLocationHome
+      responses: { "204": { description: Unused home and its rooms deleted }, "404": { $ref: "#/components/responses/NotFound" }, "409": { description: Home is assigned to a unified device } }
+  /api/v1/locations/homes/{homeId}/rooms:
+    parameters: [{ name: homeId, in: path, required: true, schema: { type: string } }]
+    post:
+      operationId: createDeviceLocationRoom
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string, minLength: 1, maxLength: 80 } } } } } }
+      responses: { "201": { description: Room created }, "404": { $ref: "#/components/responses/NotFound" }, "409": { description: Room name already exists in this home } }
+  /api/v1/locations/homes/{homeId}/rooms/{roomId}:
+    parameters: [{ name: homeId, in: path, required: true, schema: { type: string } }, { name: roomId, in: path, required: true, schema: { type: string } }]
+    put:
+      operationId: updateDeviceLocationRoom
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string, minLength: 1, maxLength: 80 } } } } } }
+      responses: { "200": { description: Room renamed and assigned device names refreshed }, "404": { $ref: "#/components/responses/NotFound" }, "409": { description: Room name already exists in this home } }
+    delete:
+      operationId: deleteDeviceLocationRoom
+      responses: { "204": { description: Unused room deleted }, "404": { $ref: "#/components/responses/NotFound" }, "409": { description: Room is assigned to a unified device } }
   /api/v1/devices/{deviceId}/states:
     parameters: [{ $ref: "#/components/parameters/DeviceId" }]
     get:
@@ -345,6 +380,30 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [enabled], properties: { enabled: { type: boolean } } } } } }
       responses:
         "200": { description: Persisted device preference applied immediately, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/Device" } } } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/devices/{deviceId}/location:
+    parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+    put:
+      operationId: setDeviceLocation
+      description: Selects the HomeLoom unified-device location. Source mode follows future Provider location changes; custom mode references a configured HomeLoom home and optional room by stable ID without mutating Provider configuration.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  required: [mode]
+                  properties: { mode: { type: string, const: source } }
+                - type: object
+                  required: [mode, homeId]
+                  properties:
+                    mode: { type: string, const: custom }
+                    homeId: { type: string }
+                    roomId: { type: string }
+      responses:
+        "200": { description: Persisted location preference applied immediately, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/Device" } } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
   /api/v1/devices/{deviceId}/simulation:
     parameters: [{ $ref: "#/components/parameters/DeviceId" }]
@@ -1092,6 +1151,20 @@ components:
         available: { type: boolean, description: True when the value was read or observed while the source device was available. }
         observedAt: { type: string, format: date-time }
         error: { type: string, description: Most recent read error when the value is unavailable. }
+    DeviceLocationRoom:
+      type: object
+      required: [id, homeId, name]
+      properties:
+        id: { type: string }
+        homeId: { type: string }
+        name: { type: string }
+    DeviceLocationHome:
+      type: object
+      required: [id, name, rooms]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        rooms: { type: array, items: { $ref: "#/components/schemas/DeviceLocationRoom" } }
     Device:
       type: object
       required: [schemaVersion, id, providerId, name, type, availability, online, endpoints, lastUpdateAt]
@@ -1101,6 +1174,15 @@ components:
         providerId: { type: string }
         name: { type: string }
         type: { type: string }
+        homeId: { type: string, description: Effective canonical home identity used by unified-device grouping; a matching Provider source name resolves to the HomeLoom ID. }
+        homeName: { type: string, description: Effective HomeLoom home name. }
+        roomId: { type: string, description: Effective canonical room identity scoped to the home; a matching Provider source name resolves to the HomeLoom ID. }
+        roomName: { type: string, description: Effective HomeLoom room name. }
+        locationMode: { type: string, enum: [source, custom], description: Whether the effective location follows the Provider or a HomeLoom-owned override. }
+        sourceHomeId: { type: string, description: Read-only home identity reported by the Provider. }
+        sourceHomeName: { type: string, description: Read-only home name reported by the Provider. }
+        sourceRoomId: { type: string, description: Read-only room identity reported by the Provider. }
+        sourceRoomName: { type: string, description: Read-only room name reported by the Provider. }
         availability: { type: string, enum: [online, offline, unknown] }
         online: { type: boolean }
         sequence: { type: integer, minimum: 0, description: Provider-local snapshot sequence when available. }

@@ -93,6 +93,16 @@ describe('ProviderCard simulation', () => {
 		expect(screen.queryByText('contact-sensor · seq 3')).not.toBeInTheDocument()
 	})
 
+	it('edits a published unified device location from its Provider card', async () => {
+		const item: Device = { schemaVersion: 1, id: 'switch', providerId: provider.id, name: '开关', type: 'switch', availability: 'online', online: true, endpoints: [], lastUpdateAt: '', locationMode: 'source' }
+		const onDeviceLocation = vi.fn()
+		render(<ProviderCard provider={provider} devices={[item]} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} onDeviceLocation={onDeviceLocation} />)
+		const locationButton = screen.getByRole('button', { name: '设置位置' })
+		expect(locationButton.closest('.provider-device-name')).toHaveTextContent('开关')
+		await userEvent.click(locationButton)
+		expect(onDeviceLocation).toHaveBeenCalledWith(item)
+	})
+
 	it('recognizes Home Assistant compatible Tuya sharing credentials as ready', () => {
 		const tuya: Provider = { ...provider, id: 'tuya-sharing', type: 'tuya', name: '涂鸦扫码云', config: { authType: 'sharing', uid: 'uid-1', endpoint: 'https://openapi.tuyaus.com', terminalId: 'terminal-1', accessToken: 'access-token', refreshToken: 'refresh-token', pollIntervalSeconds: 21600 } }
 		render(<ProviderCard provider={tuya} devices={[]} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} />)

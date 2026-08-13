@@ -2,13 +2,17 @@ package application
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	commandtracker "github.com/feranydev/homeloom/backend/internal/command"
 	domaincommand "github.com/feranydev/homeloom/backend/internal/domain/command"
@@ -58,8 +62,14 @@ type DeviceService struct {
 	metrics                           deviceMetrics
 	storageMetrics                    DatabaseMetricsProvider
 	preferences                       DevicePreferenceStore
+	locationPreferences               DeviceLocationPreferenceStore
+	locationCatalog                   DeviceLocationCatalogStore
 	disabledMu                        sync.RWMutex
 	disabled                          map[string]struct{}
+	locationMu                        sync.RWMutex
+	locations                         map[string]device.LocationPreference
+	locationCatalogMu                 sync.RWMutex
+	locationHomes                     []device.LocationHome
 	propertyMu                        sync.Mutex
 	propertyOps                       map[domainstate.Key]*propertyOperation
 	propertyMapper                    PropertyMapper
@@ -87,6 +97,26 @@ type DatabaseHealthProvider interface {
 type DevicePreferenceStore interface {
 	ListDisabledDeviceIDs(context.Context) ([]string, error)
 	SetDeviceDisabled(context.Context, string, bool) error
+}
+
+type DeviceLocationPreferenceStore interface {
+	ListDeviceLocationPreferences(context.Context) ([]device.LocationPreference, error)
+	SetDeviceLocationPreference(context.Context, device.LocationPreference) error
+	ClearDeviceLocationPreference(context.Context, string) error
+}
+
+type DeviceLocationCatalogStore interface {
+	ListDeviceLocationHomes(context.Context) ([]device.LocationHome, error)
+	SaveDeviceLocationHome(context.Context, device.LocationHome) error
+	DeleteDeviceLocationHome(context.Context, string) error
+	SaveDeviceLocationRoom(context.Context, device.LocationRoom) error
+	DeleteDeviceLocationRoom(context.Context, string) error
+}
+
+type DeviceLocationInput struct {
+	Mode   device.LocationMode `json:"mode"`
+	HomeID string              `json:"homeId,omitempty"`
+	RoomID string              `json:"roomId,omitempty"`
 }
 
 type PropertyMapper interface {
@@ -241,7 +271,7 @@ func NewDeviceService(provider providersdk.Provider, dependencies ...any) *Devic
 		provider: provider, discoverer: discoverer, cataloger: cataloger, reader: reader, writer: writer, executor: executor,
 		registry: registry.NewDeviceRegistry(nil),
 		states:   statestore.NewStore(), commands: commandtracker.NewTracker(5 * time.Second), commandQueue: newCommandCoordinator(),
-		listeners: make(map[uint64]*subscription[device.Device]), stateListeners: make(map[uint64]*subscription[domainstate.StateValue]), deviceEventListeners: make(map[uint64]*subscription[providersdk.DeviceEvent]), snapshotSeq: make(map[string]uint64), disabled: make(map[string]struct{}), propertyOps: make(map[domainstate.Key]*propertyOperation),
+		listeners: make(map[uint64]*subscription[device.Device]), stateListeners: make(map[uint64]*subscription[domainstate.StateValue]), deviceEventListeners: make(map[uint64]*subscription[providersdk.DeviceEvent]), snapshotSeq: make(map[string]uint64), disabled: make(map[string]struct{}), locations: make(map[string]device.LocationPreference), propertyOps: make(map[domainstate.Key]*propertyOperation),
 	}
 	for _, dependency := range dependencies {
 		if metrics, ok := dependency.(DatabaseMetricsProvider); ok && service.storageMetrics == nil {
@@ -249,6 +279,12 @@ func NewDeviceService(provider providersdk.Provider, dependencies ...any) *Devic
 		}
 		if preferences, ok := dependency.(DevicePreferenceStore); ok && service.preferences == nil {
 			service.preferences = preferences
+		}
+		if preferences, ok := dependency.(DeviceLocationPreferenceStore); ok && service.locationPreferences == nil {
+			service.locationPreferences = preferences
+		}
+		if catalog, ok := dependency.(DeviceLocationCatalogStore); ok && service.locationCatalog == nil {
+			service.locationCatalog = catalog
 		}
 		if mapper, ok := dependency.(PropertyMapper); ok && service.propertyMapper == nil {
 			service.propertyMapper = mapper
@@ -331,28 +367,369 @@ func NewDeviceService(provider providersdk.Provider, dependencies ...any) *Devic
 }
 
 func (s *DeviceService) LoadDevicePreferences(ctx context.Context) error {
-	if s.preferences == nil {
-		return nil
+	if s.preferences != nil {
+		ids, err := s.preferences.ListDisabledDeviceIDs(ctx)
+		if err != nil {
+			return err
+		}
+		s.disabledMu.Lock()
+		for _, id := range ids {
+			s.disabled[id] = struct{}{}
+		}
+		s.disabledMu.Unlock()
+		for _, id := range ids {
+			if item, ok := s.registry.Get(id); ok {
+				item.Disabled = true
+				item.SetOnline(false)
+				s.registry.Upsert(item)
+				s.states.MarkDeviceUnavailable(id, domainstate.UnavailableDisabled)
+				s.resetSnapshotSequence(id)
+			}
+		}
 	}
-	ids, err := s.preferences.ListDisabledDeviceIDs(ctx)
-	if err != nil {
-		return err
+	if s.locationPreferences != nil {
+		if err := s.reloadDeviceLocationPreferences(ctx, false); err != nil {
+			return err
+		}
 	}
-	s.disabledMu.Lock()
-	for _, id := range ids {
-		s.disabled[id] = struct{}{}
-	}
-	s.disabledMu.Unlock()
-	for _, id := range ids {
-		if item, ok := s.registry.Get(id); ok {
-			item.Disabled = true
-			item.SetOnline(false)
-			s.registry.Upsert(item)
-			s.states.MarkDeviceUnavailable(id, domainstate.UnavailableDisabled)
-			s.resetSnapshotSequence(id)
+	if s.locationCatalog != nil {
+		if err := s.reloadDeviceLocationCatalog(ctx, false); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func (s *DeviceService) reloadDeviceLocationPreferences(ctx context.Context, publish bool) error {
+	if s.locationPreferences == nil {
+		return nil
+	}
+	preferences, err := s.locationPreferences.ListDeviceLocationPreferences(ctx)
+	if err != nil {
+		return err
+	}
+	s.locationMu.Lock()
+	s.locations = make(map[string]device.LocationPreference, len(preferences))
+	for _, preference := range preferences {
+		s.locations[preference.DeviceID] = preference
+	}
+	s.locationMu.Unlock()
+	for _, item := range s.registry.List() {
+		updated := s.applyDeviceLocation(item)
+		s.registry.Upsert(updated)
+		if publish && (updated.HomeName != item.HomeName || updated.RoomName != item.RoomName) {
+			s.publishDevice(updated)
+		}
+	}
+	return nil
+}
+
+func (s *DeviceService) reloadDeviceLocationCatalog(ctx context.Context, publish bool) error {
+	if s.locationCatalog == nil {
+		return nil
+	}
+	homes, err := s.locationCatalog.ListDeviceLocationHomes(ctx)
+	if err != nil {
+		return err
+	}
+	s.locationCatalogMu.Lock()
+	s.locationHomes = cloneLocationHomes(homes)
+	s.locationCatalogMu.Unlock()
+	for _, item := range s.registry.List() {
+		updated := s.applyDeviceLocation(item)
+		s.registry.Upsert(updated)
+		if publish && (updated.HomeID != item.HomeID || updated.HomeName != item.HomeName || updated.RoomID != item.RoomID || updated.RoomName != item.RoomName) {
+			s.publishDevice(updated)
+		}
+	}
+	return nil
+}
+
+func (s *DeviceService) SetDeviceLocation(ctx context.Context, id string, input DeviceLocationInput) (device.Device, error) {
+	item, ok := s.registry.Get(id)
+	if !ok {
+		return device.Device{}, ErrDeviceNotFound
+	}
+	if s.locationPreferences == nil {
+		return device.Device{}, errors.New("device location preferences are unavailable")
+	}
+	switch input.Mode {
+	case device.LocationModeSource:
+		if err := s.locationPreferences.ClearDeviceLocationPreference(ctx, id); err != nil {
+			return device.Device{}, err
+		}
+		s.locationMu.Lock()
+		delete(s.locations, id)
+		s.locationMu.Unlock()
+	case device.LocationModeCustom:
+		if input.HomeID == "" {
+			return device.Device{}, NewValidationError("invalid device location", map[string]string{"homeId": "required for a custom location"})
+		}
+		homes, err := s.ListDeviceLocationHomes(ctx)
+		if err != nil {
+			return device.Device{}, err
+		}
+		var selectedHome *device.LocationHome
+		for index := range homes {
+			if homes[index].ID == input.HomeID {
+				selectedHome = &homes[index]
+				break
+			}
+		}
+		if selectedHome == nil {
+			return device.Device{}, NewValidationError("invalid device location", map[string]string{"homeId": "configured home not found"})
+		}
+		preference := device.LocationPreference{DeviceID: id, HomeID: selectedHome.ID, HomeName: selectedHome.Name}
+		if input.RoomID != "" {
+			for _, room := range selectedHome.Rooms {
+				if room.ID == input.RoomID {
+					preference.RoomID, preference.RoomName = room.ID, room.Name
+					break
+				}
+			}
+			if preference.RoomID == "" {
+				return device.Device{}, NewValidationError("invalid device location", map[string]string{"roomId": "configured room does not belong to the selected home"})
+			}
+		}
+		if err := s.locationPreferences.SetDeviceLocationPreference(ctx, preference); err != nil {
+			return device.Device{}, err
+		}
+		s.locationMu.Lock()
+		s.locations[id] = preference
+		s.locationMu.Unlock()
+	default:
+		return device.Device{}, NewValidationError("invalid device location", map[string]string{"mode": "must be source or custom"})
+	}
+	item = s.applyDeviceLocation(item)
+	s.registry.Upsert(item)
+	s.publishDevice(item)
+	return item, nil
+}
+
+func (s *DeviceService) ListDeviceLocationHomes(ctx context.Context) ([]device.LocationHome, error) {
+	if s.locationCatalog == nil {
+		return nil, errors.New("device location catalog is unavailable")
+	}
+	homes, err := s.locationCatalog.ListDeviceLocationHomes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.locationCatalogMu.Lock()
+	s.locationHomes = cloneLocationHomes(homes)
+	s.locationCatalogMu.Unlock()
+	return homes, nil
+}
+
+func (s *DeviceService) SaveDeviceLocationHome(ctx context.Context, id, name string) (device.LocationHome, error) {
+	if s.locationCatalog == nil {
+		return device.LocationHome{}, errors.New("device location catalog is unavailable")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" || !validLocationName(name) {
+		return device.LocationHome{}, NewValidationError("invalid home", map[string]string{"name": "must be 1 to 80 characters and contain no control characters"})
+	}
+	homes, err := s.locationCatalog.ListDeviceLocationHomes(ctx)
+	if err != nil {
+		return device.LocationHome{}, err
+	}
+	creating := id == ""
+	if id == "" {
+		id = customLocationID("home", name, fmt.Sprintf("%d", time.Now().UTC().UnixNano()))
+	}
+	if !creating && !slices.ContainsFunc(homes, func(home device.LocationHome) bool { return home.ID == id }) {
+		return device.LocationHome{}, device.ErrLocationNotFound
+	}
+	if slices.ContainsFunc(homes, func(home device.LocationHome) bool {
+		return home.ID != id && normalizeLocationName(home.Name) == normalizeLocationName(name)
+	}) {
+		return device.LocationHome{}, device.ErrLocationConflict
+	}
+	home := device.LocationHome{ID: id, Name: name, Rooms: []device.LocationRoom{}}
+	if err := s.locationCatalog.SaveDeviceLocationHome(ctx, home); err != nil {
+		return device.LocationHome{}, err
+	}
+	if err := s.reloadDeviceLocationCatalog(ctx, true); err != nil {
+		return device.LocationHome{}, err
+	}
+	if err := s.reloadDeviceLocationPreferences(ctx, true); err != nil {
+		return device.LocationHome{}, err
+	}
+	homes, err = s.locationCatalog.ListDeviceLocationHomes(ctx)
+	if err != nil {
+		return device.LocationHome{}, err
+	}
+	for _, saved := range homes {
+		if saved.ID == id {
+			return saved, nil
+		}
+	}
+	return device.LocationHome{}, device.ErrLocationNotFound
+}
+
+func (s *DeviceService) DeleteDeviceLocationHome(ctx context.Context, id string) error {
+	if s.locationCatalog == nil {
+		return errors.New("device location catalog is unavailable")
+	}
+	if err := s.locationCatalog.DeleteDeviceLocationHome(ctx, id); err != nil {
+		return err
+	}
+	return s.reloadDeviceLocationCatalog(ctx, true)
+}
+
+func (s *DeviceService) SaveDeviceLocationRoom(ctx context.Context, id, homeID, name string) (device.LocationRoom, error) {
+	if s.locationCatalog == nil {
+		return device.LocationRoom{}, errors.New("device location catalog is unavailable")
+	}
+	name = strings.TrimSpace(name)
+	fields := make(map[string]string)
+	if homeID == "" {
+		fields["homeId"] = "required"
+	}
+	if name == "" || !validLocationName(name) {
+		fields["name"] = "must be 1 to 80 characters and contain no control characters"
+	}
+	if len(fields) > 0 {
+		return device.LocationRoom{}, NewValidationError("invalid room", fields)
+	}
+	homes, err := s.locationCatalog.ListDeviceLocationHomes(ctx)
+	if err != nil {
+		return device.LocationRoom{}, err
+	}
+	var selectedHome *device.LocationHome
+	for index := range homes {
+		if homes[index].ID == homeID {
+			selectedHome = &homes[index]
+			break
+		}
+	}
+	if selectedHome == nil {
+		return device.LocationRoom{}, device.ErrLocationNotFound
+	}
+	creating := id == ""
+	if id == "" {
+		id = customLocationID("room", homeID, name, fmt.Sprintf("%d", time.Now().UTC().UnixNano()))
+	}
+	if !creating && !slices.ContainsFunc(selectedHome.Rooms, func(room device.LocationRoom) bool { return room.ID == id }) {
+		return device.LocationRoom{}, device.ErrLocationNotFound
+	}
+	if slices.ContainsFunc(selectedHome.Rooms, func(room device.LocationRoom) bool {
+		return room.ID != id && normalizeLocationName(room.Name) == normalizeLocationName(name)
+	}) {
+		return device.LocationRoom{}, device.ErrLocationConflict
+	}
+	room := device.LocationRoom{ID: id, HomeID: homeID, Name: name}
+	if err := s.locationCatalog.SaveDeviceLocationRoom(ctx, room); err != nil {
+		return device.LocationRoom{}, err
+	}
+	if err := s.reloadDeviceLocationCatalog(ctx, true); err != nil {
+		return device.LocationRoom{}, err
+	}
+	if err := s.reloadDeviceLocationPreferences(ctx, true); err != nil {
+		return device.LocationRoom{}, err
+	}
+	return room, nil
+}
+
+func (s *DeviceService) DeleteDeviceLocationRoom(ctx context.Context, homeID, id string) error {
+	if s.locationCatalog == nil {
+		return errors.New("device location catalog is unavailable")
+	}
+	homes, err := s.locationCatalog.ListDeviceLocationHomes(ctx)
+	if err != nil {
+		return err
+	}
+	found := false
+	for _, home := range homes {
+		if home.ID == homeID && slices.ContainsFunc(home.Rooms, func(room device.LocationRoom) bool { return room.ID == id }) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return device.ErrLocationNotFound
+	}
+	if err := s.locationCatalog.DeleteDeviceLocationRoom(ctx, id); err != nil {
+		return err
+	}
+	return s.reloadDeviceLocationCatalog(ctx, true)
+}
+
+func (s *DeviceService) applyDeviceLocation(item device.Device) device.Device {
+	sourceHomeID, sourceHomeName := item.HomeID, item.HomeName
+	sourceRoomID, sourceRoomName := item.RoomID, item.RoomName
+	if item.LocationMode != "" {
+		sourceHomeID, sourceHomeName = item.SourceHomeID, item.SourceHomeName
+		sourceRoomID, sourceRoomName = item.SourceRoomID, item.SourceRoomName
+	}
+	item.SourceHomeID, item.SourceHomeName = sourceHomeID, sourceHomeName
+	item.SourceRoomID, item.SourceRoomName = sourceRoomID, sourceRoomName
+	item.HomeID, item.HomeName = sourceHomeID, sourceHomeName
+	item.RoomID, item.RoomName = sourceRoomID, sourceRoomName
+	item.LocationMode = device.LocationModeSource
+	s.locationMu.RLock()
+	preference, custom := s.locations[item.ID]
+	s.locationMu.RUnlock()
+	if custom {
+		item.LocationMode = device.LocationModeCustom
+		item.HomeID, item.HomeName = preference.HomeID, preference.HomeName
+		item.RoomID, item.RoomName = preference.RoomID, preference.RoomName
+	} else if home, ok := s.canonicalSourceHome(sourceHomeID, sourceHomeName); ok {
+		item.HomeID, item.HomeName = home.ID, home.Name
+		if room, roomOK := canonicalSourceRoom(home.Rooms, sourceRoomID, sourceRoomName); roomOK {
+			item.RoomID, item.RoomName = room.ID, room.Name
+		}
+	}
+	return item
+}
+
+func (s *DeviceService) canonicalSourceHome(sourceID, sourceName string) (device.LocationHome, bool) {
+	s.locationCatalogMu.RLock()
+	defer s.locationCatalogMu.RUnlock()
+	for _, home := range s.locationHomes {
+		if sameLocationIdentity(home.ID, home.Name, sourceID, sourceName) {
+			return home, true
+		}
+	}
+	return device.LocationHome{}, false
+}
+
+func canonicalSourceRoom(rooms []device.LocationRoom, sourceID, sourceName string) (device.LocationRoom, bool) {
+	for _, room := range rooms {
+		if sameLocationIdentity(room.ID, room.Name, sourceID, sourceName) {
+			return room, true
+		}
+	}
+	return device.LocationRoom{}, false
+}
+
+func sameLocationIdentity(leftID, leftName, rightID, rightName string) bool {
+	if leftID != "" && rightID != "" && leftID == rightID {
+		return true
+	}
+	left, right := normalizeLocationName(leftName), normalizeLocationName(rightName)
+	return left != "" && left == right
+}
+
+func normalizeLocationName(value string) string {
+	return strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(value)), " "))
+}
+
+func cloneLocationHomes(homes []device.LocationHome) []device.LocationHome {
+	result := make([]device.LocationHome, len(homes))
+	for index, home := range homes {
+		result[index] = home
+		result[index].Rooms = append([]device.LocationRoom(nil), home.Rooms...)
+	}
+	return result
+}
+
+func validLocationName(value string) bool {
+	return utf8.RuneCountInString(value) <= 80 && !strings.ContainsAny(value, "\x00\r\n")
+}
+
+func customLocationID(kind string, values ...string) string {
+	hash := sha256.Sum256([]byte(strings.Join(values, "\x00")))
+	return "homeloom-" + kind + "-" + hex.EncodeToString(hash[:8])
 }
 
 func (s *DeviceService) SetDeviceEnabled(ctx context.Context, id string, enabled bool) (device.Device, error) {
@@ -1324,7 +1701,7 @@ func (s *DeviceService) handleCapabilityAvailability(
 
 func (s *DeviceService) mapSnapshot(item device.Device) (device.Device, error) {
 	if s.propertyMapper == nil {
-		return item, nil
+		return s.applyDeviceLocation(item), nil
 	}
 	result := item
 	result.Endpoints = nil
@@ -1388,7 +1765,7 @@ func (s *DeviceService) mapSnapshot(item device.Device) (device.Device, error) {
 	if err := result.NormalizeModelParameters(); err != nil {
 		return device.Device{}, fmt.Errorf("normalize mapped device %q: %w", item.ID, err)
 	}
-	return result, nil
+	return s.applyDeviceLocation(result), nil
 }
 
 func preserveIdentityCommands(source device.Device, target *device.Device) {

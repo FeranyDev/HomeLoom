@@ -5,11 +5,12 @@ import { ProviderCard } from './ProviderCard'
 
 type SimulationValues = { availability?: DeviceAvailability; online?: boolean; power?: boolean; value?: number; temperature?: number; humidity?: number; contact?: boolean; motion?: boolean; active?: boolean; speed?: number; mode?: string; filterLife?: number; filterChange?: boolean; position?: number; sequence?: number; repeat?: number }
 
-export function ProviderWorkspace({ providers, devices, onEdit, onManageDevices, onDelete, onRestart, onTest, onAuthChallengeComplete, onSimulate }: {
+export function ProviderWorkspace({ providers, devices, onEdit, onManageDevices, onDeviceLocation, onDelete, onRestart, onTest, onAuthChallengeComplete, onSimulate }: {
 	providers: Provider[]
 	devices: Device[]
 	onEdit: (provider: Provider) => void
 	onManageDevices: (provider: Provider) => void
+	onDeviceLocation?: (device: Device) => void
 	onDelete: (provider: Provider) => void
 	onRestart: (provider: Provider) => Promise<void>
 	onTest: (provider: ProviderInput) => Promise<void>
@@ -27,6 +28,6 @@ export function ProviderWorkspace({ providers, devices, onEdit, onManageDevices,
 			<div><span>04</span><strong>发布与同步</strong><small>统一模型 + 实时内存状态</small></div>
 		</div>
 		<div className="config-note"><span>配置来源</span><strong>PostgreSQL · providers</strong><p>每个实例独立连接、发现、重试和发布；更新配置后立即替换对应运行实例。</p></div>
-		{providers.length === 0 ? <CollectionEmpty title="还没有 Provider" description="新建 Camera、Virtual、MQTT、小米中枢、MIoT 云、Tuya、Gree 或网络设备 Provider 后，实例会立即初始化并进入统一运行流程。" /> : <div className="provider-list">{providers.map((provider) => <ProviderCard key={provider.id} provider={provider} devices={devices.filter((item) => item.providerId === provider.id && !item.removed)} onEdit={onEdit} onManageDevices={onManageDevices} onDelete={onDelete} onRestart={onRestart} onTest={onTest} onAuthChallengeComplete={onAuthChallengeComplete} onSimulate={onSimulate} />)}</div>}
+		{providers.length === 0 ? <CollectionEmpty title="还没有 Provider" description="新建 Camera、Virtual、MQTT、小米中枢、MIoT 云、Tuya、Gree 或网络设备 Provider 后，实例会立即初始化并进入统一运行流程。" /> : <div className="provider-list">{providers.map((provider) => <ProviderCard key={provider.id} provider={provider} devices={devices.filter((item) => item.providerId === provider.id && !item.removed)} onEdit={onEdit} onManageDevices={onManageDevices} onDeviceLocation={onDeviceLocation} onDelete={onDelete} onRestart={onRestart} onTest={onTest} onAuthChallengeComplete={onAuthChallengeComplete} onSimulate={onSimulate} />)}</div>}
 	</section>
 }

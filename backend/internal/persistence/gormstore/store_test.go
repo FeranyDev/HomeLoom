@@ -46,6 +46,15 @@ func TestConsistentBackupPreservesSchemaAndConfiguration(t *testing.T) {
 	if err := store.SaveProvider(ctx, providerconfig.Config{ID: "backup-provider", Type: "virtual", Name: "Backup", Config: []byte(`{}`)}); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.SaveDeviceLocationHome(ctx, device.LocationHome{ID: "backup-home", Name: "备份家庭"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveDeviceLocationRoom(ctx, device.LocationRoom{ID: "backup-room", HomeID: "backup-home", Name: "备份房间"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetDeviceLocationPreference(ctx, device.LocationPreference{DeviceID: "backup-device", HomeID: "backup-home", HomeName: "备份家庭", RoomID: "backup-room", RoomName: "备份房间"}); err != nil {
+		t.Fatal(err)
+	}
 	destination := filepath.Join(directory, "nested", "backup.json")
 	if err := store.Backup(ctx, destination); err != nil {
 		t.Fatal(err)
@@ -68,7 +77,7 @@ func TestConsistentBackupPreservesSchemaAndConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !snapshotHasProvider(snapshot, "backup-provider") || snapshot.SchemaVersion != currentSchemaVersion {
+	if !snapshotHasProvider(snapshot, "backup-provider") || snapshot.SchemaVersion != currentSchemaVersion || len(snapshot.DeviceLocationHomes) != 1 || len(snapshot.DeviceLocationRooms) != 1 || len(snapshot.DeviceLocations) != 1 {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
 	if err := store.Backup(ctx, destination); err == nil {

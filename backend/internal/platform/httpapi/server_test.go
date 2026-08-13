@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"go.uber.org/zap"
 	"mime/multipart"
 	"net/http"
@@ -529,6 +530,82 @@ func TestDeviceEnabledAPIIsPersisted(t *testing.T) {
 	server.Handler().ServeHTTP(response, enable)
 	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"online":true`)) {
 		t.Fatalf("enable response = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestDeviceLocationAPIOverridesAndRestoresProviderLocation(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	service := application.NewDeviceService(virtual.NewProvider(), store)
+	defer service.Close()
+	if err := service.LoadDevicePreferences(ctx); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(":0", service, application.NewTargetService(nil, nil), zap.NewNop())
+	homeRequest := httptest.NewRequest(http.MethodPost, "/api/v1/locations/homes", bytes.NewBufferString(`{"name":"我的家"}`))
+	homeRequest.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, homeRequest)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create home = %d %s", response.Code, response.Body.String())
+	}
+	homes, err := store.ListDeviceLocationHomes(ctx)
+	if err != nil || len(homes) != 1 {
+		t.Fatalf("homes = %#v, %v", homes, err)
+	}
+	roomRequest := httptest.NewRequest(http.MethodPost, "/api/v1/locations/homes/"+homes[0].ID+"/rooms", bytes.NewBufferString(`{"name":"书房"}`))
+	roomRequest.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, roomRequest)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create room = %d %s", response.Code, response.Body.String())
+	}
+	homes, _ = store.ListDeviceLocationHomes(ctx)
+	listLocations := httptest.NewRequest(http.MethodGet, "/api/v1/locations", nil)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, listLocations)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"name":"我的家"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"name":"书房"`)) {
+		t.Fatalf("list locations = %d %s", response.Code, response.Body.String())
+	}
+	customBody := fmt.Sprintf(`{"mode":"custom","homeId":%q,"roomId":%q}`, homes[0].ID, homes[0].Rooms[0].ID)
+	custom := httptest.NewRequest(http.MethodPut, "/api/v1/devices/virtual-switch-1/location", bytes.NewBufferString(customBody))
+	custom.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, custom)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"locationMode":"custom"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"roomName":"书房"`)) {
+		t.Fatalf("custom location response = %d %s", response.Code, response.Body.String())
+	}
+	locations, err := store.ListDeviceLocationPreferences(ctx)
+	if err != nil || len(locations) != 1 || locations[0].HomeName != "我的家" || locations[0].RoomName != "书房" {
+		t.Fatalf("stored locations = %#v, %v", locations, err)
+	}
+	deleteAssigned := httptest.NewRequest(http.MethodDelete, "/api/v1/locations/homes/"+homes[0].ID, nil)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, deleteAssigned)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("delete assigned home = %d %s", response.Code, response.Body.String())
+	}
+	inherit := httptest.NewRequest(http.MethodPut, "/api/v1/devices/virtual-switch-1/location", bytes.NewBufferString(`{"mode":"source"}`))
+	inherit.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, inherit)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"locationMode":"source"`)) {
+		t.Fatalf("source location response = %d %s", response.Code, response.Body.String())
+	}
+	locations, _ = store.ListDeviceLocationPreferences(ctx)
+	if len(locations) != 0 {
+		t.Fatalf("source mode retained custom locations = %#v", locations)
+	}
+	invalid := httptest.NewRequest(http.MethodPut, "/api/v1/devices/virtual-switch-1/location", bytes.NewBufferString(`{"mode":"custom","roomId":"missing"}`))
+	invalid.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, invalid)
+	if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte(`"homeId"`)) {
+		t.Fatalf("invalid location response = %d %s", response.Code, response.Body.String())
 	}
 }
 

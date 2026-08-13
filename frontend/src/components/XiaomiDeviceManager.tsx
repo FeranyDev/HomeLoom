@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
+import { setDeviceLocation } from '../api/devices'
 import { discoverXiaomiDevices, type XiaomiHubDevice } from '../api/xiaomi'
-import type { Device, DeviceType } from '../types/device'
+import type { Device, DeviceLocationHome, DeviceLocationMode, DeviceType } from '../types/device'
 import type { Provider, ProviderInput } from '../types/provider'
 import { defaultXiaomiMedia, inferXiaomiDeviceType, requiredXiaomiProperties, stableXiaomiControlID, stableXiaomiID, xiaomiDeviceTypes } from '../xiaomiMappings'
 import { homeLocationOptions, matchesDeviceLocation, roomLocationOptions } from '../deviceLocation'
@@ -9,11 +10,22 @@ function configuredMappings(provider: Provider): Array<Record<string, unknown>> 
 	return Array.isArray(provider.config.devices) ? provider.config.devices.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item))) : []
 }
 
-export function XiaomiDeviceManager({ provider, onClose, onSave, onMapping }: {
+type LocationDraft = { mode: DeviceLocationMode; homeId: string; roomId: string }
+
+function unifiedDeviceID(providerType: string, did: string, type: string, configuredID?: unknown): string {
+	if (configuredID) return String(configuredID)
+	if (providerType === 'xiaomi-miot-cloud') return stableXiaomiID(did).replace(/^xiaomi-/, 'xiaomi-miot-')
+	return type === 'camera' ? stableXiaomiControlID(did) : stableXiaomiID(did)
+}
+
+export function XiaomiDeviceManager({ provider, devices = [], locations = [], onClose, onSave, onMapping, onManageLocations }: {
 	provider: Provider
+	devices?: Device[]
+	locations?: DeviceLocationHome[]
 	onClose: () => void
 	onSave: (input: ProviderInput, editing: boolean) => Promise<void>
 	onMapping?: (device: Device) => void
+	onManageLocations?: () => void
 }) {
 	const initialMappings = useMemo(() => configuredMappings(provider), [provider])
 	const [mappings, setMappings] = useState<Array<Record<string, unknown>>>(initialMappings)
@@ -21,6 +33,15 @@ export function XiaomiDeviceManager({ provider, onClose, onSave, onMapping }: {
 	const [hubDevices, setHubDevices] = useState<XiaomiHubDevice[]>([])
 	const [deviceTypes, setDeviceTypes] = useState<Record<string, string>>(() => Object.fromEntries(initialMappings.map((item) => [String(item.did ?? ''), String(item.type ?? '')]).filter(([did]) => did)))
 	const [connectionModes, setConnectionModes] = useState<Record<string, string>>(() => Object.fromEntries(initialMappings.map((item) => [String(item.did ?? ''), String(item.connectionMode ?? 'auto')]).filter(([did]) => did)))
+	const [locationDrafts, setLocationDrafts] = useState<Record<string, LocationDraft>>(() => Object.fromEntries(initialMappings.map((item) => {
+		const did = String(item.did ?? '')
+		const id = unifiedDeviceID(provider.type, did, String(item.type ?? ''), item.id)
+		const current = devices.find((device) => device.id === id)
+		return [did, current?.locationMode === 'custom'
+			? { mode: 'custom', homeId: current.homeId ?? '', roomId: current.roomId ?? '' }
+			: { mode: 'source', homeId: '', roomId: '' }]
+	}).filter(([did]) => did)))
+	const [dirtyLocations, setDirtyLocations] = useState<Set<string>>(() => new Set())
 	const [discovering, setDiscovering] = useState(false)
 	const [saving, setSaving] = useState(false)
 	const [error, setError] = useState<string | null>(null)
@@ -36,9 +57,7 @@ export function XiaomiDeviceManager({ provider, onClose, onSave, onMapping }: {
 	const mappingSubject = (item: Record<string, unknown>): Device => {
 		const did = String(item.did ?? '')
 		const type = String(item.type || 'switch') as DeviceType
-		const fallbackID = provider.type === 'xiaomi-miot-cloud'
-			? stableXiaomiID(did).replace(/^xiaomi-/, 'xiaomi-miot-')
-			: type === 'camera' ? stableXiaomiControlID(did) : stableXiaomiID(did)
+		const fallbackID = unifiedDeviceID(provider.type, did, type)
 		return {
 			schemaVersion: 1, id: String(item.id || fallbackID), providerId: provider.id,
 			name: String(item.name || did || '未命名设备'), type,
@@ -50,6 +69,11 @@ export function XiaomiDeviceManager({ provider, onClose, onSave, onMapping }: {
 	function replaceMappings(next: Array<Record<string, unknown>>) {
 		setMappings(next)
 		setMappingJSON(JSON.stringify(next, null, 2))
+	}
+
+	function updateLocation(did: string, current: LocationDraft, patch: Partial<LocationDraft>) {
+		setLocationDrafts((drafts) => ({ ...drafts, [did]: { ...current, ...patch } }))
+		setDirtyLocations((dirty) => new Set(dirty).add(did))
 	}
 
 	async function discover() {
@@ -75,6 +99,7 @@ export function XiaomiDeviceManager({ provider, onClose, onSave, onMapping }: {
 			? stableXiaomiID(item.did).replace(/^xiaomi-/, 'xiaomi-miot-')
 			: type === 'camera' ? stableXiaomiControlID(item.did) : stableXiaomiID(item.did)
 		const media = central ? undefined : defaultXiaomiMedia(type)
+		setLocationDrafts((current) => current[item.did] ? current : { ...current, [item.did]: { mode: 'source', homeId: '', roomId: '' } })
 		replaceMappings([...mappings, {
 			did: item.did, id, name: item.name || item.did, type, model: item.model ?? '',
 			homeId: item.homeId ?? '', home: item.homeName ?? '', roomId: item.roomId ?? '', room: item.roomName ?? '',
@@ -117,11 +142,26 @@ export function XiaomiDeviceManager({ provider, onClose, onSave, onMapping }: {
 			if (item.type !== 'camera' || !did || (item.id && item.id !== stableXiaomiID(did))) return item
 			return { ...item, id: stableXiaomiControlID(did) }
 		})
+		for (const [did, location] of Object.entries(locationDrafts)) {
+			if (dirtyLocations.has(did) && location.mode === 'custom' && !locations.some((home) => home.id === location.homeId)) {
+				setError('HomeLoom 自定义位置必须选择已配置的家庭')
+				return
+			}
+		}
 		setSaving(true); setError(null); setResult(null)
 		try {
 			await onSave({ id: provider.id, name: provider.name, type: provider.type, enabled: provider.enabled, config: { ...provider.config, devices: normalized } }, true)
 			const next = normalized.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
+			for (const item of next) {
+				const did = String(item.did ?? '')
+				if (!dirtyLocations.has(did)) continue
+				const location = locationDrafts[did]
+				if (!location) continue
+				const id = unifiedDeviceID(provider.type, did, String(item.type ?? ''), item.id)
+				await setDeviceLocation(id, location.mode === 'source' ? { mode: 'source' } : { mode: 'custom', homeId: location.homeId, ...(location.roomId ? { roomId: location.roomId } : {}) })
+			}
 			replaceMappings(next)
+			setDirtyLocations(new Set())
 			setResult(`已保存 ${next.length} 台子设备映射并实时应用。`)
 		} catch (cause) { setError(cause instanceof Error ? cause.message : '保存子设备映射失败') } finally { setSaving(false) }
 	}
@@ -142,7 +182,9 @@ export function XiaomiDeviceManager({ provider, onClose, onSave, onMapping }: {
 				const inferred = inferXiaomiDeviceType(item)
 				const type = deviceTypes[item.did] ?? inferred
 				const connectionMode = connectionModes[item.did] ?? 'auto'
-				return <article key={item.did}><div><strong>{item.name || item.did}</strong><small>{location} · {item.model || item.specType || '型号未知'}</small>{central ? <span className="xiaomi-route-capabilities"><i className={localAvailable ? 'is-ready' : ''}>{localAvailable ? '中枢本地可控' : '中枢仅发现'}</i><i className={cloudAvailable ? 'is-ready' : ''}>{cloudAvailable ? 'OAuth 官方云可用' : '云目录未发现'}</i><i className={item.pushAvailable ? 'is-ready' : ''}>{item.pushAvailable ? '中枢实时' : '本地需要校准'}</i>{cloudAvailable && <i className={provider.metrics?.cloudMqttConnected ? 'is-ready' : ''}>{provider.metrics?.cloudMqttConnected ? '官方云实时' : '官方云 HTTP 补偿'}</i>}</span> : <small>{item.localAvailable ? `局域网 MIoT 可用 · ${item.localIp}` : '未取得局域网 IP/Token，将使用云端'}</small>}<code>{item.did}</code>{central && type === 'camera' && <small>此映射只提供中枢/云端控制能力；视频仍由独立 Camera Provider 获取。</small>}</div><label>统一模型（deviceType）<select aria-label={`${item.name || item.did} 统一模型`} value={type} onChange={(event) => mapped ? updateMappedDevice(item.did, 'type', event.target.value) : setDeviceTypes((current) => ({ ...current, [item.did]: event.target.value }))}>{xiaomiDeviceTypes.map(([value, label]) => <option value={value} key={value}>{label}（{value}）</option>)}</select></label><label>连接策略（connectionMode）<select aria-label={`${item.name || item.did} 连接策略`} value={connectionMode} onChange={(event) => mapped ? updateMappedDevice(item.did, 'connectionMode', event.target.value) : setConnectionModes((current) => ({ ...current, [item.did]: event.target.value }))}><option value="auto">自动：本地优先，云端回退（auto）</option><option value="local" disabled={!localAvailable}>仅局域网/中枢（local）</option><option value="cloud" disabled={!cloudAvailable}>仅云端（cloud）</option></select></label>{mapped ? <button type="button" className="is-danger" onClick={() => removeDevice(item.did)}>移除映射</button> : <button type="button" onClick={() => addDevice(item)}>加入映射</button>}</article>
+				const locationDraft = locationDrafts[item.did] ?? { mode: 'source', homeId: '', roomId: '' }
+				const selectedHome = locations.find((home) => home.id === locationDraft.homeId)
+				return <article key={item.did}><div><strong>{item.name || item.did}</strong><small>{location} · {item.model || item.specType || '型号未知'}</small>{central ? <span className="xiaomi-route-capabilities"><i className={localAvailable ? 'is-ready' : ''}>{localAvailable ? '中枢本地可控' : '中枢仅发现'}</i><i className={cloudAvailable ? 'is-ready' : ''}>{cloudAvailable ? 'OAuth 官方云可用' : '云目录未发现'}</i><i className={item.pushAvailable ? 'is-ready' : ''}>{item.pushAvailable ? '中枢实时' : '本地需要校准'}</i>{cloudAvailable && <i className={provider.metrics?.cloudMqttConnected ? 'is-ready' : ''}>{provider.metrics?.cloudMqttConnected ? '官方云实时' : '官方云 HTTP 补偿'}</i>}</span> : <small>{item.localAvailable ? `局域网 MIoT 可用 · ${item.localIp}` : '未取得局域网 IP/Token，将使用云端'}</small>}<code>{item.did}</code>{central && type === 'camera' && <small>此映射只提供中枢/云端控制能力；视频仍由独立 Camera Provider 获取。</small>}</div><label>统一模型（deviceType）<select aria-label={`${item.name || item.did} 统一模型`} value={type} onChange={(event) => mapped ? updateMappedDevice(item.did, 'type', event.target.value) : setDeviceTypes((current) => ({ ...current, [item.did]: event.target.value }))}>{xiaomiDeviceTypes.map(([value, label]) => <option value={value} key={value}>{label}（{value}）</option>)}</select></label><label>连接策略（connectionMode）<select aria-label={`${item.name || item.did} 连接策略`} value={connectionMode} onChange={(event) => mapped ? updateMappedDevice(item.did, 'connectionMode', event.target.value) : setConnectionModes((current) => ({ ...current, [item.did]: event.target.value }))}><option value="auto">自动：本地优先，云端回退（auto）</option><option value="local" disabled={!localAvailable}>仅局域网/中枢（local）</option><option value="cloud" disabled={!cloudAvailable}>仅云端（cloud）</option></select></label><div className="provider-device-location"><label>统一设备位置<select aria-label={`${item.name || item.did} 位置策略`} value={locationDraft.mode} onChange={(event) => { const mode = event.target.value as DeviceLocationMode; updateLocation(item.did, locationDraft, { mode, ...(mode === 'custom' ? { homeId: locationDraft.homeId || locations[0]?.id || '', roomId: '' } : {}) }) }}><option value="source">继承来源：{location}</option><option value="custom">选择 HomeLoom 位置</option></select></label>{locationDraft.mode === 'custom' && <><label>家庭<select aria-label={`${item.name || item.did} HomeLoom 家庭`} value={locationDraft.homeId} onChange={(event) => updateLocation(item.did, locationDraft, { homeId: event.target.value, roomId: '' })}><option value="">请选择家庭</option>{locations.map((home) => <option value={home.id} key={home.id}>{home.name}</option>)}</select></label><label>房间<select aria-label={`${item.name || item.did} HomeLoom 房间`} value={locationDraft.roomId} disabled={!selectedHome} onChange={(event) => updateLocation(item.did, locationDraft, { roomId: event.target.value })}><option value="">不指定房间</option>{selectedHome?.rooms.map((room) => <option value={room.id} key={room.id}>{room.name}</option>)}</select></label>{onManageLocations && <button type="button" onClick={onManageLocations}>管理位置</button>}</>}</div>{mapped ? <button type="button" className="is-danger" onClick={() => removeDevice(item.did)}>移除映射</button> : <button type="button" onClick={() => addDevice(item)}>加入映射</button>}</article>
 			})}</div>}
 			<div className="xiaomi-mapped-summary"><strong>已映射 {mappings.length} 台设备</strong><small>自动模板只覆盖统一模型必需参数，仍需按具体型号核对 SIID、PIID 和 AIID。即使设备因映射错误未进入设备中心，也可以从这里修正或删除属性路由。</small>{onMapping && mappings.length > 0 && <div className="xiaomi-mapped-summary__devices">{mappings.map((item) => { const subject = mappingSubject(item); return <button type="button" key={subject.id} aria-label={`配置 ${subject.name} 属性映射`} onClick={() => onMapping(subject)}><span>{subject.name}</span><code>{subject.id}</code><small>{subject.type}</small></button> })}</div>}</div>
 		</div>

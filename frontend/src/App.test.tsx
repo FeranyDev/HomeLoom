@@ -6,7 +6,7 @@ import type { MatterTarget } from './types/target'
 
 const api = vi.hoisted(() => ({
   getAuthStatus: vi.fn(), login: vi.fn(), logout: vi.fn(), setupAdministrator: vi.fn(),
-  listDevices: vi.fn(), setDeviceEnabled: vi.fn(), setDevicePower: vi.fn(), setDeviceProperty: vi.fn(), simulateDevice: vi.fn(), executeDeviceCommand: vi.fn(),
+  listDevices: vi.fn(), listDeviceLocations: vi.fn(), createDeviceLocationHome: vi.fn(), updateDeviceLocationHome: vi.fn(), deleteDeviceLocationHome: vi.fn(), createDeviceLocationRoom: vi.fn(), updateDeviceLocationRoom: vi.fn(), deleteDeviceLocationRoom: vi.fn(), setDeviceEnabled: vi.fn(), setDeviceLocation: vi.fn(), setDevicePower: vi.fn(), setDeviceProperty: vi.fn(), simulateDevice: vi.fn(), executeDeviceCommand: vi.fn(),
   listTargets: vi.fn(), saveTarget: vi.fn(), deleteTarget: vi.fn(), regenerateTargetPairing: vi.fn(), clearTargetPairingIdentity: vi.fn(), openMatterCommissioningWindow: vi.fn(), closeMatterCommissioningWindow: vi.fn(), deleteMatterFabric: vi.fn(), factoryResetMatterTarget: vi.fn(), confirmMatterEndpointDeviceType: vi.fn(),
   listProviders: vi.fn(), saveProvider: vi.fn(), deleteProvider: vi.fn(), restartProvider: vi.fn(), testProviderConnection: vi.fn(),
   getDiagnostics: vi.fn(), getRuntimeSettings: vi.fn(), listAuditEvents: vi.fn(), listCommands: vi.fn(), saveRuntimeSettings: vi.fn(),
@@ -19,7 +19,7 @@ const runtimeDiagnostics = { eventsReceived: 0, eventsProcessed: 0, eventsDroppe
 
 vi.mock('./api/auth', () => ({ getAuthStatus: api.getAuthStatus, login: api.login, logout: api.logout, setupAdministrator: api.setupAdministrator }))
 vi.mock('./api/devices', () => ({
-  listDevices: api.listDevices, setDeviceEnabled: api.setDeviceEnabled, setDevicePower: api.setDevicePower, setDeviceProperty: api.setDeviceProperty, simulateDevice: api.simulateDevice, executeDeviceCommand: api.executeDeviceCommand,
+  listDevices: api.listDevices, listDeviceLocations: api.listDeviceLocations, createDeviceLocationHome: api.createDeviceLocationHome, updateDeviceLocationHome: api.updateDeviceLocationHome, deleteDeviceLocationHome: api.deleteDeviceLocationHome, createDeviceLocationRoom: api.createDeviceLocationRoom, updateDeviceLocationRoom: api.updateDeviceLocationRoom, deleteDeviceLocationRoom: api.deleteDeviceLocationRoom, setDeviceEnabled: api.setDeviceEnabled, setDeviceLocation: api.setDeviceLocation, setDevicePower: api.setDevicePower, setDeviceProperty: api.setDeviceProperty, simulateDevice: api.simulateDevice, executeDeviceCommand: api.executeDeviceCommand,
   subscribeDevices: (_handler: unknown, onStatus: (live: boolean) => void) => { onStatus(true); return () => {} },
 }))
 vi.mock('./api/targets', () => ({
@@ -42,6 +42,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   window.history.replaceState(null, '', '#/devices')
   api.listDevices.mockResolvedValue([])
+	api.listDeviceLocations.mockResolvedValue([])
   api.listTargets.mockResolvedValue([])
   api.listProviders.mockResolvedValue([])
   api.getDiagnostics.mockResolvedValue({ eventsProcessed: 0 })
@@ -198,6 +199,12 @@ describe('App integration', () => {
 		expect(screen.getAllByRole('button').filter((button) => button.getAttribute('aria-current') === 'page')).toHaveLength(1)
 		expect(await screen.findByRole('region', { name: '设备列表' })).toBeInTheDocument()
 		expect(screen.getByRole('status')).toHaveTextContent('0 / 0')
+		expect(screen.queryByRole('button', { name: '管理家庭与房间' })).not.toBeInTheDocument()
+		await userEvent.click(screen.getByRole('button', { name: '设备来源' }))
+		expect(await screen.findByRole('heading', { name: '设备来源管理' })).toBeInTheDocument()
+		await userEvent.click(screen.getByRole('button', { name: '管理家庭与房间' }))
+		expect(screen.getByRole('heading', { name: '家庭与房间' })).toBeInTheDocument()
+		await userEvent.click(screen.getByRole('button', { name: '关闭' }))
 	})
 
 	it('filters the device center by source, model, home, and room', async () => {
@@ -215,9 +222,9 @@ describe('App integration', () => {
 		const user = userEvent.setup()
 		expect(await screen.findByRole('heading', { name: '客厅灯' })).toBeInTheDocument()
 
-		await user.selectOptions(screen.getByLabelText('家庭筛选'), 'id:home-a')
+		await user.selectOptions(screen.getByLabelText('家庭筛选'), 'name:我的家')
 		expect(screen.queryByRole('heading', { name: '父母家开关' })).not.toBeInTheDocument()
-		await user.selectOptions(screen.getByLabelText('房间筛选'), 'id:home-a::id:living')
+		await user.selectOptions(screen.getByLabelText('房间筛选'), 'name:我的家::name:客厅')
 		expect(screen.getByRole('heading', { name: '客厅灯' })).toBeInTheDocument()
 		expect(screen.queryByRole('heading', { name: '卧室开关' })).not.toBeInTheDocument()
 		expect(screen.getByRole('status')).toHaveTextContent('1 / 3')

@@ -256,6 +256,39 @@ type devicePreferenceRow struct {
 
 func (devicePreferenceRow) TableName() string { return "device_preferences" }
 
+type deviceLocationPreferenceRow struct {
+	DeviceID  string `gorm:"column:device_id;primaryKey"`
+	HomeID    string `gorm:"column:home_id;not null"`
+	HomeName  string `gorm:"column:home_name;not null;index:device_location_home_room_idx,priority:1"`
+	RoomID    string `gorm:"column:room_id;not null;default:''"`
+	RoomName  string `gorm:"column:room_name;not null;default:'';index:device_location_home_room_idx,priority:2"`
+	CreatedAt int64  `gorm:"column:created_at;not null"`
+	UpdatedAt int64  `gorm:"column:updated_at;not null"`
+}
+
+func (deviceLocationPreferenceRow) TableName() string { return "device_location_preferences" }
+
+type deviceLocationHomeRow struct {
+	ID        string                  `gorm:"column:id;primaryKey"`
+	Name      string                  `gorm:"column:name;not null;uniqueIndex"`
+	CreatedAt int64                   `gorm:"column:created_at;not null"`
+	UpdatedAt int64                   `gorm:"column:updated_at;not null"`
+	Rooms     []deviceLocationRoomRow `gorm:"foreignKey:HomeID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+}
+
+func (deviceLocationHomeRow) TableName() string { return "device_location_homes" }
+
+type deviceLocationRoomRow struct {
+	ID        string                `gorm:"column:id;primaryKey"`
+	HomeID    string                `gorm:"column:home_id;not null;uniqueIndex:device_location_room_name,priority:1;index"`
+	Name      string                `gorm:"column:name;not null;uniqueIndex:device_location_room_name,priority:2"`
+	CreatedAt int64                 `gorm:"column:created_at;not null"`
+	UpdatedAt int64                 `gorm:"column:updated_at;not null"`
+	Home      deviceLocationHomeRow `gorm:"foreignKey:HomeID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+}
+
+func (deviceLocationRoomRow) TableName() string { return "device_location_rooms" }
+
 type auditEventRow struct {
 	ID            int64  `gorm:"column:id;primaryKey;autoIncrement"`
 	CorrelationID string `gorm:"column:correlation_id;not null;index:audit_events_correlation_id_idx"`
@@ -383,7 +416,7 @@ func currentModels() []any {
 		&mediaAuthLeaseRow{}, &mediaAuthAuditRow{}, &mediaConfigStateRow{},
 		&matterRuntimeKVRow{}, &matterEndpointIdentityRow{},
 		&homeKitAccessoryIDRow{}, &homeKitIIDRow{}, &systemSettingRow{},
-		&devicePreferenceRow{}, &auditEventRow{}, &mappingProfileRow{},
+		&devicePreferenceRow{}, &deviceLocationHomeRow{}, &deviceLocationRoomRow{}, &deviceLocationPreferenceRow{}, &auditEventRow{}, &mappingProfileRow{},
 		&mappingBindingRow{}, &customModelPropertyRow{}, &modelEnumOverrideRow{}, &adminUserRow{},
 		&adminSessionRow{}, &miotSpecCacheRow{}, &customUnifiedModelRow{},
 	}

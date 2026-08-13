@@ -22,34 +22,37 @@ const (
 )
 
 type databaseSnapshot struct {
-	FormatVersion         int                         `json:"formatVersion"`
-	SchemaVersion         int                         `json:"schemaVersion"`
-	CreatedAt             time.Time                   `json:"createdAt"`
-	Providers             []providerRow               `json:"providers"`
-	Targets               []targetRow                 `json:"targets"`
-	TargetVirtualDevices  []targetVirtualDeviceRow    `json:"targetVirtualDevices"`
-	MediaSources          []mediaSourceRow            `json:"mediaSources"`
-	MediaCredentials      []mediaCredentialRow        `json:"mediaCredentials"`
-	MediaStreams          []mediaStreamRow            `json:"mediaStreams"`
-	MediaRuntimeValues    []mediaRuntimeKVRow         `json:"mediaRuntimeValues"`
-	MediaAuthLeases       []mediaAuthLeaseRow         `json:"mediaAuthLeases"`
-	MediaAuthAudits       []mediaAuthAuditRow         `json:"mediaAuthAudits"`
-	MediaConfigState      []mediaConfigStateRow       `json:"mediaConfigState"`
-	MatterRuntimeValues   []matterRuntimeKVRow        `json:"matterRuntimeValues"`
-	MatterEndpointIDs     []matterEndpointIdentityRow `json:"matterEndpointIdentities"`
-	HomeKitAccessoryIDs   []homeKitAccessoryIDRow     `json:"homeKitAccessoryIds"`
-	HomeKitIIDs           []homeKitIIDRow             `json:"homeKitIids"`
-	SystemSettings        []systemSettingRow          `json:"systemSettings"`
-	DevicePreferences     []devicePreferenceRow       `json:"devicePreferences"`
-	AuditEvents           []auditEventRow             `json:"auditEvents"`
-	MappingProfiles       []mappingProfileRow         `json:"mappingProfiles"`
-	MappingBindings       []mappingBindingRow         `json:"mappingBindings"`
-	CustomModelProperties []customModelPropertyRow    `json:"customModelProperties"`
-	ModelEnumOverrides    []modelEnumOverrideRow      `json:"modelEnumOverrides"`
-	AdminUsers            []adminUserRow              `json:"adminUsers"`
-	AdminSessions         []adminSessionRow           `json:"adminSessions"`
-	MIoTSpecCache         []miotSpecCacheRow          `json:"miotSpecCache"`
-	CustomUnifiedModels   []customUnifiedModelRow     `json:"customUnifiedModels"`
+	FormatVersion         int                           `json:"formatVersion"`
+	SchemaVersion         int                           `json:"schemaVersion"`
+	CreatedAt             time.Time                     `json:"createdAt"`
+	Providers             []providerRow                 `json:"providers"`
+	Targets               []targetRow                   `json:"targets"`
+	TargetVirtualDevices  []targetVirtualDeviceRow      `json:"targetVirtualDevices"`
+	MediaSources          []mediaSourceRow              `json:"mediaSources"`
+	MediaCredentials      []mediaCredentialRow          `json:"mediaCredentials"`
+	MediaStreams          []mediaStreamRow              `json:"mediaStreams"`
+	MediaRuntimeValues    []mediaRuntimeKVRow           `json:"mediaRuntimeValues"`
+	MediaAuthLeases       []mediaAuthLeaseRow           `json:"mediaAuthLeases"`
+	MediaAuthAudits       []mediaAuthAuditRow           `json:"mediaAuthAudits"`
+	MediaConfigState      []mediaConfigStateRow         `json:"mediaConfigState"`
+	MatterRuntimeValues   []matterRuntimeKVRow          `json:"matterRuntimeValues"`
+	MatterEndpointIDs     []matterEndpointIdentityRow   `json:"matterEndpointIdentities"`
+	HomeKitAccessoryIDs   []homeKitAccessoryIDRow       `json:"homeKitAccessoryIds"`
+	HomeKitIIDs           []homeKitIIDRow               `json:"homeKitIids"`
+	SystemSettings        []systemSettingRow            `json:"systemSettings"`
+	DevicePreferences     []devicePreferenceRow         `json:"devicePreferences"`
+	DeviceLocationHomes   []deviceLocationHomeRow       `json:"deviceLocationHomes"`
+	DeviceLocationRooms   []deviceLocationRoomRow       `json:"deviceLocationRooms"`
+	DeviceLocations       []deviceLocationPreferenceRow `json:"deviceLocations"`
+	AuditEvents           []auditEventRow               `json:"auditEvents"`
+	MappingProfiles       []mappingProfileRow           `json:"mappingProfiles"`
+	MappingBindings       []mappingBindingRow           `json:"mappingBindings"`
+	CustomModelProperties []customModelPropertyRow      `json:"customModelProperties"`
+	ModelEnumOverrides    []modelEnumOverrideRow        `json:"modelEnumOverrides"`
+	AdminUsers            []adminUserRow                `json:"adminUsers"`
+	AdminSessions         []adminSessionRow             `json:"adminSessions"`
+	MIoTSpecCache         []miotSpecCacheRow            `json:"miotSpecCache"`
+	CustomUnifiedModels   []customUnifiedModelRow       `json:"customUnifiedModels"`
 }
 
 type pendingRestoreMarker struct {
@@ -111,7 +114,8 @@ func (s *Store) readSnapshot(ctx context.Context) (databaseSnapshot, error) {
 			{"media config state", &result.MediaConfigState},
 			{"Matter runtime values", &result.MatterRuntimeValues}, {"Matter endpoint identities", &result.MatterEndpointIDs},
 			{"HomeKit IIDs", &result.HomeKitIIDs}, {"system settings", &result.SystemSettings},
-			{"device preferences", &result.DevicePreferences}, {"audit events", &result.AuditEvents},
+			{"device preferences", &result.DevicePreferences}, {"device location homes", &result.DeviceLocationHomes},
+			{"device location rooms", &result.DeviceLocationRooms}, {"device locations", &result.DeviceLocations}, {"audit events", &result.AuditEvents},
 			{"mapping profiles", &result.MappingProfiles}, {"mapping bindings", &result.MappingBindings},
 			{"custom model properties", &result.CustomModelProperties}, {"model enum overrides", &result.ModelEnumOverrides}, {"administrator users", &result.AdminUsers},
 			{"administrator sessions", &result.AdminSessions}, {"MIoT spec cache", &result.MIoTSpecCache},
@@ -304,7 +308,7 @@ func (s *Store) replaceRows(ctx context.Context, snapshot databaseSnapshot) erro
 			&mediaAuthLeaseRow{}, &mediaStreamRow{}, &mediaCredentialRow{}, &mediaSourceRow{},
 			&mediaRuntimeKVRow{}, &mediaAuthAuditRow{}, &mediaConfigStateRow{},
 			&mappingBindingRow{}, &mappingProfileRow{}, &customModelPropertyRow{}, &modelEnumOverrideRow{}, &customUnifiedModelRow{},
-			&miotSpecCacheRow{}, &auditEventRow{}, &devicePreferenceRow{}, &systemSettingRow{},
+			&miotSpecCacheRow{}, &auditEventRow{}, &deviceLocationPreferenceRow{}, &deviceLocationRoomRow{}, &deviceLocationHomeRow{}, &devicePreferenceRow{}, &systemSettingRow{},
 			&providerRow{}, &targetRow{}, &adminUserRow{},
 		}
 		for _, model := range deleteOrder {
@@ -322,6 +326,7 @@ func (s *Store) replaceRows(ctx context.Context, snapshot databaseSnapshot) erro
 			{"media authorization leases", &snapshot.MediaAuthLeases}, {"media authorization audits", &snapshot.MediaAuthAudits},
 			{"media config state", &snapshot.MediaConfigState},
 			{"system settings", &snapshot.SystemSettings}, {"device preferences", &snapshot.DevicePreferences},
+			{"device location homes", &snapshot.DeviceLocationHomes}, {"device location rooms", &snapshot.DeviceLocationRooms}, {"device locations", &snapshot.DeviceLocations},
 			{"audit events", &snapshot.AuditEvents}, {"mapping profiles", &snapshot.MappingProfiles},
 			{"mapping bindings", &snapshot.MappingBindings}, {"custom model properties", &snapshot.CustomModelProperties}, {"model enum overrides", &snapshot.ModelEnumOverrides},
 			{"custom unified models", &snapshot.CustomUnifiedModels}, {"MIoT spec cache", &snapshot.MIoTSpecCache},

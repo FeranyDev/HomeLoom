@@ -14,6 +14,7 @@ type Availability string
 type ParameterLevel string
 type RuntimeMode string
 type StateTransport string
+type LocationMode string
 
 const (
 	SchemaVersion = 1
@@ -82,6 +83,11 @@ const (
 	StateTransportLocalMQTT StateTransport = "local-mqtt"
 	StateTransportCloudMQTT StateTransport = "cloud-mqtt"
 	StateTransportCloudHTTP StateTransport = "cloud-http"
+)
+
+const (
+	LocationModeSource LocationMode = "source"
+	LocationModeCustom LocationMode = "custom"
 )
 
 var stableIDPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$`)
@@ -227,16 +233,21 @@ type Endpoint struct {
 }
 
 type Device struct {
-	SchemaVersion int          `json:"schemaVersion"`
-	ID            string       `json:"id"`
-	ProviderID    string       `json:"providerId"`
-	Name          string       `json:"name"`
-	Type          Type         `json:"type"`
-	HomeID        string       `json:"homeId,omitempty"`
-	HomeName      string       `json:"homeName,omitempty"`
-	RoomID        string       `json:"roomId,omitempty"`
-	RoomName      string       `json:"roomName,omitempty"`
-	Availability  Availability `json:"availability"`
+	SchemaVersion  int          `json:"schemaVersion"`
+	ID             string       `json:"id"`
+	ProviderID     string       `json:"providerId"`
+	Name           string       `json:"name"`
+	Type           Type         `json:"type"`
+	HomeID         string       `json:"homeId,omitempty"`
+	HomeName       string       `json:"homeName,omitempty"`
+	RoomID         string       `json:"roomId,omitempty"`
+	RoomName       string       `json:"roomName,omitempty"`
+	LocationMode   LocationMode `json:"locationMode,omitempty"`
+	SourceHomeID   string       `json:"sourceHomeId,omitempty"`
+	SourceHomeName string       `json:"sourceHomeName,omitempty"`
+	SourceRoomID   string       `json:"sourceRoomId,omitempty"`
+	SourceRoomName string       `json:"sourceRoomName,omitempty"`
+	Availability   Availability `json:"availability"`
 	// Online is retained as a compatibility projection for schema v1 clients.
 	Online         bool           `json:"online"`
 	Sequence       uint64         `json:"sequence,omitempty"`

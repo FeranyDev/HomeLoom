@@ -4,8 +4,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Provider } from '../types/provider'
 import { XiaomiDeviceManager } from './XiaomiDeviceManager'
 
-const api = vi.hoisted(() => ({ discoverXiaomiDevices: vi.fn() }))
+const api = vi.hoisted(() => ({ discoverXiaomiDevices: vi.fn(), setDeviceLocation: vi.fn() }))
 vi.mock('../api/xiaomi', () => ({ discoverXiaomiDevices: api.discoverXiaomiDevices }))
+vi.mock('../api/devices', () => ({ setDeviceLocation: api.setDeviceLocation }))
 
 const provider: Provider = {
 	id: 'xiaomi-main', type: 'xiaomi', name: '家庭中枢', enabled: true, status: 'running', retryCount: 0,
@@ -15,7 +16,7 @@ const provider: Provider = {
 }
 
 describe('XiaomiDeviceManager', () => {
-	beforeEach(() => { vi.clearAllMocks(); api.discoverXiaomiDevices.mockResolvedValue([{ did: '123.456', name: '客厅灯', model: 'vendor.light.v1', homeId: 'home-main', homeName: '我的家', roomId: 'room-living', roomName: '客厅', localIp: '192.168.1.20', localAvailable: true, gatewayAvailable: true, localControlAvailable: true, cloudAvailable: true, pushAvailable: true, specType: 'urn:miot-spec-v2:device:light:0000A001' }]) })
+	beforeEach(() => { vi.clearAllMocks(); api.setDeviceLocation.mockResolvedValue({}); api.discoverXiaomiDevices.mockResolvedValue([{ did: '123.456', name: '客厅灯', model: 'vendor.light.v1', homeId: 'home-main', homeName: '我的家', roomId: 'room-living', roomName: '客厅', localIp: '192.168.1.20', localAvailable: true, gatewayAvailable: true, localControlAvailable: true, cloudAvailable: true, pushAvailable: true, specType: 'urn:miot-spec-v2:device:light:0000A001' }]) })
 
 	it('discovers subdevices through the running provider and saves mappings', async () => {
 		const onSave = vi.fn().mockResolvedValue(undefined)
@@ -46,6 +47,22 @@ describe('XiaomiDeviceManager', () => {
 		expect(route).toHaveValue('cloud')
 		await userEvent.click(screen.getByRole('button', { name: '保存子设备映射' }))
 		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ devices: [expect.objectContaining({ did: '123.456', connectionMode: 'cloud' })] }) }), true))
+	})
+
+	it('inherits source location by default and can save a HomeLoom custom location while adding a device', async () => {
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		const locations = [{ id: 'home-parents', name: '父母家', rooms: [{ id: 'room-bedroom', homeId: 'home-parents', name: '卧室' }] }]
+		render(<XiaomiDeviceManager provider={provider} locations={locations} onClose={() => {}} onSave={onSave} />)
+		await userEvent.click(screen.getByRole('button', { name: '从中枢读取子设备' }))
+		const locationMode = await screen.findByLabelText('客厅灯 位置策略')
+		expect(locationMode).toHaveValue('source')
+		expect(screen.getByRole('option', { name: /继承来源：我的家 \/ 客厅/ })).toBeInTheDocument()
+		await userEvent.selectOptions(locationMode, 'custom')
+		await userEvent.selectOptions(screen.getByLabelText('客厅灯 HomeLoom 家庭'), 'home-parents')
+		await userEvent.selectOptions(screen.getByLabelText('客厅灯 HomeLoom 房间'), 'room-bedroom')
+		await userEvent.click(screen.getByRole('button', { name: '加入映射' }))
+		await userEvent.click(screen.getByRole('button', { name: '保存子设备映射' }))
+		await waitFor(() => expect(api.setDeviceLocation).toHaveBeenCalledWith('xiaomi-123.456', { mode: 'custom', homeId: 'home-parents', roomId: 'room-bedroom' }))
 	})
 
 	it('opens mapping configuration for a configured device missing from the device center', async () => {
@@ -199,10 +216,10 @@ describe('XiaomiDeviceManager', () => {
 		render(<XiaomiDeviceManager provider={provider} onClose={() => {}} onSave={vi.fn()} />)
 		await userEvent.click(screen.getByRole('button', { name: '从中枢读取子设备' }))
 		await screen.findByText('客厅灯')
-		await userEvent.selectOptions(screen.getByLabelText('小米设备家庭'), 'id:home-parents')
+		await userEvent.selectOptions(screen.getByLabelText('小米设备家庭'), 'name:父母家')
 		expect(screen.getByText('卧室空调')).toBeInTheDocument()
 		expect(screen.queryByText('客厅灯')).not.toBeInTheDocument()
-		await userEvent.selectOptions(screen.getByLabelText('小米设备房间'), 'id:home-parents::id:room-bedroom')
+		await userEvent.selectOptions(screen.getByLabelText('小米设备房间'), 'name:父母家::name:卧室')
 		expect(screen.getByText('1 / 2 台')).toBeInTheDocument()
 	})
 })

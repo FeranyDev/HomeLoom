@@ -215,6 +215,33 @@ type deviceEnabledRequest struct {
 	Enabled *bool `json:"enabled"`
 }
 
+type deviceLocationRequest struct {
+	Mode   device.LocationMode `json:"mode"`
+	HomeID string              `json:"homeId"`
+	RoomID string              `json:"roomId"`
+}
+
+type deviceLocationNameRequest struct {
+	Name string `json:"name"`
+}
+
+func deviceLocationHTTPError(err error) error {
+	var validationError *application.ValidationError
+	if errors.As(err, &validationError) {
+		return validationError
+	}
+	switch {
+	case errors.Is(err, device.ErrLocationNotFound):
+		return echo.NewHTTPError(http.StatusNotFound, "configured location not found")
+	case errors.Is(err, device.ErrLocationInUse):
+		return echo.NewHTTPError(http.StatusConflict, "configured location is in use")
+	case errors.Is(err, device.ErrLocationConflict):
+		return echo.NewHTTPError(http.StatusConflict, "configured location name already exists")
+	default:
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "device location catalog is unavailable").SetInternal(err)
+	}
+}
+
 type simulationRequest struct {
 	Availability *device.Availability `json:"availability"`
 	Online       *bool                `json:"online"`
@@ -995,6 +1022,69 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		}
 		return c.JSON(http.StatusOK, map[string]any{"data": items})
 	})
+	e.GET("/api/v1/locations", func(c echo.Context) error {
+		homes, err := devices.ListDeviceLocationHomes(c.Request().Context())
+		if err != nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "device location catalog is unavailable").SetInternal(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": homes})
+	})
+	e.POST("/api/v1/locations/homes", func(c echo.Context) error {
+		var input deviceLocationNameRequest
+		if err := c.Bind(&input); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid home")
+		}
+		home, err := devices.SaveDeviceLocationHome(c.Request().Context(), "", input.Name)
+		if err != nil {
+			return deviceLocationHTTPError(err)
+		}
+		return c.JSON(http.StatusCreated, map[string]any{"data": home})
+	})
+	e.PUT("/api/v1/locations/homes/:id", func(c echo.Context) error {
+		var input deviceLocationNameRequest
+		if err := c.Bind(&input); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid home")
+		}
+		home, err := devices.SaveDeviceLocationHome(c.Request().Context(), c.Param("id"), input.Name)
+		if err != nil {
+			return deviceLocationHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": home})
+	})
+	e.DELETE("/api/v1/locations/homes/:id", func(c echo.Context) error {
+		if err := devices.DeleteDeviceLocationHome(c.Request().Context(), c.Param("id")); err != nil {
+			return deviceLocationHTTPError(err)
+		}
+		return c.NoContent(http.StatusNoContent)
+	})
+	e.POST("/api/v1/locations/homes/:homeId/rooms", func(c echo.Context) error {
+		var input deviceLocationNameRequest
+		if err := c.Bind(&input); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid room")
+		}
+		room, err := devices.SaveDeviceLocationRoom(c.Request().Context(), "", c.Param("homeId"), input.Name)
+		if err != nil {
+			return deviceLocationHTTPError(err)
+		}
+		return c.JSON(http.StatusCreated, map[string]any{"data": room})
+	})
+	e.PUT("/api/v1/locations/homes/:homeId/rooms/:id", func(c echo.Context) error {
+		var input deviceLocationNameRequest
+		if err := c.Bind(&input); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid room")
+		}
+		room, err := devices.SaveDeviceLocationRoom(c.Request().Context(), c.Param("id"), c.Param("homeId"), input.Name)
+		if err != nil {
+			return deviceLocationHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": room})
+	})
+	e.DELETE("/api/v1/locations/homes/:homeId/rooms/:id", func(c echo.Context) error {
+		if err := devices.DeleteDeviceLocationRoom(c.Request().Context(), c.Param("homeId"), c.Param("id")); err != nil {
+			return deviceLocationHTTPError(err)
+		}
+		return c.NoContent(http.StatusNoContent)
+	})
 	e.PUT("/api/v1/devices/:id/enabled", func(c echo.Context) error {
 		var input deviceEnabledRequest
 		if err := c.Bind(&input); err != nil || input.Enabled == nil {
@@ -1006,6 +1096,26 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		}
 		if err != nil {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "device preferences are unavailable").SetInternal(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": item})
+	})
+	e.PUT("/api/v1/devices/:id/location", func(c echo.Context) error {
+		var input deviceLocationRequest
+		if err := c.Bind(&input); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid device location")
+		}
+		item, err := devices.SetDeviceLocation(c.Request().Context(), c.Param("id"), application.DeviceLocationInput{
+			Mode: input.Mode, HomeID: input.HomeID, RoomID: input.RoomID,
+		})
+		if errors.Is(err, application.ErrDeviceNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "device not found")
+		}
+		var validationError *application.ValidationError
+		if errors.As(err, &validationError) {
+			return validationError
+		}
+		if err != nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "device location preferences are unavailable").SetInternal(err)
 		}
 		return c.JSON(http.StatusOK, map[string]any{"data": item})
 	})

@@ -1,5 +1,5 @@
-import type { Device, DeviceAvailability, Property, PropertyValue, StateValue } from '../types/device'
-import { requestData } from './client'
+import type { Device, DeviceAvailability, DeviceLocationHome, DeviceLocationMode, DeviceLocationRoom, Property, PropertyValue, StateValue } from '../types/device'
+import { requestData, requestJSON } from './client'
 import { subscribeEvents } from './events'
 
 export async function listDevices(signal?: AbortSignal): Promise<Device[]> {
@@ -8,6 +8,38 @@ export async function listDevices(signal?: AbortSignal): Promise<Device[]> {
 
 export async function setDeviceEnabled(id: string, enabled: boolean): Promise<Device> {
 	return requestData<Device>(`/api/v1/devices/${encodeURIComponent(id)}/enabled`, { method: 'PUT', body: JSON.stringify({ enabled }) })
+}
+
+export async function setDeviceLocation(id: string, input: { mode: DeviceLocationMode; homeId?: string; roomId?: string }): Promise<Device> {
+	return requestData<Device>(`/api/v1/devices/${encodeURIComponent(id)}/location`, { method: 'PUT', body: JSON.stringify(input) })
+}
+
+export async function listDeviceLocations(signal?: AbortSignal): Promise<DeviceLocationHome[]> {
+	return requestData<DeviceLocationHome[]>('/api/v1/locations', { signal })
+}
+
+export async function createDeviceLocationHome(name: string): Promise<DeviceLocationHome> {
+	return requestData<DeviceLocationHome>('/api/v1/locations/homes', { method: 'POST', body: JSON.stringify({ name }) })
+}
+
+export async function updateDeviceLocationHome(id: string, name: string): Promise<DeviceLocationHome> {
+	return requestData<DeviceLocationHome>(`/api/v1/locations/homes/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ name }) })
+}
+
+export async function deleteDeviceLocationHome(id: string): Promise<void> {
+	await requestJSON<void>(`/api/v1/locations/homes/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export async function createDeviceLocationRoom(homeId: string, name: string): Promise<DeviceLocationRoom> {
+	return requestData<DeviceLocationRoom>(`/api/v1/locations/homes/${encodeURIComponent(homeId)}/rooms`, { method: 'POST', body: JSON.stringify({ name }) })
+}
+
+export async function updateDeviceLocationRoom(homeId: string, id: string, name: string): Promise<DeviceLocationRoom> {
+	return requestData<DeviceLocationRoom>(`/api/v1/locations/homes/${encodeURIComponent(homeId)}/rooms/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ name }) })
+}
+
+export async function deleteDeviceLocationRoom(homeId: string, id: string): Promise<void> {
+	await requestJSON<void>(`/api/v1/locations/homes/${encodeURIComponent(homeId)}/rooms/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
 export async function getDeviceStates(id: string, signal?: AbortSignal): Promise<StateValue[]> {

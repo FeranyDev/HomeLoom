@@ -15,6 +15,10 @@ export type DeviceAvailability = 'online' | 'offline' | 'unknown'
 export type ParameterLevel = 'required' | 'optional' | 'custom'
 export type DeviceRuntimeMode = 'pending' | 'local' | 'cloud'
 export type DeviceStateTransport = 'pending' | 'local-mqtt' | 'cloud-mqtt' | 'cloud-http'
+export type DeviceLocationMode = 'source' | 'custom'
+
+export interface DeviceLocationRoom { id: string; homeId: string; name: string }
+export interface DeviceLocationHome { id: string; name: string; rooms: DeviceLocationRoom[] }
 
 export interface PropertyValue { type: ValueType; bool?: boolean; int?: number; number?: number; string?: string }
 export interface PropertyDefinition { id: string; name: string; type: ValueType; parameterLevel?: ParameterLevel; unit?: string; readable: boolean; writable: boolean; notifiable: boolean; min?: number; max?: number; step?: number; enum?: string[]; staleAfterSeconds?: number }
@@ -26,6 +30,7 @@ interface Endpoint { id: string; name: string; type: string; capabilities: Capab
 export interface Device {
   schemaVersion: number; id: string; providerId: string; name: string; type: DeviceType; availability: DeviceAvailability; online: boolean
   homeId?: string; homeName?: string; roomId?: string; roomName?: string
+  locationMode?: DeviceLocationMode; sourceHomeId?: string; sourceHomeName?: string; sourceRoomId?: string; sourceRoomName?: string
   sequence?: number; disabled?: boolean; removed?: boolean; runtimeMode?: DeviceRuntimeMode; stateTransport?: DeviceStateTransport; endpoints: Endpoint[]; lastUpdateAt: string
 }
 

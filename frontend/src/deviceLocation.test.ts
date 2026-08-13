@@ -11,14 +11,24 @@ const devices = [
 describe('device location filters', () => {
 	it('builds stable home and room options without merging same-name rooms across homes', () => {
 		expect(homeLocationOptions(devices)).toEqual(expect.arrayContaining([
-			{ value: 'id:home-a', label: '我的家' },
+			{ value: 'name:我的家', label: '我的家' },
 			{ value: unassignedLocation, label: '未提供家庭' },
 		]))
 		expect(roomLocationOptions(devices).filter((item) => item.label.endsWith('/ 客厅'))).toHaveLength(2)
-		expect(roomLocationOptions(devices, 'id:home-a')).toEqual(expect.arrayContaining([
-			{ value: 'id:home-a::id:living', label: '客厅' },
-			{ value: 'id:home-a::id:bedroom', label: '卧室' },
+		expect(roomLocationOptions(devices, 'name:我的家')).toEqual(expect.arrayContaining([
+			{ value: 'name:我的家::name:客厅', label: '客厅' },
+			{ value: 'name:我的家::name:卧室', label: '卧室' },
 		]))
+	})
+
+	it('merges provider and HomeLoom IDs when their names identify the same location', () => {
+		const mixed = [
+			{ homeId: 'provider-home', homeName: ' 我的家 ', roomId: 'provider-room', roomName: '客厅' },
+			{ homeId: 'homeloom-home', homeName: '我的家', roomId: 'homeloom-room', roomName: '客厅' },
+		]
+		expect(homeLocationOptions(mixed)).toEqual([{ value: 'name:我的家', label: '我的家' }])
+		expect(roomLocationOptions(mixed, 'name:我的家')).toEqual([{ value: 'name:我的家::name:客厅', label: '客厅' }])
+		expect(matchesDeviceLocation(mixed[0], homeLocationKey(mixed[1]), roomLocationKey(mixed[1]))).toBe(true)
 	})
 
 	it('matches combined filters and gives missing locations explicit labels', () => {

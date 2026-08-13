@@ -39,11 +39,20 @@ describe('DeviceCard device types', () => {
 		expect(onMapping).toHaveBeenCalledWith(device)
 	})
 
+	it('shows the assigned location without exposing a device-page location editor', () => {
+		const device = { ...sensorDevice('temperature-sensor', 'temperature', 'current-temperature', { type: 'number', number: 20 }), locationMode: 'custom' as const, homeName: '我的家', roomName: '书房' }
+		render(<DeviceCard device={device} pending={false} onPowerChange={() => {}} onDetails={() => {}} />)
+		expect(screen.getByText(/我的家 \/ 书房 · HomeLoom 自定义/)).toBeInTheDocument()
+		expect(screen.queryByRole('button', { name: '设置位置' })).not.toBeInTheDocument()
+	})
+
 	it('exposes persistent disable separately from provider availability', async () => {
 		const device = sensorDevice('temperature-sensor', 'temperature', 'current-temperature', { type: 'number', number: 20 }, 'celsius')
 		const onEnabledChange = vi.fn()
 		const { rerender } = render(<DeviceCard device={device} pending={false} onPowerChange={() => {}} onDetails={() => {}} onEnabledChange={onEnabledChange} />)
-		await userEvent.click(screen.getByRole('button', { name: '禁用设备' })); expect(onEnabledChange).toHaveBeenCalledWith(device, false)
+		const disable = screen.getByRole('button', { name: '禁用设备' })
+		expect(disable.closest('.device-card__actions')).toContainElement(screen.getByRole('button', { name: '查看详情' }))
+		await userEvent.click(disable); expect(onEnabledChange).toHaveBeenCalledWith(device, false)
 		const disabled = { ...device, availability: 'offline' as const, online: false, disabled: true }
 		rerender(<DeviceCard device={disabled} pending={false} onPowerChange={() => {}} onDetails={() => {}} onEnabledChange={onEnabledChange} />)
 		expect(screen.getByText('已禁用')).toBeInTheDocument(); await userEvent.click(screen.getByRole('button', { name: '重新启用' })); expect(onEnabledChange).toHaveBeenLastCalledWith(disabled, true)

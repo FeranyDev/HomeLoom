@@ -3,6 +3,7 @@ package application_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -108,6 +109,110 @@ type skewedSnapshotProvider struct{ inner *virtual.Provider }
 type devicePreferenceMetrics struct {
 	mu       sync.Mutex
 	disabled map[string]bool
+}
+
+type deviceLocationPreferences struct {
+	mu        sync.Mutex
+	locations map[string]device.LocationPreference
+	homes     []device.LocationHome
+}
+
+func (p *deviceLocationPreferences) ListDeviceLocationPreferences(context.Context) ([]device.LocationPreference, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	result := make([]device.LocationPreference, 0, len(p.locations))
+	for _, location := range p.locations {
+		result = append(result, location)
+	}
+	return result, nil
+}
+func (p *deviceLocationPreferences) SetDeviceLocationPreference(_ context.Context, location device.LocationPreference) error {
+	p.mu.Lock()
+	p.locations[location.DeviceID] = location
+	p.mu.Unlock()
+	return nil
+}
+func (p *deviceLocationPreferences) ClearDeviceLocationPreference(_ context.Context, id string) error {
+	p.mu.Lock()
+	delete(p.locations, id)
+	p.mu.Unlock()
+	return nil
+}
+func (p *deviceLocationPreferences) ListDeviceLocationHomes(context.Context) ([]device.LocationHome, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]device.LocationHome(nil), p.homes...), nil
+}
+func (p *deviceLocationPreferences) SaveDeviceLocationHome(_ context.Context, home device.LocationHome) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for index := range p.homes {
+		if p.homes[index].ID == home.ID {
+			home.Rooms = p.homes[index].Rooms
+			p.homes[index] = home
+			for id, location := range p.locations {
+				if location.HomeID == home.ID {
+					location.HomeName = home.Name
+					p.locations[id] = location
+				}
+			}
+			return nil
+		}
+	}
+	p.homes = append(p.homes, home)
+	return nil
+}
+func (p *deviceLocationPreferences) DeleteDeviceLocationHome(_ context.Context, id string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.homes = slices.DeleteFunc(p.homes, func(home device.LocationHome) bool { return home.ID == id })
+	return nil
+}
+func (p *deviceLocationPreferences) SaveDeviceLocationRoom(_ context.Context, room device.LocationRoom) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for homeIndex := range p.homes {
+		if p.homes[homeIndex].ID != room.HomeID {
+			continue
+		}
+		for roomIndex := range p.homes[homeIndex].Rooms {
+			if p.homes[homeIndex].Rooms[roomIndex].ID == room.ID {
+				p.homes[homeIndex].Rooms[roomIndex] = room
+				for id, location := range p.locations {
+					if location.RoomID == room.ID {
+						location.RoomName = room.Name
+						p.locations[id] = location
+					}
+				}
+				return nil
+			}
+		}
+		p.homes[homeIndex].Rooms = append(p.homes[homeIndex].Rooms, room)
+		return nil
+	}
+	return device.ErrLocationNotFound
+}
+func (p *deviceLocationPreferences) DeleteDeviceLocationRoom(_ context.Context, id string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for index := range p.homes {
+		p.homes[index].Rooms = slices.DeleteFunc(p.homes[index].Rooms, func(room device.LocationRoom) bool { return room.ID == id })
+	}
+	return nil
+}
+
+type locatedProvider struct{ item device.Device }
+
+func (p *locatedProvider) Manifest() providersdk.Manifest {
+	return providersdk.Manifest{ID: p.item.ProviderID, Type: "test", Name: "Located"}
+}
+func (*locatedProvider) Capabilities() providersdk.Capabilities {
+	return providersdk.Capabilities{Discovery: true}
+}
+func (*locatedProvider) Initialize(context.Context) error { return nil }
+func (*locatedProvider) Close(context.Context) error      { return nil }
+func (p *locatedProvider) DiscoverDevices(context.Context) ([]device.Device, error) {
+	return []device.Device{p.item.Clone()}, nil
 }
 
 func (p *devicePreferenceMetrics) DatabaseOperationMetrics() (uint64, time.Duration, time.Duration) {
@@ -427,6 +532,116 @@ func TestDeviceDisablePersistsAndProviderEventsCannotReviveIt(t *testing.T) {
 	}
 	if _, _, err := service.ExecutePower(context.Background(), current.ID, false); !errors.Is(err, application.ErrDeviceDisabled) {
 		t.Fatalf("disabled write error = %v", err)
+	}
+}
+
+func TestDeviceLocationCanInheritSourceOrUsePersistentHomeLoomOverride(t *testing.T) {
+	item := device.Device{
+		SchemaVersion: device.SchemaVersion, ID: "source-light", ProviderID: "source", Name: "来源灯", Type: device.TypeLightbulb,
+		HomeID: "source-home", HomeName: "来源家庭", RoomID: "source-room", RoomName: "来源客厅", LastUpdateAt: time.Now().UTC(),
+	}
+	item.SetOnline(true)
+	preferences := &deviceLocationPreferences{
+		locations: make(map[string]device.LocationPreference),
+		homes:     []device.LocationHome{{ID: "homeloom-home", Name: "我的家", Rooms: []device.LocationRoom{{ID: "homeloom-room", HomeID: "homeloom-home", Name: "书房"}}}},
+	}
+	service := application.NewDeviceService(&locatedProvider{item: item}, preferences)
+	defer service.Close()
+	if err := service.LoadDevicePreferences(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	items, _ := service.List(context.Background())
+	if len(items) != 1 || items[0].LocationMode != device.LocationModeSource || items[0].SourceRoomName != "来源客厅" || items[0].RoomName != "来源客厅" {
+		t.Fatalf("source location = %#v", items)
+	}
+	overridden, err := service.SetDeviceLocation(context.Background(), item.ID, application.DeviceLocationInput{Mode: device.LocationModeCustom, HomeID: "homeloom-home", RoomID: "homeloom-room"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overridden.LocationMode != device.LocationModeCustom || overridden.HomeName != "我的家" || overridden.RoomName != "书房" || overridden.SourceHomeName != "来源家庭" || overridden.SourceRoomName != "来源客厅" {
+		t.Fatalf("custom location = %#v", overridden)
+	}
+	if preferences.locations[item.ID].HomeID != "homeloom-home" || preferences.locations[item.ID].RoomID != "homeloom-room" {
+		t.Fatalf("stored location = %#v", preferences.locations[item.ID])
+	}
+	if _, err := service.SaveDeviceLocationHome(context.Background(), "homeloom-home", "父母家"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.SaveDeviceLocationRoom(context.Background(), "homeloom-room", "homeloom-home", "卧室"); err != nil {
+		t.Fatal(err)
+	}
+	items, _ = service.List(context.Background())
+	if len(items) != 1 || items[0].HomeName != "父母家" || items[0].RoomName != "卧室" {
+		t.Fatalf("renamed custom location = %#v", items)
+	}
+	inherited, err := service.SetDeviceLocation(context.Background(), item.ID, application.DeviceLocationInput{Mode: device.LocationModeSource})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inherited.LocationMode != device.LocationModeSource || inherited.HomeName != "来源家庭" || inherited.RoomName != "来源客厅" || len(preferences.locations) != 0 {
+		t.Fatalf("restored source location = %#v, preferences = %#v", inherited, preferences.locations)
+	}
+}
+
+func TestDeviceLocationPreferencesReloadAcrossServiceRestart(t *testing.T) {
+	item := device.Device{SchemaVersion: device.SchemaVersion, ID: "source-light", ProviderID: "source", Name: "来源灯", Type: device.TypeLightbulb, HomeName: "来源家庭", RoomName: "来源客厅", LastUpdateAt: time.Now().UTC()}
+	item.SetOnline(true)
+	preferences := &deviceLocationPreferences{locations: map[string]device.LocationPreference{
+		item.ID: {DeviceID: item.ID, HomeID: "homeloom-home", HomeName: "父母家", RoomID: "homeloom-room", RoomName: "卧室"},
+	}}
+	service := application.NewDeviceService(&locatedProvider{item: item}, preferences)
+	defer service.Close()
+	if err := service.LoadDevicePreferences(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	items, _ := service.List(context.Background())
+	if len(items) != 1 || items[0].LocationMode != device.LocationModeCustom || items[0].HomeName != "父母家" || items[0].RoomName != "卧室" || items[0].SourceRoomName != "来源客厅" {
+		t.Fatalf("reloaded location = %#v", items)
+	}
+}
+
+func TestProviderLocationUsesHomeLoomCanonicalIdentityWhenNamesMatch(t *testing.T) {
+	item := device.Device{
+		SchemaVersion: device.SchemaVersion, ID: "source-light", ProviderID: "source", Name: "来源灯", Type: device.TypeLightbulb,
+		HomeID: "provider-home", HomeName: " 我的家 ", RoomID: "provider-room", RoomName: "客厅", LastUpdateAt: time.Now().UTC(),
+	}
+	item.SetOnline(true)
+	preferences := &deviceLocationPreferences{
+		locations: make(map[string]device.LocationPreference),
+		homes: []device.LocationHome{{
+			ID: "homeloom-home", Name: "我的家",
+			Rooms: []device.LocationRoom{{ID: "homeloom-room", HomeID: "homeloom-home", Name: "客厅"}},
+		}},
+	}
+	service := application.NewDeviceService(&locatedProvider{item: item}, preferences)
+	defer service.Close()
+	if err := service.LoadDevicePreferences(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	items, _ := service.List(context.Background())
+	if len(items) != 1 || items[0].LocationMode != device.LocationModeSource || items[0].HomeID != "homeloom-home" || items[0].RoomID != "homeloom-room" {
+		t.Fatalf("canonical location = %#v", items)
+	}
+	if items[0].SourceHomeID != "provider-home" || items[0].SourceRoomID != "provider-room" {
+		t.Fatalf("provider identity was not preserved = %#v", items[0])
+	}
+}
+
+func TestLocationCatalogRejectsNormalizedDuplicateNames(t *testing.T) {
+	preferences := &deviceLocationPreferences{
+		locations: make(map[string]device.LocationPreference),
+		homes: []device.LocationHome{{
+			ID: "home-main", Name: "My Home",
+			Rooms: []device.LocationRoom{{ID: "room-living", HomeID: "home-main", Name: "Living Room"}},
+		}},
+	}
+	service := application.NewDeviceService(&locatedProvider{item: device.Device{}}, preferences)
+	defer service.Close()
+	if _, err := service.SaveDeviceLocationHome(context.Background(), "", "  my   home "); !errors.Is(err, device.ErrLocationConflict) {
+		t.Fatalf("duplicate home error = %v", err)
+	}
+	if _, err := service.SaveDeviceLocationRoom(context.Background(), "", "home-main", " living  room "); !errors.Is(err, device.ErrLocationConflict) {
+		t.Fatalf("duplicate room error = %v", err)
 	}
 }
 

@@ -188,7 +188,7 @@ describe('TargetDeviceManager', () => {
 		const living = { ...source, homeId: 'home-a', homeName: '我的家', roomId: 'living', roomName: '客厅' }
 		const parents = { ...robot, homeId: 'home-b', homeName: '父母家', roomId: 'bedroom', roomName: '卧室' }
 		render(<TargetDeviceManager target={target} devices={[living, parents]} onClose={() => {}} onSave={onSave} />)
-		await userEvent.selectOptions(screen.getByLabelText('来源设备家庭'), 'id:home-b')
+		await userEvent.selectOptions(screen.getByLabelText('来源设备家庭'), 'name:父母家')
 		await waitFor(() => expect(screen.getByLabelText('来源统一设备')).toHaveValue('source-vacuum'))
 		expect(screen.queryByRole('option', { name: /来源开关/ })).not.toBeInTheDocument()
 		expect(screen.getByRole('option', { name: /扫地机器人.*父母家 \/ 卧室/ })).toBeInTheDocument()

@@ -10,10 +10,10 @@ export interface LocationOption { value: string; label: string }
 export const unassignedLocation = '__unassigned__'
 
 function identity(id?: string, name?: string): string {
+	const normalizedName = name?.trim().replace(/\s+/g, ' ').toLocaleLowerCase('zh-CN')
+	if (normalizedName) return `name:${normalizedName}`
 	const normalizedID = id?.trim()
-	if (normalizedID) return `id:${normalizedID}`
-	const normalizedName = name?.trim()
-	return normalizedName ? `name:${normalizedName}` : unassignedLocation
+	return normalizedID ? `id:${normalizedID}` : unassignedLocation
 }
 
 export function homeLocationKey(item: LocatedDevice): string {
