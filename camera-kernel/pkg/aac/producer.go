@@ -54,23 +54,27 @@ func (c *Producer) Start() error {
 			return err
 		}
 
-		auSize := ReadADTSSize(adts) - ADTSHeaderSize
+		frameSize, err := adtsFrameSize(adts)
+		if err != nil {
+			return err
+		}
+		payloadSize := frameSize - ADTSHeaderSize
 
 		if HasCRC(adts) {
 			// skip CRC after header
 			if _, err := c.rd.Discard(2); err != nil {
 				return err
 			}
-			auSize -= 2
+			payloadSize -= 2
 		}
 
 		// read AAC payload after header
-		payload := make([]byte, auSize)
+		payload := make([]byte, payloadSize)
 		if _, err := io.ReadFull(c.rd, payload); err != nil {
 			return err
 		}
 
-		c.Recv += int(auSize)
+		c.Recv += payloadSize
 
 		if len(c.Receivers) == 0 {
 			continue

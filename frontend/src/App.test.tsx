@@ -143,9 +143,9 @@ describe('App integration', () => {
 	await user.click(screen.getByRole('button', { name: '设备来源' }))
 	expect(await screen.findByRole('heading', { name: '设备来源管理' })).toBeInTheDocument()
 	expect(screen.getByRole('button', { name: '＋ 新建设备来源' })).toBeInTheDocument()
-    expect(screen.getByText('还没有 Provider')).toBeInTheDocument()
+    expect(await screen.findByText('还没有 Provider')).toBeInTheDocument()
 	expect(screen.queryByRole('button', { name: '米家' })).not.toBeInTheDocument()
-	expect(screen.getByText('一种生命周期，接入所有数据源。')).toBeInTheDocument()
+	expect(await screen.findByText('一种生命周期，接入所有数据源。')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: '退出' }))
     await waitFor(() => expect(api.logout).toHaveBeenCalledOnce())

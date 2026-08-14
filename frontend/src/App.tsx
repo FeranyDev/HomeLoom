@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { executeDeviceCommand, listDeviceLocations, listDevices, setDeviceEnabled, setDeviceLocation, setDevicePower, setDeviceProperty, simulateDevice } from './api/devices'
 import { clearTargetPairingIdentity, closeMatterCommissioningWindow, confirmMatterEndpointDeviceType, deleteMatterFabric, deleteTarget, factoryResetMatterTarget, listTargets, openMatterCommissioningWindow, regenerateTargetPairing, saveTarget } from './api/targets'
 import { deleteProvider, listProviders, restartProvider, saveProvider, testProviderConnection } from './api/providers'
@@ -8,11 +8,6 @@ import { getSystemVersion } from './api/system'
 import { DeviceCard } from './components/DeviceCard'
 import { TargetCard } from './components/TargetCard'
 import { TargetForm } from './components/TargetForm'
-import { TargetDeviceManager } from './components/TargetDeviceManager'
-import { ProviderForm } from './components/ProviderForm'
-import { SystemDashboard } from './components/SystemDashboard'
-import { MappingWorkspace } from './components/MappingWorkspace'
-import { DeviceDetails } from './components/DeviceDetails'
 import { ToastCenter } from './components/ToastCenter'
 import { useToasts } from './useToasts'
 import { CollectionEmpty, LoadingState } from './components/PageState'
@@ -24,13 +19,6 @@ import { usePageRoute } from './routing'
 import { confirmExactPhrase, confirmProviderDeletion, confirmTargetDeletion } from './confirmations'
 import { getAuthStatus, login, logout, setupAdministrator, type AuthStatus } from './api/auth'
 import { AuthScreen } from './components/AuthScreen'
-import { ProviderWorkspace } from './components/ProviderWorkspace'
-import { XiaomiDeviceManager } from './components/XiaomiDeviceManager'
-import { MQTTDeviceManager } from './components/MQTTDeviceManager'
-import { CameraDeviceManager } from './components/CameraDeviceManager'
-import { VirtualDeviceManager } from './components/VirtualDeviceManager'
-import { GreeDeviceManager } from './components/GreeDeviceManager'
-import { DeviceMappingDialog } from './components/DeviceMappingDialog'
 import { DeviceLocationDialog, type DeviceLocationValue } from './components/DeviceLocationDialog'
 import { DeviceLocationCatalogDialog } from './components/DeviceLocationCatalogDialog'
 import { BrandMark } from './components/BrandMark'
@@ -38,6 +26,21 @@ import { listModelContracts } from './api/mapping'
 import { homeLocationOptions, matchesDeviceLocation, roomLocationOptions } from './deviceLocation'
 import { deviceTypeLabel } from './presentationLabels'
 import { supportsProviderChildDevices } from './providerRouting'
+
+// 大体积页面与按需对话框通过动态 import 拆包，避免首屏单一超大 chunk（原先 ~588 kB）。
+// 轻量组件（DeviceCard / TargetCard / TargetForm / 位置对话框等）保持静态引入，保证首帧与测试同步渲染。
+const TargetDeviceManager = lazy(() => import('./components/TargetDeviceManager').then((module) => ({ default: module.TargetDeviceManager })))
+const ProviderForm = lazy(() => import('./components/ProviderForm').then((module) => ({ default: module.ProviderForm })))
+const SystemDashboard = lazy(() => import('./components/SystemDashboard').then((module) => ({ default: module.SystemDashboard })))
+const MappingWorkspace = lazy(() => import('./components/MappingWorkspace').then((module) => ({ default: module.MappingWorkspace })))
+const ProviderWorkspace = lazy(() => import('./components/ProviderWorkspace').then((module) => ({ default: module.ProviderWorkspace })))
+const VirtualDeviceManager = lazy(() => import('./components/VirtualDeviceManager').then((module) => ({ default: module.VirtualDeviceManager })))
+const MQTTDeviceManager = lazy(() => import('./components/MQTTDeviceManager').then((module) => ({ default: module.MQTTDeviceManager })))
+const CameraDeviceManager = lazy(() => import('./components/CameraDeviceManager').then((module) => ({ default: module.CameraDeviceManager })))
+const GreeDeviceManager = lazy(() => import('./components/GreeDeviceManager').then((module) => ({ default: module.GreeDeviceManager })))
+const XiaomiDeviceManager = lazy(() => import('./components/XiaomiDeviceManager').then((module) => ({ default: module.XiaomiDeviceManager })))
+const DeviceMappingDialog = lazy(() => import('./components/DeviceMappingDialog').then((module) => ({ default: module.DeviceMappingDialog })))
+const DeviceDetails = lazy(() => import('./components/DeviceDetails').then((module) => ({ default: module.DeviceDetails })))
 
 export function App() {
 	const [auth, setAuth] = useState<AuthStatus | null>(null)
@@ -327,7 +330,8 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
       {loading ? (
         <LoadingState />
       ) : (
-		page === 'devices' ? <section className="device-grid" aria-label="设备列表">
+		<Suspense fallback={<LoadingState />}>
+		{page === 'devices' ? <section className="device-grid" aria-label="设备列表">
 		  {filteredDevices.map((device) => (
             <DeviceCard
               key={device.id}
@@ -349,12 +353,13 @@ function Dashboard({ username, onLogout }: { username: string, onLogout: () => P
 		  </div>
 		  {visibleTargets.map((target) => <TargetCard key={target.id} target={target} sourceDevice={target.type === 'homekit-camera' || target.type === 'matter-camera' ? devices.find((item) => item.id === (target.devices[0]?.sourceDeviceId ?? target.deviceIds[0])) : undefined} onPreviewCamera={(item) => setSelectedDeviceID(item.id)} onEdit={(item) => setTargetForm({ open: true, target: item })} onManageDevices={(item) => setTargetDeviceID(item.id)} onDelete={(item) => void handleTargetDelete(item)} onRegeneratePairing={(item) => void handleTargetPairingRegenerate(item)} onClearPairingIdentity={(item) => void handleTargetPairingIdentityClear(item)} onMatterCommissioningToggle={(item, open) => void handleMatterCommissioningToggle(item, open)} onDeleteMatterFabric={(item, fabric) => void handleMatterFabricDelete(item, fabric)} onFactoryResetMatter={(item) => void handleMatterFactoryReset(item)} onEnabledChange={(item, enabled) => void handleMatterCameraEnabled(item, enabled)} />)}
 		  {visibleTargets.length === 0 && <CollectionEmpty title={targetSection === 'homekit-camera' || targetSection === 'matter-camera' ? '还没有发布摄像头' : targetSection === 'devices' ? '还没有普通设备目标' : '当前适配器尚未开放'} description={targetSection === 'homekit-camera' ? '点击“发布摄像头”，选择设备中心中的 Camera 并创建独立 HomeKit Camera Target。' : targetSection === 'matter-camera' ? '点击“发布摄像头”，选择设备中心中的 Camera 并创建实验性 Matter Camera Target。' : targetSection === 'devices' ? '新建普通 HomeKit 或 Matter 目标后，再配置消费端设备。' : '该分页用于明确协议边界，待运行时能力完成后再开放创建。'} />}
-		</section>
+		</section>}
+		</Suspense>
       )}
 	  {targetForm.open && <TargetForm target={targetForm.target} devices={devices} initialType={targetCreateType} onCancel={() => setTargetForm({ open: false, target: null })} onSave={handleTargetSave} />}
-	  {providerForm.open && <ProviderForm provider={providerForm.provider} onCancel={() => setProviderForm({ open: false, provider: null })} onSave={handleProviderSave} onTest={handleProviderTest} />}
-	  {selectedDevice && <DeviceDetails device={selectedDevice} onClose={() => setSelectedDeviceID(null)} onPropertyWrite={(endpointId, capabilityId, propertyId, value) => handlePropertyWrite(selectedDevice, endpointId, capabilityId, propertyId, value)} onCommandExecute={(endpointId, capabilityId, commandId, parameters, idempotencyKey) => handleCommandExecute(selectedDevice, endpointId, capabilityId, commandId, parameters, idempotencyKey)} />}
-	  {mappingDevice && <DeviceMappingDialog device={mappingDevice} onClose={() => setMappingDevice(null)} />}
+	  {providerForm.open && <Suspense fallback={null}><ProviderForm provider={providerForm.provider} onCancel={() => setProviderForm({ open: false, provider: null })} onSave={handleProviderSave} onTest={handleProviderTest} /></Suspense>}
+	  {selectedDevice && <Suspense fallback={null}><DeviceDetails device={selectedDevice} onClose={() => setSelectedDeviceID(null)} onPropertyWrite={(endpointId, capabilityId, propertyId, value) => handlePropertyWrite(selectedDevice, endpointId, capabilityId, propertyId, value)} onCommandExecute={(endpointId, capabilityId, commandId, parameters, idempotencyKey) => handleCommandExecute(selectedDevice, endpointId, capabilityId, commandId, parameters, idempotencyKey)} /></Suspense>}
+	  {mappingDevice && <Suspense fallback={null}><DeviceMappingDialog device={mappingDevice} onClose={() => setMappingDevice(null)} /></Suspense>}
 	  {locationDevice && <DeviceLocationDialog key={locationDevice.id} device={locationDevice} homes={locationHomes} onManage={() => setLocationCatalogOpen(true)} onCancel={() => setLocationDeviceID(null)} onSave={(value) => handleDeviceLocation(locationDevice, value)} />}
 	  {locationCatalogOpen && <DeviceLocationCatalogDialog homes={locationHomes} onChange={setLocationHomes} onClose={() => setLocationCatalogOpen(false)} />}
 	  <ToastCenter toasts={toasts} dismiss={dismiss} />

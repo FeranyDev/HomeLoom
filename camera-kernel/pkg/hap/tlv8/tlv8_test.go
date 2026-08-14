@@ -72,7 +72,7 @@ func TestVideoCodecParams(t *testing.T) {
 		CVOID             []byte `tlv8:"5"`
 	}
 
-	src, err := hex.DecodeString("0101010201000000020102030100040100")
+	src, err := hex.DecodeString("010101020100ff00020102030100040100")
 	require.Nil(t, err)
 
 	var v VideoCodecParams

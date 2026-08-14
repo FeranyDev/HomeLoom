@@ -99,10 +99,13 @@ func RTPPay(handler core.HandlerFunc) core.HandlerFunc {
 
 func ADTStoRTP(src []byte) (dst []byte) {
 	dst = make([]byte, 2) // header bytes
-	for i, n := 0, len(src)-ADTSHeaderSize; i < n; {
-		auSize := ReadADTSSize(src[i:])
-		dst = append(dst, byte(auSize>>5), byte(auSize<<3)) // size in bits
-		i += int(auSize)
+	for i := 0; i < len(src); {
+		frameSize, err := adtsFrameSize(src[i:])
+		if err != nil || frameSize > len(src)-i {
+			return nil
+		}
+		dst = append(dst, byte(frameSize>>5), byte(frameSize<<3)) // size in bits
+		i += frameSize
 	}
 	hdrSize := uint16(len(dst) - 2)
 	binary.BigEndian.PutUint16(dst, hdrSize<<3) // size in bits

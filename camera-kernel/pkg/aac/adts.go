@@ -2,6 +2,7 @@ package aac
 
 import (
 	"encoding/hex"
+	"errors"
 
 	"github.com/AlexxIT/go2rtc/pkg/bits"
 	"github.com/AlexxIT/go2rtc/pkg/core"
@@ -9,6 +10,8 @@ import (
 )
 
 const ADTSHeaderSize = 7
+
+var errInvalidADTSFrame = errors.New("adts: invalid frame length")
 
 func ADTSHeaderLen(b []byte) int {
 	if HasCRC(b) {
@@ -28,6 +31,19 @@ func HasCRC(b []byte) bool {
 	// AAAAAAAA AAAABCCD EEFFFFGH HHIJKLMM MMMMMMMM MMMOOOOO OOOOOOPP (QQQQQQQQ QQQQQQQQ)
 	// D	1	Protection absence, set to 1 if there is no CRC and 0 if there is CRC.
 	return b[1]&0b1 == 0
+}
+
+func adtsFrameSize(b []byte) (int, error) {
+	if len(b) < ADTSHeaderSize || !IsADTS(b) {
+		return 0, errInvalidADTSFrame
+	}
+
+	headerSize := ADTSHeaderLen(b)
+	frameSize := int(ReadADTSSize(b))
+	if frameSize < headerSize {
+		return 0, errInvalidADTSFrame
+	}
+	return frameSize, nil
 }
 
 func ADTSToCodec(b []byte) *core.Codec {
@@ -91,8 +107,11 @@ func WriteADTSSize(b []byte, size uint16) {
 func ADTSTimeSize(b []byte) uint32 {
 	var units uint32
 	for len(b) > ADTSHeaderSize {
-		auSize := ReadADTSSize(b)
-		b = b[auSize:]
+		frameSize, err := adtsFrameSize(b)
+		if err != nil || frameSize > len(b) {
+			break
+		}
+		b = b[frameSize:]
 		units++
 	}
 	return units * AUTime

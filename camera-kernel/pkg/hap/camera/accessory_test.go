@@ -28,7 +28,7 @@ func TestHomeLoomAccessoryAdvertisesAppleCompatibleVideoFormats(t *testing.T) {
 		codec.CodecParams[0].Level[0] != VideoCodecLevel31 ||
 		codec.CodecParams[0].Level[1] != VideoCodecLevel32 ||
 		codec.CodecParams[0].Level[2] != VideoCodecLevel40 ||
-		codec.VideoAttrs[1] != (VideoCodecAttributes{Width: 1280, Height: 720, Framerate: 30}) {
+		codec.VideoAttrs[1] != (VideoCodecAttributes{Width: 1280, Height: 720, Framerate: 20}) {
 		t.Fatalf("Apple-compatible video configuration = %#v", codec)
 	}
 }
