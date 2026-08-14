@@ -113,6 +113,12 @@ describe('BindingManager', () => {
     await screen.findByText('Virtual Switch · 来源属性映射')
     await waitFor(() => expect(container.querySelectorAll('.mapping-lane.is-model .mapping-node-list button')).toHaveLength(3))
 
+    const lanes = container.querySelector<HTMLElement>('.mapping-lanes')!
+    expect(lanes).toHaveClass('is-provider-stage')
+    expect(lanes.querySelectorAll('.mapping-lane')).toHaveLength(2)
+    expect(lanes.querySelectorAll('.mapping-arrow')).toHaveLength(1)
+    expect(screen.queryByText('消费端（CONSUMERS）')).not.toBeInTheDocument()
+
     expect([...container.querySelectorAll<HTMLElement>('.mapping-lane.is-model .mapping-node-list button')].map((item) => item.textContent)).toEqual([
       expect.stringContaining('power'),
       expect.stringContaining('lock'),
@@ -336,6 +342,33 @@ describe('BindingManager', () => {
     await userEvent.click(screen.getByRole('button', { name: /保存第.*二.*段路由/ }))
     await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({ consumerId: 'matter', consumerProperty: 'OnOff.OnOff' })))
   })
+
+	it('emphasizes required Consumer properties while mapping a Target device', async () => {
+		const baseCatalog = await catalog()
+		const required = baseCatalog.consumers[0].properties[0]
+		const optional = { ...required, id: 'Switch.Name', name: 'Switch.Name', level: 'optional' as const }
+		const api = {
+			listBindings: vi.fn(async () => []), listProfiles: vi.fn(async () => []), create: vi.fn(), update: vi.fn(), remove: vi.fn(),
+			catalog: vi.fn(async () => ({ ...baseCatalog, consumers: [{ ...baseCatalog.consumers[0], properties: [optional, required] }] })),
+		}
+		const { container } = render(<BindingManager device={device} api={api} initialStage="consumer" consumerOnly consumerId="homekit" targetId="apple-main" consumerDeviceId="living-switch" />)
+		await screen.findByText('Switch.On')
+		const lanes = container.querySelector<HTMLElement>('.mapping-lanes')!
+		expect(lanes).toHaveClass('is-consumer-stage')
+		expect(lanes.querySelectorAll('.mapping-lane')).toHaveLength(2)
+		expect(lanes.querySelectorAll('.mapping-arrow')).toHaveLength(1)
+		expect(screen.queryByText('提供端（PROVIDERS）')).not.toBeInTheDocument()
+		const consumerLane = [...container.querySelectorAll<HTMLElement>('.mapping-lane')].find((lane) => !lane.classList.contains('is-model') && !lane.classList.contains('is-context'))!
+		const consumerList = consumerLane.querySelector<HTMLElement>('.mapping-node-list')!
+		expect(consumerList.querySelectorAll('button')).toHaveLength(2)
+
+		expect(consumerLane).toHaveTextContent('2 个属性')
+		const requiredCard = within(consumerList).getByRole('button', { name: /Switch\.On/ })
+		expect(requiredCard).toHaveClass('is-consumer-required')
+		expect(within(requiredCard).getByText('必需（required）属性')).toHaveClass('parameter-level', 'is-required')
+		expect(within(consumerList).getByRole('button', { name: /Switch\.Name/ })).not.toHaveClass('is-consumer-required')
+		expect(consumerList.querySelector('button')?.textContent).toContain('Switch.On')
+	})
 
   it('hides other devices and their routes from the device editor', async () => {
     const otherDevice: Device = {

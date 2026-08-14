@@ -46,6 +46,15 @@ describe('DeviceCard device types', () => {
 		expect(screen.queryByRole('button', { name: '设置位置' })).not.toBeInTheDocument()
 	})
 
+	it('shows a device-specific mapping failure on the card', () => {
+		const device = { ...sensorDevice('temperature-sensor', 'temperature', 'current-temperature', { type: 'number', number: 20 }), mappingError: '属性映射失败：枚举值 “Auto” 没有数值映射' }
+		render(<DeviceCard device={device} pending={false} onPowerChange={() => {}} onDetails={() => {}} />)
+		const alert = screen.getByRole('alert')
+		expect(alert).toHaveTextContent('属性映射异常')
+		expect(alert).toHaveTextContent('枚举值 “Auto” 没有数值映射')
+		expect(screen.getByRole('article', { name: 'temperature-sensor' })).toHaveClass('has-mapping-error')
+	})
+
 	it('exposes persistent disable separately from provider availability', async () => {
 		const device = sensorDevice('temperature-sensor', 'temperature', 'current-temperature', { type: 'number', number: 20 }, 'celsius')
 		const onEnabledChange = vi.fn()

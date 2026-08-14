@@ -2,7 +2,7 @@ import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
-import type { MatterTarget } from './types/target'
+import type { MatterTarget, Target, TargetInput } from './types/target'
 
 const api = vi.hoisted(() => ({
   getAuthStatus: vi.fn(), login: vi.fn(), logout: vi.fn(), setupAdministrator: vi.fn(),
@@ -178,6 +178,41 @@ describe('App integration', () => {
 		expect(screen.getByRole('combobox', { name: /目标类型（type）/ })).toHaveValue('matter-camera')
 		expect(screen.queryByLabelText(/HomeKit 8 位配对码/)).not.toBeInTheDocument()
 		expect(screen.getByLabelText(/配网辨识码/)).toBeInTheDocument()
+	})
+
+	it('does not restore a deleted Consumer device when binding a replacement', async () => {
+		let bridge: Target = {
+			id: 'apple-main', type: 'apple-hap', name: 'HomeKit 主桥', enabled: true, status: 'running',
+			config: { address: ':51826', setupId: 'HLM1' }, pairing: { paired: false }, deviceIds: ['source-switch'],
+			devices: [{ id: 'old-switch', name: '旧开关', type: 'switch', sourceDeviceId: 'source-switch', enabled: true }],
+		}
+		api.listDevices.mockResolvedValue([{ schemaVersion: 1, id: 'source-switch', providerId: 'virtual-main', name: '来源开关', type: 'switch', availability: 'online', online: true, endpoints: [], lastUpdateAt: '2026-08-13T00:00:00Z' }])
+		api.listTargets.mockImplementation(async () => [bridge])
+		api.saveTarget.mockImplementation(async (input: TargetInput) => {
+			bridge = { ...bridge, deviceIds: input.deviceIds, devices: input.devices }
+			return bridge
+		})
+		api.getAuthStatus.mockResolvedValue({ initialized: true, authenticated: true, username: 'admin' })
+		render(<App />)
+		const user = userEvent.setup()
+
+		await user.click(await screen.findByRole('button', { name: '桥接中心' }))
+		await user.click(await screen.findByRole('button', { name: '配置消费端设备' }))
+		expect(await screen.findByDisplayValue('旧开关')).toBeInTheDocument()
+		await user.click(screen.getByRole('button', { name: '删除' }))
+		await user.click(screen.getByRole('button', { name: '保存消费端设备并应用目标' }))
+		await waitFor(() => expect(api.saveTarget).toHaveBeenCalledTimes(1))
+		await waitFor(() => expect(api.listTargets).toHaveBeenCalledTimes(2))
+
+		await user.click(screen.getByRole('button', { name: '返回桥接中心' }))
+		await user.click(await screen.findByRole('button', { name: '配置消费端设备' }))
+		expect(screen.queryByDisplayValue('旧开关')).not.toBeInTheDocument()
+		await user.click(screen.getByRole('button', { name: '＋ 添加消费端设备' }))
+		await user.click(screen.getByRole('button', { name: '保存消费端设备并应用目标' }))
+		await waitFor(() => expect(api.saveTarget).toHaveBeenCalledTimes(2))
+		expect((api.saveTarget.mock.calls[1][0] as TargetInput).devices).toEqual([
+			expect.objectContaining({ id: 'apple-main-source-switch', sourceDeviceId: 'source-switch' }),
+		])
 	})
 
   it('returns an authenticated dashboard to login on a global unauthorized event', async () => {

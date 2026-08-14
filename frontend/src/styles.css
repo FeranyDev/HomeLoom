@@ -220,6 +220,10 @@ button:not(:disabled):active { transform: translateY(1px); }
 .device-card__metadata > div { display: grid; grid-template-columns: 78px minmax(0, 1fr); gap: 9px; }
 .device-card__metadata dt { color: #555750; font-family: Georgia, serif; font-size: 11px; }
 .device-card__metadata dd { margin: 0; overflow: hidden; color: #777a74; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.device-card.has-mapping-error { border-color: #d2a492; }
+.device-card__mapping-error { margin-top: 9px; padding: 9px 10px; border: 1px solid #dfb7a8; border-radius: 6px; background: #f8ece7; color: #7f4033; }
+.device-card__mapping-error strong { display: block; font-size: 11px; }
+.device-card__mapping-error p { margin: 4px 0 0; overflow-wrap: anywhere; font-size: 10px; line-height: 1.5; }
 .device-card footer { display: flex; align-items: flex-end; gap: 7px; margin-top: 13px; }
 .device-card__actions { display: flex !important; flex: 1 1 auto; flex-wrap: wrap; align-items: flex-end; gap: 10px !important; width: 100%; }
 .device-card footer .device-card__actions button:not(.device-card__disable) { min-height: 38px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: rgba(255,255,255,.18); color: #4c5049; }
@@ -1045,7 +1049,7 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .target-source-mappings > header p { margin-top: 6px; color: #777b73; font-size: 12px; line-height: 1.6; }
 .target-source-mappings > details { overflow: visible; border: 1px solid #d2d0c7; background: rgba(250,249,245,.45); }
 .target-source-mappings > details > summary { padding: 12px 16px; cursor: pointer; color: #4f6449; font-weight: 650; }
-.target-source-mappings .binding-manager.mapping-graph { overflow: visible; }
+.target-source-mappings .binding-manager.mapping-graph { width: min(940px, 100%); box-sizing: border-box; margin-inline: auto; padding: 20px; overflow: visible; }
 .target-source-mappings .mapping-node-list { max-height: none; }
 .provider-grid { display: grid; grid-template-columns: 1fr; gap: 18px; }
 .provider-grid .config-note { grid-column: 1 / -1; }
@@ -1197,6 +1201,7 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .mapping-stage-tabs button + button { border-left: 1px solid #c9c8c0; }
 .mapping-stage-tabs button.is-active { background: #343b34; color: #fff; }
 .mapping-lanes { display: grid; grid-template-columns: minmax(230px, 1fr) 52px minmax(260px, 1.15fr) 52px minmax(230px, 1fr); align-items: stretch; height: clamp(560px, 75vh, 720px); min-height: 0; }
+.mapping-lanes.is-provider-stage, .mapping-lanes.is-consumer-stage { width: min(900px, 100%); grid-template-columns: minmax(0, 1fr) 38px minmax(0, 1fr); margin-inline: auto; }
 .mapping-lane { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; border: 1px solid #d0cfc7; background: #f8f7f2; }
 .mapping-lane.is-model { border-color: #899486; background: #eef0e9; box-shadow: inset 0 4px #657365; }
 .mapping-lane.is-context { background: repeating-linear-gradient(-45deg, #f5f4ef, #f5f4ef 8px, #efeee8 8px, #efeee8 16px); }
@@ -1251,6 +1256,9 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .parameter-level.is-required { background: #ead8cf; color: #7e4836; }
 .parameter-level.is-optional { background: #dbe3d8; color: #4f6852; }
 .parameter-level.is-custom { background: #ddd9e8; color: #5f5279; }
+.mapping-node-list button.is-consumer-required { border-color: #c89280; background: linear-gradient(90deg, #fbefea, #fffaf7); box-shadow: inset 4px 0 #ae604a; }
+.mapping-node-list button.is-consumer-required:hover { border-color: #a8604b; background: #fff8f5; }
+.mapping-node-list button.is-consumer-required.is-selected { border-color: #9b523e; box-shadow: inset 4px 0 #984b37, 3px 3px 0 #dfb9ad; }
 .mapping-node-list button.is-publisher-bound { border-color: #8aa189; background: #f3f7f1; }
 .mapping-node-list button.is-publisher-bound.is-selected { box-shadow: 3px 3px 0 #c3d4bf; }
 .publisher-bound-mark { justify-self: start; padding: 2px 7px; border-radius: 999px; background: #d7e5d4; color: #3f6144; font-size: 9px; font-style: normal; letter-spacing: .04em; }
@@ -1878,7 +1886,7 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 	.model-property-title em { grid-column: 2; justify-self: start; }
 	.model-property-card dl { grid-template-columns: 1fr; }
 	.binding-editor { grid-template-columns: 1fr; }
-	.mapping-lanes { grid-template-columns: 1fr; height: auto; gap: 8px; }
+	.mapping-lanes, .mapping-lanes.is-provider-stage, .mapping-lanes.is-consumer-stage { grid-template-columns: 1fr; height: auto; gap: 8px; }
 	.mapping-node-list, .target-source-mappings .mapping-node-list { height: auto; max-height: min(480px, 60vh); }
 	.mapping-arrow { min-height: 38px; transform: rotate(90deg); }
 	.mapping-route-toolbar, .custom-property-grid { grid-template-columns: 1fr; }

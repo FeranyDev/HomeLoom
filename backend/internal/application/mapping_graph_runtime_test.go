@@ -3,6 +3,7 @@ package application_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -354,6 +355,9 @@ func TestInvalidSourceMappingNeverLeaksCompleteCatalogIntoDeviceRegistry(t *test
 	if _, leaked := items[0].Property("native", "miot", "property-99"); leaked {
 		t.Fatalf("complete source catalog leaked after mapping failure: %#v", items[0])
 	}
+	if items[0].MappingError != "属性映射失败：invalid test conversion" {
+		t.Fatalf("mapping error = %q", items[0].MappingError)
+	}
 }
 
 func TestAirConditionerIdentityEnumBindingShowsFourthPropertyAndWritesBack(t *testing.T) {
@@ -395,6 +399,52 @@ func TestAirConditionerIdentityEnumBindingShowsFourthPropertyAndWritesBack(t *te
 	property, found = updated.Property("main", "air-conditioner", "fan-speed")
 	if !found || property.Value.String == nil || *property.Value.String != "low" {
 		t.Fatalf("updated fan-speed property = %#v, found=%v", property, found)
+	}
+}
+
+func TestAirConditionerBrokenFanSpeedProfileIsVisibleOnFallbackDevice(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, err := application.NewProfileService(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	maximumAuto, maximumLow, maximumMedium := 0.0, 30.0, 60.0
+	profile := mapping.Profile{
+		SchemaVersion: 1, ID: "fan-enum-to-number", Version: 1, Kind: mapping.KindProvider,
+		InputType: device.ValueTypeEnum, OutputType: device.ValueTypeNumber,
+		Transforms: []mapping.Transform{{Type: mapping.TransformEnumNumber, Bands: []mapping.RangeBand{
+			{Max: &maximumAuto, Value: "auto", Reverse: 0},
+			{Max: &maximumLow, Value: "low", Reverse: 30},
+			{Max: &maximumMedium, Value: "medium", Reverse: 60},
+			{Value: "high", Reverse: 90},
+		}}},
+	}
+	if _, err := profiles.Create(ctx, profile); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := profiles.CreateBinding(ctx, mapping.Binding{
+		ID: "binding-fan-speed", Stage: mapping.StageProvider, ProfileID: profile.ID, DeviceType: device.TypeAirConditioner,
+		ProviderID: "xiaomi-2231ed", DeviceID: "xiaomi-126772242", EndpointID: "miot-3", CapabilityID: "service-3", PropertyID: "property-1",
+		ModelEndpointID: "main", ModelCapabilityID: "air-conditioner", ModelPropertyID: "rotation-speed", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service := application.NewDeviceService(newAirConditionerMappingProvider(), profiles)
+	defer service.Close()
+	items, err := service.List(ctx)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("devices = %#v, %v", items, err)
+	}
+	if _, found := items[0].Property("main", "air-conditioner", "rotation-speed"); found {
+		t.Fatalf("failed mapping should fall back to the narrow snapshot: %#v", items[0])
+	}
+	if !strings.Contains(items[0].MappingError, `binding "binding-fan-speed"`) || !strings.Contains(items[0].MappingError, `enum value "High" has no numeric mapping`) {
+		t.Fatalf("mapping error = %q", items[0].MappingError)
 	}
 }
 

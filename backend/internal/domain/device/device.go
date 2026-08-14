@@ -255,8 +255,12 @@ type Device struct {
 	Removed        bool           `json:"removed,omitempty"`
 	RuntimeMode    RuntimeMode    `json:"runtimeMode,omitempty"`
 	StateTransport StateTransport `json:"stateTransport,omitempty"`
-	Endpoints      []Endpoint     `json:"endpoints"`
-	LastUpdateAt   time.Time      `json:"lastUpdateAt"`
+	// MappingError contains the latest non-fatal Provider → unified-model
+	// projection failure for this device. The public snapshot remains available
+	// through the safe fallback, so clients can guide the user to fix the route.
+	MappingError string     `json:"mappingError,omitempty"`
+	Endpoints    []Endpoint `json:"endpoints"`
+	LastUpdateAt time.Time  `json:"lastUpdateAt"`
 }
 
 func ValidStableID(value string) bool { return stableIDPattern.MatchString(value) }

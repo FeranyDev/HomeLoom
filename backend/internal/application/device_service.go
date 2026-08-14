@@ -302,6 +302,7 @@ func NewDeviceService(provider providersdk.Provider, dependencies ...any) *Devic
 	for _, source := range items {
 		item, err := service.mapSnapshot(source)
 		if err != nil {
+			mappingErr := err
 			// A SourceCatalog snapshot can contain every Provider-native field.
 			// Never put it in the public registry when a binding or conversion is
 			// invalid. Fall back to the Provider's deliberately narrow discovery
@@ -314,6 +315,7 @@ func NewDeviceService(provider providersdk.Provider, dependencies ...any) *Devic
 			if err != nil {
 				continue
 			}
+			item.MappingError = mappingErrorText(mappingErr)
 		}
 		item.NormalizeAvailability()
 		service.registry.Upsert(item)
@@ -779,6 +781,8 @@ func (s *DeviceService) SetDeviceEnabled(ctx context.Context, id string, enabled
 					item = snapshot
 					if projected, projectErr := s.projectLatestSnapshot(ctx, item); projectErr == nil {
 						item = projected
+					} else {
+						item.MappingError = mappingErrorText(projectErr)
 					}
 					item.Disabled, item.Removed = false, false
 					item.NormalizeAvailability()
@@ -1616,6 +1620,7 @@ func (s *DeviceService) handleEvent(event eventbus.Event) {
 	// boundary so raw attributes can never escape through the event stream.
 	mapped, err := s.projectLatestSnapshot(context.Background(), item)
 	if err != nil {
+		s.publishMappingError(item.ID, err)
 		return
 	}
 	item = mapped
@@ -1766,6 +1771,30 @@ func (s *DeviceService) mapSnapshot(item device.Device) (device.Device, error) {
 		return device.Device{}, fmt.Errorf("normalize mapped device %q: %w", item.ID, err)
 	}
 	return s.applyDeviceLocation(result), nil
+}
+
+func mappingErrorText(cause error) string {
+	if cause == nil {
+		return ""
+	}
+	return "属性映射失败：" + cause.Error()
+}
+
+// publishMappingError keeps the last failed projection visible on the affected
+// device without exposing the Provider-native source snapshot. A later
+// successful projection replaces the registry item and clears this field.
+func (s *DeviceService) publishMappingError(id string, cause error) {
+	item, exists := s.registry.Get(id)
+	if !exists {
+		return
+	}
+	message := mappingErrorText(cause)
+	if item.MappingError == message {
+		return
+	}
+	item.MappingError = message
+	s.registry.Upsert(item)
+	s.publishDevice(item)
 }
 
 func preserveIdentityCommands(source device.Device, target *device.Device) {

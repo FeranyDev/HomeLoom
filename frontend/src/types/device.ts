@@ -31,7 +31,7 @@ export interface Device {
   schemaVersion: number; id: string; providerId: string; name: string; type: DeviceType; availability: DeviceAvailability; online: boolean
   homeId?: string; homeName?: string; roomId?: string; roomName?: string
   locationMode?: DeviceLocationMode; sourceHomeId?: string; sourceHomeName?: string; sourceRoomId?: string; sourceRoomName?: string
-  sequence?: number; disabled?: boolean; removed?: boolean; runtimeMode?: DeviceRuntimeMode; stateTransport?: DeviceStateTransport; endpoints: Endpoint[]; lastUpdateAt: string
+	sequence?: number; disabled?: boolean; removed?: boolean; runtimeMode?: DeviceRuntimeMode; stateTransport?: DeviceStateTransport; mappingError?: string; endpoints: Endpoint[]; lastUpdateAt: string
 }
 
 export function availabilityLabel(value: DeviceAvailability): string { return value === 'online' ? '在线' : value === 'offline' ? '离线' : '未知' }

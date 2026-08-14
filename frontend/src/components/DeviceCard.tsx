@@ -38,7 +38,7 @@ export function DeviceCard({ device, pending, onPowerChange, onDetails, onMappin
 	const updatedAt = new Date(device.lastUpdateAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 
   return (
-    <article className={`device-card is-${device.type}`} aria-labelledby={headingID}>
+	<article className={`device-card is-${device.type}${device.mappingError ? ' has-mapping-error' : ''}`} aria-labelledby={headingID}>
       <div className="device-card__topline">
         <span className={`status-dot is-${device.availability}`} />
 		<span>{device.removed ? '来源已删除' : device.disabled ? '已禁用' : networkDevice ? (power ? '已开启' : '已关闭') : availabilityLabel(device.availability)}</span>
@@ -71,6 +71,7 @@ export function DeviceCard({ device, pending, onPowerChange, onDetails, onMappin
         : <div className={`sensor-state ${device.online ? 'is-active' : ''}`}><strong>{device.online ? '状态可用' : '不可用'}</strong><span>{String(device.type).toUpperCase()}</span></div>
       }</div>
 
+	  {device.mappingError && <section className="device-card__mapping-error" role="alert"><strong>属性映射异常</strong><p>{device.mappingError}</p></section>}
 	  <dl className="device-card__metadata"><div><dt>设备来源</dt><dd>{device.providerId}</dd></div><div><dt>统一模型</dt><dd>{device.type}</dd></div><div><dt>家庭 / 房间</dt><dd>{deviceLocationLabel(device)}{device.locationMode === 'custom' ? ' · HomeLoom 自定义' : ' · 继承来源'}</dd></div><div><dt>上次更新</dt><dd>{updatedAt}</dd></div></dl>
 	  <footer><div className="device-card__actions"><button onClick={() => onDetails(device)}>查看详情</button>{onMapping && !device.removed && <button className="is-primary" onClick={() => onMapping(device)}>配置映射</button>}{onEnabledChange && !device.removed && <button className="device-card__disable" disabled={pending} onClick={() => onEnabledChange(device, Boolean(device.disabled))}>{device.disabled ? '重新启用' : '禁用设备'}</button>}</div></footer>
     </article>
