@@ -93,9 +93,18 @@ func applyConsumerProjection(result *device.Device, source device.Device, parame
 	path := binding.ModelPath()
 	property, exists := source.Property(path.EndpointID, path.CapabilityID, path.PropertyID)
 	if !exists {
-		return false, nil
-	}
-	if binding.ProfileID != "" {
+		if binding.ProfileID == "" || profile.Default == nil {
+			return false, nil
+		}
+		preview, previewErr := mapping.Preview(mapping.PreviewRequest{Profile: profile, Direction: mapping.DirectionForward})
+		if previewErr != nil {
+			return false, fmt.Errorf("consumer binding %q missing default: %w", binding.ID, previewErr)
+		}
+		property = device.Property{
+			Definition: device.PropertyDefinition{ID: parameter.Source.PropertyID, Name: parameter.Source.PropertyID, Type: profile.OutputType, Readable: true, Notifiable: true},
+			Value:      preview.Value,
+		}
+	} else if binding.ProfileID != "" {
 		preview, previewErr := mapping.Preview(mapping.PreviewRequest{Profile: profile, Direction: mapping.DirectionForward, Value: &property.Value})
 		if previewErr != nil {
 			return false, fmt.Errorf("consumer binding %q: %w", binding.ID, previewErr)

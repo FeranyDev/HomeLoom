@@ -207,6 +207,22 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "409": { description: Another restore is already pending }
         "413": { description: Restore archive exceeds 256 MiB }
+  /api/v1/system/master-key:
+    get:
+      operationId: getMasterKeyStatus
+      description: Returns only opaque version and ciphertext-count state; neither key material, ciphertext, scope nor plaintext is returned.
+      responses:
+        "200": { description: Master key rotation status, headers: { Cache-Control: { schema: { type: string, enum: [no-store] } } }, content: { application/json: { schema: { $ref: "#/components/schemas/MasterKeyStatusResponse" } } } }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/v1/system/master-key/rotate:
+    post:
+      operationId: rotateMasterKey
+      description: Requires X-CSRF-Token and the exact ROTATE confirmation. Atomically re-encrypts durable secrets using a new active key; set resume=true to retry an interrupted batch with the already active key.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/MasterKeyRotationRequest" } } } }
+      responses:
+        "200": { description: Rotation completed without exposing secret material, headers: { Cache-Control: { schema: { type: string, enum: [no-store] } } }, content: { application/json: { schema: { $ref: "#/components/schemas/MasterKeyRotationResponse" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "503": { $ref: "#/components/responses/Unavailable" }
   /api/v1/diagnostics:
     get:
       operationId: getDiagnostics
@@ -237,6 +253,60 @@ paths:
       description: Returns unprojected Provider attributes, the merged three-level unified model catalog, and every built-in Consumer property. Provider devices include catalog provenance and completeness metadata.
       responses:
         "200": { description: Visual mapping catalog, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/MappingCatalog" } } } } } }
+  /api/v1/logical-devices:
+    get:
+      operationId: listLogicalDevices
+      responses:
+        "200":
+          description: Persisted manual multi-Provider device links
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/LogicalDevice" } }
+    post:
+      operationId: createLogicalDevice
+      description: Creates a manual device link. Candidate discovery never creates a link automatically.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/LogicalDevice" } } } }
+      responses: { "201": { description: Link persisted and applied }, "400": { $ref: "#/components/responses/BadRequest" }, "409": { description: Identity conflicts with a concrete device } }
+  /api/v1/logical-devices/candidates:
+    get:
+      operationId: listLogicalDeviceCandidates
+      description: Review-only candidates requiring same type, normalized name, and a shared source home or room. Names alone never produce a candidate or merge.
+      responses:
+        "200":
+          description: Manual-link suggestions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/LogicalDeviceCandidate" } }
+  /api/v1/logical-devices/{id}:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    get: { operationId: getLogicalDevice, responses: { "200": { description: Manual device link }, "404": { $ref: "#/components/responses/NotFound" } } }
+    put:
+      operationId: updateLogicalDevice
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/LogicalDevice" } } } }
+      responses: { "200": { description: Link persisted and reapplied }, "400": { $ref: "#/components/responses/BadRequest" }, "404": { $ref: "#/components/responses/NotFound" } }
+    delete: { operationId: deleteLogicalDevice, responses: { "204": { description: Unlinked; concrete sources are republished }, "404": { $ref: "#/components/responses/NotFound" } } }
+  /api/v1/logical-devices/{id}/explanations:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    get:
+      operationId: getLogicalDeviceRouteExplanations
+      responses:
+        "200":
+          description: Selected attribute and command candidates with availability and reason
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/LogicalRouteExplanation" } }
   /api/v1/mapping/consumers:
     get:
       operationId: listConsumerCatalogs
@@ -733,6 +803,37 @@ components:
       type: object
       required: [confirmation]
       properties: { confirmation: { type: string } }
+    MasterKeyRotationRequest:
+      type: object
+      required: [confirmation]
+      properties:
+        confirmation: { type: string, const: ROTATE }
+        resume: { type: boolean, default: false, description: Retry the active key's interrupted re-encryption batch without allocating another key version. }
+    MasterKeyStatus:
+      type: object
+      required: [activeVersion, retainedVersions, ciphertextsByVersion, legacyCiphertexts, needsReencryption]
+      properties:
+        activeVersion: { type: integer, minimum: 1 }
+        retainedVersions: { type: array, items: { type: integer, minimum: 1 } }
+        ciphertextsByVersion: { type: object, additionalProperties: { type: integer, minimum: 0 } }
+        legacyCiphertexts: { type: integer, minimum: 0 }
+        needsReencryption: { type: boolean }
+    MasterKeyStatusResponse:
+      type: object
+      required: [data]
+      properties: { data: { $ref: "#/components/schemas/MasterKeyStatus" } }
+    MasterKeyRotation:
+      type: object
+      required: [previousVersion, activeVersion, reencrypted, status]
+      properties:
+        previousVersion: { type: integer, minimum: 1 }
+        activeVersion: { type: integer, minimum: 1 }
+        reencrypted: { type: integer, minimum: 0 }
+        status: { $ref: "#/components/schemas/MasterKeyStatus" }
+    MasterKeyRotationResponse:
+      type: object
+      required: [data]
+      properties: { data: { $ref: "#/components/schemas/MasterKeyRotation" } }
     MatterEndpointDeviceTypeRequest:
       type: object
       required: [deviceType, confirmation]
@@ -1066,6 +1167,56 @@ components:
         consumerDeviceId: { type: string, description: Concrete virtual-device ID within targetId. Makes Consumer mappings independent per bridge device. }
         consumerProperty: { type: string }
         enabled: { type: boolean }
+    LogicalSourceRef:
+      type: object
+      required: [providerId, deviceId]
+      properties:
+        providerId: { type: string }
+        deviceId: { type: string }
+    LogicalPropertyPath:
+      type: object
+      required: [endpointId, capabilityId, propertyId]
+      properties:
+        endpointId: { type: string }
+        capabilityId: { type: string }
+        propertyId: { type: string }
+    LogicalCommandPath:
+      type: object
+      required: [endpointId, capabilityId, commandId]
+      properties:
+        endpointId: { type: string }
+        capabilityId: { type: string }
+        commandId: { type: string }
+    LogicalDevice:
+      type: object
+      required: [id, name, type, bindings]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        type: { type: string }
+        bindings:
+          type: array
+          minItems: 2
+          items: { allOf: [{ $ref: "#/components/schemas/LogicalSourceRef" }, { type: object, required: [priority], properties: { priority: { type: integer, minimum: 0, maximum: 1000 } } }] }
+        propertyRoutes: { type: array, items: { type: object, required: [path, candidates], properties: { path: { $ref: "#/components/schemas/LogicalPropertyPath" }, candidates: { type: array, minItems: 1, items: { type: object, additionalProperties: true } } } } }
+        commandRoutes: { type: array, items: { type: object, required: [path, candidates], properties: { path: { $ref: "#/components/schemas/LogicalCommandPath" }, candidates: { type: array, minItems: 1, items: { type: object, additionalProperties: true } } } } }
+    LogicalDeviceCandidate:
+      type: object
+      required: [left, right, reasons]
+      properties:
+        left: { allOf: [{ $ref: "#/components/schemas/LogicalSourceRef" }, { type: object, required: [name, type], properties: { name: { type: string }, type: { type: string }, homeId: { type: string }, roomId: { type: string } } }] }
+        right: { allOf: [{ $ref: "#/components/schemas/LogicalSourceRef" }, { type: object, required: [name, type], properties: { name: { type: string }, type: { type: string }, homeId: { type: string }, roomId: { type: string } } }] }
+        reasons: { type: array, items: { type: string } }
+    LogicalRouteExplanation:
+      type: object
+      required: [logicalDeviceId, kind, path, reason, selected, candidates]
+      properties:
+        logicalDeviceId: { type: string }
+        kind: { type: string, enum: [property, command] }
+        path: { type: string }
+        reason: { type: string, enum: [provider_priority, safe_fallback_provider_unavailable, all_sources_unavailable] }
+        selected: { type: object, additionalProperties: true }
+        candidates: { type: array, items: { type: object, additionalProperties: true } }
     CustomModelProperty:
       type: object
       required: [id, deviceType, endpointId, endpointName, endpointType, capabilityId, capabilityType, definition]

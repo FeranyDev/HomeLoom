@@ -91,3 +91,22 @@ func (s StateValue) MarshalJSON() ([]byte, error) {
 		Value any `json:"value"`
 	}{alias: alias(s), Value: value})
 }
+
+// UnmarshalJSON mirrors MarshalJSON so a StateValue can be used in durable
+// checkpoints. Unknown values intentionally retain a zero Value while known
+// values preserve their typed payload.
+func (s *StateValue) UnmarshalJSON(payload []byte) error {
+	type alias StateValue
+	var decoded struct {
+		alias
+		Value json.RawMessage `json:"value"`
+	}
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		return err
+	}
+	*s = StateValue(decoded.alias)
+	if len(decoded.Value) == 0 || string(decoded.Value) == "null" {
+		return nil
+	}
+	return json.Unmarshal(decoded.Value, &s.Value)
+}

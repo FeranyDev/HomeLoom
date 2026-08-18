@@ -47,6 +47,20 @@ type ProviderInfo struct {
 	AuthChallenge     *ProviderAuthChallenge        `json:"authChallenge,omitempty"`
 }
 
+// ProviderCredentialRevocation describes a completed administrator-requested
+// Xiaomi credential clear. LocalRevoked is true only after the disabled,
+// secret-free replacement was durably stored. Remote and disconnect failures
+// are reported separately because neither may restore local credentials.
+type ProviderCredentialRevocation struct {
+	ProviderID          string `json:"providerId"`
+	LocalRevoked        bool   `json:"localRevoked"`
+	RemoteAttempted     bool   `json:"remoteAttempted"`
+	RemoteRevoked       bool   `json:"remoteRevoked"`
+	RemoteError         string `json:"remoteError,omitempty"`
+	DisconnectError     string `json:"disconnectError,omitempty"`
+	ReconciliationError string `json:"reconciliationError,omitempty"`
+}
+
 // ProviderAuthChallenge is an in-memory, short-lived Xiaomi identity gate.
 // Challenge IDs and URLs are safe to return to the administrator; account
 // passwords and submitted verification codes are deliberately absent.
@@ -967,6 +981,85 @@ func (s *ProviderService) Delete(ctx context.Context, id string) error {
 		}
 	}
 	return nil
+}
+
+// RevokeXiaomiCredentials safely disables a Xiaomi Provider and removes its
+// durable credentials. It is intentionally not a Delete operation: the
+// provider's ID and device mapping remain available for an explicit future
+// re-authorization. Remote revocation is optional provider behavior; lack of
+// a verified endpoint never prevents local credential removal.
+func (s *ProviderService) RevokeXiaomiCredentials(ctx context.Context, id string) (ProviderCredentialRevocation, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ProviderCredentialRevocation{}, errors.New("provider id is required")
+	}
+	if s.factory == nil || s.store == nil || s.runtime == nil {
+		return ProviderCredentialRevocation{}, errors.New("provider management is unavailable")
+	}
+	s.authRun.Lock()
+	defer s.authRun.Unlock()
+	s.credentialRun.Lock()
+	defer s.credentialRun.Unlock()
+	s.mu.RLock()
+	item, exists := s.configs[id]
+	s.mu.RUnlock()
+	if !exists {
+		return ProviderCredentialRevocation{}, fmt.Errorf("provider %q not found", id)
+	}
+	if item.Type != "xiaomi" && item.Type != "xiaomi-miot-cloud" {
+		return ProviderCredentialRevocation{}, fmt.Errorf("provider %q is not a Xiaomi provider", id)
+	}
+	instance, err := s.factory.Create(item)
+	if err != nil {
+		return ProviderCredentialRevocation{}, err
+	}
+	revoker, ok := instance.(providersdk.CredentialRevoker)
+	if !ok {
+		return ProviderCredentialRevocation{}, fmt.Errorf("provider %q does not support credential revocation", id)
+	}
+	revocation, err := revoker.RevokeCredentials(ctx)
+	if err != nil {
+		return ProviderCredentialRevocation{}, err
+	}
+	if !json.Valid(revocation.Config) {
+		return ProviderCredentialRevocation{}, errors.New("provider returned an invalid revoked credential configuration")
+	}
+	updated := item
+	updated.Enabled = false
+	updated.Config = append(json.RawMessage(nil), revocation.Config...)
+	// Reconstruct the disabled replacement before storing it. This validates
+	// the provider-specific marker and ensures an accidental empty document is
+	// never treated as a completed local revocation.
+	if _, err := s.factory.Create(updated); err != nil {
+		return ProviderCredentialRevocation{}, fmt.Errorf("validate revoked provider configuration: %w", err)
+	}
+	if err := s.store.SaveProvider(ctx, updated); err != nil {
+		return ProviderCredentialRevocation{}, err
+	}
+	s.mu.Lock()
+	s.configs[id] = updated
+	delete(s.credentialRetries, id)
+	s.mu.Unlock()
+	s.clearAuthChallengeLocked(id)
+	s.wakeCredentialMaintenance()
+	result := ProviderCredentialRevocation{
+		ProviderID: id, LocalRevoked: true,
+		RemoteAttempted: revocation.RemoteAttempted, RemoteRevoked: revocation.RemoteRevoked, RemoteError: revocation.RemoteError,
+	}
+	if item.Enabled {
+		if err := s.runtime.Remove(ctx, id); err != nil {
+			result.DisconnectError = err.Error()
+		}
+	}
+	s.mu.RLock()
+	changeHandler := s.changeHandler
+	s.mu.RUnlock()
+	if changeHandler != nil {
+		if err := changeHandler(ctx, updated, false); err != nil {
+			result.ReconciliationError = err.Error()
+		}
+	}
+	return result, nil
 }
 
 type providerReference struct {

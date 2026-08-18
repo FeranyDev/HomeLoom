@@ -8,7 +8,7 @@ const api = vi.hoisted(() => ({
   getAuthStatus: vi.fn(), login: vi.fn(), logout: vi.fn(), setupAdministrator: vi.fn(),
   listDevices: vi.fn(), listDeviceLocations: vi.fn(), createDeviceLocationHome: vi.fn(), updateDeviceLocationHome: vi.fn(), deleteDeviceLocationHome: vi.fn(), createDeviceLocationRoom: vi.fn(), updateDeviceLocationRoom: vi.fn(), deleteDeviceLocationRoom: vi.fn(), setDeviceEnabled: vi.fn(), setDeviceLocation: vi.fn(), setDevicePower: vi.fn(), setDeviceProperty: vi.fn(), simulateDevice: vi.fn(), executeDeviceCommand: vi.fn(),
   listTargets: vi.fn(), saveTarget: vi.fn(), deleteTarget: vi.fn(), regenerateTargetPairing: vi.fn(), clearTargetPairingIdentity: vi.fn(), openMatterCommissioningWindow: vi.fn(), closeMatterCommissioningWindow: vi.fn(), deleteMatterFabric: vi.fn(), factoryResetMatterTarget: vi.fn(), confirmMatterEndpointDeviceType: vi.fn(),
-  listProviders: vi.fn(), saveProvider: vi.fn(), deleteProvider: vi.fn(), restartProvider: vi.fn(), testProviderConnection: vi.fn(),
+  listProviders: vi.fn(), saveProvider: vi.fn(), deleteProvider: vi.fn(), restartProvider: vi.fn(), revokeProviderCredentials: vi.fn(), testProviderConnection: vi.fn(),
   getDiagnostics: vi.fn(), getRuntimeSettings: vi.fn(), listAuditEvents: vi.fn(), listCommands: vi.fn(), saveRuntimeSettings: vi.fn(),
   subscribeEvents: vi.fn(),
   getSystemVersion: vi.fn(),
@@ -26,7 +26,7 @@ vi.mock('./api/targets', () => ({
   listTargets: api.listTargets, saveTarget: api.saveTarget, deleteTarget: api.deleteTarget, regenerateTargetPairing: api.regenerateTargetPairing, clearTargetPairingIdentity: api.clearTargetPairingIdentity, openMatterCommissioningWindow: api.openMatterCommissioningWindow, closeMatterCommissioningWindow: api.closeMatterCommissioningWindow, deleteMatterFabric: api.deleteMatterFabric, factoryResetMatterTarget: api.factoryResetMatterTarget, confirmMatterEndpointDeviceType: api.confirmMatterEndpointDeviceType,
   subscribeTargets: () => () => {},
 }))
-vi.mock('./api/providers', () => ({ listProviders: api.listProviders, saveProvider: api.saveProvider, deleteProvider: api.deleteProvider, restartProvider: api.restartProvider, testProviderConnection: api.testProviderConnection }))
+vi.mock('./api/providers', () => ({ listProviders: api.listProviders, saveProvider: api.saveProvider, deleteProvider: api.deleteProvider, restartProvider: api.restartProvider, revokeProviderCredentials: api.revokeProviderCredentials, testProviderConnection: api.testProviderConnection }))
 vi.mock('./api/diagnostics', () => ({
   getDiagnostics: api.getDiagnostics, getRuntimeSettings: api.getRuntimeSettings, listAuditEvents: api.listAuditEvents, listCommands: api.listCommands, saveRuntimeSettings: api.saveRuntimeSettings,
   subscribeAuditEvents: () => () => {}, subscribeCommands: () => () => {},

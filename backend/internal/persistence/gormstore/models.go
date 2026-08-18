@@ -256,6 +256,73 @@ type devicePreferenceRow struct {
 
 func (devicePreferenceRow) TableName() string { return "device_preferences" }
 
+// logicalDeviceRow stores the complete validated configuration in one document.
+// Routes evolve as a unit and are not queried independently, so a document keeps
+// PostgreSQL and SQLite migration behaviour identical without duplicating the
+// route validation rules in the persistence layer.
+type logicalDeviceRow struct {
+	ID           string       `gorm:"column:id;primaryKey"`
+	DocumentJSON jsonDocument `gorm:"column:document_json;not null"`
+	CreatedAt    int64        `gorm:"column:created_at;not null"`
+	UpdatedAt    int64        `gorm:"column:updated_at;not null"`
+}
+
+func (logicalDeviceRow) TableName() string { return "logical_devices" }
+
+// providerDeviceIdentityRow binds a Provider-native device identifier to the
+// canonical Device.ID published by HomeLoom. The row deliberately has no
+// provider foreign key: disabling or deleting a Provider must not erase a
+// stable device identity that can be restored on a later reconfiguration.
+type providerDeviceIdentityRow struct {
+	ProviderID       string `gorm:"column:provider_id;primaryKey"`
+	ProviderDeviceID string `gorm:"column:provider_device_id;primaryKey"`
+	DeviceID         string `gorm:"column:device_id;not null;uniqueIndex:provider_device_identity_device,priority:2"`
+	CreatedAt        int64  `gorm:"column:created_at;not null"`
+	UpdatedAt        int64  `gorm:"column:updated_at;not null"`
+}
+
+func (providerDeviceIdentityRow) TableName() string { return "provider_device_identities" }
+
+// logicalDeviceIdentityRow reserves logical IDs after an explicit unlink.
+// This distinguishes an operator deletion from a transient Provider outage and
+// keeps Target-facing identities stable during the retention window.
+type logicalDeviceIdentityRow struct {
+	LogicalDeviceID string `gorm:"column:logical_device_id;primaryKey"`
+	DeletedAt       int64  `gorm:"column:deleted_at;not null;default:0;index:logical_device_identity_purge_idx"`
+	PurgeAfter      int64  `gorm:"column:purge_after;not null;default:0;index:logical_device_identity_purge_idx"`
+	CreatedAt       int64  `gorm:"column:created_at;not null"`
+	UpdatedAt       int64  `gorm:"column:updated_at;not null"`
+}
+
+func (logicalDeviceIdentityRow) TableName() string { return "logical_device_identities" }
+
+// deviceCapabilityIdentityRow preserves the stable endpoint/capability path
+// independently of mutable labels or discovery ordering. Rows are append-only
+// until an explicit retention purge so a temporarily absent capability does
+// not receive a new identity when it returns.
+type deviceCapabilityIdentityRow struct {
+	DeviceID     string `gorm:"column:device_id;primaryKey"`
+	EndpointID   string `gorm:"column:endpoint_id;primaryKey"`
+	CapabilityID string `gorm:"column:capability_id;primaryKey"`
+	CreatedAt    int64  `gorm:"column:created_at;not null"`
+	UpdatedAt    int64  `gorm:"column:updated_at;not null"`
+}
+
+func (deviceCapabilityIdentityRow) TableName() string { return "device_capability_identities" }
+
+// homeKitAccessoryUUIDRow supplies a durable opaque accessory identity in
+// addition to HAP's AID/IID allocation. It is scoped to the Target and is
+// removed only when that Target itself is explicitly deleted.
+type homeKitAccessoryUUIDRow struct {
+	TargetID  string    `gorm:"column:target_id;primaryKey;uniqueIndex:homekit_accessory_uuid_target_uuid,priority:1"`
+	DeviceID  string    `gorm:"column:device_id;primaryKey"`
+	UUID      string    `gorm:"column:uuid;not null;uniqueIndex:homekit_accessory_uuid_target_uuid,priority:2"`
+	CreatedAt int64     `gorm:"column:created_at;not null"`
+	Target    targetRow `gorm:"foreignKey:TargetID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+}
+
+func (homeKitAccessoryUUIDRow) TableName() string { return "homekit_accessory_uuids" }
+
 type deviceLocationPreferenceRow struct {
 	DeviceID  string `gorm:"column:device_id;primaryKey"`
 	HomeID    string `gorm:"column:home_id;not null"`
@@ -415,8 +482,8 @@ func currentModels() []any {
 		&mediaCredentialRow{}, &mediaStreamRow{}, &mediaRuntimeKVRow{},
 		&mediaAuthLeaseRow{}, &mediaAuthAuditRow{}, &mediaConfigStateRow{},
 		&matterRuntimeKVRow{}, &matterEndpointIdentityRow{},
-		&homeKitAccessoryIDRow{}, &homeKitIIDRow{}, &systemSettingRow{},
-		&devicePreferenceRow{}, &deviceLocationHomeRow{}, &deviceLocationRoomRow{}, &deviceLocationPreferenceRow{}, &auditEventRow{}, &mappingProfileRow{},
+		&homeKitAccessoryIDRow{}, &homeKitIIDRow{}, &homeKitAccessoryUUIDRow{}, &systemSettingRow{},
+		&devicePreferenceRow{}, &logicalDeviceRow{}, &providerDeviceIdentityRow{}, &logicalDeviceIdentityRow{}, &deviceCapabilityIdentityRow{}, &deviceLocationHomeRow{}, &deviceLocationRoomRow{}, &deviceLocationPreferenceRow{}, &auditEventRow{}, &mappingProfileRow{},
 		&mappingBindingRow{}, &customModelPropertyRow{}, &modelEnumOverrideRow{}, &adminUserRow{},
 		&adminSessionRow{}, &miotSpecCacheRow{}, &customUnifiedModelRow{},
 	}

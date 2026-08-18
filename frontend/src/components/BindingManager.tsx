@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as mappingApi from '../api/mapping'
 import type { Device, DeviceType, PropertyDefinition, PropertyValue } from '../types/device'
 import type { ConsumerProperty, MappingBinding, MappingCatalog, MappingProfileInfo, SourceCatalogDevice, SourceCatalogMetadata, SourceValueStatus } from '../types/mapping'
@@ -29,6 +29,7 @@ type BindingAPI = {
   listBindings: typeof mappingApi.listMappingBindings; listProfiles: typeof mappingApi.listMappingProfiles
   create: typeof mappingApi.createMappingBinding; update: typeof mappingApi.updateMappingBinding
   remove: typeof mappingApi.deleteMappingBinding; catalog: typeof mappingApi.getMappingCatalog
+	preview?: typeof mappingApi.previewMapping
 }
 
 const defaultAPI: BindingAPI = {
@@ -174,6 +175,21 @@ function intersectNumericDefinitions(source?: NumericDefinition, target?: Numeri
   return { min: minimum, max: maximum, step: steps.length ? Math.max(...steps) : undefined, unit: target.unit ?? source.unit }
 }
 
+function automaticCapabilityProfileID(source?: { type?: string; unit?: string }, target?: { type?: string; unit?: string }): string | undefined {
+  const numeric = (type?: string) => type === 'int' || type === 'number'
+  if (!numeric(source?.type) || !numeric(target?.type) || !source?.unit || !target?.unit || source.unit === target.unit) return undefined
+  const supported = new Set(['celsius:fahrenheit', 'fahrenheit:celsius', 'celsius:kelvin', 'kelvin:celsius', 'kelvin:mired', 'mired:kelvin', 'ratio:percent', 'percent:ratio'])
+  if (!supported.has(`${source.unit}:${target.unit}`)) return undefined
+  return `builtin-capability-${source.unit}-to-${target.unit}-${source.type}-to-${target.type}`
+}
+
+function modelPropertyValue(item: Device, path?: { endpointId: string; capabilityId: string; propertyId: string }): PropertyValue | undefined {
+  if (!path) return undefined
+  return (item.endpoints ?? []).find((endpoint) => endpoint.id === path.endpointId)
+    ?.capabilities.find((capability) => capability.id === path.capabilityId)
+    ?.properties.find((property) => property.definition.id === path.propertyId)?.value
+}
+
 export function BindingManager({ device, profileRevision = 0, catalogRevision = 0, api = defaultAPI, initialStage = 'provider', providerOnly = false, consumerOnly = false, consumerLabel, targetId, consumerDeviceId, consumerId, consumerDeviceType }: {
   device: Device; profileRevision?: number; catalogRevision?: number; api?: BindingAPI
   initialStage?: 'provider' | 'consumer'; providerOnly?: boolean; consumerOnly?: boolean; consumerLabel?: string; targetId?: string; consumerDeviceId?: string; consumerId?: string; consumerDeviceType?: DeviceType
@@ -183,11 +199,17 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
   const fallbackCatalogDevice: SourceCatalogDevice = { ...device, catalog: fallbackMetadata }
   const [catalog, setCatalog] = useState<MappingCatalog>({ providers: [fallbackCatalogDevice], models: [], consumers: [] })
   const [bindings, setBindings] = useState<MappingBinding[]>([])
+  const deletedBindingIDs = useRef(new Set<string>())
+  const [recentlyDeletedRoute, setRecentlyDeletedRoute] = useState<MappingBinding | null>(null)
   const [profiles, setProfiles] = useState<MappingProfileInfo[]>([])
   const [sourceKey, setSourceKey] = useState('')
   const [modelKey, setModelKey] = useState('')
   const [consumerKey, setConsumerKey] = useState('')
   const [profileId, setProfileId] = useState('')
+	const [automaticProfileID, setAutomaticProfileID] = useState<string | null>(null)
+	const [hapPreviewValue, setHapPreviewValue] = useState<PropertyValue | null>(null)
+	const [hapPreviewError, setHapPreviewError] = useState('')
+	const [hapPreviewing, setHapPreviewing] = useState(false)
   const [editingID, setEditingID] = useState<string | null>(null)
   const [editingDefaultKey, setEditingDefaultKey] = useState<string | null>(null)
   const [editingEnabled, setEditingEnabled] = useState(true)
@@ -199,7 +221,9 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
   const refresh = useCallback(async () => {
     try {
       const [nextBindings, nextProfiles, nextCatalog] = await Promise.all([api.listBindings(), api.listProfiles(), api.catalog()])
-      const deviceBindings = nextBindings.filter((item) => item.providerId === device.providerId && item.deviceId === device.id)
+      const deviceBindings = nextBindings
+        .filter((item) => !deletedBindingIDs.current.has(item.id))
+        .filter((item) => item.providerId === device.providerId && item.deviceId === device.id)
       const visibleBindings = deviceBindings.filter((item) => {
         if (consumerOnly) {
           // Keep provider-stage bindings so consumer mapping can mark model parameters
@@ -254,6 +278,9 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
   const selectedProfile = profiles.find((item) => item.id === profileId)
   const numericSource = stage === 'provider' ? source?.definition : modelParameter
   const numericTarget = stage === 'provider' ? modelParameter : consumer?.property
+	const suggestedCapabilityProfileID = automaticCapabilityProfileID(numericSource, numericTarget)
+	const hapPreviewInput = stage === 'consumer' && consumer?.consumer.id === 'homekit' ? modelPropertyValue(device, modelParameter?.path) : undefined
+	const canPreviewHAPValue = Boolean(stage === 'consumer' && consumer?.consumer.id === 'homekit' && hapPreviewInput && (!consumer.property.kind || consumer.property.kind === 'attribute'))
   const projectedNumericSource = projectNumericDefinition(numericSource, selectedProfile)
   const effectiveNumericRange = intersectNumericDefinitions(projectedNumericSource, numericTarget)
   const showNumericRange = (inputType === 'int' || inputType === 'number') && (outputType === 'int' || outputType === 'number')
@@ -307,8 +334,43 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
   useEffect(() => {
     if (profileId && !compatibleProfiles.some((item) => item.id === profileId)) setProfileId('')
   }, [compatibleProfiles, profileId])
+	useEffect(() => {
+		if (editingID || editingDefaultKey || !suggestedCapabilityProfileID || profileId || !compatibleProfiles.some((item) => item.id === suggestedCapabilityProfileID)) return
+		setProfileId(suggestedCapabilityProfileID)
+		setAutomaticProfileID(suggestedCapabilityProfileID)
+	}, [compatibleProfiles, editingDefaultKey, editingID, profileId, suggestedCapabilityProfileID])
+	useEffect(() => {
+		if (automaticProfileID && automaticProfileID === profileId && automaticProfileID !== suggestedCapabilityProfileID) {
+			setProfileId('')
+			setAutomaticProfileID(null)
+		}
+	}, [automaticProfileID, profileId, suggestedCapabilityProfileID])
+	useEffect(() => { setHapPreviewValue(null); setHapPreviewError('') }, [consumerKey, modelKey, profileId, stage])
+  useEffect(() => {
+    if (!recentlyDeletedRoute) return
+    const timer = window.setTimeout(() => setRecentlyDeletedRoute(null), 8_000)
+    return () => window.clearTimeout(timer)
+  }, [recentlyDeletedRoute])
 
   const clearEditing = () => { setEditingID(null); setEditingDefaultKey(null); setEditingEnabled(true); setLockedProviderSourceKey(null) }
+
+	const previewHAPValue = async () => {
+		if (!hapPreviewInput) return
+		setHapPreviewing(true); setHapPreviewError('')
+		try {
+			if (!profileId) {
+				setHapPreviewValue(hapPreviewInput)
+				return
+			}
+			const result = await (api.preview ?? mappingApi.previewMapping)({ profileId, direction: 'forward', value: hapPreviewInput })
+			setHapPreviewValue(result.value)
+		} catch (cause) {
+			setHapPreviewValue(null)
+			setHapPreviewError(routeError(cause))
+		} finally {
+			setHapPreviewing(false)
+		}
+	}
 
   const save = async () => {
     if (!modelParameter || (stage === 'provider' ? !source : !consumer)) return
@@ -331,6 +393,7 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
 
   const editDefault = (item: DefaultProviderRoute) => {
     setStage('provider'); setSourceKey(item.source.key); setModelKey(pathKey(item.model.path)); setProfileId('')
+		setAutomaticProfileID(null)
     setEditingID(null); setEditingDefaultKey(item.key); setEditingEnabled(true); setLockedProviderSourceKey(item.source.key)
   }
 
@@ -348,11 +411,21 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
       if (!publisherBoundModelKeys.has(itemModelKey)) setModelPropertyFilter('all')
     }
     setModelKey(itemModelKey)
-    setProfileId(item.profileId ?? ''); setEditingID(item.id); setEditingDefaultKey(null); setEditingEnabled(item.enabled)
+    setProfileId(item.profileId ?? ''); setAutomaticProfileID(null); setEditingID(item.id); setEditingDefaultKey(null); setEditingEnabled(item.enabled)
   }
 
   const toggle = async (item: MappingBinding) => { try { await api.update(item.id, { ...item, enabled: !item.enabled }); await refresh() } catch (cause) { setError(routeError(cause)) } }
-  const remove = async (item: MappingBinding) => { if (!window.confirm(`删除映射路由 ${item.id}？`)) return; try { await api.remove(item.id); await refresh() } catch (cause) { setError(routeError(cause)) } }
+  const remove = async (item: MappingBinding) => {
+    if (!window.confirm(`删除映射路由 ${item.id}？`)) return
+    try {
+      await api.remove(item.id)
+      deletedBindingIDs.current.add(item.id)
+      setBindings((current) => current.filter((currentItem) => currentItem.id !== item.id))
+      setRecentlyDeletedRoute(item)
+      if (editingID === item.id) clearEditing()
+      await refresh()
+    } catch (cause) { setError(routeError(cause)) }
+  }
 
 
   const openProfileForCurrentMismatch = () => {
@@ -440,11 +513,25 @@ export function BindingManager({ device, profileRevision = 0, catalogRevision = 
       </>}
     </div>
     <div className={`mapping-route-toolbar ${editingID || editingDefaultKey ? 'is-editing' : ''}`}>
-      <div className="mapping-profile-field"><label>转换配置（Profile）<select aria-label="映射转换 Profile" value={profileId} onChange={(event) => setProfileId(event.target.value)}><option value="">恒等转换（identity）· 不转换</option>{compatibleProfiles.map((item) => <option key={item.id} value={item.id}>{item.id} · {(item.transforms ?? []).map((transform) => transform.type).join(' → ') || 'identity'}</option>)}</select></label><button type="button" className="mapping-profile-refresh" aria-label="刷新转换配置列表" title="重新加载可用 Profile" onClick={() => void refresh()} disabled={saving}>刷新</button></div>
+      <div className="mapping-profile-field"><label>转换配置（Profile）<select aria-label="映射转换 Profile" value={profileId} onChange={(event) => { setAutomaticProfileID(null); setProfileId(event.target.value) }}><option value="">恒等转换（identity）· 不转换</option>{compatibleProfiles.map((item) => <option key={item.id} value={item.id}>{item.id} · {(item.transforms ?? []).map((transform) => transform.type).join(' → ') || 'identity'}</option>)}</select></label><button type="button" className="mapping-profile-refresh" aria-label="刷新转换配置列表" title="重新加载可用 Profile" onClick={() => void refresh()} disabled={saving}>刷新</button></div>
       <div className="mapping-route-actions"><small>{editingDefaultKey ? '正在修改默认映射；保存后写入当前设备的独立覆盖。' : editingID ? `正在编辑数据库路由 ${editingID}` : inputType && outputType ? `类型：${valueTypeLabel(inputType)} → ${valueTypeLabel(outputType)}；同一来源可继续映射到其他模型属性。` : '请选择两端属性'}</small>{showProfileJump && enumCompatibility.kind === 'none' && <button type="button" onClick={openProfileForCurrentMismatch}>去配置转换 Profile</button>}{(editingID || editingDefaultKey) && <button onClick={clearEditing}>取消编辑</button>}<button className="add-button" disabled={saving || !modelParameter || (stage === 'provider' ? !source : !consumer || !consumerDevice) || (!profileId && inputType !== outputType) || enumProfileRequired} onClick={() => void save()}>{saving ? '保存中…' : editingDefaultKey ? '保存默认映射覆盖' : editingID ? '保存路由修改' : `＋ 保存第 ${stage === 'provider' ? '一' : '二'} 段路由`}</button></div>
       {showNumericRange && <div className="numeric-range-comparison" role="status"><header><strong>数值范围（NUMERIC RANGE）</strong><span>最终范围由两端约束取交集</span></header><section><small>{stage === 'provider' ? '来源范围（Provider）' : '统一模型范围（Model）'}</small><code>{numericRangeText(numericSource)}</code></section><i>→</i><section><small>转换后范围</small><code>{projectedNumericSource ? numericRangeText(projectedNumericSource) : '无法静态推导'}</code></section><i>∩</i><section><small>{stage === 'provider' ? '统一模型范围（Model）' : `${consumer?.consumer.name ?? '消费端'}范围（Consumer）`}</small><code>{numericRangeText(numericTarget)}</code></section><i>=</i><section className={effectiveNumericRange ? 'is-effective' : 'is-empty'}><small>最终有效范围</small><code>{effectiveNumericRange ? numericRangeText(effectiveNumericRange) : '无有效交集'}</code></section></div>}
       {enumCompatibility.kind !== 'none' && <div className={`enum-compatibility is-${profileId ? 'profile' : enumCompatibility.kind}`} role="status"><header><strong>枚举值域检查（ENUM DOMAIN）</strong><span>{profileId ? `由 Profile ${profileId} 转换` : enumCompatibility.kind === 'exact' ? '完全一致，可直接映射' : enumCompatibility.kind === 'normalized' ? '仅格式差异，可自动对齐' : enumCompatibility.kind === 'partial' ? enumPartialLabel : '语义不一致，需要 Profile'}</span></header><div className="enum-domain-comparison"><section><small>{enumSourceLabel}</small><div>{enumCompatibility.source.map((item) => <code key={item}>{item}</code>)}</div></section><i>→</i><section><small>{enumTargetLabel}</small><div>{enumCompatibility.target.map((item) => <code key={item}>{item}</code>)}</div></section></div><div className="enum-pair-list">{enumCompatibility.pairs.map((item) => <span key={`${item.source}/${item.target}`}><code>{item.source}</code> → <code>{item.target}</code></span>)}</div>{!profileId && enumCompatibility.targetOnly.length > 0 && <p>{enumTargetOnlyLabel}：<code>{enumCompatibility.targetOnly.join(' / ')}</code>；{enumTargetOnlyHint}</p>}{!profileId && enumCompatibility.sourceOnly.length > 0 && <p>无法自动对齐：<code>{enumCompatibility.sourceOnly.join(' / ')}</code>；请选择枚举转换 Profile 后保存。</p>}{showProfileJump && <div className="mapping-profile-jump"><button type="button" className="add-button" onClick={openProfileForCurrentMismatch}>去配置转换 Profile</button><small>将按当前两端类型与枚举值预填草稿，并在新标签打开转换配置页。</small></div>}</div>}
     </div>
+    {suggestedCapabilityProfileID === profileId && <p className="capability-profile-suggestion" role="status">已按两端单位自动选择 Capability Profile：<code>{profileId}</code>。可在下方改为其他转换。</p>}
+    {canPreviewHAPValue && consumer && hapPreviewInput && <section className="hap-value-preview" aria-label="HomeKit 属性逐值结果预览">
+      <header><strong>HomeKit 属性逐值结果预览</strong><span>{consumerPropertyLabel(consumer.property.id)} · {profileId || '恒等转换（identity）'}</span></header>
+      <div><section><small>统一模型当前值</small><code>{propertyValueText(hapPreviewInput)} · {valueTypeLabel(hapPreviewInput.type)}</code></section><i>→</i><section className={hapPreviewValue ? 'is-output' : ''}><small>HomeKit 结果</small><code>{hapPreviewValue ? `${propertyValueText(hapPreviewValue)} · ${valueTypeLabel(hapPreviewValue.type)}` : '尚未预览'}</code></section><button type="button" onClick={() => void previewHAPValue()} disabled={hapPreviewing}>{hapPreviewing ? '计算中…' : '预览当前值'}</button></div>
+      {hapPreviewError && <p role="alert">{hapPreviewError}</p>}
+    </section>}
+    {recentlyDeletedRoute && <section className="mapping-route-deleted" role="status" aria-label="已删除映射路由">
+      <span>刚刚删除</span>
+      <div>
+        <strong>{recentlyDeletedRoute.targetId && recentlyDeletedRoute.consumerDeviceId ? `${recentlyDeletedRoute.targetId} / ${recentlyDeletedRoute.consumerDeviceId}` : `${recentlyDeletedRoute.providerId} / ${recentlyDeletedRoute.deviceId}`}</strong>
+        <code>{recentlyDeletedRoute.stage === 'provider' ? `${recentlyDeletedRoute.endpointId}.${recentlyDeletedRoute.capabilityId}.${recentlyDeletedRoute.propertyId}` : `${recentlyDeletedRoute.modelEndpointId}.${recentlyDeletedRoute.modelCapabilityId}.${recentlyDeletedRoute.modelPropertyId}`} → {recentlyDeletedRoute.stage === 'provider' ? `${recentlyDeletedRoute.modelEndpointId}.${recentlyDeletedRoute.modelCapabilityId}.${recentlyDeletedRoute.modelPropertyId}` : `${recentlyDeletedRoute.consumerId}.${recentlyDeletedRoute.consumerProperty}`}</code>
+        <small>已从当前设备路由移除，不再参与映射。</small>
+      </div>
+    </section>}
     <div className="mapping-route-list"><div className="command-heading"><h3>当前设备路由</h3><span>{visibleDefaultProviderRoutes.length > 0 ? `${visibleDefaultProviderRoutes.length} 条模型默认 · ` : ''}数据库覆盖 · {targetId && consumerDeviceId ? `${targetId} / ${consumerDeviceId}` : `${device.providerId} / ${device.id}`}</span></div>{stage === 'provider' && <p className="mapping-route-priority">优先级：手工数据库路由覆盖相同目标的模型默认路由；同一来源可以保留多条指向不同模型属性的路由。</p>}{visibleDefaultProviderRoutes.map((item) => <article key={`default-${item.key}`} className="is-default"><span className="route-stage is-default">模型默认（DEFAULT）</span><div><strong>{item.source.deviceName}</strong><code>{item.source.endpointId}.{item.source.capabilityId}.{item.source.propertyId} → {item.model.path.endpointId}.{item.model.path.capabilityId}.{item.model.path.propertyId}</code><small>{deviceTypeLabel(item.source.deviceType)} · 恒等转换（identity）· 目标未被手工路由占用时生效</small></div><div><button aria-label={`编辑默认映射 ${item.source.propertyId}`} onClick={() => editDefault(item)}>编辑覆盖</button></div></article>)}{listedBindings.map((item) => <article key={item.id} className={item.enabled ? '' : 'is-disabled'}><span className={`route-stage is-${item.stage}`}>{item.stage === 'provider' ? '数据库覆盖（P → M）' : '模型 →消费端（M → C）'}</span><div><strong>{item.targetId && item.consumerDeviceId ? `${item.targetId} / ${item.consumerDeviceId}` : `${item.providerId} / ${item.deviceId}`}</strong><code>{item.stage === 'provider' ? `${item.endpointId}.${item.capabilityId}.${item.propertyId}` : `${item.modelEndpointId}.${item.modelCapabilityId}.${item.modelPropertyId}`} → {item.stage === 'provider' ? `${item.modelEndpointId}.${item.modelCapabilityId}.${item.modelPropertyId}` : `${item.consumerId}.${item.consumerProperty}`}</code><small>{item.deviceType ? deviceTypeLabel(item.deviceType) : '设备类型未指定'} · {item.profileId || '恒等转换（identity）'} · {item.enabled ? '实时生效' : '已停用'}</small></div><div><button aria-label={`编辑映射路由 ${item.id}`} onClick={() => edit(item)}>编辑</button><button onClick={() => void toggle(item)}>{item.enabled ? '停用' : '启用'}</button><button className="danger-link" onClick={() => void remove(item)}>删除</button></div></article>)}{listedBindings.length === 0 && visibleDefaultProviderRoutes.length === 0 && <p className="mapping-route-empty">当前设备没有可自动匹配的默认路由，请从上方选择来源属性和统一模型属性后保存。</p>}</div>
   </section>
 }

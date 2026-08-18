@@ -4,6 +4,7 @@ import { ApiError } from '../api/client'
 import { completeTuyaOAuth, parseTuyaOAuthCallback, pollTuyaSharingLogin, startTuyaOAuth, startTuyaSharingLogin, tuyaOAuthQRCodeURL, tuyaSharingQRCodeURL, type TuyaOAuthCallbackMessage, type TuyaOAuthStartResult, type TuyaSharingLoginPollResult, type TuyaSharingLoginStartResult } from '../api/tuya'
 import { completeXiaomiOAuth, discoverXiaomiGateways, getXiaomiProviderAuthChallenge, startXiaomiCloudLogin, startXiaomiOAuth, verifyXiaomiCloudLogin, verifyXiaomiProviderAuthChallenge, type XiaomiCloudLoginResult, type XiaomiGateway } from '../api/xiaomi'
 import { loginSonoff } from '../api/sonoff'
+import { scanProviderNetwork, type ProviderDiscoveryCandidate } from '../api/providers'
 
 const xiaomiOAuthRedirectURL = 'http://homeassistant.local:8123'
 const tuyaOAuthDefaultRedirectURL = typeof window === 'undefined' ? 'http://homeassistant.local:8123/api/v1/tuya/oauth/callback' : `${window.location.origin}/api/v1/tuya/oauth/callback`
@@ -55,7 +56,7 @@ function createTuyaExample() {
 }
 
 function createSonoffExample() {
-	return { mode: 'auto', region: 'auto', requestTimeoutSeconds: 10, refreshIntervalSeconds: 60, cloud: { endpoint: '', accessToken: '', username: '', password: '', countryCode: '+86', appId: '', appSecret: '' }, devices: [] }
+	return { mode: 'auto', region: 'auto', requestTimeoutSeconds: 10, refreshIntervalSeconds: 60, discoveryTimeoutSeconds: 5, cloud: { endpoint: '', accessToken: '', username: '', password: '', countryCode: '+86', appId: '', appSecret: '', websocketEndpoint: '' }, devices: [] }
 }
 
 function createCameraExample() {
@@ -186,6 +187,8 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 	const [tuyaSharingSession, setTuyaSharingSession] = useState<TuyaSharingLoginStartResult | null>(null)
 	const [tuyaSharingBusy, setTuyaSharingBusy] = useState(false)
 	const [sonoffAuthenticating, setSonoffAuthenticating] = useState(false)
+	const [sonoffScanning, setSonoffScanning] = useState(false)
+	const [sonoffCandidates, setSonoffCandidates] = useState<ProviderDiscoveryCandidate[]>([])
 	const hasRedactedSecrets = Boolean(provider && JSON.stringify(provider.config).includes('********'))
   const example = { latencyMs: 0, rejectWrites: false, devices: [{ id: 'demo-switch', name: '客厅开关', type: 'switch', online: true, power: false }, { id: 'demo-light', name: '客厅灯', type: 'lightbulb', online: true, power: true, brightness: 80, colorTemperature: 250, hue: 35, saturation: 45 }, { id: 'demo-outlet', name: '书房插座', type: 'outlet', online: true, power: false, inUse: false, currentPower: 0, energy: 1.25 }, { id: 'demo-temperature', name: '客厅温度', type: 'temperature-sensor', online: true, temperature: 23.6, batteryLevel: 91, lowBattery: false }, { id: 'demo-humidity', name: '客厅湿度', type: 'humidity-sensor', online: true, humidity: 56.2, batteryLevel: 90, lowBattery: false }, { id: 'demo-climate', name: '客厅温湿度', type: 'temperature-humidity-sensor', online: true, temperature: 23.6, humidity: 56.2, batteryLevel: 87, lowBattery: false }, { id: 'demo-contact', name: '入户门', type: 'contact-sensor', online: true, contact: false, batteryLevel: 88, lowBattery: false, tampered: false }, { id: 'demo-motion', name: '走廊活动', type: 'motion-sensor', online: true, motion: false, batteryLevel: 84, lowBattery: false, tampered: false }, { id: 'demo-fan', name: '卧室风扇', type: 'fan', online: true, active: false, speed: 35, mode: 'manual', swingMode: true, direction: 'clockwise', controlLock: false }, { id: 'demo-air', name: '客厅净化器', type: 'air-purifier', online: true, active: true, speed: 60, mode: 'auto', swingMode: false, controlLock: false, airQuality: 'good', pm25: 12, voc: 80, filterLife: 82, filterChange: false }, { id: 'demo-shade', name: '南窗帘', type: 'window-covering', online: true, position: 50, obstruction: false }, ...expandedVirtualExamples] }
 	const xiaomiExample = initialXiaomiConfig
@@ -291,6 +294,17 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 			setConfig(JSON.stringify({ ...configObject, region: result.region, cloud: { ...sonoffCloud, accessToken: result.accessToken, endpoint: result.endpoint } }, null, 2))
 			setTestResult('eWeLink 登录成功，云端设备目录和局域网 devicekey 已就绪。请保存 Provider。')
 		} catch (cause) { setError(cause instanceof Error ? cause.message : 'eWeLink 登录失败') } finally { setSonoffAuthenticating(false) }
+	}
+	async function scanSonoffLAN() {
+		setSonoffScanning(true); setError(null); setTestResult(null); setSonoffCandidates([])
+		try {
+			const candidates = await scanProviderNetwork({
+				id: id || 'sonoff-network-scan', name: name || 'Sonoff LAN scan', type: 'sonoff', enabled: false,
+				config: { ...configObject, devices: Array.isArray(configObject.devices) ? configObject.devices : [] },
+			})
+			setSonoffCandidates(candidates)
+			setTestResult(candidates.length ? `发现 ${candidates.length} 台 Sonoff 局域网设备；结果仅是候选，不会写入配置。` : '未发现 Sonoff 局域网设备。')
+		} catch (cause) { setError(cause instanceof Error ? cause.message : 'Sonoff 局域网扫描失败') } finally { setSonoffScanning(false) }
 	}
 	useEffect(() => {
 		if (!tuyaSharingSession) return
@@ -552,9 +566,12 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 				{String(sonoffCloud.accessToken ?? '').trim() && <small className="test-success">eWeLink 会话已就绪。保存后 Provider 会复用 Token；密码用于 Token 失效时自动重新登录。</small>}
 				<label>请求超时（秒）<input aria-label="Sonoff 请求超时" type="number" min="1" max="120" value={Number(configObject.requestTimeoutSeconds ?? 10)} onChange={(event) => setConfig(JSON.stringify({ ...configObject, requestTimeoutSeconds: Number(event.target.value) }, null, 2))} /></label>
 				<label>刷新间隔（秒）<input aria-label="Sonoff 刷新间隔" type="number" min="15" max="86400" value={Number(configObject.refreshIntervalSeconds ?? 60)} onChange={(event) => setConfig(JSON.stringify({ ...configObject, refreshIntervalSeconds: Number(event.target.value) }, null, 2))} /></label>
+				<label>局域网扫描时长（秒）<input aria-label="Sonoff 局域网扫描时长" type="number" min="1" max="30" value={Number(configObject.discoveryTimeoutSeconds ?? 5)} onChange={(event) => setConfig(JSON.stringify({ ...configObject, discoveryTimeoutSeconds: Number(event.target.value) }, null, 2))} /></label>
+				<button type="button" className="example-button" disabled={sonoffScanning || saving} onClick={() => void scanSonoffLAN()}>{sonoffScanning ? '正在扫描 Sonoff 局域网…' : '扫描 Sonoff 局域网'}</button>
 			</div></section>
-			<div className="xiaomi-next-step"><strong>02 · 保存并发现设备</strong><p>登录成功后点击“保存并应用”，Provider 会自动读取云端设备；有 host/devicekey 的设备优先走局域网，其他设备回退云端。</p></div>
-			<details><summary>云端端点与已有 Token（高级）</summary><div className="mqtt-tls-grid"><label>云端区域<select aria-label="Sonoff 云端区域" value={String(configObject.region ?? 'auto')} onChange={(event) => setConfig(JSON.stringify({ ...configObject, region: event.target.value }, null, 2))}><option value="auto">自动</option><option value="cn">中国（cn）</option><option value="as">亚洲（as）</option><option value="us">美国（us）</option><option value="eu">欧洲（eu）</option></select></label><label>Endpoint<input aria-label="Sonoff 云端 Endpoint" value={String(sonoffCloud.endpoint ?? '')} onChange={(event) => updateSonoffCloud('endpoint', event.target.value)} placeholder="留空按区域选择" /></label><label>Access Token<input aria-label="Sonoff Access Token" type="password" value={String(sonoffCloud.accessToken ?? '')} onChange={(event) => updateSonoffCloud('accessToken', event.target.value)} /></label><label>自有 App ID（可选）<input aria-label="Sonoff App ID" value={String(sonoffCloud.appId ?? '')} onChange={(event) => updateSonoffCloud('appId', event.target.value)} /></label><label>自有 App Secret（可选）<input aria-label="Sonoff App Secret" type="password" value={String(sonoffCloud.appSecret ?? '')} onChange={(event) => updateSonoffCloud('appSecret', event.target.value)} /></label><small>通常不需要手工填写 Token 或 App 凭据；仅在使用自有 eWeLink 应用时覆盖默认兼容签名。</small></div></details>
+			<div className="xiaomi-next-step"><strong>02 · 确认候选并保存</strong><p>mDNS 扫描只返回临时 endpoint，绝不自动添加配置；加密设备仍需通过 eWeLink 云目录取得 devicekey。登录成功后点击“保存并应用”，Provider 会自动读取云端设备；有 host/devicekey 的设备优先走局域网，其他设备回退云端。</p></div>
+			{sonoffCandidates.length > 0 && <div className="xiaomi-device-binding"><div className="xiaomi-device-binding__heading"><div><strong>Sonoff 局域网候选</strong><small>候选没有携带 devicekey 或 TXT data；请先通过云端目录确认设备密钥。</small></div><span>{sonoffCandidates.length} 台</span></div><div className="xiaomi-hub-device-list">{sonoffCandidates.map((candidate) => <article key={`${candidate.id ?? candidate.metadata?.deviceId ?? candidate.host}-${candidate.host}`}><div><strong>{candidate.name || 'Sonoff 设备'}</strong><small>{candidate.host}:{candidate.port} · {candidate.metadata?.type || '型号待确认'}</small><code>{candidate.metadata?.deviceId || candidate.id || '未知 ID'}</code></div><small>{candidate.metadata?.configured === 'true' ? '已在当前配置中' : '候选，尚未保存'}</small></article>)}</div></div>}
+			<details><summary>云端端点与已有 Token（高级）</summary><div className="mqtt-tls-grid"><label>云端区域<select aria-label="Sonoff 云端区域" value={String(configObject.region ?? 'auto')} onChange={(event) => setConfig(JSON.stringify({ ...configObject, region: event.target.value }, null, 2))}><option value="auto">自动</option><option value="cn">中国（cn）</option><option value="as">亚洲（as）</option><option value="us">美国（us）</option><option value="eu">欧洲（eu）</option></select></label><label>Endpoint<input aria-label="Sonoff 云端 Endpoint" value={String(sonoffCloud.endpoint ?? '')} onChange={(event) => updateSonoffCloud('endpoint', event.target.value)} placeholder="留空按区域选择" /></label><label>Access Token<input aria-label="Sonoff Access Token" type="password" value={String(sonoffCloud.accessToken ?? '')} onChange={(event) => updateSonoffCloud('accessToken', event.target.value)} /></label><label>WebSocket Endpoint（可选）<input aria-label="Sonoff WebSocket Endpoint" value={String(sonoffCloud.websocketEndpoint ?? '')} onChange={(event) => updateSonoffCloud('websocketEndpoint', event.target.value)} placeholder="wss://…" /><small>仅填写已获授权且已验证的服务端点；Provider 使用当前会话 Bearer 认证接收状态帧。</small></label><label>自有 App ID（可选）<input aria-label="Sonoff App ID" value={String(sonoffCloud.appId ?? '')} onChange={(event) => updateSonoffCloud('appId', event.target.value)} /></label><label>自有 App Secret（可选）<input aria-label="Sonoff App Secret" type="password" value={String(sonoffCloud.appSecret ?? '')} onChange={(event) => updateSonoffCloud('appSecret', event.target.value)} /></label><small>通常不需要手工填写 Token 或 App 凭据；仅在使用自有 eWeLink 应用时覆盖默认兼容签名。</small></div></details>
 			<details><summary>设备映射与完整 JSON（高级）</summary><label className="wide config-editor"><span>Sonoff Provider 配置 JSON</span><textarea aria-label="Sonoff Provider 高级配置" rows={9} value={config} onChange={(event) => setConfig(event.target.value)} spellCheck={false} />{fieldErrors.config && <small className="field-error">{fieldErrors.config}</small>}<small>登录成功后请保存；devices 可留空，首次发现会从 eWeLink 云端读取。</small></label></details>
 			{testResult && <small className="test-success">{testResult}</small>}{error && <small className="inline-error">{error}</small>}
 		</div>

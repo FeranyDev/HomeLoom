@@ -16,7 +16,9 @@ LAN 协议使用 `_ewelink._tcp.local.` 的设备信息、`/zeroconf/*` HTTP 接
 
 创建 Provider 时可直接输入 eWeLink 邮箱/手机号、密码和国家区号，点击“登录 eWeLink 账号”。HomeLoom 按 [AlexxIT/SonoffLAN](https://github.com/AlexxIT/SonoffLAN) 的 v2 登录方式调用 `/v2/user/login`，自动取得区域、Access Token 和设备 `apikey`（用于 LAN 的 `deviceKey`），登录结果回填到 Provider 配置后再由用户保存。已保存账号凭据可在 Token 失效时触发后端重新登录；也可只保存已有 Access Token。
 
-云端设备目录使用 `/v2/device/thing`，状态写入使用 `/v2/device/thing/status`；WebSocket 实时监督仍未纳入这一初版，状态由发现、读取和刷新流程提供。
+云端设备目录使用 `/v2/device/thing`，状态写入使用 `/v2/device/thing/status`。LAN 扫描使用 `_ewelink._tcp.local.` mDNS，只返回短暂的候选 endpoint，绝不会直接新增、覆盖或按名称合并已保存设备。加密设备的 TXT 负载不会返回到管理页面，`deviceKey` 仍必须来自已授权的云目录或受保护配置。
+
+如账号或自建 eWeLink 应用提供了已验证的 WebSocket 地址，可填写 `cloud.websocketEndpoint`（仅接受 `wss://`）。Provider 会用当前云会话的 Bearer header 建立可重连的 JSON 状态流，并只处理带 `deviceid`、`params` 或 `online` 的状态帧；原始帧及凭据不会进入日志、诊断或设备快照。各区域/应用的 WebSocket 登录帧和订阅主题并非稳定公开契约，因此 HomeLoom 不猜测端点、不伪造注册帧；需要以目标账号和地区确认该端点能直接推送状态。
 
 ## 配置示例
 
@@ -28,12 +30,14 @@ Provider 的 `config` JSON 可以按下面方式配置。实际保存时 `passwo
   "region": "auto",
   "requestTimeoutSeconds": 10,
   "refreshIntervalSeconds": 60,
+  "discoveryTimeoutSeconds": 5,
   "cloud": {
     "endpoint": "",
     "username": "name@example.com",
     "password": "replace-me",
     "countryCode": "+86",
-    "accessToken": ""
+    "accessToken": "",
+    "websocketEndpoint": ""
   },
   "devices": [
     {

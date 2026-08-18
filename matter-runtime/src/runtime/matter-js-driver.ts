@@ -1815,6 +1815,15 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
       "ConstantSpeed",
       "Automatic",
     );
+    // HomeLoom's uniform electrical model represents a single-phase AC meter.
+    // The feature also supplies voltage, current, frequency and power-factor
+    // attributes in addition to the base active-power measurement.
+    const ElectricalPowerMeasurementServer =
+      sdk.electricalPowerMeasurement.ElectricalPowerMeasurementServer.with(
+        "AlternatingCurrent",
+      );
+    const ElectricalEnergyMeasurementServer =
+      sdk.electricalEnergyMeasurement.ElectricalEnergyMeasurementServer;
 
     switch (normalizeDeviceType(device.deviceType)) {
       case "switch":
@@ -1898,6 +1907,12 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
           HostPumpLevelServer,
           PumpConfigServer,
           sdk.pressureMeasurement.PressureMeasurementServer,
+          BridgeInfo,
+        ) as never;
+      case "power-meter":
+        return sdk.electricalMeterDevice.ElectricalMeterDevice.with(
+          ElectricalPowerMeasurementServer,
+          ElectricalEnergyMeasurementServer,
           BridgeInfo,
         ) as never;
       case "air-purifier":
@@ -2300,6 +2315,11 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
         ),
       };
     }
+
+    if (deviceType === "power-meter") {
+      state.electricalPowerMeasurement = electricalPowerMeasurementState(device.attributes);
+      state.electricalEnergyMeasurement = electricalEnergyMeasurementState(device.attributes);
+    }
     return state;
   }
 
@@ -2556,6 +2576,48 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
       case "ValveConfigurationAndControl.RemainingDuration":
         await endpoint.setStateOf("valveConfigurationAndControl", {
           remainingDuration: value === null ? null : integerValue(value),
+        });
+        return;
+      case "ElectricalPowerMeasurement.ActivePower":
+        await endpoint.setStateOf("electricalPowerMeasurement", {
+          activePower: nullableScaledMeasurement(value, 1_000),
+        });
+        return;
+      case "ElectricalPowerMeasurement.Voltage":
+        await endpoint.setStateOf("electricalPowerMeasurement", {
+          voltage: nullableScaledMeasurement(value, 1_000),
+        });
+        return;
+      case "ElectricalPowerMeasurement.ActiveCurrent":
+        await endpoint.setStateOf("electricalPowerMeasurement", {
+          activeCurrent: nullableScaledMeasurement(value, 1_000),
+        });
+        return;
+      case "ElectricalPowerMeasurement.Frequency":
+        await endpoint.setStateOf("electricalPowerMeasurement", {
+          frequency: nullableScaledMeasurement(value, 1_000),
+        });
+        return;
+      case "ElectricalPowerMeasurement.PowerFactor":
+        await endpoint.setStateOf("electricalPowerMeasurement", {
+          powerFactor: nullableScaledMeasurement(value, 10_000),
+        });
+        return;
+      case "ElectricalPowerMeasurement.ReactivePower":
+        await endpoint.setStateOf("electricalPowerMeasurement", {
+          reactivePower: nullableScaledMeasurement(value, 1_000),
+        });
+        return;
+      case "ElectricalPowerMeasurement.ApparentPower":
+        await endpoint.setStateOf("electricalPowerMeasurement", {
+          apparentPower: nullableScaledMeasurement(value, 1_000),
+        });
+        return;
+      case "ElectricalEnergyMeasurement.CumulativeEnergyImported":
+        await endpoint.setStateOf("electricalEnergyMeasurement", {
+          cumulativeEnergyImported: value === null
+            ? null
+            : energyMeasurement(value),
         });
         return;
       default:
@@ -2870,6 +2932,7 @@ type NormalizedDeviceType =
   | "air-quality"
   | "valve"
   | "pump"
+  | "power-meter"
   | "air-purifier"
   | "speaker"
   | "television"
@@ -2961,6 +3024,11 @@ function normalizeDeviceType(deviceType: string): NormalizedDeviceType {
       return "valve";
     case "pump":
       return "pump";
+    case "power-meter":
+    case "powermeter":
+    case "electrical-meter":
+    case "electricalmeter":
+      return "power-meter";
     case "air-purifier":
     case "airpurifier":
       return "air-purifier";
@@ -3040,6 +3108,101 @@ function integerValue(value: JsonValue | undefined, fallback?: number): number {
     throw new AdapterOperationError("invalid_attribute_value", `Matter attribute requires an integer`);
   }
   return numeric;
+}
+
+/**
+ * Matter electrical measurement clusters use integer base units. Keep the
+ * conversion in the protocol adapter so the Go model remains readable in W,
+ * V, A, Hz and kWh as declared by the Consumer Catalog.
+ */
+function scaledMeasurement(value: JsonValue | undefined, multiplier: number): number {
+  const result = Math.round(numberValue(value) * multiplier);
+  if (!Number.isSafeInteger(result)) {
+    throw new AdapterOperationError(
+      "invalid_attribute_value",
+      "Matter electrical measurement exceeds the safe integer range",
+    );
+  }
+  return result;
+}
+
+function nullableScaledMeasurement(value: JsonValue | undefined, multiplier: number): number | null {
+  return value === null || value === undefined ? null : scaledMeasurement(value, multiplier);
+}
+
+function electricalPowerMeasurementState(
+  attributes: DeviceSnapshot["attributes"],
+): Record<string, unknown> {
+  return {
+    // HomeLoom's current electrical model describes single-phase AC values.
+    powerMode: 2,
+    numberOfMeasurementTypes: 7,
+    accuracy: [
+      measurementAccuracy(1, 0, 1_000_000),
+      measurementAccuracy(2, 0, 1_000_000),
+      measurementAccuracy(5, 0, 1_000_000_000_000),
+      measurementAccuracy(6, -1_000_000_000_000, 1_000_000_000_000),
+      measurementAccuracy(7, 0, 1_000_000_000_000),
+      measurementAccuracy(11, 0, 1_000_000),
+      measurementAccuracy(12, 0, 10_000),
+    ],
+    activePower: scaledMeasurement(attributes["ElectricalPowerMeasurement.ActivePower"], 1_000),
+    voltage: nullableScaledMeasurement(attributes["ElectricalPowerMeasurement.Voltage"], 1_000),
+    activeCurrent: nullableScaledMeasurement(
+      attributes["ElectricalPowerMeasurement.ActiveCurrent"],
+      1_000,
+    ),
+    frequency: nullableScaledMeasurement(attributes["ElectricalPowerMeasurement.Frequency"], 1_000),
+    powerFactor: nullableScaledMeasurement(attributes["ElectricalPowerMeasurement.PowerFactor"], 10_000),
+    reactivePower: nullableScaledMeasurement(
+      attributes["ElectricalPowerMeasurement.ReactivePower"],
+      1_000,
+    ),
+    apparentPower: nullableScaledMeasurement(
+      attributes["ElectricalPowerMeasurement.ApparentPower"],
+      1_000,
+    ),
+  };
+}
+
+function electricalEnergyMeasurementState(
+  attributes: DeviceSnapshot["attributes"],
+): Record<string, unknown> {
+  const energy = attributes["ElectricalEnergyMeasurement.CumulativeEnergyImported"];
+  return {
+    accuracy: measurementAccuracy(14, 0, 1_000_000_000_000_000),
+    cumulativeEnergyImported: energy === null || energy === undefined
+      ? null
+      : energyMeasurement(energy),
+  };
+}
+
+function measurementAccuracy(
+  measurementType: number,
+  minMeasuredValue: number,
+  maxMeasuredValue: number,
+): Record<string, unknown> {
+  return {
+    measurementType,
+    // Provider samples can be direct physical measurements or derived cloud
+    // values. The current unified model does not carry provenance/precision,
+    // so advertise the conservative Matter representation rather than claim a
+    // meter-grade direct measurement.
+    measured: false,
+    minMeasuredValue,
+    maxMeasuredValue,
+    accuracyRanges: [{ rangeMin: minMeasuredValue, rangeMax: maxMeasuredValue, percentMax: 10_000 }],
+  };
+}
+
+function energyMeasurement(value: JsonValue): Record<string, number> {
+  return {
+    energy: scaledMeasurement(value, 1_000_000),
+    // The Matter schema uses a UTC epoch-seconds timestamp. The runtime owns
+    // this observation timestamp because the Go snapshot only carries the
+    // numeric cumulative value, not an individual meter sample timestamp.
+    endTimestamp: Math.floor(Date.now() / 1_000),
+  };
 }
 
 function percentToMatterLevel(percent: number): number {
@@ -3511,6 +3674,7 @@ export const MATTER_DRIVER_CATALOG_DEVICE_TYPE_CONSTANTS = [
   "AirQualitySensor",
   "Valve",
   "Pump",
+  "PowerMeter",
   "AirPurifier",
   "Speaker",
   "Television",
@@ -3540,6 +3704,14 @@ export const MATTER_DRIVER_ATTRIBUTE_PATHS = [
   "Thermostat.OccupiedHeatingSetpoint",
   "Thermostat.OccupiedCoolingSetpoint",
   "ThermostatUserInterfaceConfiguration.TemperatureDisplayMode",
+  "ElectricalPowerMeasurement.ActivePower",
+  "ElectricalPowerMeasurement.Voltage",
+  "ElectricalPowerMeasurement.ActiveCurrent",
+  "ElectricalPowerMeasurement.Frequency",
+  "ElectricalPowerMeasurement.PowerFactor",
+  "ElectricalPowerMeasurement.ReactivePower",
+  "ElectricalPowerMeasurement.ApparentPower",
+  "ElectricalEnergyMeasurement.CumulativeEnergyImported",
   "DoorLock.LockState",
   "DoorLock.DoorState",
   "IlluminanceMeasurement.MeasuredValue",

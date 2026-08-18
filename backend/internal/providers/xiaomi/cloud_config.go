@@ -24,16 +24,19 @@ const (
 // provider. Password and session fields are encrypted by the provider config
 // secret codec before the JSON document is stored in the configured database.
 type CloudConfig struct {
-	Region            string         `json:"region"`
-	Username          string         `json:"username,omitempty"`
-	Password          string         `json:"password,omitempty"`
-	UserID            string         `json:"userId,omitempty"`
-	Ssecurity         string         `json:"ssecurity,omitempty"`
-	ServiceToken      string         `json:"serviceToken,omitempty"`
-	PassToken         string         `json:"passToken,omitempty"`
-	PollIntervalSec   int            `json:"pollIntervalSeconds,omitempty"`
-	RequestTimeoutSec int            `json:"requestTimeoutSeconds,omitempty"`
-	Devices           []DeviceConfig `json:"devices"`
+	// CredentialsRevoked keeps a disabled configuration after the account
+	// password/session has been removed by the administrator.
+	CredentialsRevoked bool           `json:"credentialsRevoked,omitempty"`
+	Region             string         `json:"region"`
+	Username           string         `json:"username,omitempty"`
+	Password           string         `json:"password,omitempty"`
+	UserID             string         `json:"userId,omitempty"`
+	Ssecurity          string         `json:"ssecurity,omitempty"`
+	ServiceToken       string         `json:"serviceToken,omitempty"`
+	PassToken          string         `json:"passToken,omitempty"`
+	PollIntervalSec    int            `json:"pollIntervalSeconds,omitempty"`
+	RequestTimeoutSec  int            `json:"requestTimeoutSeconds,omitempty"`
+	Devices            []DeviceConfig `json:"devices"`
 }
 
 func decodeCloudConfig(item providerconfig.Config) (CloudConfig, error) {
@@ -44,6 +47,12 @@ func decodeCloudConfig(item providerconfig.Config) (CloudConfig, error) {
 		return CloudConfig{}, fmt.Errorf("decode Xiaomi cloud config: %w", err)
 	}
 	config.applyDefaults()
+	if config.CredentialsRevoked {
+		if item.Enabled {
+			return CloudConfig{}, errors.New("revoked Xiaomi cloud credentials require the provider to be disabled")
+		}
+		return config, nil
+	}
 	if err := config.validate(); err != nil {
 		return CloudConfig{}, err
 	}

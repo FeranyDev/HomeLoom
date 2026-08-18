@@ -17,6 +17,7 @@ type Config struct {
 	Storage StorageConfig `yaml:"storage"`
 	Logging LoggingConfig `yaml:"logging"`
 	Media   MediaConfig   `yaml:"media"`
+	Runtime RuntimeConfig `yaml:"runtime"`
 }
 
 type LoggingConfig struct {
@@ -43,6 +44,16 @@ type MediaConfig struct {
 	SRTPPortBase       int    `yaml:"srtp_port_base"`
 }
 
+// RuntimeConfig covers bounded in-memory pipelines. EventQueueCapacity is per
+// shard; the aggregate capacity is EventQueueShards multiplied by it. State
+// checkpoints are deliberately disabled by default and, when enabled, are a
+// low-frequency restart cache rather than a durable event history.
+type RuntimeConfig struct {
+	EventQueueShards              int `yaml:"event_queue_shards"`
+	EventQueueCapacity            int `yaml:"event_queue_capacity"`
+	StateCheckpointIntervalSecond int `yaml:"state_checkpoint_interval_seconds"`
+}
+
 func Default() Config {
 	return Config{
 		Server: ServerConfig{Address: "127.0.0.1:8090"},
@@ -59,6 +70,10 @@ func Default() Config {
 			HAPPortBase:        51826,
 			RTSPPortBase:       18554,
 			SRTPPortBase:       20000,
+		},
+		Runtime: RuntimeConfig{
+			EventQueueShards:   8,
+			EventQueueCapacity: 128,
 		},
 	}
 }
@@ -131,6 +146,15 @@ func (c Config) Validate() error {
 			return err
 		}
 	}
+	if c.Runtime.EventQueueShards < 1 || c.Runtime.EventQueueShards > 128 {
+		return errors.New("runtime.event_queue_shards must be between 1 and 128")
+	}
+	if c.Runtime.EventQueueCapacity < 1 || c.Runtime.EventQueueCapacity > 65_536 {
+		return errors.New("runtime.event_queue_capacity must be between 1 and 65536")
+	}
+	if interval := c.Runtime.StateCheckpointIntervalSecond; interval != 0 && (interval < 60 || interval > 86_400) {
+		return errors.New("runtime.state_checkpoint_interval_seconds must be 0 or between 60 and 86400")
+	}
 	for _, value := range c.Server.TrustedProxies {
 		value = strings.TrimSpace(value)
 		if value == "" {
@@ -190,6 +214,19 @@ func applyEnvironment(config *Config) error {
 				return fmt.Errorf("%s must be an integer", name)
 			}
 			*destination = port
+		}
+	}
+	for name, destination := range map[string]*int{
+		"HOMELOOM_EVENT_QUEUE_SHARDS":                &config.Runtime.EventQueueShards,
+		"HOMELOOM_EVENT_QUEUE_CAPACITY":              &config.Runtime.EventQueueCapacity,
+		"HOMELOOM_STATE_CHECKPOINT_INTERVAL_SECONDS": &config.Runtime.StateCheckpointIntervalSecond,
+	} {
+		if value := os.Getenv(name); value != "" {
+			parsed, err := strconv.Atoi(value)
+			if err != nil {
+				return fmt.Errorf("%s must be an integer", name)
+			}
+			*destination = parsed
 		}
 	}
 	return nil

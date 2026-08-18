@@ -38,6 +38,7 @@ export interface LoadedMatterJs {
   readonly airQualitySensor: typeof import("@matter/main/devices/air-quality-sensor");
   readonly waterValve: typeof import("@matter/main/devices/water-valve");
   readonly pumpDevice: typeof import("@matter/main/devices/pump");
+  readonly electricalMeterDevice: typeof import("@matter/main/devices/electrical-meter");
   readonly airPurifier: typeof import("@matter/main/devices/air-purifier");
   readonly speakerDevice: typeof import("@matter/main/devices/speaker");
   readonly basicVideoPlayerDevice: typeof import("@matter/main/devices/basic-video-player");
@@ -66,6 +67,8 @@ export interface LoadedMatterJs {
   readonly carbonMonoxideConcentrationMeasurement: typeof import("@matter/main/behaviors/carbon-monoxide-concentration-measurement");
   readonly valveConfigurationAndControl: typeof import("@matter/main/behaviors/valve-configuration-and-control");
   readonly pumpConfigurationAndControl: typeof import("@matter/main/behaviors/pump-configuration-and-control");
+  readonly electricalPowerMeasurement: typeof import("@matter/main/behaviors/electrical-power-measurement");
+  readonly electricalEnergyMeasurement: typeof import("@matter/main/behaviors/electrical-energy-measurement");
   readonly mediaPlayback: typeof import("@matter/main/behaviors/media-playback");
   readonly keypadInput: typeof import("@matter/main/behaviors/keypad-input");
   readonly bridgedDeviceBasicInformation: typeof import("@matter/main/behaviors/bridged-device-basic-information");
@@ -198,6 +201,7 @@ export async function loadPinnedMatterJs(): Promise<LoadedMatterJs> {
     airQualitySensor,
     waterValve,
     pumpDevice,
+    electricalMeterDevice,
     airPurifier,
     speakerDevice,
     basicVideoPlayerDevice,
@@ -226,6 +230,8 @@ export async function loadPinnedMatterJs(): Promise<LoadedMatterJs> {
     carbonMonoxideConcentrationMeasurement,
     valveConfigurationAndControl,
     pumpConfigurationAndControl,
+    electricalPowerMeasurement,
+    electricalEnergyMeasurement,
     mediaPlayback,
     keypadInput,
     bridgedDeviceBasicInformation,
@@ -252,6 +258,7 @@ export async function loadPinnedMatterJs(): Promise<LoadedMatterJs> {
     import("@matter/main/devices/air-quality-sensor"),
     import("@matter/main/devices/water-valve"),
     import("@matter/main/devices/pump"),
+    import("@matter/main/devices/electrical-meter"),
     import("@matter/main/devices/air-purifier"),
     import("@matter/main/devices/speaker"),
     import("@matter/main/devices/basic-video-player"),
@@ -280,6 +287,8 @@ export async function loadPinnedMatterJs(): Promise<LoadedMatterJs> {
     import("@matter/main/behaviors/carbon-monoxide-concentration-measurement"),
     import("@matter/main/behaviors/valve-configuration-and-control"),
     import("@matter/main/behaviors/pump-configuration-and-control"),
+    import("@matter/main/behaviors/electrical-power-measurement"),
+    import("@matter/main/behaviors/electrical-energy-measurement"),
     import("@matter/main/behaviors/media-playback"),
     import("@matter/main/behaviors/keypad-input"),
     import("@matter/main/behaviors/bridged-device-basic-information"),
@@ -307,6 +316,7 @@ export async function loadPinnedMatterJs(): Promise<LoadedMatterJs> {
     airQualitySensor,
     waterValve,
     pumpDevice,
+    electricalMeterDevice,
     airPurifier,
     speakerDevice,
     basicVideoPlayerDevice,
@@ -335,6 +345,8 @@ export async function loadPinnedMatterJs(): Promise<LoadedMatterJs> {
     carbonMonoxideConcentrationMeasurement,
     valveConfigurationAndControl,
     pumpConfigurationAndControl,
+    electricalPowerMeasurement,
+    electricalEnergyMeasurement,
     mediaPlayback,
     keypadInput,
     bridgedDeviceBasicInformation,

@@ -20,6 +20,7 @@ const (
 const (
 	defaultRequestTimeoutSeconds = 10
 	defaultRefreshInterval       = 60
+	defaultDiscoveryTimeout      = 5
 	defaultLANPort               = 8081
 )
 
@@ -32,18 +33,20 @@ type Config struct {
 	Region                string         `json:"region,omitempty"`
 	RequestTimeoutSeconds int            `json:"requestTimeoutSeconds,omitempty"`
 	RefreshIntervalSec    int            `json:"refreshIntervalSeconds,omitempty"`
+	DiscoveryTimeoutSec   int            `json:"discoveryTimeoutSeconds,omitempty"`
 	Cloud                 CloudConfig    `json:"cloud,omitempty"`
 	Devices               []DeviceConfig `json:"devices"`
 }
 
 type CloudConfig struct {
-	Endpoint    string `json:"endpoint,omitempty"`
-	AccessToken string `json:"accessToken,omitempty"`
-	Username    string `json:"username,omitempty"`
-	Password    string `json:"password,omitempty"`
-	CountryCode string `json:"countryCode,omitempty"`
-	AppID       string `json:"appId,omitempty"`
-	AppSecret   string `json:"appSecret,omitempty"`
+	Endpoint          string `json:"endpoint,omitempty"`
+	AccessToken       string `json:"accessToken,omitempty"`
+	Username          string `json:"username,omitempty"`
+	Password          string `json:"password,omitempty"`
+	CountryCode       string `json:"countryCode,omitempty"`
+	AppID             string `json:"appId,omitempty"`
+	AppSecret         string `json:"appSecret,omitempty"`
+	WebSocketEndpoint string `json:"websocketEndpoint,omitempty"`
 }
 
 type DeviceConfig struct {
@@ -97,6 +100,9 @@ func (c *Config) applyDefaults() {
 	if c.RefreshIntervalSec == 0 {
 		c.RefreshIntervalSec = defaultRefreshInterval
 	}
+	if c.DiscoveryTimeoutSec == 0 {
+		c.DiscoveryTimeoutSec = defaultDiscoveryTimeout
+	}
 	c.Cloud.Endpoint = strings.TrimRight(strings.TrimSpace(c.Cloud.Endpoint), "/")
 	c.Cloud.AccessToken = strings.TrimSpace(c.Cloud.AccessToken)
 	c.Cloud.Username = strings.TrimSpace(c.Cloud.Username)
@@ -104,6 +110,7 @@ func (c *Config) applyDefaults() {
 	c.Cloud.CountryCode = strings.TrimSpace(c.Cloud.CountryCode)
 	c.Cloud.AppID = strings.TrimSpace(c.Cloud.AppID)
 	c.Cloud.AppSecret = strings.TrimSpace(c.Cloud.AppSecret)
+	c.Cloud.WebSocketEndpoint = strings.TrimSpace(c.Cloud.WebSocketEndpoint)
 	if c.Cloud.CountryCode == "" {
 		c.Cloud.CountryCode = "+86"
 	}
@@ -148,12 +155,21 @@ func (c Config) validate(providerID string) error {
 	if c.RefreshIntervalSec < 15 || c.RefreshIntervalSec > 86400 {
 		return errors.New("refreshIntervalSeconds must be between 15 and 86400")
 	}
-	cloudConfigured := c.Mode == ModeCloud || c.Cloud.Endpoint != "" || c.Cloud.AccessToken != "" || c.Cloud.Username != "" || c.Cloud.Password != ""
+	if c.DiscoveryTimeoutSec < 1 || c.DiscoveryTimeoutSec > 30 {
+		return errors.New("discoveryTimeoutSeconds must be between 1 and 30")
+	}
+	cloudConfigured := c.Mode == ModeCloud || c.Cloud.Endpoint != "" || c.Cloud.AccessToken != "" || c.Cloud.Username != "" || c.Cloud.Password != "" || c.Cloud.WebSocketEndpoint != ""
 	if cloudConfigured {
 		if c.Cloud.Endpoint != "" {
 			parsed, err := url.Parse(c.Cloud.Endpoint)
 			if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
 				return errors.New("cloud.endpoint must be an absolute https URL")
+			}
+		}
+		if c.Cloud.WebSocketEndpoint != "" {
+			parsed, err := url.Parse(c.Cloud.WebSocketEndpoint)
+			if err != nil || parsed.Scheme != "wss" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+				return errors.New("cloud.websocketEndpoint must be an absolute wss URL without user information, query, or fragment")
 			}
 		}
 		if c.Cloud.AccessToken == "" && (c.Cloud.Username == "" || c.Cloud.Password == "") {

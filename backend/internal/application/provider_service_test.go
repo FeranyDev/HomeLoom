@@ -26,6 +26,34 @@ type renewableProvider struct {
 	renewError error
 }
 
+type credentialRevokingProvider struct {
+	id     string
+	result providersdk.CredentialRevocation
+}
+
+type credentialRevocationRuntime struct {
+	removed []string
+	err     error
+}
+
+func (p *credentialRevokingProvider) Manifest() providersdk.Manifest {
+	return providersdk.Manifest{ID: p.id, Type: "xiaomi", Name: p.id}
+}
+func (*credentialRevokingProvider) Capabilities() providersdk.Capabilities {
+	return providersdk.Capabilities{}
+}
+func (*credentialRevokingProvider) Initialize(context.Context) error { return nil }
+func (*credentialRevokingProvider) Close(context.Context) error      { return nil }
+func (p *credentialRevokingProvider) RevokeCredentials(context.Context) (providersdk.CredentialRevocation, error) {
+	return p.result, nil
+}
+func (*credentialRevocationRuntime) Apply(context.Context, providersdk.Provider) error { return nil }
+func (r *credentialRevocationRuntime) Remove(_ context.Context, id string) error {
+	r.removed = append(r.removed, id)
+	return r.err
+}
+func (*credentialRevocationRuntime) ProviderInfos() []providersdk.RuntimeInfo { return nil }
+
 type renewalRuntime struct {
 	applyCalls atomic.Int32
 	failFirst  atomic.Bool
@@ -481,6 +509,41 @@ func (s *providerStore) SaveProvider(_ context.Context, item providerconfig.Conf
 func (s *providerStore) DeleteProvider(_ context.Context, id string) error {
 	delete(s.items, id)
 	return nil
+}
+
+func TestProviderServiceRevokesXiaomiCredentialsDurablyBeforeDisconnectOutcome(t *testing.T) {
+	original := providerconfig.Config{ID: "xiaomi-main", Type: "xiaomi", Name: "Xiaomi", Enabled: true, Config: json.RawMessage(`{"accessToken":"secret-token","devices":[]}`)}
+	store := &providerStore{items: map[string]providerconfig.Config{original.ID: original}}
+	factory := providersdk.NewFactory()
+	if err := factory.Register("xiaomi", func(item providerconfig.Config) (providersdk.Provider, error) {
+		return &credentialRevokingProvider{id: item.ID, result: providersdk.CredentialRevocation{
+			Config: json.RawMessage(`{"credentialsRevoked":true,"devices":[]}`), RemoteAttempted: true, RemoteError: "configured endpoint failed",
+		}}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &credentialRevocationRuntime{err: errors.New("disconnect timed out")}
+	service := application.NewProviderService([]providerconfig.Config{original}, store, factory, runtime)
+	changed := 0
+	service.SetChangeHandler(func(context.Context, providerconfig.Config, bool) error {
+		changed++
+		return errors.New("downstream refresh delayed")
+	})
+
+	result, err := service.RevokeXiaomiCredentials(context.Background(), original.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.LocalRevoked || !result.RemoteAttempted || result.RemoteError == "" || result.DisconnectError == "" || result.ReconciliationError == "" {
+		t.Fatalf("revoke result = %#v", result)
+	}
+	stored := store.items[original.ID]
+	if stored.Enabled || strings.Contains(string(stored.Config), "secret-token") || !strings.Contains(string(stored.Config), `"credentialsRevoked":true`) {
+		t.Fatalf("stored revoked provider = %#v", stored)
+	}
+	if len(runtime.removed) != 1 || runtime.removed[0] != original.ID || changed != 1 {
+		t.Fatalf("runtime removals=%v changes=%d", runtime.removed, changed)
+	}
 }
 
 func TestProviderServiceAppliesDisablesAndDeletes(t *testing.T) {

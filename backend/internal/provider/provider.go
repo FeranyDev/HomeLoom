@@ -93,6 +93,26 @@ type CredentialMaintainer interface {
 	RenewCredentials(context.Context) (json.RawMessage, error)
 }
 
+// CredentialRevocation is the outcome of an administrator-requested
+// credential revocation. Config is a complete, secret-free replacement
+// document that the application must persist before reporting local success.
+// Remote revocation is deliberately best-effort: a provider may have no
+// authoritative remote endpoint, but must still return the local replacement.
+type CredentialRevocation struct {
+	Config          json.RawMessage `json:"-"`
+	RemoteAttempted bool            `json:"remoteAttempted"`
+	RemoteRevoked   bool            `json:"remoteRevoked"`
+	RemoteError     string          `json:"remoteError,omitempty"`
+}
+
+// CredentialRevoker is an optional provider capability for a deliberate
+// administrator action. Implementations must clear all durable credentials
+// from the returned configuration even when a configured remote service
+// refuses or cannot complete revocation.
+type CredentialRevoker interface {
+	RevokeCredentials(context.Context) (CredentialRevocation, error)
+}
+
 type Discoverer interface {
 	DiscoverDevices(context.Context) ([]device.Device, error)
 }

@@ -293,6 +293,53 @@ func TestProviderRouteRelocatesRawPathAndResolvesReverseWrite(t *testing.T) {
 	}
 }
 
+func TestProviderBindingProjectsProfileDefaultWhenRawSourceIsMissing(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, err := application.NewProfileService(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultValue := device.BoolValue(true)
+	profile := mapping.Profile{
+		SchemaVersion: 1, ID: "missing-in-use-default", Version: 1, Kind: mapping.KindProvider,
+		InputType: device.ValueTypeBool, OutputType: device.ValueTypeBool, Default: &defaultValue,
+	}
+	if _, err := profiles.Create(ctx, profile); err != nil {
+		t.Fatal(err)
+	}
+	for _, binding := range []mapping.Binding{
+		{
+			ID: "raw-power-required", Stage: mapping.StageProvider, ProviderID: "raw-main", DeviceID: "raw-switch-1", DeviceType: device.TypeSwitch,
+			EndpointID: "main", CapabilityID: "vendor", PropertyID: "raw-power",
+			ModelEndpointID: "main", ModelCapabilityID: "switch", ModelPropertyID: "power", Enabled: true,
+		},
+		{
+			ID: "missing-in-use", Stage: mapping.StageProvider, ProfileID: profile.ID, ProviderID: "raw-main", DeviceID: "raw-switch-1", DeviceType: device.TypeSwitch,
+			EndpointID: "main", CapabilityID: "vendor", PropertyID: "missing-in-use",
+			ModelEndpointID: "main", ModelCapabilityID: "switch", ModelPropertyID: "in-use", Enabled: true,
+		},
+	} {
+		if _, err := profiles.CreateBinding(ctx, binding); err != nil {
+			t.Fatal(err)
+		}
+	}
+	service := application.NewDeviceService(newRawMappingProvider(), profiles)
+	defer service.Close()
+	items, err := service.List(ctx)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("items = %#v, error = %v", items, err)
+	}
+	inUse, found := items[0].Property("main", "switch", "in-use")
+	if !found || inUse.Value.Bool == nil || !*inUse.Value.Bool || inUse.Definition.ParameterLevel != device.ParameterOptional {
+		t.Fatalf("missing-source default projection = %#v, found=%v", inUse, found)
+	}
+}
+
 func TestPublicProviderEventUsesCompleteCatalogOnlyInsideMappingBoundary(t *testing.T) {
 	ctx := context.Background()
 	store, err := openTestStore(t, ctx)
@@ -613,6 +660,44 @@ func TestConsumerRouteProjectsAndReversesConversion(t *testing.T) {
 	}
 }
 
+func TestConsumerBindingProjectsProfileDefaultWhenModelPropertyIsMissing(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, err := application.NewProfileService(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultValue := device.BoolValue(false)
+	profile := mapping.Profile{
+		SchemaVersion: 1, ID: "missing-homekit-default", Version: 1, Kind: mapping.KindTarget,
+		InputType: device.ValueTypeBool, OutputType: device.ValueTypeBool, Default: &defaultValue,
+	}
+	if _, err := profiles.Create(ctx, profile); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := profiles.CreateBinding(ctx, mapping.Binding{
+		ID: "missing-homekit-switch", Stage: mapping.StageConsumer, ProfileID: profile.ID,
+		ProviderID: "provider-1", DeviceID: "switch-1", DeviceType: device.TypeSwitch,
+		ModelEndpointID: "main", ModelCapabilityID: "switch", ModelPropertyID: "power",
+		ConsumerID: "homekit", ConsumerProperty: "Switch.On", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	item := device.Device{SchemaVersion: 1, ID: "switch-1", ProviderID: "provider-1", Name: "Switch", Type: device.TypeSwitch, Availability: device.AvailabilityOnline, Online: true, LastUpdateAt: time.Now().UTC()}
+	projected, err := profiles.ProjectConsumerDevice("homekit", item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	power, found := projected.Property("main", "switch", "power")
+	if !found || power.Value.Bool == nil || *power.Value.Bool {
+		t.Fatalf("missing-model default projection = %#v, found=%v", power, found)
+	}
+}
+
 func TestConsumerRouteIsScopedToTargetVirtualDevice(t *testing.T) {
 	ctx := context.Background()
 	store, err := openTestStore(t, ctx)
@@ -733,6 +818,67 @@ func TestConsumerDeviceComposesAuxiliarySourcesAndRoutesWritesByPriority(t *test
 	}
 	if !values["primary-switch"] || values["aux-switch"] {
 		t.Fatalf("write routing updated wrong source: %#v", values)
+	}
+}
+
+func TestConsumerAirConditionerKeepsRotationSpeedWhenAuxiliaryClimateFieldsAreMapped(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, err := application.NewProfileService(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := virtual.NewProviderFromConfig(providerconfig.Config{ID: "aggregate-climate", Name: "Aggregate climate", Config: []byte(`{"devices":[{"id":"primary-air-conditioner","name":"Primary air conditioner","type":"air-conditioner"},{"id":"aux-climate","name":"Auxiliary climate","type":"temperature-humidity-sensor","temperature":21.8,"humidity":54}]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := application.NewDeviceService(provider, profiles)
+	defer service.Close()
+
+	newClimateBinding := func(id, capabilityID, propertyID, consumerProperty string) mapping.Binding {
+		return mapping.Binding{
+			ID: id, Stage: mapping.StageConsumer,
+			ProviderID: "aggregate-climate", DeviceID: "aux-climate", DeviceType: device.TypeTemperatureHumiditySensor, ConsumerDeviceType: device.TypeAirConditioner,
+			ModelEndpointID: "main", ModelCapabilityID: capabilityID, ModelPropertyID: propertyID,
+			TargetID: "apple-main", ConsumerDeviceID: "living-room-ac", ConsumerID: "homekit", ConsumerProperty: consumerProperty, Enabled: true,
+		}
+	}
+	if _, err := profiles.CreateBinding(ctx, newClimateBinding("auxiliary-current-temperature", "temperature", "current-temperature", "HeaterCooler.CurrentTemperature")); err != nil {
+		t.Fatal(err)
+	}
+
+	sourceIDs := []string{"primary-air-conditioner", "aux-climate"}
+	projected, err := service.ProjectSourcesForConsumerInstance("homekit", "apple-main", "living-room-ac", device.TypeAirConditioner, sourceIDs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotationSpeed, found := projected.Property("main", "air-conditioner", "rotation-speed")
+	if !found || rotationSpeed.Value.Number == nil || *rotationSpeed.Value.Number != 40 {
+		t.Fatalf("temperature mapping removed primary rotation speed: %#v, found=%v", rotationSpeed, found)
+	}
+	currentTemperature, found := projected.Property("main", "temperature", "current-temperature")
+	if !found || currentTemperature.Value.Number == nil || *currentTemperature.Value.Number != 21.8 {
+		t.Fatalf("auxiliary temperature projection = %#v, found=%v", currentTemperature, found)
+	}
+
+	if _, err := profiles.CreateBinding(ctx, newClimateBinding("auxiliary-current-humidity", "humidity", "current-humidity", "HumiditySensor.CurrentRelativeHumidity")); err != nil {
+		t.Fatal(err)
+	}
+	projected, err = service.ProjectSourcesForConsumerInstance("homekit", "apple-main", "living-room-ac", device.TypeAirConditioner, sourceIDs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotationSpeed, found = projected.Property("main", "air-conditioner", "rotation-speed")
+	if !found || rotationSpeed.Value.Number == nil || *rotationSpeed.Value.Number != 40 {
+		t.Fatalf("humidity mapping removed primary rotation speed: %#v, found=%v", rotationSpeed, found)
+	}
+	currentHumidity, found := projected.Property("main", "humidity", "current-humidity")
+	if !found || currentHumidity.Value.Number == nil || *currentHumidity.Value.Number != 54 {
+		t.Fatalf("auxiliary humidity projection = %#v, found=%v", currentHumidity, found)
 	}
 }
 

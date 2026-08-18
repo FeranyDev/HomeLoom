@@ -17,8 +17,25 @@ func TestDecodeConfigAppliesSafeDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Mode != ModeAuto || config.Region != "auto" || config.RequestTimeoutSeconds != defaultRequestTimeoutSeconds || config.Devices[0].Port != defaultLANPort || config.Devices[0].Channels != 1 {
+	if config.Mode != ModeAuto || config.Region != "auto" || config.RequestTimeoutSeconds != defaultRequestTimeoutSeconds || config.DiscoveryTimeoutSec != defaultDiscoveryTimeout || config.Devices[0].Port != defaultLANPort || config.Devices[0].Channels != 1 {
 		t.Fatalf("defaults not applied: %#v", config)
+	}
+}
+
+func TestDecodeConfigValidatesWebSocketEndpoint(t *testing.T) {
+	for _, raw := range []string{
+		`{"mode":"cloud","cloud":{"accessToken":"token","websocketEndpoint":"ws://cloud.example"}}`,
+		`{"mode":"cloud","cloud":{"accessToken":"token","websocketEndpoint":"wss://user:password@cloud.example"}}`,
+		`{"mode":"cloud","cloud":{"accessToken":"token","websocketEndpoint":"wss://cloud.example/?accessToken=secret"}}`,
+		`{"mode":"cloud","cloud":{"accessToken":"token","websocketEndpoint":"wss://cloud.example/#fragment"}}`,
+	} {
+		if _, err := decodeConfig(providerconfig.Config{ID: "sonoff-main", Config: []byte(raw)}); err == nil {
+			t.Fatalf("config unexpectedly accepted: %s", raw)
+		}
+	}
+	config, err := decodeConfig(providerconfig.Config{ID: "sonoff-main", Config: []byte(`{"mode":"cloud","cloud":{"accessToken":"token","websocketEndpoint":"wss://cloud.example/events"}}`)})
+	if err != nil || config.Cloud.WebSocketEndpoint != "wss://cloud.example/events" {
+		t.Fatalf("config=%#v err=%v", config, err)
 	}
 }
 

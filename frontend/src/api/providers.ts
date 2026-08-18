@@ -15,7 +15,23 @@ export async function deleteProvider(id: string): Promise<void> {
 }
 
 export async function restartProvider(id: string): Promise<Provider> {
-  return requestData<Provider>(`/api/v1/providers/${encodeURIComponent(id)}/restart`, { method: 'POST' })
+	return requestData<Provider>(`/api/v1/providers/${encodeURIComponent(id)}/restart`, { method: 'POST' })
+}
+
+export interface ProviderCredentialRevocation {
+	providerId: string
+	localRevoked: boolean
+	remoteAttempted: boolean
+	remoteRevoked: boolean
+	remoteError?: string
+	disconnectError?: string
+	reconciliationError?: string
+}
+
+export async function revokeProviderCredentials(id: string, confirmation: string): Promise<ProviderCredentialRevocation> {
+	return requestData<ProviderCredentialRevocation>(`/api/v1/providers/${encodeURIComponent(id)}/credentials/revoke`, {
+		method: 'POST', body: JSON.stringify({ confirmation }),
+	})
 }
 
 export async function testProviderConnection(input: ProviderInput): Promise<void> {

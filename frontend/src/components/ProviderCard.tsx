@@ -51,12 +51,13 @@ function providerTypeName(type: string): string {
 	return type
 }
 
-export function ProviderCard({ provider, devices, onEdit, onDelete, onRestart, onSimulate, onManageDevices, onDeviceLocation, onTest, onAuthChallengeComplete }: {
+export function ProviderCard({ provider, devices, onEdit, onDelete, onRestart, onSimulate, onManageDevices, onDeviceLocation, onRevokeCredentials, onTest, onAuthChallengeComplete }: {
 	provider: Provider
 	devices: Device[]
 	onEdit: (provider: Provider) => void
 	onDelete: (provider: Provider) => void
 	onRestart: (provider: Provider) => Promise<void>
+	onRevokeCredentials?: (provider: Provider) => Promise<void>
 	onSimulate: (device: Device, values: SimulationValues) => Promise<void>
 	onManageDevices?: (provider: Provider) => void
 	onDeviceLocation?: (device: Device) => void
@@ -87,6 +88,7 @@ export function ProviderCard({ provider, devices, onEdit, onDelete, onRestart, o
 	const displayedProviderType = provider.type === 'mqtt' ? `mqtt-${mqttMode}` : provider.type
 	const brokerReady = mqttMode === 'server' ? Boolean(config.listenAddress) : Boolean(config.brokerUrl)
 	const cloudSessionReady = Boolean((config.username && config.password) || (config.userId && config.ssecurity && config.serviceToken))
+	const credentialsRevoked = Boolean(config.credentialsRevoked)
 	const configuredAuthChallenge = normalizeAuthChallenge(provider.authChallenge)
 	const [runtimeAuthChallenge, setRuntimeAuthChallenge] = useState<ProviderAuthChallenge | null>(configuredAuthChallenge)
 	const [authChallengeCode, setAuthChallengeCode] = useState('')
@@ -138,9 +140,9 @@ export function ProviderCard({ provider, devices, onEdit, onDelete, onRestart, o
 		const timer = window.setTimeout(() => setAuthChallengeClock(Date.now()), Math.min(delay + 1, 2_147_483_647))
 		return () => window.clearTimeout(timer)
 	}, [authChallenge?.expiresAt])
-	const setupReady = provider.type === 'camera' || provider.type === 'virtual' ? provider.enabled : provider.type === 'xiaomi' ? authorized : provider.type === 'xiaomi-miot-cloud' ? cloudSessionReady && !authRequired : provider.type === 'mqtt' ? brokerReady : provider.type === 'gree' ? greeDeviceConfigured : provider.type === 'tuya' ? tuyaConfigured : configuredDevices.length > 0
-	const setupLabel = provider.type === 'camera' ? `${configuredDevices.length} 台子设备` : provider.type === 'virtual' ? `${expectedDeviceCount} 台子设备` : provider.type === 'xiaomi' ? (authorized ? '已授权' : '待授权') : provider.type === 'xiaomi-miot-cloud' ? (authRequired ? '需短信验证' : cloudSessionReady ? '账号就绪' : '待登录') : provider.type === 'mqtt' ? (brokerReady ? (mqttMode === 'server' ? '监听就绪' : 'Broker 就绪') : '待配置') : provider.type === 'gree' ? (greeDeviceConfigured ? `${expectedDeviceCount} 台设备` : expectedDeviceCount ? `${expectedDeviceCount} 台（待补全）` : '待配置') : provider.type === 'network' ? (expectedDeviceCount ? `${expectedDeviceCount} 台待监测` : '待配置') : provider.type === 'tuya' ? (tuyaConfigured ? `${expectedDeviceCount} 台已发现` : '待配置') : `${configuredDevices.length} 台`
-	const setupDetail = provider.type === 'camera' ? 'Provider 与摄像头连接配置分离' : provider.type === 'virtual' ? 'Provider 与虚拟设备配置分离' : provider.type === 'xiaomi' ? `${String(oauth.region || 'cn').toUpperCase()} · UID ${String(oauth.uid || '—')}` : provider.type === 'xiaomi-miot-cloud' ? `${String(config.region || 'cn').toUpperCase()} · ${String(config.username || config.userId || '未配置账号')}` : provider.type === 'mqtt' ? mqttMode === 'server' ? String(config.listenAddress || '尚未设置监听地址') : String(config.brokerUrl || '尚未设置 Broker') : provider.type === 'gree' ? `${greeName || '未命名 Gree 设备'} · ${greeHost || '未设置 host'}:${greePort} · MAC ${greeMAC || '未设置'}` : provider.type === 'network' ? `${expectedDeviceCount} 台设备 · TCP 电源状态探测${config.wolBroadcastAddress ? ' · Wake-on-LAN 已配置' : ''}` : provider.type === 'tuya' ? `${String(config.region || 'cn').toUpperCase()} · UID ${String(config.uid || '未配置')}` : '数据库期望设备'
+	const setupReady = !credentialsRevoked && (provider.type === 'camera' || provider.type === 'virtual' ? provider.enabled : provider.type === 'xiaomi' ? authorized : provider.type === 'xiaomi-miot-cloud' ? cloudSessionReady && !authRequired : provider.type === 'mqtt' ? brokerReady : provider.type === 'gree' ? greeDeviceConfigured : provider.type === 'tuya' ? tuyaConfigured : configuredDevices.length > 0)
+	const setupLabel = credentialsRevoked ? '凭据已注销' : provider.type === 'camera' ? `${configuredDevices.length} 台子设备` : provider.type === 'virtual' ? `${expectedDeviceCount} 台子设备` : provider.type === 'xiaomi' ? (authorized ? '已授权' : '待授权') : provider.type === 'xiaomi-miot-cloud' ? (authRequired ? '需短信验证' : cloudSessionReady ? '账号就绪' : '待登录') : provider.type === 'mqtt' ? (brokerReady ? (mqttMode === 'server' ? '监听就绪' : 'Broker 就绪') : '待配置') : provider.type === 'gree' ? (greeDeviceConfigured ? `${expectedDeviceCount} 台设备` : expectedDeviceCount ? `${expectedDeviceCount} 台（待补全）` : '待配置') : provider.type === 'network' ? (expectedDeviceCount ? `${expectedDeviceCount} 台待监测` : '待配置') : provider.type === 'tuya' ? (tuyaConfigured ? `${expectedDeviceCount} 台已发现` : '待配置') : `${configuredDevices.length} 台`
+	const setupDetail = credentialsRevoked ? '本地 Token、会话与证书已清除；重新授权后才能启用。' : provider.type === 'camera' ? 'Provider 与摄像头连接配置分离' : provider.type === 'virtual' ? 'Provider 与虚拟设备配置分离' : provider.type === 'xiaomi' ? `${String(oauth.region || 'cn').toUpperCase()} · UID ${String(oauth.uid || '—')}` : provider.type === 'xiaomi-miot-cloud' ? `${String(config.region || 'cn').toUpperCase()} · ${String(config.username || config.userId || '未配置账号')}` : provider.type === 'mqtt' ? mqttMode === 'server' ? String(config.listenAddress || '尚未设置监听地址') : String(config.brokerUrl || '尚未设置 Broker') : provider.type === 'gree' ? `${greeName || '未命名 Gree 设备'} · ${greeHost || '未设置 host'}:${greePort} · MAC ${greeMAC || '未设置'}` : provider.type === 'network' ? `${expectedDeviceCount} 台设备 · TCP 电源状态探测${config.wolBroadcastAddress ? ' · Wake-on-LAN 已配置' : ''}` : provider.type === 'tuya' ? `${String(config.region || 'cn').toUpperCase()} · UID ${String(config.uid || '未配置')}` : '数据库期望设备'
 	const connectionReady = provider.status === 'running'
 	const connectionLabel = provider.type === 'xiaomi' ? (certificateReady ? '证书就绪' : '待申请证书') : provider.type === 'xiaomi-miot-cloud' ? (authRequired ? (authChallengeExpired ? '挑战已过期' : '需要短信验证') : connectionReady ? '云会话可用' : provider.status) : provider.type === 'mqtt' ? (connectionReady ? (mqttMode === 'server' ? '服务端监听中' : 'Broker 已连接') : provider.status) : connectionReady ? '已连接' : provider.status
 	const connectionDetail = provider.type === 'camera' ? (connectionReady ? 'Media Worker / Camera Kernel 已按 Provider 启用' : 'Media Worker / Camera Kernel 未启用') : provider.type === 'xiaomi' ? `${String(config.host || '未选择中枢')}:${Number(config.port || 8883)} · MQTT 本地优先 / OAuth 官方云回退` : provider.type === 'xiaomi-miot-cloud' ? `轮询 ${Number(config.pollIntervalSeconds || 30)} 秒 · 非官方兼容接口` : provider.type === 'gree' ? `${greeHost || '未配置 host'}:${greePort} · 局域网轮询 ${greePollInterval} 秒 · 请求超时 ${greeRequestTimeout} 秒` : provider.type === 'network' ? `TCP 探测 ${networkProbeInterval} 秒 · 超时 ${networkProbeTimeout} 秒 · 连续失败 ${Number(config.offlineThreshold || 1)} 次后关闭` : provider.type === 'tuya' ? `轮询 ${Number(config.pollIntervalSeconds || 21600)} 秒 · ${String(config.authType || '').toLowerCase() === 'sharing' || String(config.authType || '').toLowerCase() === 'homeassistant' ? 'Home Assistant 兼容扫码' : 'Tuya OpenAPI'}` : provider.type === 'mqtt' ? mqttMode === 'server' ? '外部设备主动连接 · 内嵌 Broker' : `${String(config.clientId || `homeloom-${provider.id}`)} · MQTT 客户端会话` : '进程内异步事件源'
@@ -152,11 +154,11 @@ export function ProviderCard({ provider, devices, onEdit, onDelete, onRestart, o
 			: provider.metrics?.cloudMqttConfigured ? '等待自动重连' : '完成 OAuth 后自动启用'
 	const managedDeviceSource = supportsProviderChildDevices(provider.type)
 	const [drafts, setDrafts] = useState<Record<string, string>>({})
-	const [busy, setBusy] = useState<'test' | 'restart' | null>(null)
+	const [busy, setBusy] = useState<'test' | 'restart' | 'revoke' | null>(null)
 
-	async function run(action: 'test' | 'restart') {
+	async function run(action: 'test' | 'restart' | 'revoke') {
 		setBusy(action)
-		try { if (action === 'test' && onTest) await onTest(provider); else if (action === 'restart') await onRestart(provider) } finally { setBusy(null) }
+		try { if (action === 'test' && onTest) await onTest(provider); else if (action === 'restart') await onRestart(provider); else if (action === 'revoke' && onRevokeCredentials) await onRevokeCredentials(provider) } finally { setBusy(null) }
 	}
 
 	async function submitAuthChallenge() {
@@ -188,7 +190,7 @@ export function ProviderCard({ provider, devices, onEdit, onDelete, onRestart, o
 	return <article className="provider-card provider-runtime-card">
 		<header>
 			<div><div className="device-card__topline"><span className={`status-dot ${connectionReady ? 'is-online' : ''}`} />{provider.status}<span className="provider">{displayedProviderType}</span></div><h3>{provider.name}</h3><p>{provider.type === 'mqtt' ? `MQTT ${mqttMode === 'server' ? '服务端（SERVER）' : '客户端（CLIENT）'} · HomeLoom v1` : providerTypeName(provider.type)} · {provider.id}</p></div>
-			<div className="provider-card__actions"><button onClick={() => onEdit(provider)}>{providerEditLabel}</button>{managedDeviceSource && onManageDevices && <button disabled={!connectionReady} title={connectionReady ? '使用当前运行连接配置设备' : '请先连接设备来源'} onClick={() => onManageDevices(provider)}>{provider.type === 'camera' ? '管理摄像头' : provider.type === 'virtual' ? '管理虚拟设备' : provider.type === 'gree' ? '管理格力设备' : '管理设备'}</button>}{onTest && <button disabled={busy !== null || (provider.type === 'xiaomi' && !certificateReady)} onClick={() => void run('test')}>{busy === 'test' ? '测试中…' : provider.type === 'mqtt' && mqttMode === 'server' ? '测试监听' : '测试连接'}</button>}{provider.enabled && <button disabled={busy !== null} onClick={() => void run('restart')}>{busy === 'restart' ? (provider.type === 'mqtt' && mqttMode === 'server' ? '重启监听中…' : '重连中…') : provider.type === 'mqtt' && mqttMode === 'server' ? '重启监听' : '重新连接'}</button>}<button className="is-danger" onClick={() => onDelete(provider)}>删除</button></div>
+			<div className="provider-card__actions"><button onClick={() => onEdit(provider)}>{providerEditLabel}</button>{managedDeviceSource && onManageDevices && <button disabled={!connectionReady} title={connectionReady ? '使用当前运行连接配置设备' : '请先连接设备来源'} onClick={() => onManageDevices(provider)}>{provider.type === 'camera' ? '管理摄像头' : provider.type === 'virtual' ? '管理虚拟设备' : provider.type === 'gree' ? '管理格力设备' : '管理设备'}</button>}{onTest && <button disabled={busy !== null || (provider.type === 'xiaomi' && !certificateReady)} onClick={() => void run('test')}>{busy === 'test' ? '测试中…' : provider.type === 'mqtt' && mqttMode === 'server' ? '测试监听' : '测试连接'}</button>}{provider.enabled && <button disabled={busy !== null} onClick={() => void run('restart')}>{busy === 'restart' ? (provider.type === 'mqtt' && mqttMode === 'server' ? '重启监听中…' : '重连中…') : provider.type === 'mqtt' && mqttMode === 'server' ? '重启监听' : '重新连接'}</button>}{(provider.type === 'xiaomi' || provider.type === 'xiaomi-miot-cloud') && onRevokeCredentials && !credentialsRevoked && <button className="is-danger" disabled={busy !== null} onClick={() => void run('revoke')}>{busy === 'revoke' ? '注销中…' : '注销凭据'}</button>}<button className="is-danger" onClick={() => onDelete(provider)}>删除</button></div>
 		</header>
 		<div className="provider-status-grid">
 			<div><span>{provider.type === 'xiaomi' || provider.type === 'xiaomi-miot-cloud' || provider.type === 'tuya' ? '账号与凭据' : provider.type === 'mqtt' ? (mqttMode === 'server' ? '服务端配置' : 'Broker 配置') : '设备配置'}</span><strong className={setupReady ? 'is-ready' : ''}>{setupLabel}</strong><small>{setupDetail}</small></div>

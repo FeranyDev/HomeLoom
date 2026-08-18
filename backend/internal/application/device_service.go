@@ -73,6 +73,7 @@ type DeviceService struct {
 	propertyMu                        sync.Mutex
 	propertyOps                       map[domainstate.Key]*propertyOperation
 	propertyMapper                    PropertyMapper
+	checkpoint                        stateCheckpoint
 }
 
 type propertyOperation struct {
@@ -140,6 +141,14 @@ type ProviderPropertyProjector interface {
 	ProjectProviderProperty(providerID, deviceID, endpointID, capabilityID, propertyID string, definition device.PropertyDefinition, value device.PropertyValue) ([]ProviderPropertyProjection, error)
 }
 
+// MissingProviderPropertyProjector supplies explicit Provider projections for
+// source paths that are absent from the latest Provider snapshot. It is kept
+// separate from ProviderPropertyProjector so existing mappers preserve their
+// one-property-at-a-time behavior.
+type MissingProviderPropertyProjector interface {
+	ProjectMissingProviderProperties(providerID, deviceID string, available []device.ParameterPath) ([]ProviderPropertyProjection, error)
+}
+
 type ConsumerPropertyMapper interface {
 	ProjectConsumerDevice(consumerID string, item device.Device) (device.Device, error)
 	ResolveConsumerWrite(providerID, deviceID, consumerID string, deviceType device.Type, endpointID, capabilityID, propertyID string, value device.PropertyValue) (device.ParameterPath, device.PropertyValue, string, bool, error)
@@ -189,6 +198,9 @@ type deviceMetrics struct {
 	providerEventsIgnored atomic.Uint64
 	mappingApplied        atomic.Uint64
 	mappingErrors         atomic.Uint64
+	stateCheckpoints      atomic.Uint64
+	stateCheckpointErrors atomic.Uint64
+	statesRestored        atomic.Uint64
 	maxClockSkewNanos     atomic.Uint64
 }
 
@@ -241,6 +253,9 @@ type DeviceMetrics struct {
 	Goroutines                int     `json:"goroutines"`
 	HeapAllocBytes            uint64  `json:"heapAllocBytes"`
 	HeapObjects               uint64  `json:"heapObjects"`
+	StateCheckpointsWritten   uint64  `json:"stateCheckpointsWritten"`
+	StateCheckpointErrors     uint64  `json:"stateCheckpointErrors"`
+	StatesRestoredFromCache   uint64  `json:"statesRestoredFromCache"`
 }
 
 func (s *DeviceService) Readiness(ctx context.Context) Readiness {
@@ -262,6 +277,7 @@ func (s *DeviceService) SetCommandTimeout(timeout time.Duration) { s.commands.Se
 func (s *DeviceService) SetCommandHistoryLimit(limit int) { s.commands.SetMaxItems(limit) }
 
 func NewDeviceService(provider providersdk.Provider, dependencies ...any) *DeviceService {
+	options := deviceServiceOptionsFrom(dependencies)
 	discoverer, _ := provider.(providersdk.Discoverer)
 	cataloger, _ := provider.(providersdk.SourceCataloger)
 	reader, _ := provider.(providersdk.PropertyReader)
@@ -270,7 +286,7 @@ func NewDeviceService(provider providersdk.Provider, dependencies ...any) *Devic
 	service := &DeviceService{
 		provider: provider, discoverer: discoverer, cataloger: cataloger, reader: reader, writer: writer, executor: executor,
 		registry: registry.NewDeviceRegistry(nil),
-		states:   statestore.NewStore(), commands: commandtracker.NewTracker(5 * time.Second), commandQueue: newCommandCoordinator(),
+		states:   statestore.NewStore(statestore.Options{PriorityResolver: options.StatePriority}), commands: commandtracker.NewTracker(5 * time.Second), commandQueue: newCommandCoordinator(),
 		listeners: make(map[uint64]*subscription[device.Device]), stateListeners: make(map[uint64]*subscription[domainstate.StateValue]), deviceEventListeners: make(map[uint64]*subscription[providersdk.DeviceEvent]), snapshotSeq: make(map[string]uint64), disabled: make(map[string]struct{}), locations: make(map[string]device.LocationPreference), propertyOps: make(map[domainstate.Key]*propertyOperation),
 	}
 	for _, dependency := range dependencies {
@@ -290,6 +306,8 @@ func NewDeviceService(provider providersdk.Provider, dependencies ...any) *Devic
 			service.propertyMapper = mapper
 		}
 	}
+	service.checkpoint = newStateCheckpoint(options.StateCheckpoint)
+	service.restoreStateCheckpoint(context.Background())
 	items := make([]device.Device, 0)
 	if discoverer != nil {
 		items, _ = discoverer.DiscoverDevices(context.Background())
@@ -337,7 +355,7 @@ func NewDeviceService(provider providersdk.Provider, dependencies ...any) *Devic
 			)
 		}
 	}
-	service.dispatcher = eventbus.NewDispatcher(8, 128, service.handleEvent)
+	service.dispatcher = eventbus.NewDispatcherWithConfig(options.EventQueue, service.handleEvent)
 	staleCtx, staleCancel := context.WithCancel(context.Background())
 	service.staleCancel, service.staleDone = staleCancel, make(chan struct{})
 	go service.runStaleScanner(staleCtx)
@@ -358,7 +376,10 @@ func NewDeviceService(provider providersdk.Provider, dependencies ...any) *Devic
 	}
 	if subscriber, ok := provider.(providersdk.CapabilityAvailabilitySubscriber); ok {
 		service.unsubscribeCapabilityAvailability = subscriber.SubscribeCapabilityAvailability(func(availability providersdk.CapabilityAvailability) {
-			if err := service.dispatcher.Publish(eventbus.Event{DeviceID: availability.DeviceID, Payload: availability}); err != nil {
+			if err := service.dispatcher.Publish(eventbus.Event{
+				DeviceID: availability.DeviceID, Payload: availability, Priority: eventbus.PriorityHigh,
+				CoalesceKey: "availability\x00" + availability.DeviceID + "\x00" + availability.EndpointID + "\x00" + availability.CapabilityID,
+			}); err != nil {
 				service.metrics.eventsDropped.Add(1)
 			}
 		})
@@ -945,11 +966,32 @@ func (s *DeviceService) Metrics() DeviceMetrics {
 		ProviderMessagesReceived: providerMessagesReceived, ProviderMessagesInvalid: providerMessagesInvalid, ProviderMessagesDropped: providerMessagesDropped, ProviderCommandsPublished: providerCommandsPublished,
 		MappingApplied: s.metrics.mappingApplied.Load(), MappingErrors: s.metrics.mappingErrors.Load(),
 		Goroutines: runtime.NumGoroutine(), HeapAllocBytes: memory.HeapAlloc, HeapObjects: memory.HeapObjects,
+		StateCheckpointsWritten: s.metrics.stateCheckpoints.Load(), StateCheckpointErrors: s.metrics.stateCheckpointErrors.Load(), StatesRestoredFromCache: s.metrics.statesRestored.Load(),
 	}
 }
 
 func (s *DeviceService) List(ctx context.Context) ([]device.Device, error) {
 	return s.registry.List(), nil
+}
+
+// RemoveFromRegistry emits a transient removed tombstone and clears the public
+// card without altering a concrete Provider. It is used when an explicit
+// Logical Device binding takes ownership of an already discovered source;
+// unlinking followed by RefreshDevices will publish the concrete source again.
+func (s *DeviceService) RemoveFromRegistry(id string) {
+	item, exists := s.registry.Get(id)
+	if !exists {
+		return
+	}
+	item.Removed = true
+	item.SetOnline(false)
+	s.registry.Delete(id)
+	s.resetSnapshotSequence(id)
+	stale := s.states.MarkDeviceUnavailable(id, domainstate.UnavailableRemoved)
+	for _, state := range stale {
+		s.publishState(state)
+	}
+	s.publishDevice(item)
 }
 
 // ReportDeviceAvailability lets a protocol runtime feed observed reachability
@@ -1595,6 +1637,9 @@ func (s *DeviceService) Close() error {
 	s.unsubscribeDeviceEvents()
 	s.unsubscribeCapabilityAvailability()
 	s.closeSubscriptions()
+	checkpointCtx, checkpointCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	s.saveStateCheckpoint(checkpointCtx)
+	checkpointCancel()
 	s.staleCancel()
 	<-s.staleDone
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1718,44 +1763,66 @@ func (s *DeviceService) mapSnapshot(item device.Device) (device.Device, error) {
 	}
 	projected := make([]projectedProperty, 0)
 	byTarget := make(map[string]int)
+	available := make([]device.ParameterPath, 0)
+	addProjection := func(projection ProviderPropertyProjection, sourceProperty device.Property, endpointName, endpointType, capabilityType string) error {
+		definition := projection.Definition
+		definition.ID = projection.Path.PropertyID
+		if resolver, ok := s.propertyMapper.(ModelDefinitionMapper); ok {
+			var modelProperty bool
+			definition, modelProperty = resolver.ResolveModelDefinition(item.Type, projection.Path, definition)
+			if !modelProperty {
+				// Native Provider attributes stay in ProviderCatalog until an
+				// explicit route places them in the unified model.
+				return nil
+			}
+		}
+		property := sourceProperty
+		property.Definition, property.Value = definition, alignEnumValue(projection.Value, definition.Enum)
+		candidate := projectedProperty{path: projection.Path, property: property, endpointName: endpointName, endpointType: endpointType, capabilityType: capabilityType, explicit: projection.Explicit}
+		key := projection.Path.Key()
+		if index, exists := byTarget[key]; exists {
+			current := projected[index]
+			if current.explicit && !candidate.explicit {
+				return nil
+			}
+			if current.explicit == candidate.explicit {
+				return fmt.Errorf("mapping produces duplicate %s unified property %s for device %q", map[bool]string{true: "manual", false: "automatic"}[candidate.explicit], projection.Path, item.ID)
+			}
+			projected[index] = candidate
+			return nil
+		}
+		byTarget[key] = len(projected)
+		projected = append(projected, candidate)
+		return nil
+	}
 	for _, endpoint := range item.Endpoints {
 		for _, capability := range endpoint.Capabilities {
 			for _, sourceProperty := range capability.Properties {
+				available = append(available, device.ParameterPath{EndpointID: endpoint.ID, CapabilityID: capability.ID, PropertyID: sourceProperty.Definition.ID})
 				projections, err := s.providerPropertyProjections(item.ProviderID, item.ID, endpoint.ID, capability.ID, sourceProperty.Definition.ID, sourceProperty)
 				if err != nil {
 					return device.Device{}, err
 				}
 				for _, projection := range projections {
-					definition := projection.Definition
-					definition.ID = projection.Path.PropertyID
-					if resolver, ok := s.propertyMapper.(ModelDefinitionMapper); ok {
-						var modelProperty bool
-						definition, modelProperty = resolver.ResolveModelDefinition(item.Type, projection.Path, definition)
-						if !modelProperty {
-							// Native Provider attributes stay in ProviderCatalog until an
-							// explicit route places them in the unified model.
-							continue
-						}
+					if err := addProjection(projection, sourceProperty, endpoint.Name, endpoint.Type, capability.Type); err != nil {
+						return device.Device{}, err
 					}
-					property := sourceProperty
-					property.Definition, property.Value = definition, alignEnumValue(projection.Value, definition.Enum)
-					candidate := projectedProperty{path: projection.Path, property: property, endpointName: endpoint.Name, endpointType: endpoint.Type, capabilityType: capability.Type, explicit: projection.Explicit}
-					key := projection.Path.Key()
-					if index, exists := byTarget[key]; exists {
-						current := projected[index]
-						if current.explicit && !candidate.explicit {
-							continue
-						}
-						if current.explicit == candidate.explicit {
-							return device.Device{}, fmt.Errorf("mapping produces duplicate %s unified property %s for device %q", map[bool]string{true: "manual", false: "automatic"}[candidate.explicit], projection.Path, item.ID)
-						}
-						projected[index] = candidate
-						continue
-					}
-					byTarget[key] = len(projected)
-					projected = append(projected, candidate)
 				}
 			}
+		}
+	}
+	if projector, ok := s.propertyMapper.(MissingProviderPropertyProjector); ok {
+		missing, err := projector.ProjectMissingProviderProperties(item.ProviderID, item.ID, available)
+		if err != nil {
+			s.metrics.mappingErrors.Add(1)
+			return device.Device{}, err
+		}
+		for _, projection := range missing {
+			placeholder := device.Property{Definition: projection.Definition, Value: projection.Value}
+			if err := addProjection(projection, placeholder, projection.Path.EndpointID, projection.Path.EndpointID, projection.Path.CapabilityID); err != nil {
+				return device.Device{}, err
+			}
+			s.metrics.mappingApplied.Add(1)
 		}
 	}
 	for _, projection := range projected {
@@ -2164,6 +2231,10 @@ func (s *DeviceService) runStaleScanner(ctx context.Context) {
 	defer close(s.staleDone)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	checkpoint := s.checkpoint.ticker()
+	if checkpoint != nil {
+		defer checkpoint.Stop()
+	}
 	for {
 		select {
 		case now := <-ticker.C:
@@ -2174,6 +2245,8 @@ func (s *DeviceService) runStaleScanner(ctx context.Context) {
 			}
 			expired := s.commands.Expire(now.UTC())
 			s.metrics.commandsTimedOut.Add(uint64(len(expired)))
+		case <-checkpointChan(checkpoint):
+			s.saveStateCheckpoint(ctx)
 		case <-ctx.Done():
 			return
 		}

@@ -72,6 +72,8 @@ Web 管理面只有这一个管理员身份，不实现普通用户、角色或�
 - `GET /api/v1/system/diagnostic-bundle`：下载版本、指标、脱敏配置和最近审计事件组成的诊断包；
 - `POST /api/v1/system/backup`：输入精确确认短语 `BACKUP` 后下载数据库中立逻辑快照与主密钥组成的 ZIP 完整备份；
 - `POST /api/v1/system/restore`：上传完整备份并输入 `RESTORE`，完成完整性、Schema 和密钥校验后暂存；下次进程启动前原子替换、保留恢复前快照，并清空备份中的旧浏览器 Session；
+- `GET /api/v1/system/master-key`：返回不含密钥或密文的活动版本、保留版本及重加密状态；
+- `POST /api/v1/system/master-key/rotate`：输入 `ROTATE` 后创建新活动主密钥并事务重加密所有持久化秘密。批处理被中断时传入 `{"resume":true}` 安全续跑；旧 key 会为历史备份恢复保留；
 - `GET /api/v1/diagnostics`：设备、事件、命令、订阅及 Go runtime 快照；
 - `GET /metrics`：Prometheus 文本指标；
 - `GET /api/v1/devices/{id}/states`：内存状态、来源和质量；
@@ -83,6 +85,8 @@ Web 管理面只有这一个管理员身份，不实现普通用户、角色或�
 管理前端首次进入时通过 REST 获取全量数据，此后由统一 SSE 应用增量变化，并每 5 分钟重新获取一次全量数据以修复断线或慢客户端丢失的事件。手动刷新和完成配置写入后仍会立即获取全量数据。
 
 所有 `/api/v1` 下的 POST、PUT、PATCH 和 DELETE 都记录审计事件，包括失败的操作。审计表只保存 actor、方法、模板化路由、资源 ID、状态码、结果和 correlation ID，不保存请求体或配置值，避免 Provider 凭据和 HomeKit PIN 进入日志。记录保存在所选数据库的 `audit_events` 表中，当前自动保留最近 5000 条；写请求会在返回前同步尝试持久化，审计失败会写入结构化错误日志，但不会把已经完成的业务操作伪装成失败。SSE 订阅使用有界缓冲，慢客户端只会漏掉实时通知，不影响已经落库的历史。
+
+逻辑设备使用 `/api/v1/logical-devices` CRUD 手动保存 `Logical Device → Provider Binding`。`GET /api/v1/logical-devices/candidates` 仅返回供管理员确认的候选，必须同时满足统一模型类型、规范化名称和来源家庭或房间一致；名称相同本身绝不会创建或合并设备。已链接来源从设备中心隐藏，解除链接会重新发布来源设备。属性和命令可通过 `propertyRoutes`/`commandRoutes` 指定具体 Provider、Endpoint、Capability 与 Property/Command；无显式路由时按 Binding priority 选择同路径来源。回退只发生在前一来源明确 offline、Provider unavailable 或来源已不存在时；写入不会在超时或拒绝后重试，命令还必须声明 `idempotent` 且在候选中显式允许回退。`GET /api/v1/logical-devices/{id}/explanations` 返回每个多来源属性或命令当前的候选、可用性、选择结果和原因。
 
 `/metrics` 中的 runtime 指标包括 `homeloom_go_goroutines`、`homeloom_go_heap_alloc_bytes` 和 `homeloom_go_heap_objects`。事件指标包含入队到处理完成的平均/最大延迟及超过 100ms 的慢 Handler 计数；数据库指标包含配置、身份、schema、健康检查和备份操作数以及平均/最大延迟；`homeloom_homekit_pushes_total` 统计运行期间应用到 HomeKit Characteristic 的状态更新次数。命令协调指标 `homeloom_command_queue_pending` 和 `homeloom_command_queue_max_pending` 分别表示当前等待 Provider 执行槽的命令数及进程生命周期内的最大等待数。
 
@@ -173,7 +177,7 @@ Provider 配置仍以完整值保存在所选数据库中，但管理 API 会递
 
 进程结构化日志统一经过敏感属性过滤器。敏感键直接替换为 `********`，错误文本或 URL 中常见的 `token=...`、`api_key=...`、`password=...` 等赋值也会在输出前清理。调用方仍不应把完整请求体作为无语义字符串写入日志。
 
-HomeKit PIN 在数据库中使用 AES-256-GCM 加密，主密钥保存到 `storage.master_key` / `HOMELOOM_MASTER_KEY` 指定的文件并强制使用 `0600` 权限。已有明文 PIN 会在首次启动时自动加密；数据库包含密文但密钥缺失时服务会拒绝启动。Web 完整备份把数据库中立逻辑快照和配套密钥封装为一个 ZIP；该文件可解密 Provider 凭据与桥 PIN，必须按敏感文件保管。HAP 控制器配对目录不在数据库备份中。
+HomeKit PIN 在数据库中使用 AES-256-GCM 加密，主密钥保存到 `storage.master_key` / `HOMELOOM_MASTER_KEY` 指定的文件并强制使用 `0600` 权限。新建密文为 `enc:v2:<key-version>:`；历史 `enc:v1` 可读。主密钥文件是仅本地可读的 versioned keyring，活动 key 只用于新写入，保留 key 只用于旧密文和历史备份恢复。已有明文 PIN 会在首次启动时自动加密；数据库包含密文但密钥缺失时服务会拒绝启动。Web 完整备份把数据库中立逻辑快照和配套 keyring 封装为一个 ZIP；该文件可解密 Provider 凭据与桥 PIN，必须按敏感文件保管。HAP 控制器配对目录不在数据库备份中。
 
 HomeLoom 不直接管理 PostgreSQL 数据目录权限；生产环境应由 PostgreSQL 服务和卷策略负责访问控制。HomeLoom 主密钥为 `0600`。HomeKit 身份目录由安全 Store 管理：目录为 `0700`、身份与配对文件为 `0600`，启动时会修复已有权限并拒绝身份目录中的符号链接。
 

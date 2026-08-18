@@ -127,6 +127,17 @@ describe('ProviderCard simulation', () => {
 		expect(screen.queryByText('********')).not.toBeInTheDocument()
 	})
 
+	it('offers credential revocation only for Xiaomi providers and reflects the durable revoked marker', async () => {
+		const xiaomi: Provider = { ...provider, id: 'xiaomi-main', type: 'xiaomi', name: '小米', config: { oauth: { clientId: '1', oauthUuid: 'uuid', virtualDid: '2' }, clientId: '2', clientCertificate: '********', privateKey: '********' } }
+		const onRevokeCredentials = vi.fn().mockResolvedValue(undefined)
+		const view = render(<ProviderCard provider={xiaomi} devices={[]} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} onRevokeCredentials={onRevokeCredentials} />)
+		await userEvent.click(screen.getByRole('button', { name: '注销凭据' }))
+		expect(onRevokeCredentials).toHaveBeenCalledWith(xiaomi)
+		view.rerender(<ProviderCard provider={{ ...xiaomi, enabled: false, config: { credentialsRevoked: true, devices: [] } }} devices={[]} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} onRevokeCredentials={onRevokeCredentials} />)
+		expect(screen.getByText('凭据已注销')).toBeInTheDocument()
+		expect(screen.queryByRole('button', { name: '注销凭据' })).not.toBeInTheDocument()
+	})
+
 	it('distinguishes the third-party MIoT cloud from central hub and future official cloud', () => {
 		const cloud: Provider = { ...provider, id: 'xiaomi-miot-cloud-main', type: 'xiaomi-miot-cloud', name: 'MIoT 云', config: { region: 'cn', username: 'owner@example.com', password: '********', pollIntervalSeconds: 30, devices: [] }, capabilities: { ...provider.capabilities, events: false } }
 		render(<ProviderCard provider={cloud} devices={[]} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} onManageDevices={vi.fn()} />)

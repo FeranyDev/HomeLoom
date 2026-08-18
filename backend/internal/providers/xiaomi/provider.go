@@ -71,6 +71,7 @@ type Provider struct {
 	configDocument      json.RawMessage
 	pendingConfigChange *runtimeConfigChange
 	configChangeHandler func(previous, replacement json.RawMessage)
+	remoteTokenRevoker  oauthTokenRevoker
 
 	mu                       sync.RWMutex
 	client                   hubClient
@@ -132,6 +133,7 @@ var (
 	_ providersdk.Provider              = (*Provider)(nil)
 	_ providersdk.LiveReconfigurer      = (*Provider)(nil)
 	_ providersdk.CredentialMaintainer  = (*Provider)(nil)
+	_ providersdk.CredentialRevoker     = (*Provider)(nil)
 	_ providersdk.Discoverer            = (*Provider)(nil)
 	_ providersdk.MediaSourceDiscoverer = (*Provider)(nil)
 	_ providersdk.MediaSourceRefresher  = (*Provider)(nil)
@@ -176,7 +178,7 @@ func newProviderWithResolver(id, name string, config Config, factory clientFacto
 	if err != nil {
 		return nil, err
 	}
-	provider := &Provider{id: id, name: name, config: config, factory: factory, resolver: resolver, discoverGateways: DiscoverGateways, configDocument: configDocument, devices: make(map[string]device.Device), sourceDevices: make(map[string]device.Device), byDID: make(map[string]string), routes: make(map[string]deviceRoute), rawProperties: make(map[string]PropertyMapping), rawActions: make(map[string]ActionMapping), propertyInterests: make(map[string]struct{}), catalog: make(map[string]providersdk.SourceCatalogMetadata), valueStatus: make(map[string]providersdk.SourceValueStatus), observations: make(map[string]propertyObservation), propertyFailures: make(map[string]propertyReadFailure), listeners: make(map[uint64]func(device.Device)), eventListeners: make(map[uint64]func(providersdk.DeviceEvent)), cloudDisconnectGrace: defaultCloudDisconnectGrace, cloudDirectoryInterval: defaultCloudDirectoryReconcile, directoryRefreshDebounce: 500 * time.Millisecond}
+	provider := &Provider{id: id, name: name, config: config, factory: factory, resolver: resolver, discoverGateways: DiscoverGateways, configDocument: configDocument, remoteTokenRevoker: revokeOAuthTokens, devices: make(map[string]device.Device), sourceDevices: make(map[string]device.Device), byDID: make(map[string]string), routes: make(map[string]deviceRoute), rawProperties: make(map[string]PropertyMapping), rawActions: make(map[string]ActionMapping), propertyInterests: make(map[string]struct{}), catalog: make(map[string]providersdk.SourceCatalogMetadata), valueStatus: make(map[string]providersdk.SourceValueStatus), observations: make(map[string]propertyObservation), propertyFailures: make(map[string]propertyReadFailure), listeners: make(map[uint64]func(device.Device)), eventListeners: make(map[uint64]func(providersdk.DeviceEvent)), cloudDisconnectGrace: defaultCloudDisconnectGrace, cloudDirectoryInterval: defaultCloudDirectoryReconcile, directoryRefreshDebounce: 500 * time.Millisecond}
 	for _, configured := range config.Devices {
 		item := buildDevice(id, configured)
 		applyCentralStalePolicy(&item, config.pollInterval())
@@ -206,6 +208,10 @@ func (p *Provider) Capabilities() providersdk.Capabilities {
 
 func (p *Provider) Initialize(ctx context.Context) error {
 	p.mu.Lock()
+	if p.config.CredentialsRevoked {
+		p.mu.Unlock()
+		return ErrCredentialsRevoked
+	}
 	if p.client != nil {
 		p.mu.Unlock()
 		// Initialize is a lifecycle assertion rather than a request to open a

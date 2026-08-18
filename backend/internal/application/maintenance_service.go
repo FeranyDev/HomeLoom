@@ -3,22 +3,35 @@ package application
 import (
 	"archive/zip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"time"
+
+	domainmaintenance "github.com/feranydev/homeloom/backend/internal/domain/maintenance"
 )
 
 const (
-	BackupConfirmation  = "BACKUP"
-	RestoreConfirmation = "RESTORE"
-	maxRestoreArchive   = 256 << 20
+	BackupConfirmation    = "BACKUP"
+	RestoreConfirmation   = "RESTORE"
+	RotateKeyConfirmation = "ROTATE"
+	maxRestoreArchive     = 256 << 20
 )
 
 type MaintenanceStore interface {
 	Backup(context.Context, string) error
 	SchemaVersion(context.Context) (int, error)
+}
+
+// MasterKeyMaintenanceStore is optional to preserve backup/restore-only
+// implementations. The production GORM store implements it; unavailable
+// adapters fail closed rather than pretending key rotation completed.
+type MasterKeyMaintenanceStore interface {
+	MasterKeyStatus(context.Context) (domainmaintenance.MasterKeyStatus, error)
+	RotateMasterKey(context.Context) (domainmaintenance.MasterKeyRotation, error)
+	ResumeMasterKeyRotation(context.Context) (domainmaintenance.MasterKeyRotation, error)
 }
 
 type MaintenanceArtifact struct {
@@ -47,10 +60,35 @@ type MaintenanceService struct {
 	pendingPaths  func(string) (string, string, string)
 	writeMarker   func(string, time.Time) error
 	now           func() time.Time
+	keys          MasterKeyMaintenanceStore
 }
 
 func NewMaintenanceService(store MaintenanceStore, masterKeyPath string, validate func(context.Context, string) error, pendingPaths func(string) (string, string, string), writeMarker func(string, time.Time) error) *MaintenanceService {
-	return &MaintenanceService{store: store, masterKeyPath: masterKeyPath, validate: validate, pendingPaths: pendingPaths, writeMarker: writeMarker, now: time.Now}
+	keys, _ := store.(MasterKeyMaintenanceStore)
+	return &MaintenanceService{store: store, masterKeyPath: masterKeyPath, validate: validate, pendingPaths: pendingPaths, writeMarker: writeMarker, now: time.Now, keys: keys}
+}
+
+func (s *MaintenanceService) MasterKeyStatus(ctx context.Context) (domainmaintenance.MasterKeyStatus, error) {
+	if s.keys == nil {
+		return domainmaintenance.MasterKeyStatus{}, errors.New("master key rotation is unavailable")
+	}
+	return s.keys.MasterKeyStatus(ctx)
+}
+
+// RotateMasterKey requires an explicit phrase because the old key material is
+// intentionally retained for database recovery and encrypted backups. The
+// operation never returns secret data or key material.
+func (s *MaintenanceService) RotateMasterKey(ctx context.Context, confirmation string, resume bool) (domainmaintenance.MasterKeyRotation, error) {
+	if confirmation != RotateKeyConfirmation {
+		return domainmaintenance.MasterKeyRotation{}, NewValidationError("master key rotation confirmation required", map[string]string{"confirmation": "type ROTATE to confirm"})
+	}
+	if s.keys == nil {
+		return domainmaintenance.MasterKeyRotation{}, errors.New("master key rotation is unavailable")
+	}
+	if resume {
+		return s.keys.ResumeMasterKeyRotation(ctx)
+	}
+	return s.keys.RotateMasterKey(ctx)
 }
 
 func (s *MaintenanceService) Backup(ctx context.Context, confirmation string) (MaintenanceArtifact, error) {

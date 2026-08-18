@@ -38,7 +38,8 @@ describe('unified event stream', () => {
 		const onConnection = vi.fn()
 		const onDevice = vi.fn()
 		const onRuntime = vi.fn()
-		const unsubscribeConnection = subscribeEvents({ onConnection, onDevice })
+		const onRuntimeLog = vi.fn()
+		const unsubscribeConnection = subscribeEvents({ onConnection, onDevice, onRuntimeLog })
 		const unsubscribeRuntime = subscribeEvents({ onRuntime })
 
 		expect(FakeEventSource.instances).toHaveLength(1)
@@ -46,9 +47,11 @@ describe('unified event stream', () => {
 		FakeEventSource.instances[0].emit('ready', {})
 		FakeEventSource.instances[0].emit('device', { id: 'light-1' })
 		FakeEventSource.instances[0].emit('runtime', { diagnostics: { eventsProcessed: 3 } })
+		FakeEventSource.instances[0].emit('runtime-log', { sequence: 7, process: 'backend', instance: 'main', message: 'ready' })
 		expect(onConnection).toHaveBeenCalledWith(true)
 		expect(onDevice).toHaveBeenCalledWith({ id: 'light-1' })
 		expect(onRuntime).toHaveBeenCalledWith({ diagnostics: { eventsProcessed: 3 } })
+		expect(onRuntimeLog).toHaveBeenCalledWith({ sequence: 7, process: 'backend', instance: 'main', message: 'ready' })
 
 		unsubscribeConnection()
 		expect(FakeEventSource.instances[0].closed).toBe(false)

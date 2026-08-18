@@ -1243,7 +1243,9 @@ created_at
 - master key 缺失检测；
 - 导出、诊断包和日志脱敏测试。
 
-现有 `enc:v1` AES-GCM 可用于第一版，但“主密钥版本与轮换”是新增能力：密文必须记录 key version，轮换需支持旧 key 读取、新 key 写入、批量重加密和可验证回滚。
+主密钥版本与轮换已实现：新密文使用 `enc:v2:<key-version>:<base64>`，并将 key version 和 secret scope 作为 AES-GCM 的认证数据；读取兼容历史 `enc:v1`。主密钥文件已升级为权限 `0600` 的 versioned keyring，轮换先原子落盘 keyring，再将 Target、Matter runtime、Provider 配置、媒体 credential/runtime 在单一数据库事务中批量重加密。若事务或进程中断，旧 key 与当前 key 均保留，管理员可通过认证 API 使用 `resume` 安全重试，不会暴露 key 或明文。
+
+当前明确的恢复性限制：旧 key 不会自动裁剪，因为它仍是历史备份恢复所必需的材料；待备份保留期与密钥销毁流程定义后，才可增加显式、可审计的 key retirement 操作。
 
 ---
 

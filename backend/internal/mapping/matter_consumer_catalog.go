@@ -110,6 +110,19 @@ func MatterConsumerContracts() []device.ConsumerModelContract {
 			optional("pump", "speed", "LevelControl.CurrentLevel"),
 			optional("pressure", "current-pressure", "PressureMeasurement.MeasuredValue"),
 		}},
+		// Electrical Meter represents the uniform electrical measurements using
+		// Matter 1.3+ measurement clusters.  The runtime owns the unit conversion
+		// (W/V/A/Hz/kWh → mW/mV/mA/mHz/mWh) and cumulative-energy struct.
+		{ConsumerID: "matter", DeviceType: device.TypePowerMeter, Parameters: []device.ConsumerParameterMapping{
+			required("electrical", "current-power", "ElectricalPowerMeasurement.ActivePower"),
+			optional("electrical", "voltage", "ElectricalPowerMeasurement.Voltage"),
+			optional("electrical", "current", "ElectricalPowerMeasurement.ActiveCurrent"),
+			optional("electrical", "frequency", "ElectricalPowerMeasurement.Frequency"),
+			optional("electrical", "power-factor", "ElectricalPowerMeasurement.PowerFactor"),
+			optional("electrical", "reactive-power", "ElectricalPowerMeasurement.ReactivePower"),
+			optional("electrical", "apparent-power", "ElectricalPowerMeasurement.ApparentPower"),
+			optional("electrical", "energy", "ElectricalEnergyMeasurement.CumulativeEnergyImported"),
+		}},
 		{ConsumerID: "matter", DeviceType: device.TypeAirPurifier, Parameters: []device.ConsumerParameterMapping{
 			required("air-purifier", "active", "OnOff.OnOff"),
 			optional("air-purifier", "target-state", "FanControl.FanMode"),

@@ -37,6 +37,26 @@ describe('XiaomiDeviceManager', () => {
 		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ id: 'xiaomi-main', config: expect.objectContaining({ devices: [expect.objectContaining({ did: '123.456', type: 'lightbulb', connectionMode: 'auto', homeId: 'home-main', home: '我的家', roomId: 'room-living', room: '客厅' })] }) }), true))
 	})
 
+	it('generates unsaved drafts by DID without merging same-name mappings', async () => {
+		api.discoverXiaomiDevices.mockResolvedValue([
+			{ did: 'already-mapped', name: '客厅灯', model: 'vendor.light.v1' },
+			{ did: 'same-name-new-device', name: '客厅灯', model: 'vendor.light.v2' },
+		])
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		const mapped = { ...provider, config: { ...provider.config, devices: [{ did: 'already-mapped', id: 'xiaomi-already-mapped', name: '客厅灯', type: 'lightbulb', connectionMode: 'auto', properties: [], actions: [] }] } }
+		render(<XiaomiDeviceManager provider={mapped} onClose={() => {}} onSave={onSave} />)
+		await userEvent.click(screen.getByRole('button', { name: '从中枢读取子设备' }))
+		await screen.findAllByText('客厅灯')
+		await userEvent.click(screen.getByRole('button', { name: '为未映射设备生成草稿' }))
+		expect(screen.getByText('已映射 2 台设备')).toBeInTheDocument()
+		expect(onSave).not.toHaveBeenCalled()
+		await userEvent.click(screen.getByRole('button', { name: '保存子设备映射' }))
+		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ devices: expect.arrayContaining([
+			expect.objectContaining({ did: 'already-mapped', id: 'xiaomi-already-mapped' }),
+			expect.objectContaining({ did: 'same-name-new-device', id: 'xiaomi-same-name-new-device' }),
+		]) }) }), true))
+	})
+
 	it('allows changing a mapped central device route without reconnecting the provider', async () => {
 		const onSave = vi.fn().mockResolvedValue(undefined)
 		const mapped = { ...provider, config: { ...provider.config, devices: [{ did: '123.456', id: 'xiaomi-123.456', name: '客厅灯', type: 'lightbulb', connectionMode: 'auto', properties: [], actions: [] }] } }

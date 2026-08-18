@@ -36,6 +36,13 @@ type AccessoryIdentityStore interface {
 	HomeKitIID(context.Context, string, string, string) (uint64, error)
 }
 
+// AccessoryUUIDStore is optional so existing AID/IID stores remain compatible.
+// The production GORM store implements it and records a durable opaque UUID
+// alongside the HAP allocation.
+type AccessoryUUIDStore interface {
+	HomeKitAccessoryUUID(context.Context, string, string) (string, error)
+}
+
 type PairingInfo struct {
 	Code     string
 	SetupID  string
@@ -459,6 +466,11 @@ func newAccessoryBindings(items []device.Device, selected map[string]bool, acces
 			a := accessory.New(info, accessory.TypeAirConditioner)
 			a.Id = accessoryIDs[item.ID]
 			heaterCooler := service.NewHeaterCooler()
+			// A humidity sensor is an auxiliary service of the air conditioner.
+			// Keep the HeaterCooler as the primary HomeKit service so adding
+			// humidity does not make clients replace its fan-speed controls with
+			// the sensor-only presentation.
+			heaterCooler.S.Primary = true
 			fault := characteristic.NewStatusFault()
 			coolingTarget := characteristic.NewCoolingThresholdTemperature()
 			heatingTarget := characteristic.NewHeatingThresholdTemperature()
@@ -1147,6 +1159,11 @@ func New(ctx context.Context, config Config, devices *application.DeviceService,
 			aid, err := config.IdentityStore.HomeKitAccessoryAID(ctx, config.ID, item.ID)
 			if err != nil {
 				return nil, fmt.Errorf("allocate HomeKit AID for %q: %w", item.ID, err)
+			}
+			if uuidStore, ok := config.IdentityStore.(AccessoryUUIDStore); ok {
+				if _, err := uuidStore.HomeKitAccessoryUUID(ctx, config.ID, item.ID); err != nil {
+					return nil, fmt.Errorf("allocate HomeKit accessory UUID for %q: %w", item.ID, err)
+				}
 			}
 			accessoryIDs[item.ID] = aid
 		}

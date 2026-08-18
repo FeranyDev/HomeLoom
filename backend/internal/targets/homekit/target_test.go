@@ -16,6 +16,7 @@ import (
 
 	"github.com/brutella/hap/accessory"
 	"github.com/brutella/hap/characteristic"
+	hapservice "github.com/brutella/hap/service"
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
@@ -101,12 +102,17 @@ func TestHomeKitAddressPreflightDetectsOccupiedPort(t *testing.T) {
 }
 
 type memoryIdentityStore struct {
-	values map[string]uint64
-	next   map[string]uint64
+	values         map[string]uint64
+	next           map[string]uint64
+	accessoryUUIDs []string
 }
 
 func (s *memoryIdentityStore) HomeKitAccessoryAID(context.Context, string, string) (uint64, error) {
 	return 2, nil
+}
+func (s *memoryIdentityStore) HomeKitAccessoryUUID(_ context.Context, targetID, deviceID string) (string, error) {
+	s.accessoryUUIDs = append(s.accessoryUUIDs, targetID+"/"+deviceID)
+	return "00000000-0000-4000-8000-000000000001", nil
 }
 func (s *memoryIdentityStore) HomeKitIID(_ context.Context, targetID, deviceID, key string) (uint64, error) {
 	composite := targetID + "/" + deviceID + "/" + key
@@ -476,6 +482,16 @@ func TestAccessoryBindingsMapAndWriteAirConditioner(t *testing.T) {
 	if len(bindings.accessories) != 1 || bindings.actives["ac"] == nil || bindings.heaterCurrent["ac"] == nil || bindings.heaterTargets["ac"] == nil || bindings.temperatures["ac"] == nil || bindings.coolingTargets["ac"] == nil || bindings.heatingTargets["ac"] == nil || bindings.speeds["ac"] == nil || bindings.swingModes["ac"] == nil || bindings.humidities["ac"] == nil || bindings.filterLife["ac"] == nil || bindings.filterChange["ac"] == nil || findHomeKitCharacteristic(bindings.byDevice["ac"], characteristic.TypeTemperatureDisplayUnits) == nil {
 		t.Fatalf("air-conditioner bindings = %#v", bindings)
 	}
+	var heaterCoolerPrimary bool
+	for _, current := range bindings.byDevice["ac"].Ss {
+		if current.Type == hapservice.TypeHeaterCooler {
+			heaterCoolerPrimary = current.Primary
+			break
+		}
+	}
+	if !heaterCoolerPrimary {
+		t.Fatal("air-conditioner HeaterCooler service must remain primary when humidity is published")
+	}
 	if bindings.heaterCurrent["ac"].Value() != characteristic.CurrentHeaterCoolerStateInactive || bindings.heaterTargets["ac"].Value() != characteristic.TargetHeaterCoolerStateAuto || bindings.temperatures["ac"].Value() != 23.5 || bindings.coolingTargets["ac"].Value() != 22 || bindings.heatingTargets["ac"].Value() != 22 {
 		t.Fatal("initial air-conditioner values were not mapped")
 	}
@@ -746,5 +762,21 @@ func TestTargetReportsProjectionIssuesForIncompleteDevices(t *testing.T) {
 	}
 	if target.PublishedAccessoryCount() != 1 {
 		t.Fatalf("published accessories = %d", target.PublishedAccessoryCount())
+	}
+}
+
+func TestTargetEnsuresAccessoryUUIDForPersistentAccessory(t *testing.T) {
+	service := application.NewDeviceService(virtual.NewProvider())
+	defer service.Close()
+	identities := &memoryIdentityStore{values: make(map[string]uint64), next: make(map[string]uint64)}
+	created, err := New(context.Background(), Config{
+		ID: "uuid-bridge", Name: "UUID Bridge", Address: "127.0.0.1:0", Pin: "12345678", SetupID: "UUID",
+		StorePath: t.TempDir(), DeviceIDs: []string{"virtual-switch-1"}, IdentityStore: identities,
+	}, service, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.PublishedAccessoryCount() != 1 || len(identities.accessoryUUIDs) != 1 || identities.accessoryUUIDs[0] != "uuid-bridge/virtual-switch-1" {
+		t.Fatalf("accessory UUID identity calls = %#v", identities.accessoryUUIDs)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
+	"github.com/feranydev/homeloom/backend/internal/domain/logicaldevice"
 	domainmedia "github.com/feranydev/homeloom/backend/internal/domain/media"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 )
@@ -50,6 +51,12 @@ type Manager struct {
 	boundSources                       map[string]string
 	hiddenSources                      map[string]struct{}
 	canonicalSnapshots                 map[string]device.Device
+	logicalDevices                     map[string]logicaldevice.Config
+	logicalSourceIDs                   map[string]map[string]struct{}
+	logicalSourceSnapshots             map[string]device.Device
+	logicalSnapshots                   map[string]device.Device
+	logicalExplanations                map[string][]logicaldevice.RouteExplanation
+	identityStore                      DeviceIdentityStore
 	listeners                          map[uint64]func(device.Device)
 	eventListeners                     map[uint64]func(providersdk.DeviceEvent)
 	capabilityAvailabilityListeners    map[uint64]func(providersdk.CapabilityAvailability)
@@ -66,7 +73,7 @@ type Manager struct {
 }
 
 func New(items ...providersdk.Provider) (*Manager, error) {
-	m := &Manager{providers: make(map[string]*managedProvider), routes: make(map[string]string), mediaRoutes: make(map[string]string), capabilityRoutes: make(map[capabilityRoute]capabilityDelegate), boundSources: make(map[string]string), hiddenSources: make(map[string]struct{}), canonicalSnapshots: make(map[string]device.Device), listeners: make(map[uint64]func(device.Device)), eventListeners: make(map[uint64]func(providersdk.DeviceEvent)), capabilityAvailabilityListeners: make(map[uint64]func(providersdk.CapabilityAvailability)), propertyInterests: make(map[string][]providersdk.PropertyInterest)}
+	m := &Manager{providers: make(map[string]*managedProvider), routes: make(map[string]string), mediaRoutes: make(map[string]string), capabilityRoutes: make(map[capabilityRoute]capabilityDelegate), boundSources: make(map[string]string), hiddenSources: make(map[string]struct{}), canonicalSnapshots: make(map[string]device.Device), logicalDevices: make(map[string]logicaldevice.Config), logicalSourceIDs: make(map[string]map[string]struct{}), logicalSourceSnapshots: make(map[string]device.Device), logicalSnapshots: make(map[string]device.Device), logicalExplanations: make(map[string][]logicaldevice.RouteExplanation), listeners: make(map[uint64]func(device.Device)), eventListeners: make(map[uint64]func(providersdk.DeviceEvent)), capabilityAvailabilityListeners: make(map[uint64]func(providersdk.CapabilityAvailability)), propertyInterests: make(map[string][]providersdk.PropertyInterest)}
 	for _, item := range items {
 		id := item.Manifest().ID
 		if id == "" {
@@ -190,6 +197,7 @@ func (m *Manager) DiscoverDevices(ctx context.Context) ([]device.Device, error) 
 	m.mu.RUnlock()
 	result := make([]device.Device, 0)
 	routes := make(map[string]string)
+	logicalSourceSnapshots := make(map[string]device.Device)
 	capabilitySourceDevices := make(map[string]device.Device)
 	bindings := make([]providersdk.CapabilityBinding, 0)
 	hiddenSources := make(map[string]struct{})
@@ -233,6 +241,7 @@ providerLoop:
 			result = append(result, item)
 			key := providerDeviceKey(id, item.ID)
 			capabilitySourceDevices[key] = item
+			logicalSourceSnapshots[key] = item.Clone()
 		}
 		// A Provider may expose a richer native MIoT catalog than its public
 		// configured Device projection. Capability bindings consume that
@@ -327,6 +336,10 @@ providerLoop:
 			capabilityRoutes[route] = delegate
 		}
 	}
+	// Preserve identities for every concrete snapshot before explicit source
+	// hiding. Logical binding, camera composition, or a temporary Provider
+	// absence must not make an endpoint/capability identity disappear.
+	identitySources := cloneDeviceList(result)
 	if len(boundSources) != 0 || len(hiddenSources) != 0 {
 		filtered := result[:0]
 		for _, item := range result {
@@ -342,6 +355,30 @@ providerLoop:
 		result = filtered
 	}
 	m.mu.Lock()
+	// Logical aggregation runs after specialized Camera capability composition
+	// but before publishing the device list. Only explicit bindings hide their
+	// concrete source cards; similar names are never considered here.
+	for logicalID := range m.logicalDevices {
+		if owner := routes[logicalID]; owner != "" {
+			m.mu.Unlock()
+			return nil, fmt.Errorf("logical device id %q conflicts with concrete provider %q", logicalID, owner)
+		}
+	}
+	logicalItems := m.replaceLogicalSourceSnapshotsLocked(logicalSourceSnapshots)
+	if len(m.logicalSourceIDs) != 0 {
+		filtered := result[:0]
+		for _, item := range result {
+			if _, linked := m.logicalSourceIDs[providerDeviceKey(item.ProviderID, item.ID)]; linked {
+				continue
+			}
+			filtered = append(filtered, item)
+		}
+		result = filtered
+	}
+	for _, item := range logicalItems {
+		routes[item.ID] = logicaldevice.ProviderID
+		result = append(result, item)
+	}
 	m.routes = routes
 	m.capabilityRoutes = capabilityRoutes
 	m.boundSources = boundSources
@@ -351,6 +388,9 @@ providerLoop:
 		m.canonicalSnapshots[providerDeviceKey(item.ProviderID, item.ID)] = item.Clone()
 	}
 	m.mu.Unlock()
+	if err := m.persistDiscoveryIdentities(ctx, identitySources, logicalItems); err != nil {
+		return nil, err
+	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result, nil
 }
@@ -941,6 +981,7 @@ func (m *Manager) attachSnapshots(id string, current *managedProvider) {
 		var projected device.Device
 		projectedOK := false
 		availabilityChanges := make([]providersdk.CapabilityAvailability, 0)
+		logicalProjected, logicalSource := m.updateLogicalSourceSnapshotLocked(id, item)
 		if boundSource {
 			for route, delegate := range m.capabilityRoutes {
 				if delegate.sourceProviderID == id && delegate.sourceDeviceID == item.ID {
@@ -977,6 +1018,15 @@ func (m *Manager) attachSnapshots(id string, current *managedProvider) {
 			}
 			if item.IsOnline() && projectedOK {
 				m.broadcast(projected)
+			}
+			for _, logical := range logicalProjected {
+				m.broadcast(logical)
+			}
+			return
+		}
+		if logicalSource {
+			for _, logical := range logicalProjected {
+				m.broadcast(logical)
 			}
 			return
 		}
@@ -1066,6 +1116,12 @@ func (m *Manager) broadcastDeviceEvent(event providersdk.DeviceEvent) {
 
 func (m *Manager) WriteProperty(ctx context.Context, request providersdk.PropertyWriteRequest) (device.Device, error) {
 	m.mu.RLock()
+	_, logical := m.logicalDevices[request.DeviceID]
+	m.mu.RUnlock()
+	if logical {
+		return m.writeLogicalProperty(ctx, request)
+	}
+	m.mu.RLock()
 	id, ok := m.routes[request.DeviceID]
 	delegate, delegated := m.capabilityRoutes[capabilityRoute{request.DeviceID, request.EndpointID, request.CapabilityID}]
 	if delegated {
@@ -1107,6 +1163,12 @@ func (m *Manager) WriteProperty(ctx context.Context, request providersdk.Propert
 
 func (m *Manager) ReadProperty(ctx context.Context, request providersdk.PropertyReadRequest) (device.Property, error) {
 	m.mu.RLock()
+	_, logical := m.logicalDevices[request.DeviceID]
+	m.mu.RUnlock()
+	if logical {
+		return m.readLogicalProperty(ctx, request)
+	}
+	m.mu.RLock()
 	id, ok := m.routes[request.DeviceID]
 	delegate, delegated := m.capabilityRoutes[capabilityRoute{request.DeviceID, request.EndpointID, request.CapabilityID}]
 	if delegated {
@@ -1134,6 +1196,12 @@ func (m *Manager) ReadProperty(ctx context.Context, request providersdk.Property
 }
 
 func (m *Manager) ExecuteCommand(ctx context.Context, request providersdk.CommandRequest) (device.Device, error) {
+	m.mu.RLock()
+	_, logical := m.logicalDevices[request.DeviceID]
+	m.mu.RUnlock()
+	if logical {
+		return m.executeLogicalCommand(ctx, request)
+	}
 	m.mu.RLock()
 	id, ok := m.routes[request.DeviceID]
 	delegate, delegated := m.capabilityRoutes[capabilityRoute{request.DeviceID, request.EndpointID, request.CapabilityID}]

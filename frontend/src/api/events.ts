@@ -1,4 +1,4 @@
-import type { AuditEvent, DeviceCommand, Diagnostics } from '../types/diagnostics'
+import type { AuditEvent, DeviceCommand, Diagnostics, SubprocessLogEntry } from '../types/diagnostics'
 import type { Device, StateValue } from '../types/device'
 import type { Provider } from '../types/provider'
 import type { Target } from '../types/target'
@@ -15,6 +15,7 @@ export interface EventHandlers {
 	onState?: (state: StateValue) => void
 	onCommand?: (command: DeviceCommand) => void
 	onAudit?: (event: AuditEvent) => void
+	onRuntimeLog?: (entry: SubprocessLogEntry) => void
 	onTarget?: (target: Target) => void
 	onRuntime?: (delta: RuntimeDelta) => void
 }
@@ -41,6 +42,7 @@ function ensureSource() {
 	source.addEventListener('state', (event) => { const value = parse<StateValue>(event); if (value) dispatch('onState', value) })
 	source.addEventListener('command', (event) => { const value = parse<DeviceCommand>(event); if (value) dispatch('onCommand', value) })
 	source.addEventListener('audit', (event) => { const value = parse<AuditEvent>(event); if (value) dispatch('onAudit', value) })
+	source.addEventListener('runtime-log', (event) => { const value = parse<SubprocessLogEntry>(event); if (value) dispatch('onRuntimeLog', value) })
 	source.addEventListener('target', (event) => { const value = parse<unknown>(event); if (value) dispatch('onTarget', normalizeTarget(value)) })
 	source.addEventListener('runtime', (event) => { const value = parse<RuntimeDelta>(event); if (value) dispatch('onRuntime', value) })
 	source.onerror = () => dispatch('onConnection', false)

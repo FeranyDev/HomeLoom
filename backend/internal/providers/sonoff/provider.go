@@ -29,6 +29,8 @@ type cloudTransport interface {
 	SetDeviceState(context.Context, string, map[string]any) error
 }
 
+type lanDiscovery func(context.Context, time.Duration) ([]lan.Service, error)
+
 type runtimeDevice struct {
 	config DeviceConfig
 	item   device.Device
@@ -40,17 +42,22 @@ type Provider struct {
 	name   string
 	config Config
 
-	lan   lanTransport
-	cloud cloudTransport
+	lan         lanTransport
+	cloud       cloudTransport
+	discoverLAN lanDiscovery
+	realtime    cloud.RealtimeSubscriber
 
-	mu        sync.RWMutex
-	running   bool
-	devices   map[string]runtimeDevice
-	listeners map[uint64]func(device.Device)
-	next      uint64
-	requests  atomic.Uint64
-	errors    atomic.Uint64
-	writes    atomic.Uint64
+	mu             sync.RWMutex
+	running        bool
+	devices        map[string]runtimeDevice
+	listeners      map[uint64]func(device.Device)
+	next           uint64
+	realtimeCancel context.CancelFunc
+	realtimeDone   chan struct{}
+	requests       atomic.Uint64
+	errors         atomic.Uint64
+	writes         atomic.Uint64
+	realtimeEvents atomic.Uint64
 }
 
 func NewProviderFromConfig(item providerconfig.Config) (*Provider, error) {
@@ -60,6 +67,7 @@ func NewProviderFromConfig(item providerconfig.Config) (*Provider, error) {
 	}
 	requestTimeout := time.Duration(config.RequestTimeoutSeconds) * time.Second
 	var cloudClient cloudTransport
+	var realtime cloud.RealtimeSubscriber
 	if config.Mode != ModeLocal && (config.Cloud.Endpoint != "" || config.Cloud.AccessToken != "" || config.Cloud.Username != "" || config.Cloud.Password != "") {
 		endpoint := config.Cloud.Endpoint
 		if endpoint == "" {
@@ -81,8 +89,14 @@ func NewProviderFromConfig(item providerconfig.Config) (*Provider, error) {
 			return nil, clientErr
 		}
 		cloudClient = client
+		if config.Cloud.WebSocketEndpoint != "" {
+			realtime, clientErr = cloud.NewWebSocketSubscriber(config.Cloud.WebSocketEndpoint, client)
+			if clientErr != nil {
+				return nil, clientErr
+			}
+		}
 	}
-	return newProvider(item.ID, item.Name, config, lan.NewClient(http.DefaultClient, requestTimeout), cloudClient), nil
+	return newProvider(item.ID, item.Name, config, lan.NewClient(http.DefaultClient, requestTimeout), cloudClient, realtime), nil
 }
 
 // NewProviderWithTransports is used by deterministic tests and embedding
@@ -92,11 +106,29 @@ func NewProviderWithTransports(item providerconfig.Config, local lanTransport, r
 	if err != nil {
 		return nil, err
 	}
-	return newProvider(item.ID, item.Name, config, local, remote), nil
+	return newProvider(item.ID, item.Name, config, local, remote, nil), nil
 }
 
-func newProvider(id, name string, config Config, local lanTransport, remote cloudTransport) *Provider {
-	return &Provider{id: id, name: name, config: config, lan: local, cloud: remote, devices: make(map[string]runtimeDevice), listeners: make(map[uint64]func(device.Device))}
+// NewProviderWithTransportsAndRealtime additionally injects the cloud push
+// subscription. It is primarily useful for embedded integrations and tests;
+// the normal constructor creates a WebSocket subscriber only when an explicit
+// cloud.websocketEndpoint is configured.
+func NewProviderWithTransportsAndRealtime(item providerconfig.Config, local lanTransport, remote cloudTransport, realtime cloud.RealtimeSubscriber) (*Provider, error) {
+	config, err := decodeConfig(item)
+	if err != nil {
+		return nil, err
+	}
+	return newProvider(item.ID, item.Name, config, local, remote, realtime), nil
+}
+
+func newProvider(id, name string, config Config, local lanTransport, remote cloudTransport, realtime cloud.RealtimeSubscriber) *Provider {
+	return &Provider{
+		id: id, name: name, config: config, lan: local, cloud: remote, realtime: realtime,
+		discoverLAN: func(ctx context.Context, timeout time.Duration) ([]lan.Service, error) {
+			return lan.DiscoverServices(ctx, timeout, nil)
+		},
+		devices: make(map[string]runtimeDevice), listeners: make(map[uint64]func(device.Device)),
+	}
 }
 
 func (p *Provider) Manifest() providersdk.Manifest {
@@ -107,18 +139,73 @@ func (p *Provider) Capabilities() providersdk.Capabilities {
 	return providersdk.Capabilities{Discovery: true, PropertyRead: true, PropertyWrite: true, Commands: true, Events: true}
 }
 
-func (p *Provider) Initialize(context.Context) error {
+func (p *Provider) Initialize(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	p.mu.Lock()
+	if p.running {
+		p.mu.Unlock()
+		return nil
+	}
 	p.running = true
+	var lifecycle context.Context
+	var source cloud.RealtimeSubscriber
+	var done chan struct{}
+	if p.realtime != nil {
+		lifecycle, p.realtimeCancel = context.WithCancel(context.WithoutCancel(ctx))
+		source, done = p.realtime, make(chan struct{})
+		p.realtimeDone = done
+	}
 	p.mu.Unlock()
+	if source != nil {
+		go p.consumeRealtime(lifecycle, source, done)
+	}
 	return nil
 }
 
-func (p *Provider) Close(context.Context) error {
+func (p *Provider) Close(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	p.mu.Lock()
 	p.running = false
+	cancel, done := p.realtimeCancel, p.realtimeDone
+	p.realtimeCancel, p.realtimeDone = nil, nil
 	p.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	return nil
+}
+
+func (p *Provider) consumeRealtime(ctx context.Context, source cloud.RealtimeSubscriber, done chan struct{}) {
+	defer close(done)
+	for {
+		err := source.Subscribe(ctx, p.applyRealtimeEvent)
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			p.errors.Add(1)
+		}
+		// A completed stream is unexpected as well. Back off before reconnecting
+		// so a misconfigured endpoint cannot spin a CPU or flood diagnostics.
+		timer := time.NewTimer(5 * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
 }
 
 func (p *Provider) DiscoverDevices(ctx context.Context) ([]device.Device, error) {
@@ -146,6 +233,60 @@ func (p *Provider) DiscoverDevices(ctx context.Context) ([]device.Device, error)
 	}
 	p.mu.Unlock()
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result, nil
+}
+
+// Scan discovers transient eWeLink LAN endpoints through mDNS. Scan never
+// mutates p.config or p.devices: the caller must explicitly turn a candidate
+// into a saved device configuration.
+func (p *Provider) Scan(ctx context.Context) ([]providersdk.DiscoveryCandidate, error) {
+	if p.discoverLAN == nil {
+		return nil, fmt.Errorf("Sonoff LAN discovery is unavailable")
+	}
+	p.requests.Add(1)
+	services, err := p.discoverLAN(ctx, time.Duration(p.config.DiscoveryTimeoutSec)*time.Second)
+	if err != nil {
+		p.errors.Add(1)
+		return nil, err
+	}
+	configured := make(map[string]bool, len(p.config.Devices))
+	for _, item := range p.config.Devices {
+		configured[item.DeviceID] = true
+	}
+	result := make([]providersdk.DiscoveryCandidate, 0, len(services))
+	for _, service := range services {
+		found, parseErr := lan.ParseService(service)
+		if parseErr != nil {
+			continue
+		}
+		name := strings.TrimSpace(service.Instance)
+		if name == "" {
+			name = strings.TrimSpace(found.Type)
+		}
+		if name == "" {
+			name = "Sonoff " + stableID(found.DeviceID)
+		}
+		metadata := map[string]string{
+			"deviceId":   found.DeviceID,
+			"type":       found.Type,
+			"apiVersion": found.APIVersion,
+			"encrypted":  strconv.FormatBool(found.Encrypt),
+			"diy":        strconv.FormatBool(!found.Encrypt),
+		}
+		if configured[found.DeviceID] {
+			metadata["configured"] = "true"
+		}
+		result = append(result, providersdk.DiscoveryCandidate{
+			ID: "sonoff-" + stableID(found.DeviceID), Provider: ProviderType, Name: name,
+			Host: found.Host, Port: found.Port, Metadata: metadata,
+		})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].ID == result[j].ID {
+			return result[i].Host < result[j].Host
+		}
+		return result[i].ID < result[j].ID
+	})
 	return result, nil
 }
 
@@ -357,13 +498,13 @@ func (p *Provider) ProviderMetrics() map[string]uint64 {
 		}
 	}
 	p.mu.RUnlock()
-	return map[string]uint64{"requests": p.requests.Load(), "writes": p.writes.Load(), "errors": p.errors.Load(), "devices": count, "onlineDevices": online}
+	return map[string]uint64{"requests": p.requests.Load(), "writes": p.writes.Load(), "errors": p.errors.Load(), "realtimeEvents": p.realtimeEvents.Load(), "devices": count, "onlineDevices": online}
 }
 
 func (p *Provider) ProviderDiagnostics() map[string]string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return map[string]string{"mode": p.config.Mode, "region": p.config.Region, "lan": strconv.FormatBool(p.lan != nil), "cloud": strconv.FormatBool(p.cloud != nil), "devices": strconv.Itoa(len(p.devices))}
+	return map[string]string{"mode": p.config.Mode, "region": p.config.Region, "lan": strconv.FormatBool(p.lan != nil), "cloud": strconv.FormatBool(p.cloud != nil), "realtime": strconv.FormatBool(p.realtime != nil), "devices": strconv.Itoa(len(p.devices))}
 }
 
 func (p *Provider) current(id string) (runtimeDevice, bool) {
@@ -387,6 +528,37 @@ func (p *Provider) applyState(id string, state map[string]any) {
 	p.mu.Unlock()
 	if exists {
 		p.notify(latest.item)
+	}
+}
+
+func (p *Provider) applyRealtimeEvent(event cloud.RealtimeEvent) {
+	deviceID := strings.TrimSpace(event.DeviceID)
+	if deviceID == "" {
+		return
+	}
+	p.mu.Lock()
+	updated := make([]device.Device, 0, 1)
+	for id, current := range p.devices {
+		if current.config.DeviceID != deviceID {
+			continue
+		}
+		for key, value := range event.Params {
+			current.params[key] = value
+		}
+		online := event.Online
+		if online == nil {
+			online = boolPointer(true)
+		}
+		if err := p.commitConfigLocked(current.config, current.params, online); err != nil {
+			p.errors.Add(1)
+			continue
+		}
+		updated = append(updated, p.devices[id].item)
+	}
+	p.mu.Unlock()
+	for _, item := range updated {
+		p.realtimeEvents.Add(1)
+		p.notify(item)
 	}
 }
 
@@ -455,3 +627,4 @@ var _ providersdk.PropertyReader = (*Provider)(nil)
 var _ providersdk.PropertyWriter = (*Provider)(nil)
 var _ providersdk.CommandExecutor = (*Provider)(nil)
 var _ providersdk.EventSubscriber = (*Provider)(nil)
+var _ providersdk.DiscoveryScanner = (*Provider)(nil)

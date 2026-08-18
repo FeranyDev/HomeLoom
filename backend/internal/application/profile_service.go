@@ -155,12 +155,13 @@ func NewProfileService(ctx context.Context, store ProfileStore) (*ProfileService
 
 func BuiltInProfiles() []mapping.Profile {
 	factor100, factor001 := 100.0, 0.01
-	return []mapping.Profile{
+	profiles := []mapping.Profile{
 		{SchemaVersion: 1, ID: "builtin-active-low", Version: 1, Kind: mapping.KindProvider, InputType: device.ValueTypeBool, OutputType: device.ValueTypeBool, Transforms: []mapping.Transform{{Type: mapping.TransformInvert}}},
 		{SchemaVersion: 1, ID: "builtin-celsius-fahrenheit", Version: 1, Kind: mapping.KindTarget, InputType: device.ValueTypeNumber, OutputType: device.ValueTypeNumber, Transforms: []mapping.Transform{{Type: mapping.TransformUnit, FromUnit: "celsius", ToUnit: "fahrenheit"}}},
 		{SchemaVersion: 1, ID: "builtin-ratio-percent", Version: 1, Kind: mapping.KindCapability, InputType: device.ValueTypeNumber, OutputType: device.ValueTypeNumber, Transforms: []mapping.Transform{{Type: mapping.TransformScale, Factor: &factor100}}},
 		{SchemaVersion: 1, ID: "builtin-percent-ratio", Version: 1, Kind: mapping.KindCapability, InputType: device.ValueTypeNumber, OutputType: device.ValueTypeNumber, Transforms: []mapping.Transform{{Type: mapping.TransformScale, Factor: &factor001}}},
 	}
+	return append(profiles, mapping.AutoCapabilityProfiles()...)
 }
 
 func (s *ProfileService) List() []ProfileInfo {

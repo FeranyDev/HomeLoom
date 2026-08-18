@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/buildinfo"
 	"github.com/feranydev/homeloom/backend/internal/config"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
+	"github.com/feranydev/homeloom/backend/internal/eventbus"
 	"github.com/feranydev/homeloom/backend/internal/mapping"
 	"github.com/feranydev/homeloom/backend/internal/persistence/gormstore"
 	"github.com/feranydev/homeloom/backend/internal/platform/httpapi"
@@ -33,6 +35,17 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
+
+func newRuntimeLogger(level zapcore.Level, terminal io.Writer, runtimeLogs *subprocesslog.Store) *zap.Logger {
+	if terminal == nil {
+		terminal = io.Discard
+	}
+	outputs := []io.Writer{terminal}
+	if runtimeLogs != nil {
+		outputs = append(outputs, runtimeLogs.Writer("backend", "main"))
+	}
+	return logging.New(level, io.MultiWriter(outputs...))
+}
 
 func main() {
 	configPath := flag.String("config", "", "path to a YAML configuration file")
@@ -54,10 +67,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, levelErr)
 		os.Exit(2)
 	}
-	logger := logging.NewStderr(level)
+	childLogs := subprocesslog.New(subprocesslog.DefaultCapacity)
+	// Keep the canonical terminal output while also exposing already-redacted
+	// structured main-process logs through the bounded runtime log store.
+	logger := newRuntimeLogger(level, os.Stderr, childLogs)
 	defer func() { _ = logger.Sync() }()
 	zap.ReplaceGlobals(logger)
-	childLogs := subprocesslog.New(subprocesslog.DefaultCapacity)
 	settings, err := config.Load(*configPath)
 	if err != nil {
 		logger.Error("configuration failed", zap.Error(err))
@@ -213,8 +228,21 @@ func main() {
 		logger.Error("provider manager creation failed", zap.Error(err))
 		os.Exit(1)
 	}
+	// Persist the already-canonical Device.ID emitted by Provider discovery
+	// before the DeviceService or Targets consume it. The registry is optional
+	// at the manager boundary but always available in the production runtime.
+	providerManager.SetDeviceIdentityStore(store)
 	if err := providerManager.Initialize(ctx); err != nil {
 		logger.Error("provider initialization failed", zap.Error(err))
+		os.Exit(1)
+	}
+	logicalConfigs, err := store.ListLogicalDevices(ctx)
+	if err != nil {
+		logger.Error("logical device configuration load failed", zap.Error(err))
+		os.Exit(1)
+	}
+	if err := providerManager.SetLogicalDevices(logicalConfigs); err != nil {
+		logger.Error("logical device configuration apply failed", zap.Error(err))
 		os.Exit(1)
 	}
 	for _, info := range providerManager.ProviderInfos() {
@@ -278,12 +306,18 @@ func main() {
 		providerManager.SetPropertyInterests(interests)
 	}
 	syncProviderPropertyInterests()
-	service := application.NewDeviceService(providerManager, store, profileService)
+	service := application.NewDeviceService(providerManager, store, profileService, application.DeviceServiceOptions{
+		EventQueue: eventbus.Config{ShardCount: settings.Runtime.EventQueueShards, QueueSize: settings.Runtime.EventQueueCapacity},
+		StateCheckpoint: application.StateCheckpointConfig{
+			Store: store, Interval: time.Duration(settings.Runtime.StateCheckpointIntervalSecond) * time.Second,
+		},
+	})
 	defer service.Close()
 	if err := service.LoadDevicePreferences(ctx); err != nil {
 		logger.Error("device preference load failed", zap.Error(err))
 		os.Exit(1)
 	}
+	logicalDeviceService := application.NewLogicalDeviceService(store, providerManager, service)
 	if settings.Media.Enabled {
 		mediaRuntime, err = newEmbeddedMediaRuntime(ctx, store, providerManager, embeddedMediaConfig{
 			CameraKernelBinary: settings.Media.CameraKernelBinary,
@@ -393,6 +427,7 @@ func main() {
 	auditService := application.NewAuditService(store)
 	server.SetAuditService(auditService)
 	server.SetProfileService(profileService)
+	server.SetLogicalDeviceService(logicalDeviceService)
 	server.SetExportService(application.NewExportService(service, providerService, targetService, settingsService, auditService, profileService))
 	server.SetMediaService(mediaService)
 	if settings.Media.Enabled {

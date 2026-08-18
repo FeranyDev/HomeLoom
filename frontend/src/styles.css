@@ -525,6 +525,19 @@ button.is-danger:hover:not(:disabled),
   gap: 12px;
 }
 
+.system-dashboard .master-key-actions {
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  background: rgba(247, 246, 241, .72);
+}
+
+.system-dashboard .master-key-actions > span {
+  color: #5c6259;
+  font-size: 12px;
+}
+
 .system-dashboard .maintenance-actions .file-picker {
   position: relative;
   display: grid;
@@ -1298,7 +1311,25 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .numeric-range-comparison code { padding: 6px 8px; border: 1px solid #c4c8c0; background: rgba(255,255,255,.7); color: #4c544b; font-size: 11px; white-space: nowrap; }
 .numeric-range-comparison section.is-effective code { border-color: #7f9978; background: #e4eee1; }
 .numeric-range-comparison section.is-empty code { border-color: #bd8d7e; background: #f4e3dd; color: #8a4938; }
+.capability-profile-suggestion { margin: -4px 0 0; padding: 9px 12px; border: 1px solid #aab9a5; background: #edf4ea; color: #456144; font-size: 11px; }
+.capability-profile-suggestion code { color: inherit; overflow-wrap: anywhere; }
+.hap-value-preview { display: grid; gap: 11px; margin-top: 16px; padding: 14px; border: 1px solid #9eb19a; background: #f2f7ef; }
+.hap-value-preview > header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 16px; }
+.hap-value-preview > header strong { color: #3f5d3d; font-size: 12px; }
+.hap-value-preview > header span, .hap-value-preview small { color: #61735f; font-size: 11px; }
+.hap-value-preview > div { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto; gap: 10px; align-items: end; }
+.hap-value-preview section { display: grid; gap: 5px; min-width: 0; }
+.hap-value-preview code { overflow: hidden; padding: 7px 8px; border: 1px solid #c4d0c0; background: rgba(255,255,255,.72); color: #475543; text-overflow: ellipsis; white-space: nowrap; }
+.hap-value-preview section.is-output code { border-color: #779373; background: #e2efde; }
+.hap-value-preview button { min-height: 33px; padding: 7px 10px; border: 1px solid #597754; border-radius: 5px; background: #fff; color: #42613e; font: inherit; cursor: pointer; white-space: nowrap; }
+.hap-value-preview button:disabled { opacity: .6; cursor: wait; }
+.hap-value-preview > p { margin: 0; color: #934d3d; font-size: 11px; }
 .mapping-route-list { display: grid; }
+.mapping-route-deleted { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 12px; align-items: start; margin-top: 16px; padding: 13px 15px; border: 1px solid #b65d4a; border-left: 5px solid #9b4635; background: #fff0ea; box-shadow: 3px 3px 0 #edc5b8; color: #713628; animation: mapping-route-deleted-in .22s ease-out; }
+.mapping-route-deleted > span { padding: 5px 8px; background: #9b4635; color: #fff; font: 10px ui-monospace, monospace; }
+.mapping-route-deleted > div { display: grid; gap: 4px; min-width: 0; }
+.mapping-route-deleted code, .mapping-route-deleted small { color: #7a463b; overflow-wrap: anywhere; }
+@keyframes mapping-route-deleted-in { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
 .mapping-route-list article { display: grid; grid-template-columns: auto 1fr auto; gap: 14px; align-items: center; padding: 14px 0; border-top: 1px solid #d6d5cd; }
 .mapping-route-list article.is-disabled { opacity: .5; }
 .mapping-route-list article.is-default { margin: 0 -10px; padding-right: 10px; padding-left: 10px; border: 1px dashed #aeb8aa; background: rgba(230, 235, 227, .52); }
@@ -1537,6 +1568,18 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .config-note { display: grid; grid-template-columns: 120px 1fr; gap: 8px 20px; padding: 20px 26px; border: 1px dashed #bfc1b8; color: #757970; }
 .config-note strong { color: #3e433c; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
 .config-note p { grid-column: 2; margin: 0; font-size: 13px; }
+.logical-device-manager { display: grid; gap: 18px; overflow: auto; padding: 28px; background: var(--surface, #f8f7f2); }
+.logical-device-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, .8fr); gap: 20px; }
+.logical-device-item { display: flex; justify-content: space-between; gap: 16px; padding: 13px 0; border-bottom: 1px solid #dedfd7; }
+.logical-device-item div { display: grid; gap: 4px; }
+.logical-device-item code, .logical-device-editor small { color: #73786f; font-size: 12px; }
+.logical-device-editor { display: grid; gap: 12px; align-content: start; padding: 18px; border: 1px solid #d5d6ce; border-radius: 10px; }
+.logical-device-editor label { display: grid; gap: 6px; color: #51564d; font-size: 13px; }
+.logical-device-editor input, .logical-device-editor select, .logical-device-editor textarea { width: 100%; box-sizing: border-box; padding: 9px; border: 1px solid #c6c9c0; border-radius: 6px; font: inherit; }
+.logical-device-editor textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.config-note button { margin: 3px 6px 3px 0; font: inherit; text-decoration: underline; }
+.logical-route-explanations { padding: 14px 18px; border-left: 3px solid #819175; background: rgba(129,145,117,.09); }
+.logical-route-explanations p { margin: 7px 0; font-size: 13px; }
 .target-card { display: grid; grid-template-columns: 1fr 300px; min-height: 350px; border: 1px solid #d2d0c7; background: rgba(250, 249, 245, .72); }
 .target-card__content { padding: 30px; }
 .target-id { margin: 38px 0 8px; color: #94978f; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
@@ -1893,6 +1936,8 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 	.mapping-route-toolbar > .mapping-route-actions { align-items: stretch; flex-direction: column; }
 	.numeric-range-comparison { grid-template-columns: 1fr; }
 	.numeric-range-comparison > i { display: none; }
+	.hap-value-preview > div { grid-template-columns: 1fr; }
+	.hap-value-preview > div > i { display: none; }
 	.custom-property-grid fieldset { grid-template-columns: 1fr; }
 	.mapping-route-list article, .custom-property-list article { grid-template-columns: auto 1fr; }
 	.mapping-route-list article > div:last-child, .custom-property-list article > div:last-child { grid-column: 2; }

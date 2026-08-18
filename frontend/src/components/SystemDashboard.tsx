@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AuditEvent, DeviceCommand, Diagnostics, RuntimeSettings, SubprocessLogEntry } from '../types/diagnostics'
-import { listSubprocessLogs } from '../api/diagnostics'
-import { downloadDatabaseBackup, stageDatabaseRestore } from '../api/maintenance'
+import { listRuntimeLogs } from '../api/diagnostics'
+import { subscribeEvents } from '../api/events'
+import { downloadDatabaseBackup, getMasterKeyStatus, rotateMasterKey, stageDatabaseRestore, type MasterKeyStatus } from '../api/maintenance'
 import { confirmExactPhrase } from '../confirmations'
 
 
@@ -83,7 +84,8 @@ function RuntimeSettingsCard({ settings, onSave }: { settings: RuntimeSettings |
 
 function DatabaseMaintenanceCard() {
 	const [restoreFile, setRestoreFile] = useState<File | null>(null)
-	const [busy, setBusy] = useState<'backup' | 'restore' | null>(null)
+	const [keyStatus, setKeyStatus] = useState<MasterKeyStatus | null>(null)
+	const [busy, setBusy] = useState<'backup' | 'restore' | 'key' | 'key-status' | null>(null)
 	const [message, setMessage] = useState<string | null>(null)
 	const [error, setError] = useState<string | null>(null)
 
@@ -112,10 +114,43 @@ function DatabaseMaintenanceCard() {
 		} catch (cause) { setError(cause instanceof Error ? cause.message : '暂存恢复失败') } finally { setBusy(null) }
 	}
 
-	return <div className="maintenance-card queue-card"><div><span>数据库备份与恢复</span><strong>单管理员运维</strong></div><p>完整备份包含数据库逻辑快照、管理员密码哈希、加密配置以及数据库主密钥。恢复包会先进行格式、Schema 和密钥校验，再以事务替换当前数据。</p><div className="maintenance-actions"><button className="primary" disabled={busy !== null} onClick={() => void backup()}>{busy === 'backup' ? '生成中…' : '下载完整备份'}</button><label className="file-picker">恢复压缩包<span>{restoreFile ? restoreFile.name : '选择 .zip 备份包'}</span><input aria-label="恢复压缩包" type="file" accept=".zip,application/zip" onChange={(event) => setRestoreFile(event.target.files?.[0] ?? null)} /></label><button className="is-danger" disabled={busy !== null || !restoreFile} onClick={() => void restore()}>{busy === 'restore' ? '校验中…' : '校验并暂存恢复'}</button></div>{message && <small className="maintenance-message" role="status">{message}</small>}{error && <small className="field-error" role="alert">{error}</small>}<small>整库恢复需要一次正常进程重启；Provider、桥和映射的日常配置保存仍会实时生效。</small></div>
+	async function rotateKey() {
+		const resume = Boolean(keyStatus?.needsReencryption)
+		const confirmation = confirmExactPhrase(resume ? '上次密钥轮换未完成。将使用当前活动密钥安全重试批量重加密。' : '轮换会生成新的数据库主密钥并批量重加密所有持久化凭据。旧密钥会保留在受限 keyring 中，以支持旧备份恢复；请先下载完整备份。', 'ROTATE')
+		if (!confirmation) return
+		setBusy('key'); setError(null); setMessage(null)
+		try {
+			const result = await rotateMasterKey(confirmation, resume)
+			setKeyStatus(result.status)
+			setMessage(`主密钥已切换至 v${result.activeVersion}，已重加密 ${result.reencrypted} 项持久化秘密。旧版本仅保留用于恢复旧备份。`)
+		} catch (cause) { setError(cause instanceof Error ? cause.message : '主密钥轮换失败') } finally { setBusy(null) }
+	}
+
+	async function refreshKeyStatus() {
+		setBusy('key-status'); setError(null)
+		try {
+			const status = await getMasterKeyStatus()
+			if (!isMasterKeyStatus(status)) throw new Error('主密钥状态响应无效')
+			setKeyStatus(status)
+		} catch (cause) { setError(cause instanceof Error ? cause.message : '读取主密钥状态失败') } finally { setBusy(null) }
+	}
+
+	return <div className="maintenance-card queue-card"><div><span>数据库备份、恢复与密钥</span><strong>单管理员运维</strong></div><p>完整备份包含数据库逻辑快照、管理员密码哈希、加密配置以及数据库主密钥。恢复包会先进行格式、Schema 和密钥校验，再以事务替换当前数据。</p><div className="maintenance-actions"><button className="primary" disabled={busy !== null} onClick={() => void backup()}>{busy === 'backup' ? '生成中…' : '下载完整备份'}</button><label className="file-picker">恢复压缩包<span>{restoreFile ? restoreFile.name : '选择 .zip 备份包'}</span><input aria-label="恢复压缩包" type="file" accept=".zip,application/zip" onChange={(event) => setRestoreFile(event.target.files?.[0] ?? null)} /></label><button className="is-danger" disabled={busy !== null || !restoreFile} onClick={() => void restore()}>{busy === 'restore' ? '校验中…' : '校验并暂存恢复'}</button></div><div className="maintenance-actions master-key-actions"><span>{keyStatus ? `主密钥 v${keyStatus.activeVersion} · 保留 v${keyStatus.retainedVersions.join('、v')}` : '请先读取主密钥状态'}</span><button disabled={busy !== null} onClick={() => void refreshKeyStatus()}>{busy === 'key-status' ? '读取中…' : '读取主密钥状态'}</button><button className="is-danger" disabled={busy !== null || !keyStatus} onClick={() => void rotateKey()}>{busy === 'key' ? '轮换中…' : keyStatus?.needsReencryption ? '恢复密钥轮换' : '轮换主密钥'}</button></div>{keyStatus?.needsReencryption && <small className="field-error" role="alert">检测到旧版本密文；请使用“恢复密钥轮换”完成批量重加密。</small>}{message && <small className="maintenance-message" role="status">{message}</small>}{error && <small className="field-error" role="alert">{error}</small>}<small>整库恢复需要一次正常进程重启；主密钥轮换不删除旧密钥，旧版本仅为恢复历史备份而保留。</small></div>
 }
 
-function SubprocessLogDialog({ onClose }: { onClose: () => void }) {
+function isMasterKeyStatus(value: unknown): value is MasterKeyStatus {
+	if (!value || typeof value !== 'object') return false
+	const status = value as Partial<MasterKeyStatus>
+	return typeof status.activeVersion === 'number' && Array.isArray(status.retainedVersions) && typeof status.needsReencryption === 'boolean'
+}
+
+function mergeRuntimeLogs(current: SubprocessLogEntry[], incoming: SubprocessLogEntry[]): SubprocessLogEntry[] {
+	const bySequence = new Map(current.map((entry) => [entry.sequence, entry]))
+	for (const entry of incoming) bySequence.set(entry.sequence, entry)
+	return [...bySequence.values()].sort((left, right) => left.sequence - right.sequence).slice(-2000)
+}
+
+function RuntimeLogDialog({ onClose }: { onClose: () => void }) {
 	const [entries, setEntries] = useState<SubprocessLogEntry[]>([])
 	const [query, setQuery] = useState('')
 	const [process, setProcess] = useState('all')
@@ -135,35 +170,33 @@ function SubprocessLogDialog({ onClose }: { onClose: () => void }) {
 
 	useEffect(() => {
 		let active = true
-		let loading = false
 		const controller = new AbortController()
-		const refresh = async () => {
-			if (loading) return
-			loading = true
-			try {
-				const next = await listSubprocessLogs(cursor.current, controller.signal)
-				if (!active) return
-				setError(null)
-				if (next.length === 0) return
-				cursor.current = next[next.length - 1].sequence
-				setEntries((current) => [...current, ...next].slice(-2000))
-			} catch (cause) {
-				if (active && !(cause instanceof DOMException && cause.name === 'AbortError')) setError(cause instanceof Error ? cause.message : '读取子程序日志失败')
-			} finally { loading = false }
+		const append = (next: SubprocessLogEntry[]) => {
+			if (!active || next.length === 0) return
+			cursor.current = Math.max(cursor.current, ...next.map((entry) => entry.sequence))
+			setEntries((current) => mergeRuntimeLogs(current, next))
 		}
-		void refresh()
-		const timer = window.setInterval(() => void refresh(), 3000)
-		return () => { active = false; controller.abort(); window.clearInterval(timer) }
+		// Subscribe before reading the retained snapshot so a log emitted during
+		// the initial request is de-duplicated instead of lost.
+		const unsubscribe = subscribeEvents({ onRuntimeLog: (entry) => append([entry]) })
+		void listRuntimeLogs(0, controller.signal).then((history) => {
+			if (!active) return
+			setError(null)
+			append(history)
+		}).catch((cause) => {
+			if (active && !(cause instanceof DOMException && cause.name === 'AbortError')) setError(cause instanceof Error ? cause.message : '读取运行日志失败')
+		})
+		return () => { active = false; controller.abort(); unsubscribe() }
 	}, [])
 
 	const processes = useMemo(() => [...new Set(entries.map((entry) => entry.subsystem ?? entry.process))].sort(), [entries])
 	const normalized = query.trim().toLowerCase()
 	const filtered = entries.filter((entry) => (process === 'all' || (entry.subsystem ?? entry.process) === process) && (!normalized || `${entry.process} ${entry.component ?? ''} ${entry.module ?? ''} ${entry.facility ?? ''} ${entry.subsystem ?? ''} ${entry.instance} ${entry.level ?? ''} ${entry.message} ${entry.error ?? ''}`.toLowerCase().includes(normalized)))
-	return <div className="modal-backdrop subprocess-log-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className="subprocess-log-dialog" role="dialog" aria-modal="true" aria-label="子程序日志管理">
-		<div className="command-heading"><div><p className="eyebrow">运行诊断（RUNTIME DIAGNOSTICS）</p><h3>子程序日志</h3></div><div className="subprocess-log-heading-actions"><span>主程序集中采集 · 内存最多 2000 条</span><button type="button" onClick={onClose}>关闭</button></div></div>
-		<div className="command-filters subprocess-log-filters"><input aria-label="搜索子程序日志" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索进程、实例、等级或内容" /><select aria-label="子程序类型" value={process} onChange={(event) => setProcess(event.target.value)}><option value="all">全部子程序</option>{processes.map((item) => <option key={item} value={item}>{subprocessLabel(item)}</option>)}</select><span>{filtered.length} / {entries.length}</span></div>
+	return <div className="modal-backdrop subprocess-log-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className="subprocess-log-dialog" role="dialog" aria-modal="true" aria-label="运行日志管理">
+		<div className="command-heading"><div><p className="eyebrow">运行诊断（RUNTIME DIAGNOSTICS）</p><h3>实时运行日志</h3></div><div className="subprocess-log-heading-actions"><span>主进程与子进程 · SSE 自动重连 · 内存最多 2000 条</span><button type="button" onClick={onClose}>关闭</button></div></div>
+		<div className="command-filters subprocess-log-filters"><input aria-label="搜索运行日志" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索进程、实例、等级或内容" /><select aria-label="进程类型" value={process} onChange={(event) => setProcess(event.target.value)}><option value="all">全部进程</option>{processes.map((item) => <option key={item} value={item}>{subprocessLabel(item)}</option>)}</select><span>{filtered.length} / {entries.length}</span></div>
 		{error && <div className="command-empty" role="alert">{error}</div>}
-		{!error && filtered.length === 0 ? <div className="command-empty">暂无子程序日志</div> : <div className="subprocess-log-view" role="log" aria-label="子程序日志内容">{filtered.map((entry) => <div key={entry.sequence}><time>{new Date(entry.time).toLocaleTimeString()}</time><b className={`is-${entry.level ?? 'unknown'}`}>{entry.level ?? 'log'}</b><span>{subprocessLabel(entry.subsystem ?? entry.process)}/{entry.instance}</span><code>{entry.message}{entry.error ? ` · ${entry.error}` : ''}</code></div>)}</div>}
+		{!error && filtered.length === 0 ? <div className="command-empty">暂无运行日志</div> : <div className="subprocess-log-view" role="log" aria-label="运行日志内容">{filtered.map((entry) => <div key={entry.sequence}><time>{new Date(entry.time).toLocaleTimeString()}</time><b className={`is-${entry.level ?? 'unknown'}`}>{entry.level ?? 'log'}</b><span>{subprocessLabel(entry.subsystem ?? entry.process)}/{entry.instance}</span><code>{entry.message}{entry.error ? ` · ${entry.error}` : ''}</code></div>)}</div>}
 	</section></div>
 }
 
@@ -172,6 +205,7 @@ function subprocessLabel(value: string): string {
 	if (value === 'ffmpeg') return 'FFmpeg'
 	if (value === 'camera-kernel') return 'Camera Kernel'
 	if (value === 'matter') return 'Matter'
+	if (value === 'backend') return 'HomeLoom'
 	return value
 }
 
@@ -245,8 +279,8 @@ export function SystemDashboard({ diagnostics, commands, auditEvents = [], setti
     <RuntimeSettingsCard settings={settings} onSave={onSettingsSave} />
 	<div className="artifact-card queue-card"><div><span>支持资料</span><strong>已自动脱敏</strong></div><p>配置导出不包含桥 PIN、Setup URI 或本地存储路径；Provider 凭据会替换为星号。诊断包额外包含版本、运行指标和最近审计记录。</p><div className="artifact-actions"><a className="ui-button" href="/api/v1/system/config-export" download>导出脱敏配置</a><a className="ui-button is-primary" href="/api/v1/system/diagnostic-bundle" download>下载诊断包</a></div><small>下载响应禁止浏览器缓存，分享前仍建议检查设备名称等非凭据数据。</small></div>
 	<DatabaseMaintenanceCard />
-	<div className="subprocess-log-launcher queue-card"><div><span>子程序日志</span><strong>Camera Kernel · Matter</strong></div><p>子程序输出由主程序集中采集并脱敏。打开独立日志窗口后实时刷新，不占用系统页正文空间。</p><button className="primary" type="button" onClick={() => setSubprocessLogsOpen(true)}>打开日志窗口</button></div>
-	{subprocessLogsOpen && <SubprocessLogDialog onClose={() => setSubprocessLogsOpen(false)} />}
+	<div className="subprocess-log-launcher queue-card"><div><span>实时运行日志</span><strong>HomeLoom · Camera Kernel · Matter</strong></div><p>主进程与子进程输出均由主程序集中采集并脱敏。日志通过 SSE 实时推送；断线后会按游标补回近期记录。</p><button className="primary" type="button" onClick={() => setSubprocessLogsOpen(true)}>打开日志窗口</button></div>
+	{subprocessLogsOpen && <RuntimeLogDialog onClose={() => setSubprocessLogsOpen(false)} />}
 	<div className="audit-section command-section"><div className="command-heading"><h3>实时审计日志</h3><span>数据库持久化最近 5000 条 · 页面加载最近 200 条</span></div><div className="command-filters"><input aria-label="搜索审计日志" value={auditQuery} onChange={(event) => setAuditQuery(event.target.value)} placeholder="搜索资源、动作、路由或 correlation ID" /><span>{filteredAuditEvents.length} / {auditEvents.length}</span></div>{auditEvents.length === 0 ? <div className="command-empty">还没有管理操作记录</div> : filteredAuditEvents.length === 0 ? <div className="command-empty">没有匹配的审计记录</div> : <><div className="audit-table"><div className="audit-row command-header"><span>资源 / 动作</span><span>结果</span><span>Correlation ID</span><span>时间</span></div>{auditPagination.pageItems.map((event) => <div className="audit-row" key={event.id}><span><b>{event.resourceType}{event.resourceId ? ` · ${event.resourceId}` : ''}</b><small>{event.method} {event.route} · {event.action}</small></span><span><i className={`command-status is-${event.outcome === 'succeeded' ? 'confirmed' : 'rejected'}`}>{event.status}</i><small>{event.outcome}</small></span><code title={event.correlationId}>{event.correlationId}</code><time>{new Date(event.createdAt).toLocaleString()}</time></div>)}</div><ListPagination label="审计日志" page={auditPagination.page} totalPages={auditPagination.totalPages} totalItems={auditPagination.totalItems} start={auditPagination.start} end={auditPagination.end} pageSize={auditPageSize} onPageChange={setAuditPage} onPageSizeChange={setAuditPageSize} /></>}</div>
     <div className="command-section"><div className="command-heading"><h3>命令历史</h3><span>内存中最多保留 {settings?.commandHistoryLimit ?? 1000} 条记录</span></div><div className="command-filters"><input aria-label="搜索命令" value={commandQuery} onChange={(event) => setCommandQuery(event.target.value)} placeholder="搜索设备、属性、动作、错误或命令 ID" /><select aria-label="命令状态" value={commandStatus} onChange={(event) => setCommandStatus(event.target.value)}><option value="all">全部状态</option><option value="queued">queued</option><option value="sent">sent</option><option value="accepted">accepted</option><option value="confirmed">confirmed</option><option value="rejected">rejected</option><option value="timeout">timeout</option><option value="superseded">superseded</option><option value="unknown">outcome unknown</option></select><span>{filteredCommands.length} / {commands.length}</span></div>{commands.length === 0 ? <div className="command-empty">还没有控制命令</div> : filteredCommands.length === 0 ? <div className="command-empty">没有匹配的命令</div> : <><div className="command-table"><div className="command-row command-header"><span>设备 / 属性或动作</span><span>期望值 / 参数</span><span>状态 / 结果</span><span>更新时间</span></div>{commandPagination.pageItems.map((command) => <div className="command-row" key={command.id}><span><b>{command.deviceId}</b><small>{command.capabilityId}.{command.commandId ?? command.propertyId}</small><small>{command.id}</small>{command.correlationId && <small>trace: {command.correlationId}</small>}{Boolean(command.coalescedRequests) && <small>合并重复请求 × {command.coalescedRequests}</small>}</span><code>{expectedValue(command)}</code><span><i className={`command-status is-${command.status}`}>{command.status}</i>{command.outcome && <small>outcome: {command.outcome}</small>}{command.error && <small>{command.error}</small>}</span><time>{new Date(command.updatedAt).toLocaleString()}</time></div>)}</div><ListPagination label="命令历史" page={commandPagination.page} totalPages={commandPagination.totalPages} totalItems={commandPagination.totalItems} start={commandPagination.start} end={commandPagination.end} pageSize={commandPageSize} onPageChange={setCommandPage} onPageSizeChange={setCommandPageSize} /></>}</div>
   </section>

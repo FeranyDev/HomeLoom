@@ -422,6 +422,61 @@ func (s *ProfileService) ProjectProviderProperty(providerID, deviceID, endpointI
 	return result, nil
 }
 
+// ProjectMissingProviderProperties applies an explicit Provider binding's
+// default only when that binding's source path is absent from the Provider
+// snapshot. A present source property always wins, including when its value is
+// false or zero. Bindings without a Profile default remain absent rather than
+// fabricating a value.
+func (s *ProfileService) ProjectMissingProviderProperties(providerID, deviceID string, available []device.ParameterPath) ([]ProviderPropertyProjection, error) {
+	availablePaths := make(map[string]struct{}, len(available))
+	for _, path := range available {
+		availablePaths[path.Key()] = struct{}{}
+	}
+
+	s.mu.RLock()
+	bindings := make([]mapping.Binding, 0)
+	profiles := make(map[string]mapping.Profile)
+	for _, binding := range s.bindings {
+		if binding.EffectiveStage() != mapping.StageProvider || !binding.Enabled || binding.ProviderID != providerID || binding.DeviceID != deviceID || binding.ProfileID == "" {
+			continue
+		}
+		if _, exists := availablePaths[binding.SourcePath().Key()]; exists {
+			continue
+		}
+		profile, exists := s.profileLocked(binding.ProfileID)
+		if !exists {
+			s.mu.RUnlock()
+			return nil, fmt.Errorf("mapping profile %q not found", binding.ProfileID)
+		}
+		if profile.Default == nil {
+			continue
+		}
+		bindings = append(bindings, binding)
+		profiles[binding.ProfileID] = profile
+	}
+	s.mu.RUnlock()
+	sort.Slice(bindings, func(i, j int) bool { return bindings[i].ID < bindings[j].ID })
+
+	result := make([]ProviderPropertyProjection, 0, len(bindings))
+	for _, binding := range bindings {
+		profile := profiles[binding.ProfileID]
+		preview, err := mapping.Preview(mapping.PreviewRequest{Profile: profile, Direction: mapping.DirectionForward})
+		if err != nil {
+			return nil, fmt.Errorf("binding %q (%s) missing default: %w", binding.ID, mapping.BindingPath(binding), err)
+		}
+		path := binding.ModelPath()
+		result = append(result, ProviderPropertyProjection{
+			Path: path,
+			Definition: device.PropertyDefinition{
+				ID: path.PropertyID, Name: path.PropertyID, Type: profile.OutputType,
+				Readable: true, Notifiable: true,
+			},
+			Value: preview.Value, BindingID: binding.ID, Explicit: true,
+		})
+	}
+	return result, nil
+}
+
 func uniqueStrings(values []string) []string {
 	seen := make(map[string]struct{}, len(values))
 	result := make([]string, 0, len(values))

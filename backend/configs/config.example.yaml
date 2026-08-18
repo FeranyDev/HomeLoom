@@ -11,6 +11,16 @@ logging:
   # the Web system page. Core's own level is set with the -log-level flag.
   child_level: "info"
 
+runtime:
+  # Event queue capacity is per shard (aggregate capacity: shards × capacity).
+  # Higher-priority events are drained first; queued property updates may be
+  # coalesced by Core before reaching a Provider/Target handler.
+  event_queue_shards: 8
+  event_queue_capacity: 128
+  # 0 disables persistence. Set 60..86400 for a low-frequency last-known
+  # state cache; every restored value is marked stale until a Provider reports.
+  state_checkpoint_interval_seconds: 0
+
 media:
   # Core directly owns media lifecycle and authorization. Only the constrained
   # per-camera kernel and FFmpeg remain external executables.

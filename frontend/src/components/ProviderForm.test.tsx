@@ -220,6 +220,16 @@ describe('ProviderForm', () => {
 		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ type: 'sonoff', config: expect.objectContaining({ mode: 'auto', region: 'cn', cloud: expect.objectContaining({ accessToken: 'sonoff-access', endpoint: 'https://cn-apia.coolkit.cn' }) }) }), false))
 	})
 
+	it('shows Sonoff mDNS candidates without adding them to the unsaved configuration', async () => {
+		providerAPI.scanProviderNetwork.mockResolvedValue([{ id: 'sonoff-new-device', providerType: 'sonoff', name: 'Sonoff Plug', host: '192.168.1.30', port: 8081, mac: '', metadata: { deviceId: 'new-device', encrypted: 'true' } }])
+		render(<ProviderForm provider={null} initialType="sonoff" onCancel={() => {}} onSave={vi.fn()} />)
+		await userEvent.click(screen.getByRole('button', { name: '扫描 Sonoff 局域网' }))
+		await waitFor(() => expect(providerAPI.scanProviderNetwork).toHaveBeenCalledWith(expect.objectContaining({ type: 'sonoff', enabled: false, config: expect.objectContaining({ devices: [] }) })))
+		expect(screen.getByText('Sonoff Plug')).toBeInTheDocument()
+		expect(screen.getByText('候选，尚未保存')).toBeInTheDocument()
+		expect(screen.getByText(/不会写入配置/)).toBeInTheDocument()
+	})
+
 	it('completes Tuya OAuth through the QR callback message and fills the UID/token', async () => {
 		const onSave = vi.fn().mockResolvedValue(undefined)
 		const popup = {} as Window

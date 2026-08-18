@@ -13,6 +13,10 @@ import (
 
 const DefaultCapacity = 2000
 
+// SubscriberBuffer bounds a single consumer's pending live log entries. A
+// slow browser must never be able to delay a process that is writing logs.
+const SubscriberBuffer = 256
+
 type Entry struct {
 	Sequence  uint64    `json:"sequence"`
 	Time      time.Time `json:"time"`
@@ -28,18 +32,20 @@ type Entry struct {
 }
 
 type Store struct {
-	mu       sync.RWMutex
-	capacity int
-	next     uint64
-	entries  []Entry
-	now      func() time.Time
+	mu          sync.RWMutex
+	capacity    int
+	next        uint64
+	entries     []Entry
+	now         func() time.Time
+	subscribers map[uint64]chan Entry
+	nextSubID   uint64
 }
 
 func New(capacity int) *Store {
 	if capacity <= 0 {
 		capacity = DefaultCapacity
 	}
-	return &Store{capacity: capacity, entries: make([]Entry, 0, capacity), now: time.Now}
+	return &Store{capacity: capacity, entries: make([]Entry, 0, capacity), now: time.Now, subscribers: make(map[uint64]chan Entry)}
 }
 
 func (s *Store) Writer(process, instance string) io.Writer {
@@ -84,9 +90,17 @@ func (s *Store) Append(process, instance string, payload []byte) {
 	if len(s.entries) == s.capacity {
 		copy(s.entries, s.entries[1:])
 		s.entries[len(s.entries)-1] = entry
-		return
+	} else {
+		s.entries = append(s.entries, entry)
 	}
-	s.entries = append(s.entries, entry)
+	for _, subscriber := range s.subscribers {
+		select {
+		case subscriber <- entry:
+		default:
+			// Live delivery is deliberately lossy for a slow client. The
+			// bounded snapshot remains available for cursor-based recovery.
+		}
+	}
 }
 
 func logSubsystem(process, module, message string) string {
@@ -117,6 +131,30 @@ func (s *Store) Snapshot(after uint64, limit int) []Entry {
 	result := make([]Entry, len(s.entries)-start)
 	copy(result, s.entries[start:])
 	return result
+}
+
+// Subscribe returns a bounded stream of new entries and an idempotent
+// unsubscriber. Consumers must use Snapshot with their latest sequence after
+// reconnecting, because a full subscriber buffer intentionally drops entries.
+func (s *Store) Subscribe() (<-chan Entry, func()) {
+	s.mu.Lock()
+	s.nextSubID++
+	id := s.nextSubID
+	channel := make(chan Entry, SubscriberBuffer)
+	s.subscribers[id] = channel
+	s.mu.Unlock()
+
+	var once sync.Once
+	return channel, func() {
+		once.Do(func() {
+			s.mu.Lock()
+			if current, exists := s.subscribers[id]; exists {
+				delete(s.subscribers, id)
+				close(current)
+			}
+			s.mu.Unlock()
+		})
+	}
 }
 
 type lineWriter struct {

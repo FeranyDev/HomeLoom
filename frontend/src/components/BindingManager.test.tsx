@@ -52,6 +52,45 @@ describe('BindingManager', () => {
     expect(screen.getByText('140 ～ 500，步长 1 mired', { selector: '.is-effective code' })).toBeInTheDocument()
   })
 
+	it('previews each selected HomeKit Consumer property from its current unified-model value', async () => {
+		const preview = vi.fn(async () => ({ profileId: 'target-invert', profileVersion: 1, direction: 'forward' as const, value: { type: 'bool' as const, bool: true }, steps: [] }))
+		const api = {
+			listBindings: vi.fn(async () => []),
+			listProfiles: vi.fn(async () => [{ schemaVersion: 1 as const, id: 'target-invert', version: 1, kind: 'target' as const, inputType: 'bool' as const, outputType: 'bool' as const, transforms: [{ type: 'invert' as const }], builtIn: false }]),
+			create: vi.fn(), update: vi.fn(), remove: vi.fn(), catalog, preview,
+		}
+		render(<BindingManager device={device} api={api} initialStage="consumer" consumerOnly consumerId="homekit" />)
+
+		expect(await screen.findByRole('region', { name: 'HomeKit 属性逐值结果预览' })).toBeInTheDocument()
+		await userEvent.selectOptions(screen.getByLabelText('映射转换 Profile'), 'target-invert')
+		await userEvent.click(screen.getByRole('button', { name: '预览当前值' }))
+
+		expect(preview).toHaveBeenCalledWith({ profileId: 'target-invert', direction: 'forward', value: { type: 'bool', bool: false } })
+		expect(await screen.findByText('true · 布尔值（bool）')).toBeInTheDocument()
+	})
+
+	it('automatically selects a generated Capability Profile for compatible unit differences', async () => {
+		const sensor: Device = {
+			...device, id: 'temperature-1', name: 'Temperature', type: 'temperature-sensor',
+			endpoints: [{ id: 'main', name: 'Main', type: 'main', capabilities: [{ id: 'temperature', type: 'temperature', properties: [{ definition: { id: 'current-temperature', name: 'Temperature', type: 'number', unit: 'celsius', readable: true, writable: false, notifiable: true }, value: { type: 'number', number: 20 } }] }] }],
+		}
+		const automaticID = 'builtin-capability-celsius-to-fahrenheit-number-to-number'
+		const api = {
+			listBindings: vi.fn(async () => []),
+			listProfiles: vi.fn(async () => [{ schemaVersion: 1 as const, id: automaticID, version: 1, kind: 'capability' as const, inputType: 'number' as const, outputType: 'number' as const, transforms: [{ type: 'unit' as const, fromUnit: 'celsius', toUnit: 'fahrenheit' }], builtIn: true }]),
+			create: vi.fn(), update: vi.fn(), remove: vi.fn(),
+			catalog: vi.fn(async () => ({
+				providers: [{ ...sensor, catalog: { complete: true, source: 'device-snapshot' } }],
+				models: [{ deviceType: 'temperature-sensor' as const, version: 1, builtIn: true, custom: { publisher: { level: 'custom' as const, behavior: 'preserve' }, consumer: { level: 'custom' as const, behavior: 'explicit' } }, parameters: [{ path: { endpointId: 'main', capabilityId: 'temperature', propertyId: 'current-temperature' }, name: 'Temperature', level: 'required' as const, type: 'number' as const, unit: 'fahrenheit', readable: true, writable: false, notifiable: true, publisher: { level: 'required' as const, behavior: 'must-publish' }, consumer: { level: 'required' as const, behavior: 'must-map' } }] }],
+				consumers: [],
+			})),
+		}
+		render(<BindingManager device={sensor} api={api} providerOnly />)
+
+		await waitFor(() => expect(screen.getByLabelText('映射转换 Profile')).toHaveValue(automaticID))
+		expect(screen.getByText(/已按两端单位自动选择 Capability Profile/)).toBeInTheDocument()
+	})
+
   it('allows property-card text to be selected for copying', async () => {
     render(<BindingManager device={device} api={{
       listBindings: vi.fn(async () => []), listProfiles: vi.fn(async () => []), create: vi.fn(), update: vi.fn(), remove: vi.fn(), catalog,
@@ -320,6 +359,26 @@ describe('BindingManager', () => {
     await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
       stage: 'consumer', providerId: 'virtual-main', deviceId: 'virtual-switch-1', targetId: 'apple-main', consumerDeviceId: 'living-switch', consumerId: 'homekit', consumerProperty: 'Switch.On',
     })))
+  })
+
+  it('highlights a deleted Target route even when a stale refresh still returns it', async () => {
+    const current: MappingBinding = { id: 'bridge-current', stage: 'consumer', providerId: device.providerId, deviceId: device.id, deviceType: 'switch', modelEndpointId: 'main', modelCapabilityId: 'switch', modelPropertyId: 'power', targetId: 'apple-main', consumerDeviceId: 'living-switch', consumerId: 'homekit', consumerProperty: 'Switch.On', enabled: true }
+    const api = {
+      listBindings: vi.fn(async () => [current]), listProfiles: vi.fn(async () => []), create: vi.fn(), update: vi.fn(), remove: vi.fn(async () => undefined), catalog,
+    }
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<BindingManager device={device} api={api} initialStage="consumer" consumerOnly consumerId="homekit" targetId="apple-main" consumerDeviceId="living-switch" />)
+
+    await userEvent.click(await screen.findByRole('button', { name: '删除' }))
+
+    await waitFor(() => expect(api.remove).toHaveBeenCalledWith('bridge-current'))
+    const deleted = await screen.findByRole('status', { name: '已删除映射路由' })
+    expect(deleted).toHaveClass('mapping-route-deleted')
+    expect(deleted).toHaveTextContent('刚刚删除')
+    expect(deleted).toHaveTextContent('apple-main / living-switch')
+    expect(deleted).toHaveTextContent('main.switch.power → homekit.Switch.On')
+    expect(screen.queryByRole('button', { name: '编辑映射路由 bridge-current' })).not.toBeInTheDocument()
+    confirm.mockRestore()
   })
 
   it('uses only the Consumer catalog selected by the Target adapter', async () => {

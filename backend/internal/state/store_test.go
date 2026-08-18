@@ -10,6 +10,67 @@ import (
 	domainstate "github.com/feranydev/homeloom/backend/internal/domain/state"
 )
 
+func TestApplyWithResultExplainsCrossProviderPriority(t *testing.T) {
+	key := domainstate.Key{DeviceID: "lamp", EndpointID: "main", CapabilityID: "switch", PropertyID: "power"}
+	now := time.Now().UTC()
+	store := NewStore(Options{PriorityResolver: StaticPriorityResolver{
+		Providers: map[string]int{"cloud": 10, "lan": 1},
+	}})
+	if _, applied := store.Apply(domainstate.StateValue{Key: key, ProviderID: "lan", Value: domainstate.BoolValue(true), ObservedAt: now, ReceivedAt: now, Quality: domainstate.QualityReported}); !applied {
+		t.Fatal("initial value was not applied")
+	}
+	value, result := store.ApplyWithResult(domainstate.StateValue{Key: key, ProviderID: "cloud", Value: domainstate.BoolValue(false), ObservedAt: now.Add(-time.Minute), ReceivedAt: now.Add(-time.Minute), Quality: domainstate.QualityReported})
+	if !result.Applied || result.Decision != DecisionAccepted || result.CurrentPriority != 1 || result.IncomingPriority != 10 || value.ProviderID != "cloud" {
+		t.Fatalf("value = %#v, result = %#v", value, result)
+	}
+	value, result = store.ApplyWithResult(domainstate.StateValue{Key: key, ProviderID: "lan", Value: domainstate.BoolValue(true), ObservedAt: now.Add(time.Minute), ReceivedAt: now.Add(time.Minute), Quality: domainstate.QualityReported})
+	if result.Applied || result.Decision != DecisionRejectedProviderPriority || result.CurrentPriority != 10 || result.IncomingPriority != 1 || value.ProviderID != "cloud" || value.Value.Bool == nil || *value.Value.Bool {
+		t.Fatalf("lower priority value = %#v, result = %#v", value, result)
+	}
+}
+
+func TestPropertyPriorityOverridesProviderDefault(t *testing.T) {
+	key := domainstate.Key{DeviceID: "sensor", EndpointID: "main", CapabilityID: "air-quality", PropertyID: "pm25"}
+	now := time.Now().UTC()
+	store := NewStore(Options{PriorityResolver: StaticPriorityResolver{
+		Providers: map[string]int{"cloud": 10, "lan": 1},
+		Properties: map[domainstate.Key]map[string]int{
+			key: {"cloud": 1, "lan": 20},
+		},
+	}})
+	store.Apply(domainstate.StateValue{Key: key, ProviderID: "cloud", Value: domainstate.IntValue(30), ObservedAt: now, ReceivedAt: now, Quality: domainstate.QualityReported})
+	value, result := store.ApplyWithResult(domainstate.StateValue{Key: key, ProviderID: "lan", Value: domainstate.IntValue(20), ObservedAt: now.Add(-time.Minute), ReceivedAt: now.Add(-time.Minute), Quality: domainstate.QualityReported})
+	if !result.Applied || value.ProviderID != "lan" || value.Value.Int == nil || *value.Value.Int != 20 {
+		t.Fatalf("value = %#v, result = %#v", value, result)
+	}
+}
+
+func TestCheckpointRoundTripForcesRestoredValuesStale(t *testing.T) {
+	key := domainstate.Key{DeviceID: "lamp", EndpointID: "main", CapabilityID: "switch", PropertyID: "power"}
+	now := time.Now().UTC()
+	store := NewStore()
+	store.Apply(domainstate.StateValue{Key: key, ProviderID: "lan", Value: domainstate.BoolValue(true), ObservedAt: now, ReceivedAt: now, ExpiresAt: now.Add(time.Minute), Quality: domainstate.QualityReported, PendingCommandID: "cmd-1"})
+	payload, err := json.Marshal(store.Checkpoint())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var checkpoint Checkpoint
+	if err := json.Unmarshal(payload, &checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	restored := NewStore()
+	if !restored.RestoreCheckpoint(checkpoint) {
+		t.Fatal("RestoreCheckpoint() rejected a current checkpoint")
+	}
+	value, exists := restored.Get(key)
+	if !exists || value.Quality != domainstate.QualityStale || value.Source != domainstate.SourcePersistentCache || value.Available || value.UnavailableReason != domainstate.UnavailableStale || value.PendingCommandID != "" || !value.ExpiresAt.IsZero() || value.Value.Bool == nil || !*value.Value.Bool {
+		t.Fatalf("restored value = %#v", value)
+	}
+	if restored.RestoreCheckpoint(Checkpoint{Version: CheckpointVersion + 1}) {
+		t.Fatal("RestoreCheckpoint() accepted an unsupported version")
+	}
+}
+
 func TestUnknownNullAndUnavailableRetainsLastValue(t *testing.T) {
 	store := NewStore()
 	now := time.Now().UTC()

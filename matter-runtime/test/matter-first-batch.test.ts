@@ -105,7 +105,7 @@ test("all Catalog types construct official endpoints and bridge state", async (t
     devices: firstBatchDevices(),
   });
 
-  assert.equal(driver.diagnostics().deviceCount, 24);
+  assert.equal(driver.diagnostics().deviceCount, 25);
   for (const device of firstBatchDevices()) {
     const deviceTypeList = await driver.readAttributeForTest(
       device.id,
@@ -259,6 +259,29 @@ test("all Catalog types construct official endpoints and bridge state", async (t
     await driver.readAttributeForTest("television", "mediaPlayback", "currentState"),
     0,
   );
+  assert.equal(
+    await driver.readAttributeForTest(
+      "power-meter",
+      "electricalPowerMeasurement",
+      "activePower",
+    ),
+    1_234_500,
+  );
+  assert.equal(
+    await driver.readAttributeForTest(
+      "power-meter",
+      "electricalPowerMeasurement",
+      "voltage",
+    ),
+    230_100,
+  );
+  const cumulativeEnergy = await driver.readAttributeForTest(
+    "power-meter",
+    "electricalEnergyMeasurement",
+    "cumulativeEnergyImported",
+  ) as { energy?: number; endTimestamp?: number };
+  assert.equal(cumulativeEnergy.energy, 12_345_678_000);
+  assert.ok(typeof cumulativeEnergy.endTimestamp === "number");
 
   await driver.invokeCommandForTest("fan", "onOff", "off");
   await driver.invokeCommandForTest(
@@ -354,12 +377,28 @@ test("all Catalog types construct official endpoints and bridge state", async (t
     { deviceId: "fan", path: "FanControl.PercentSetting", value: 33 },
     { deviceId: "thermostat", path: "Thermostat.SystemMode", value: "auto" },
     { deviceId: "network-device", path: "OnOff.OnOff", value: false },
+    { deviceId: "power-meter", path: "ElectricalPowerMeasurement.ActivePower", value: 500.25 },
+    { deviceId: "power-meter", path: "ElectricalEnergyMeasurement.CumulativeEnergyImported", value: 12_346 },
   ]);
   assert.equal(
     await driver.readAttributeForTest("network-device", "onOff", "onOff"),
     false,
   );
   assert.equal(writes.length, 7, "host replay must not loop back as controller writes");
+  assert.equal(
+    await driver.readAttributeForTest(
+      "power-meter",
+      "electricalPowerMeasurement",
+      "activePower",
+    ),
+    500_250,
+  );
+  const replayedCumulativeEnergy = await driver.readAttributeForTest(
+    "power-meter",
+    "electricalEnergyMeasurement",
+    "cumulativeEnergyImported",
+  ) as { energy?: number };
+  assert.equal(replayedCumulativeEnergy.energy, 12_346_000_000);
 
   await driver.updateReachability([
     { deviceId: "humidity", reachable: false },
@@ -506,6 +545,16 @@ function firstBatchDevices(): DeviceSnapshot[] {
     snapshot("television", 24, "television", {
       "OnOff.OnOff": true,
       "MediaPlayback.CurrentState": "playing",
+    }),
+    snapshot("power-meter", 27, "power-meter", {
+      "ElectricalPowerMeasurement.ActivePower": 1234.5,
+      "ElectricalPowerMeasurement.Voltage": 230.1,
+      "ElectricalPowerMeasurement.ActiveCurrent": 5.36,
+      "ElectricalPowerMeasurement.Frequency": 50,
+      "ElectricalPowerMeasurement.PowerFactor": 0.96,
+      "ElectricalPowerMeasurement.ReactivePower": 20.5,
+      "ElectricalPowerMeasurement.ApparentPower": 1280.3,
+      "ElectricalEnergyMeasurement.CumulativeEnergyImported": 12345.678,
     }),
   ];
 }

@@ -162,13 +162,15 @@ HomeLoom 的温湿度组合传感器属于统一模型逻辑类型，Matter 没�
 - [x] 水泵（Pump · OnOff + Level + Pump Configuration）；
 - [x] 空气净化器（Air Purifier · Fan Control + OnOff）；
 - [x] 扬声器音量控制（Speaker · OnOff 静音 + Level 音量；不做完整媒体控制）；
-- [ ] 空调/Room Air Conditioner；
-- [ ] 车库门；
-- [ ] 机器人吸尘器；
-- [ ] 能耗、电压、电流、功率属性，根据 Matter 规范版本和生态兼容性分级接入；
+- [x] 电力计量器（Electrical Meter · Electrical Power Measurement + Electrical Energy Measurement）：有功/无功/视在功率、电压、电流、频率、功率因数和累计进口电量；运行时负责 W/V/A/Hz/kWh 到 Matter mW/mV/mA/mHz/mWh 的精确整型换算，并声明标准精度范围；
+- [ ] 空调/Room Air Conditioner：统一模型只有一个 `target-temperature`，而 Matter Thermostat 在自动/冷暖模式要求独立的 Heating 与 Cooling setpoint；直接双向映射会让 Matter 的死区自动调整覆盖用户请求，需先扩充统一模型后再开放；
+- [ ] 车库门：固定的 Matter 1.6 Device Type 目录没有可直接等价于 HomeLoom 车库门状态机的 Garage Door endpoint；需先确定 Closure 设备类型、障碍/锁止状态和安全命令契约；
+- [ ] 机器人吸尘器：Matter Robotic Vacuum Cleaner 需要 `RvcRunMode`、`RvcOperationalState`（及可选 Clean Mode/Service Area）的模式表、状态机与命令，现有统一模型尚未提供这些规范必填数据；
+- [~] 能耗、电压、电流、功率属性：Electrical Meter 已完成；多相、需量/周期电量、出口电量、费率、能源管理与各 Controller 的显示兼容性仍待按能力分级；
+- [ ] EVSE：Energy EVSE 需要 State、SupplyState、FaultState、回路容量和 Enable/Disable Charging 安全命令，现有统一模型不足以安全构造；
 - [ ] 完整媒体控制与更多影音设备。
 
-机器人吸尘器需要重新按 Matter 原生设备模型评估，不能沿用 HomeKit Consumer 的“不支持”结论。
+完整媒体控制仍需补齐 Audio Output、输入源/Content App、播放队列与进度语义；当前电视仅是 Basic Video Player 的播放、暂停、停止和按键控制，扬声器仅支持绝对音量/静音。机器人吸尘器需要按 Matter 原生设备模型评估，不能沿用 HomeKit Consumer 的“不支持”结论。
 
 后续新增类型仍必须遵循“统一模型映射 → 官方 Device Type/Cluster → driver 构造测试 → 控制器验收”的顺序逐类启用，禁止先暴露目录再让 `state.replay` 失败。
 
@@ -288,7 +290,7 @@ Matter 不能只用 HomeKit 的 `paired: boolean` 表达运行状态。
 
 ### 第二轮：完整基础桥（代码基础完成，真实双桥与 Multi-Admin 待验收）
 
-- [x] 扩充并验证官方标准 Matter 设备模型（第一批 12 类 + 第二批 10 类）；
+- [x] 扩充并验证官方标准 Matter 设备模型（第一批 12 类 + 第二批 10 类 + Electrical Meter）；
 - [x] 多 Fabric 管理 API 和 commissioning window 生命周期；
 - [x] sidecar 故障恢复与全量重放；
 - [~] 100 Endpoint 稳定身份和状态 burst 已自动测试，真实 Controller 订阅压力测试待执行；
@@ -298,8 +300,8 @@ Matter 不能只用 HomeKit 的 `paired: boolean` 表达运行状态。
 
 ### 第三轮：高级设备与发布准备（进行中）
 
-- [x] 第二批官方设备模型（照度、气压、漏水、烟雾、一氧化碳、空气质量、阀门、水泵、空气净化器、扬声器、电视）；
-- [ ] 剩余高级设备：Room Air Conditioner、车库门、机器人吸尘器、能耗与 EVSE 等；
+- [x] 第二批官方设备模型（照度、气压、漏水、烟雾、一氧化碳、空气质量、阀门、水泵、空气净化器、扬声器、电视、电力计量器）；
+- [ ] 剩余高级设备：Room Air Conditioner、车库门、机器人吸尘器、EVSE 与能源高级能力等；
 - [ ] 生态差异兼容；
 - [ ] 完整 `chip-tool` 回归；
 - [ ] Apple Home、Google Home 等实机记录；

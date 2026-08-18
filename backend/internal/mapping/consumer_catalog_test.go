@@ -142,12 +142,42 @@ func TestMatterFirstDeviceBatchIsExplicitlySupported(t *testing.T) {
 		device.TypeIlluminanceSensor, device.TypePressureSensor, device.TypeLeakSensor,
 		device.TypeSmokeSensor, device.TypeCarbonMonoxideSensor, device.TypeAirQualitySensor,
 		device.TypeValve, device.TypePump, device.TypeAirPurifier, device.TypeSpeaker, device.TypeTelevision,
+		device.TypePowerMeter,
 	}
 	for _, deviceType := range supported {
 		known, ok := ConsumerModelSupport("matter", deviceType)
 		if !known || !ok {
 			t.Errorf("Matter support for %q = known %v, supported %v", deviceType, known, ok)
 		}
+	}
+}
+
+func TestMatterElectricalMeterMappingsUseNativeClustersAndUnits(t *testing.T) {
+	powerMeter, found := ConsumerContract("matter", device.TypePowerMeter)
+	if !found {
+		t.Fatal("Matter electrical meter contract is missing")
+	}
+	want := map[string]string{
+		"current-power": "ElectricalPowerMeasurement.ActivePower",
+		"voltage":       "ElectricalPowerMeasurement.Voltage",
+		"current":       "ElectricalPowerMeasurement.ActiveCurrent",
+		"frequency":     "ElectricalPowerMeasurement.Frequency",
+		"power-factor":  "ElectricalPowerMeasurement.PowerFactor",
+		"energy":        "ElectricalEnergyMeasurement.CumulativeEnergyImported",
+	}
+	for _, parameter := range powerMeter.Parameters {
+		if target, ok := want[parameter.Source.PropertyID]; ok && parameter.Target == target {
+			delete(want, parameter.Source.PropertyID)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("Matter electrical meter mappings missing: %#v", want)
+	}
+	energy, found := FindConsumerProperty(
+		"matter", device.TypePowerMeter, "ElectricalEnergyMeasurement.CumulativeEnergyImported",
+	)
+	if !found || energy.Unit != "kilowatt-hour" || energy.Kind != "attribute" || !energy.Notifiable {
+		t.Fatalf("Matter cumulative-energy property = %#v, found=%v", energy, found)
 	}
 }
 

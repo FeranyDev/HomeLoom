@@ -42,7 +42,8 @@ export async function requestJSON<T>(path: string, init: RequestInit = {}): Prom
 }
 
 export async function requestData<T>(path: string, init: RequestInit = {}): Promise<T> {
-  return (await requestJSON<{ data: T }>(path, init)).data
+  const response = await requestJSON<{ data: T }>(path, init)
+  return response?.data as T
 }
 
 export async function requestFile(path: string, init: RequestInit = {}): Promise<DownloadedFile> {

@@ -17,8 +17,9 @@ describe('API client', () => {
   })
 
 	it('handles empty success responses and malformed error bodies', async () => {
-		vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response(null, { status: 204 })).mockResolvedValueOnce(new Response('gateway unavailable', { status: 502 })))
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response(null, { status: 204 })).mockResolvedValueOnce(new Response(null, { status: 204 })).mockResolvedValueOnce(new Response('gateway unavailable', { status: 502 })))
 		await expect(requestJSON<void>('/empty')).resolves.toBeUndefined()
+		await expect(requestData<void>('/empty-data')).resolves.toBeUndefined()
 		const error = await requestJSON('/broken').catch((cause) => cause)
 		expect(error).toBeInstanceOf(ApiError)
 		expect(error).toMatchObject({ status: 502, code: 'unknown_error', requestId: '' })

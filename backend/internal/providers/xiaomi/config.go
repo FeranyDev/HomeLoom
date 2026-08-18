@@ -30,6 +30,10 @@ const (
 // and PEM material are stored in the provider JSON so the GORM store's existing
 // recursive secret encryption can protect them without a sidecar YAML/file.
 type Config struct {
+	// CredentialsRevoked marks a deliberately disabled Provider whose local
+	// credentials were cleared by an administrator. It permits the redacted
+	// device mapping to remain visible without making the instance runnable.
+	CredentialsRevoked bool           `json:"credentialsRevoked,omitempty"`
 	Host               string         `json:"host"`
 	Port               int            `json:"port,omitempty"`
 	GatewayDID         string         `json:"gatewayDid,omitempty"`
@@ -58,6 +62,11 @@ type OAuthConfig struct {
 	RefreshToken string `json:"refreshToken,omitempty"`
 	RefreshAfter int64  `json:"refreshAfter,omitempty"`
 	ExpiresAt    int64  `json:"expiresAt,omitempty"`
+	// RevocationEndpoint is optional. Xiaomi does not publish a configured
+	// endpoint in this integration, so no remote request is made unless an
+	// administrator explicitly provides a verified HTTPS endpoint implementing
+	// the OAuth token-revocation contract.
+	RevocationEndpoint string `json:"revocationEndpoint,omitempty"`
 }
 
 type DeviceConfig struct {
@@ -130,6 +139,12 @@ func decodeConfig(item providerconfig.Config) (Config, *url.URL, *tls.Config, er
 		return Config{}, nil, nil, fmt.Errorf("decode xiaomi config: %w", err)
 	}
 	config.applyDefaults()
+	if config.CredentialsRevoked {
+		if item.Enabled {
+			return Config{}, nil, nil, errors.New("revoked Xiaomi credentials require the provider to be disabled")
+		}
+		return config, nil, nil, nil
+	}
 	brokerURL, err := config.validate()
 	if err != nil {
 		return Config{}, nil, nil, err
@@ -142,6 +157,9 @@ func decodeConfig(item providerconfig.Config) (Config, *url.URL, *tls.Config, er
 }
 
 func (c *Config) applyDefaults() {
+	if c.OAuth != nil {
+		c.OAuth.RevocationEndpoint = strings.TrimSpace(c.OAuth.RevocationEndpoint)
+	}
 	c.Host = strings.TrimSpace(c.Host)
 	c.GatewayDID = strings.TrimSpace(c.GatewayDID)
 	c.ClientID = strings.TrimSpace(c.ClientID)
@@ -209,6 +227,12 @@ func (c Config) validate() (*url.URL, error) {
 	}
 	if c.CACertificate == "" || c.ClientCertificate == "" || c.PrivateKey == "" {
 		return nil, errors.New("caCertificate, clientCertificate and privateKey are required")
+	}
+	if c.OAuth != nil && c.OAuth.RevocationEndpoint != "" {
+		endpoint, err := url.Parse(c.OAuth.RevocationEndpoint)
+		if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.Fragment != "" {
+			return nil, errors.New("oauth.revocationEndpoint must be an absolute HTTPS URL without user info or fragment")
+		}
 	}
 	if c.RequestTimeoutSec < 1 || c.RequestTimeoutSec > 120 {
 		return nil, errors.New("requestTimeoutSeconds must be between 1 and 120")

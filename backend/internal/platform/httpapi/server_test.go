@@ -36,6 +36,27 @@ type apiSettingsStore struct{ values map[string]string }
 
 type apiScanProvider struct{ id string }
 
+type apiCredentialRevokingProvider struct{ id string }
+type apiCredentialRevocationRuntime struct{ removed []string }
+
+func (p *apiCredentialRevokingProvider) Manifest() providersdk.Manifest {
+	return providersdk.Manifest{ID: p.id, Type: "xiaomi", Name: p.id}
+}
+func (*apiCredentialRevokingProvider) Capabilities() providersdk.Capabilities {
+	return providersdk.Capabilities{}
+}
+func (*apiCredentialRevokingProvider) Initialize(context.Context) error { return nil }
+func (*apiCredentialRevokingProvider) Close(context.Context) error      { return nil }
+func (*apiCredentialRevokingProvider) RevokeCredentials(context.Context) (providersdk.CredentialRevocation, error) {
+	return providersdk.CredentialRevocation{Config: json.RawMessage(`{"credentialsRevoked":true,"devices":[]}`)}, nil
+}
+func (*apiCredentialRevocationRuntime) Apply(context.Context, providersdk.Provider) error { return nil }
+func (r *apiCredentialRevocationRuntime) Remove(_ context.Context, id string) error {
+	r.removed = append(r.removed, id)
+	return nil
+}
+func (*apiCredentialRevocationRuntime) ProviderInfos() []providersdk.RuntimeInfo { return nil }
+
 type apiAuthState struct {
 	sync.Mutex
 	verified bool
@@ -273,6 +294,71 @@ func TestDatabaseBackupAndRestoreStagingAPI(t *testing.T) {
 	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusAccepted || !strings.Contains(response.Body.String(), `"requiresRestart":true`) {
 		t.Fatalf("restore stage = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestMasterKeyRotationAPIRequiresAdministratorCSRFAndDoesNotExposeKeys(t *testing.T) {
+	ctx := context.Background()
+	databaseURL, keyPath := testStoreCredentials(t)
+	store, err := gormstore.Open(ctx, databaseURL, keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	server := newTestServer()
+	server.SetMaintenanceService(application.NewMaintenanceService(store, keyPath, gormstore.ValidateRestoreCandidate, gormstore.PendingRestorePaths, gormstore.WritePendingRestoreMarker))
+	auth := application.NewAuthService(store)
+	server.SetAuthService(auth)
+	session, err := auth.Setup(ctx, "admin", "a-long-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/system/master-key", nil)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status = %d %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/system/master-key/rotate", bytes.NewBufferString(`{"confirmation":"ROTATE"}`))
+	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: session.Token})
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("rotation without csrf = %d %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/system/master-key/rotate", bytes.NewBufferString(`{"confirmation":"WRONG"}`))
+	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	request.Header.Set(csrfHeaderName, session.CSRFToken)
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: session.Token})
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "type ROTATE") {
+		t.Fatalf("rotation wrong confirmation = %d %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/system/master-key/rotate", bytes.NewBufferString(`{"confirmation":"ROTATE"}`))
+	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	request.Header.Set(csrfHeaderName, session.CSRFToken)
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: session.Token})
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"activeVersion":2`) || strings.Contains(response.Body.String(), "keys") || strings.Contains(response.Body.String(), "master-keyring") {
+		t.Fatalf("rotation = %d %s", response.Code, response.Body.String())
+	}
+	if cacheControl := response.Header().Get(echo.HeaderCacheControl); cacheControl != "no-store" {
+		t.Fatalf("rotation cache control = %q", cacheControl)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/system/master-key", nil)
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: session.Token})
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"activeVersion":2`) || strings.Contains(response.Body.String(), "keys") {
+		t.Fatalf("rotation status = %d %s", response.Code, response.Body.String())
 	}
 }
 
@@ -760,7 +846,7 @@ func TestRuntimeSettingsAPIUpdatesWithoutRestart(t *testing.T) {
 	}
 }
 
-func TestSubprocessLogsAPIUsesCursorAndDisablesCaching(t *testing.T) {
+func TestRuntimeLogsAPIUsesCursorAndDisablesCaching(t *testing.T) {
 	devices := application.NewDeviceService(nil, nil)
 	server := NewServer(":0", devices, application.NewTargetService(nil, nil), zap.NewNop())
 	logs := subprocesslog.New(10)
@@ -768,7 +854,7 @@ func TestSubprocessLogsAPIUsesCursorAndDisablesCaching(t *testing.T) {
 	logs.Append("camera-kernel", "camera-1", []byte("streaming"))
 	server.SetSubprocessLogs(logs)
 
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/system/subprocess-logs?after=1&limit=5", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/system/runtime-logs?after=1&limit=5", nil)
 	recorder := httptest.NewRecorder()
 	server.echo.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK || recorder.Header().Get("Cache-Control") != "no-store" {
@@ -1634,6 +1720,52 @@ func TestUnifiedEventStreamPublishesDeviceChanges(t *testing.T) {
 	}
 }
 
+func TestUnifiedEventStreamPublishesBoundedRuntimeLogsWithCursor(t *testing.T) {
+	devices := application.NewDeviceService(virtual.NewProvider())
+	defer devices.Close()
+	logs := subprocesslog.New(10)
+	logs.Append("backend", "main", []byte(`{"level":"info","msg":"first"}`))
+	logs.Append("matter", "matter-main", []byte(`{"level":"info","msg":"token=do-not-leak runtime ready"}`))
+	server := NewServer(":0", devices, application.NewTargetService(nil, nil), zap.NewNop())
+	server.SetSubprocessLogs(logs)
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	request, err := http.NewRequest(http.MethodGet, httpServer.URL+"/api/v1/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Last-Event-ID", "1")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("cache control = %q", response.Header.Get("Cache-Control"))
+	}
+	scanner := bufio.NewScanner(response.Body)
+	if !scanner.Scan() || scanner.Text() != "event: ready" {
+		t.Fatalf("ready = %q", scanner.Text())
+	}
+	if !scanner.Scan() || scanner.Text() != "data: {}" || !scanner.Scan() || scanner.Text() != "" {
+		t.Fatalf("malformed ready event")
+	}
+	if !scanner.Scan() || scanner.Text() != "id: 2" {
+		t.Fatalf("replayed id = %q", scanner.Text())
+	}
+	if !scanner.Scan() || scanner.Text() != "event: runtime-log" {
+		t.Fatalf("replayed event = %q", scanner.Text())
+	}
+	if !scanner.Scan() {
+		t.Fatal("missing runtime log data")
+	}
+	payload := scanner.Text()
+	if !strings.Contains(payload, `"sequence":2`) || !strings.Contains(payload, `"message":"token=******** runtime ready"`) || strings.Contains(payload, "do-not-leak") {
+		t.Fatalf("replayed log = %q", payload)
+	}
+}
+
 func TestLegacySplitEventStreamsAreRemoved(t *testing.T) {
 	httpServer := httptest.NewServer(newTestServer().Handler())
 	defer httpServer.Close()
@@ -1867,5 +1999,39 @@ func TestRestartProviderEndpoint(t *testing.T) {
 	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"status":"running"`)) {
 		t.Fatalf("restart response = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestRevokeProviderCredentialsEndpointRequiresConfirmationAndReturnsSafeOutcome(t *testing.T) {
+	config := providerconfig.Config{ID: "xiaomi-main", Type: "xiaomi", Name: "Xiaomi", Enabled: true, Config: json.RawMessage(`{"accessToken":"secret-token","devices":[]}`)}
+	factory := providersdk.NewFactory()
+	if err := factory.Register("xiaomi", func(item providerconfig.Config) (providersdk.Provider, error) {
+		return &apiCredentialRevokingProvider{id: item.ID}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store := &apiProviderStore{items: map[string]providerconfig.Config{config.ID: config}}
+	runtime := &apiCredentialRevocationRuntime{}
+	providers := application.NewProviderService([]providerconfig.Config{config}, store, factory, runtime)
+	devices := application.NewDeviceService(virtual.NewProvider())
+	defer devices.Close()
+	server := NewServer(":0", devices, application.NewTargetService(nil, nil), zap.NewNop(), providers)
+
+	incorrect := httptest.NewRecorder()
+	incorrectRequest := httptest.NewRequest(http.MethodPost, "/api/v1/providers/xiaomi-main/credentials/revoke", strings.NewReader(`{"confirmation":"REVOKE another"}`))
+	incorrectRequest.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	server.Handler().ServeHTTP(incorrect, incorrectRequest)
+	if incorrect.Code != http.StatusBadRequest {
+		t.Fatalf("incorrect confirmation = %d %s", incorrect.Code, incorrect.Body.String())
+	}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/providers/xiaomi-main/credentials/revoke", strings.NewReader(`{"confirmation":"REVOKE xiaomi-main"}`))
+	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"localRevoked":true`)) || bytes.Contains(response.Body.Bytes(), []byte("secret-token")) || response.Header().Get(echo.HeaderCacheControl) != "no-store" {
+		t.Fatalf("revocation response = %d %s headers=%v", response.Code, response.Body.String(), response.Header())
+	}
+	if saved := store.items[config.ID]; saved.Enabled || !bytes.Contains(saved.Config, []byte(`"credentialsRevoked":true`)) || len(runtime.removed) != 1 {
+		t.Fatalf("saved=%#v removed=%v", saved, runtime.removed)
 	}
 }

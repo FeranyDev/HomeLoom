@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -39,8 +38,13 @@ type databaseSnapshot struct {
 	MatterEndpointIDs     []matterEndpointIdentityRow   `json:"matterEndpointIdentities"`
 	HomeKitAccessoryIDs   []homeKitAccessoryIDRow       `json:"homeKitAccessoryIds"`
 	HomeKitIIDs           []homeKitIIDRow               `json:"homeKitIids"`
+	HomeKitAccessoryUUIDs []homeKitAccessoryUUIDRow     `json:"homeKitAccessoryUuids"`
 	SystemSettings        []systemSettingRow            `json:"systemSettings"`
 	DevicePreferences     []devicePreferenceRow         `json:"devicePreferences"`
+	LogicalDevices        []logicalDeviceRow            `json:"logicalDevices"`
+	ProviderDeviceIDs     []providerDeviceIdentityRow   `json:"providerDeviceIdentities"`
+	LogicalDeviceIDs      []logicalDeviceIdentityRow    `json:"logicalDeviceIdentities"`
+	DeviceCapabilities    []deviceCapabilityIdentityRow `json:"deviceCapabilityIdentities"`
 	DeviceLocationHomes   []deviceLocationHomeRow       `json:"deviceLocationHomes"`
 	DeviceLocationRooms   []deviceLocationRoomRow       `json:"deviceLocationRooms"`
 	DeviceLocations       []deviceLocationPreferenceRow `json:"deviceLocations"`
@@ -107,14 +111,14 @@ func (s *Store) readSnapshot(ctx context.Context) (databaseSnapshot, error) {
 			out   any
 		}{
 			{"providers", &result.Providers}, {"targets", &result.Targets},
-			{"target virtual devices", &result.TargetVirtualDevices}, {"HomeKit accessory IDs", &result.HomeKitAccessoryIDs},
+			{"target virtual devices", &result.TargetVirtualDevices}, {"HomeKit accessory IDs", &result.HomeKitAccessoryIDs}, {"HomeKit accessory UUIDs", &result.HomeKitAccessoryUUIDs},
 			{"media sources", &result.MediaSources}, {"media credentials", &result.MediaCredentials},
 			{"media streams", &result.MediaStreams}, {"media runtime values", &result.MediaRuntimeValues},
 			{"media authorization leases", &result.MediaAuthLeases}, {"media authorization audits", &result.MediaAuthAudits},
 			{"media config state", &result.MediaConfigState},
 			{"Matter runtime values", &result.MatterRuntimeValues}, {"Matter endpoint identities", &result.MatterEndpointIDs},
 			{"HomeKit IIDs", &result.HomeKitIIDs}, {"system settings", &result.SystemSettings},
-			{"device preferences", &result.DevicePreferences}, {"device location homes", &result.DeviceLocationHomes},
+			{"device preferences", &result.DevicePreferences}, {"logical devices", &result.LogicalDevices}, {"provider device identities", &result.ProviderDeviceIDs}, {"logical device identities", &result.LogicalDeviceIDs}, {"device capability identities", &result.DeviceCapabilities}, {"device location homes", &result.DeviceLocationHomes},
 			{"device location rooms", &result.DeviceLocationRooms}, {"device locations", &result.DeviceLocations}, {"audit events", &result.AuditEvents},
 			{"mapping profiles", &result.MappingProfiles}, {"mapping bindings", &result.MappingBindings},
 			{"custom model properties", &result.CustomModelProperties}, {"model enum overrides", &result.ModelEnumOverrides}, {"administrator users", &result.AdminUsers},
@@ -166,11 +170,11 @@ func ValidateRestoreCandidate(_ context.Context, path string) error {
 	if err := requireRegularFile(path+".key", "restore master key"); err != nil {
 		return err
 	}
-	key, err := readMasterKey(path + ".key")
+	keyring, err := readMasterKeyring(path + ".key")
 	if err != nil {
 		return fmt.Errorf("validate restore master key: %w", err)
 	}
-	codec, err := newSecretCodec(key)
+	codec, err := newSecretCodec(keyring)
 	if err != nil {
 		return err
 	}
@@ -189,7 +193,7 @@ func ValidateRestoreCandidate(_ context.Context, path string) error {
 	}
 	for _, credential := range snapshot.MediaCredentials {
 		if credential.CredentialBlobEncrypted == "" ||
-			!strings.HasPrefix(credential.CredentialBlobEncrypted, encryptedPrefix) {
+			!isEncryptedSecret(credential.CredentialBlobEncrypted) {
 			return fmt.Errorf("validate media credential %q: credential is not encrypted", credential.ID)
 		}
 		if _, err := codec.decrypt(
@@ -200,7 +204,7 @@ func ValidateRestoreCandidate(_ context.Context, path string) error {
 		}
 	}
 	for _, value := range snapshot.MediaRuntimeValues {
-		if value.Value != "" && !strings.HasPrefix(value.Value, encryptedPrefix) {
+		if value.Value != "" && !isEncryptedSecret(value.Value) {
 			return fmt.Errorf(
 				"validate media runtime namespace %q key %q: value is not encrypted",
 				value.Namespace,
@@ -303,12 +307,12 @@ func (s *Store) replaceRows(ctx context.Context, snapshot databaseSnapshot) erro
 	return s.orm.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		unscoped := tx.Session(&gorm.Session{AllowGlobalUpdate: true})
 		deleteOrder := []any{
-			&adminSessionRow{}, &homeKitIIDRow{}, &homeKitAccessoryIDRow{}, &matterEndpointIdentityRow{},
+			&adminSessionRow{}, &homeKitIIDRow{}, &homeKitAccessoryUUIDRow{}, &homeKitAccessoryIDRow{}, &matterEndpointIdentityRow{},
 			&matterRuntimeKVRow{}, &targetVirtualDeviceRow{},
 			&mediaAuthLeaseRow{}, &mediaStreamRow{}, &mediaCredentialRow{}, &mediaSourceRow{},
 			&mediaRuntimeKVRow{}, &mediaAuthAuditRow{}, &mediaConfigStateRow{},
 			&mappingBindingRow{}, &mappingProfileRow{}, &customModelPropertyRow{}, &modelEnumOverrideRow{}, &customUnifiedModelRow{},
-			&miotSpecCacheRow{}, &auditEventRow{}, &deviceLocationPreferenceRow{}, &deviceLocationRoomRow{}, &deviceLocationHomeRow{}, &devicePreferenceRow{}, &systemSettingRow{},
+			&miotSpecCacheRow{}, &auditEventRow{}, &deviceLocationPreferenceRow{}, &deviceLocationRoomRow{}, &deviceLocationHomeRow{}, &deviceCapabilityIdentityRow{}, &logicalDeviceIdentityRow{}, &providerDeviceIdentityRow{}, &logicalDeviceRow{}, &devicePreferenceRow{}, &systemSettingRow{},
 			&providerRow{}, &targetRow{}, &adminUserRow{},
 		}
 		for _, model := range deleteOrder {
@@ -325,12 +329,12 @@ func (s *Store) replaceRows(ctx context.Context, snapshot databaseSnapshot) erro
 			{"media streams", &snapshot.MediaStreams}, {"media runtime values", &snapshot.MediaRuntimeValues},
 			{"media authorization leases", &snapshot.MediaAuthLeases}, {"media authorization audits", &snapshot.MediaAuthAudits},
 			{"media config state", &snapshot.MediaConfigState},
-			{"system settings", &snapshot.SystemSettings}, {"device preferences", &snapshot.DevicePreferences},
+			{"system settings", &snapshot.SystemSettings}, {"device preferences", &snapshot.DevicePreferences}, {"logical devices", &snapshot.LogicalDevices}, {"provider device identities", &snapshot.ProviderDeviceIDs}, {"logical device identities", &snapshot.LogicalDeviceIDs}, {"device capability identities", &snapshot.DeviceCapabilities},
 			{"device location homes", &snapshot.DeviceLocationHomes}, {"device location rooms", &snapshot.DeviceLocationRooms}, {"device locations", &snapshot.DeviceLocations},
 			{"audit events", &snapshot.AuditEvents}, {"mapping profiles", &snapshot.MappingProfiles},
 			{"mapping bindings", &snapshot.MappingBindings}, {"custom model properties", &snapshot.CustomModelProperties}, {"model enum overrides", &snapshot.ModelEnumOverrides},
 			{"custom unified models", &snapshot.CustomUnifiedModels}, {"MIoT spec cache", &snapshot.MIoTSpecCache},
-			{"target virtual devices", &snapshot.TargetVirtualDevices}, {"HomeKit accessory IDs", &snapshot.HomeKitAccessoryIDs},
+			{"target virtual devices", &snapshot.TargetVirtualDevices}, {"HomeKit accessory IDs", &snapshot.HomeKitAccessoryIDs}, {"HomeKit accessory UUIDs", &snapshot.HomeKitAccessoryUUIDs},
 			{"HomeKit IIDs", &snapshot.HomeKitIIDs}, {"Matter runtime values", &snapshot.MatterRuntimeValues},
 			{"Matter endpoint identities", &snapshot.MatterEndpointIDs},
 		}

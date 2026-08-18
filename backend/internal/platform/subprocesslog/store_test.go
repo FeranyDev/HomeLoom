@@ -39,3 +39,29 @@ func TestStoreClassifiesCameraSubsystems(t *testing.T) {
 		t.Fatalf("entries = %#v", entries)
 	}
 }
+
+func TestStoreSubscriptionIsBoundedAndRecoversWithCursorSnapshot(t *testing.T) {
+	store := New(DefaultCapacity)
+	updates, unsubscribe := store.Subscribe()
+	defer unsubscribe()
+	for index := 0; index < SubscriberBuffer+2; index++ {
+		store.Append("backend", "main", []byte("line"))
+	}
+	if len(updates) != SubscriberBuffer {
+		t.Fatalf("live subscription length = %d, want %d", len(updates), SubscriberBuffer)
+	}
+	entries := store.Snapshot(SubscriberBuffer, 10)
+	if len(entries) != 2 || entries[0].Sequence != SubscriberBuffer+1 || entries[1].Sequence != SubscriberBuffer+2 {
+		t.Fatalf("cursor recovery = %#v", entries)
+	}
+}
+
+func TestStoreSubscriptionStopsAfterUnsubscribe(t *testing.T) {
+	store := New(5)
+	updates, unsubscribe := store.Subscribe()
+	unsubscribe()
+	store.Append("backend", "main", []byte("not delivered"))
+	if _, open := <-updates; open {
+		t.Fatal("subscription channel remained open after unsubscribe")
+	}
+}

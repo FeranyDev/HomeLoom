@@ -15,7 +15,7 @@ describe('SystemDashboard', () => {
 		expect(screen.getByRole('link', { name: '下载诊断包' })).toHaveAttribute('href', '/api/v1/system/diagnostic-bundle')
 		expect(screen.getByText('已自动脱敏')).toBeInTheDocument()
 		expect(screen.getByRole('button', { name: '下载完整备份' })).toBeInTheDocument()
-		expect(screen.getByText('子程序日志')).toBeInTheDocument()
+		expect(screen.getByText('实时运行日志')).toBeInTheDocument()
 		expect(screen.getByLabelText('恢复压缩包')).toBeInTheDocument()
 	})
 	it('shows persistent audit events and correlation IDs', () => {
@@ -25,20 +25,22 @@ describe('SystemDashboard', () => {
 		expect(screen.getByText('trace-123')).toBeInTheDocument()
 		expect(screen.getByText('provider · virtual-main')).toBeInTheDocument()
 	})
-	it('shows logs collected from child processes', async () => {
-		vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ sequence: 1, time: '2026-08-01T00:00:00Z', process: 'matter', component: 'matter-js', subsystem: 'matter', instance: 'matter-main', level: 'info', message: 'runtime ready' }, { sequence: 2, time: '2026-08-01T00:00:01Z', process: 'camera-kernel', component: 'camera-kernel', module: 'homekit', subsystem: 'homekit', instance: 'camera-1', level: 'info', message: 'pair setup completed' }, { sequence: 3, time: '2026-08-01T00:00:02Z', process: 'camera-kernel', component: 'camera-kernel', module: 'ffmpeg', subsystem: 'ffmpeg', instance: 'camera-1', level: 'info', message: 'decoder ready' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+	it('shows logs collected from the main and child processes', async () => {
+		vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ sequence: 1, time: '2026-08-01T00:00:00Z', process: 'backend', component: 'backend', subsystem: 'backend', instance: 'main', level: 'info', message: 'main runtime ready' }, { sequence: 2, time: '2026-08-01T00:00:01Z', process: 'matter', component: 'matter-js', subsystem: 'matter', instance: 'matter-main', level: 'info', message: 'runtime ready' }, { sequence: 3, time: '2026-08-01T00:00:02Z', process: 'camera-kernel', component: 'camera-kernel', module: 'homekit', subsystem: 'homekit', instance: 'camera-1', level: 'info', message: 'pair setup completed' }, { sequence: 4, time: '2026-08-01T00:00:03Z', process: 'camera-kernel', component: 'camera-kernel', module: 'ffmpeg', subsystem: 'ffmpeg', instance: 'camera-1', level: 'info', message: 'decoder ready' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
 		const diagnostics = { eventsReceived: 0, eventsProcessed: 0, eventsDropped: 0, eventQueuePending: 0, eventQueueCapacity: 1, targetEventsDropped: 0, stateEventsDropped: 0, statesMarkedStale: 0, commandsStarted: 0, commandsConfirmed: 0, commandsRejected: 0, commandsTimedOut: 0, commandsSuperseded: 0, commandsOutcomeUnknown: 0, homeKitPushes: 0, onlineDevices: 0, offlineDevices: 0, unknownDevices: 0, providersRunning: 0, providerRetries: 0, deviceSubscribers: 0, stateSubscribers: 0, commandAverageLatencyMs: 0, commandQueuePending: 0, commandQueueMaxPending: 0, eventAverageLatencyMs: 0, eventMaxLatencyMs: 0, slowEventHandlers: 0, databaseOperations: 0, databaseAverageLatencyMs: 0, databaseMaxLatencyMs: 0, providerClockSkewEvents: 0, providerMaxClockSkewMs: 0, goroutines: 1, heapAllocBytes: 0, heapObjects: 0 }
 		render(<SystemDashboard diagnostics={diagnostics} commands={[]} settings={{ commandTimeoutSeconds: 5, commandHistoryLimit: 1000 }} onSettingsSave={vi.fn()} />)
 		expect(document.body.style.overflow).toBe('')
 		await userEvent.click(screen.getByRole('button', { name: '打开日志窗口' }))
-		expect(screen.getByRole('dialog', { name: '子程序日志管理' })).toHaveAttribute('aria-modal', 'true')
+		expect(screen.getByRole('dialog', { name: '运行日志管理' })).toHaveAttribute('aria-modal', 'true')
 		expect(document.body.style.overflow).toBe('hidden')
 		expect(await screen.findByText('runtime ready')).toBeInTheDocument()
+		expect(screen.getByText('main runtime ready')).toBeInTheDocument()
+		expect(screen.getByText('HomeLoom/main')).toBeInTheDocument()
 		expect(screen.getByText('Matter/matter-main')).toBeInTheDocument()
 		expect(screen.getByRole('option', { name: 'HomeKit' })).toBeInTheDocument()
 		expect(screen.getByRole('option', { name: 'FFmpeg' })).toBeInTheDocument()
 		await userEvent.click(screen.getByRole('button', { name: '关闭' }))
-		expect(screen.queryByRole('dialog', { name: '子程序日志管理' })).not.toBeInTheDocument()
+		expect(screen.queryByRole('dialog', { name: '运行日志管理' })).not.toBeInTheDocument()
 		expect(document.body.style.overflow).toBe('')
 	})
   it('shows queue health and command lifecycle', () => {

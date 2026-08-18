@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
@@ -33,6 +34,30 @@ type fakeCloud struct {
 	devices []cloud.Device
 	states  []map[string]any
 	err     error
+}
+
+type fakeRealtime struct {
+	ready   chan struct{}
+	release chan struct{}
+	event   cloud.RealtimeEvent
+}
+
+func (f *fakeRealtime) Subscribe(ctx context.Context, handler func(cloud.RealtimeEvent)) error {
+	select {
+	case <-f.ready:
+	default:
+		close(f.ready)
+	}
+	select {
+	case <-f.release:
+		if handler != nil {
+			handler(f.event)
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (f *fakeCloud) ListDevices(context.Context) ([]cloud.Device, error) {
@@ -118,5 +143,73 @@ func TestProviderBuildsCloudCatalogAndPreservesUnknownParams(t *testing.T) {
 	}
 	if _, ok := items[0].Property("main", "sonoff-raw", "vendorfuture"); !ok {
 		t.Fatal("unknown cloud parameter was not retained")
+	}
+}
+
+func TestProviderScanBuildsTransientLANCandidatesWithoutPersistingThem(t *testing.T) {
+	provider, err := NewProviderWithTransports(providerconfig.Config{ID: "sonoff-main", Config: []byte(`{"mode":"local","devices":[{"id":"configured-switch","deviceId":"configured","name":"已配置开关","uiid":1,"deviceKey":"key","host":"192.0.2.9"}]}`)}, &fakeLAN{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.discoverLAN = func(context.Context, time.Duration) ([]lan.Service, error) {
+		return []lan.Service{
+			{Instance: "New Plug", Address: "192.0.2.30", Port: 8081, TXT: map[string]string{"id": "new-device", "type": "plug", "encrypt": "true", "data1": `{"apikey":"must-not-leak"}`}},
+			{Instance: "Existing", Address: "192.0.2.31", Port: 8081, TXT: map[string]string{"id": "configured", "type": "plug", "encrypt": "false"}},
+			{Address: "192.0.2.32", Port: 8081, TXT: map[string]string{"type": "missing-id"}},
+		}, nil
+	}
+	candidates, err := provider.Scan(context.Background())
+	if err != nil || len(candidates) != 2 {
+		t.Fatalf("candidates=%#v err=%v", candidates, err)
+	}
+	newCandidate := candidates[1]
+	if newCandidate.ID != "sonoff-new-device" || newCandidate.Host != "192.0.2.30" || newCandidate.Metadata["deviceId"] != "new-device" || newCandidate.Metadata["encrypted"] != "true" {
+		t.Fatalf("new candidate=%#v", newCandidate)
+	}
+	if _, leaked := newCandidate.Metadata["data1"]; leaked {
+		t.Fatalf("candidate leaked TXT data: %#v", newCandidate)
+	}
+	if candidates[0].Metadata["configured"] != "true" {
+		t.Fatalf("existing candidate was not marked configured: %#v", candidates[0])
+	}
+	if len(provider.config.Devices) != 1 || provider.config.Devices[0].DeviceID != "configured" {
+		t.Fatalf("scan modified provider config: %#v", provider.config.Devices)
+	}
+}
+
+func TestProviderAppliesInjectedRealtimeStateAndStopsOnClose(t *testing.T) {
+	online := true
+	realtime := &fakeRealtime{ready: make(chan struct{}), release: make(chan struct{}), event: cloud.RealtimeEvent{DeviceID: "1000abc", Params: map[string]any{"switch": "on"}, Online: &online}}
+	provider, err := NewProviderWithTransportsAndRealtime(providerconfig.Config{ID: "sonoff-main", Config: []byte(`{"mode":"auto","cloud":{"accessToken":"token"},"devices":[{"id":"switch","deviceId":"1000abc","name":"开关","uiid":1,"deviceKey":"key","host":"192.0.2.10","params":{"switch":"off"}}]}`)}, &fakeLAN{}, &fakeCloud{}, realtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updates := make(chan device.Device, 1)
+	unsubscribe := provider.Subscribe(func(item device.Device) { updates <- item })
+	defer unsubscribe()
+	if err := provider.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	<-realtime.ready
+	if _, err := provider.DiscoverDevices(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	close(realtime.release)
+	select {
+	case item := <-updates:
+		property, exists := item.Property("main", "switch", "power")
+		if !exists || property.Value.Bool == nil || !*property.Value.Bool {
+			t.Fatalf("realtime item=%#v", item)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for realtime update")
+	}
+	if got := provider.ProviderMetrics()["realtimeEvents"]; got != 1 {
+		t.Fatalf("realtimeEvents=%d", got)
+	}
+	closeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := provider.Close(closeCtx); err != nil {
+		t.Fatalf("close provider: %v", err)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -33,6 +34,7 @@ type Store struct {
 	keyPath           string
 	databaseKind      databaseKind
 	secrets           *secretCodec
+	secretRotationMu  sync.Mutex
 	operationCount    atomic.Uint64
 	totalLatencyNanos atomic.Uint64
 	maxLatencyNanos   atomic.Uint64

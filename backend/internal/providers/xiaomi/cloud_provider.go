@@ -70,6 +70,7 @@ type CloudProvider struct {
 var (
 	_ providersdk.Provider              = (*CloudProvider)(nil)
 	_ providersdk.LiveReconfigurer      = (*CloudProvider)(nil)
+	_ providersdk.CredentialRevoker     = (*CloudProvider)(nil)
 	_ providersdk.Discoverer            = (*CloudProvider)(nil)
 	_ providersdk.MediaSourceDiscoverer = (*CloudProvider)(nil)
 	_ providersdk.MediaSourceRefresher  = (*CloudProvider)(nil)
@@ -219,6 +220,10 @@ func (p *CloudProvider) CompleteIdentityVerification(ctx context.Context, code s
 
 func (p *CloudProvider) Initialize(ctx context.Context) error {
 	p.mu.Lock()
+	if p.config.CredentialsRevoked {
+		p.mu.Unlock()
+		return ErrCredentialsRevoked
+	}
 	if p.client != nil {
 		if strings.TrimSpace(p.identityURL) != "" {
 			url := p.identityURL

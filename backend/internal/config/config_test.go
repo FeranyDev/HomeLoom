@@ -23,6 +23,9 @@ func TestLoadYAMLAndEnvironmentOverride(t *testing.T) {
 	t.Setenv("HOMELOOM_HAP_PORT_BASE", "52000")
 	t.Setenv("HOMELOOM_RTSP_PORT_BASE", "20000")
 	t.Setenv("HOMELOOM_SRTP_PORT_BASE", "21000")
+	t.Setenv("HOMELOOM_EVENT_QUEUE_SHARDS", "12")
+	t.Setenv("HOMELOOM_EVENT_QUEUE_CAPACITY", "256")
+	t.Setenv("HOMELOOM_STATE_CHECKPOINT_INTERVAL_SECONDS", "300")
 
 	loaded, err := Load(path)
 	if err != nil {
@@ -50,6 +53,9 @@ func TestLoadYAMLAndEnvironmentOverride(t *testing.T) {
 		loaded.Media.RTSPPortBase != 20000 ||
 		loaded.Media.SRTPPortBase != 21000 {
 		t.Fatalf("media process settings = %#v", loaded.Media)
+	}
+	if loaded.Runtime.EventQueueShards != 12 || loaded.Runtime.EventQueueCapacity != 256 || loaded.Runtime.StateCheckpointIntervalSecond != 300 {
+		t.Fatalf("runtime settings = %#v", loaded.Runtime)
 	}
 }
 
@@ -96,6 +102,20 @@ func TestValidateRejectsInvalidChildLogLevel(t *testing.T) {
 	config.Logging.ChildLevel = "trace"
 	if err := config.Validate(); err == nil {
 		t.Fatal("Validate() accepted an invalid child log level")
+	}
+}
+
+func TestValidateRuntimeQueueAndCheckpointBounds(t *testing.T) {
+	for _, mutate := range []func(*RuntimeConfig){
+		func(config *RuntimeConfig) { config.EventQueueShards = 0 },
+		func(config *RuntimeConfig) { config.EventQueueCapacity = 0 },
+		func(config *RuntimeConfig) { config.StateCheckpointIntervalSecond = 59 },
+	} {
+		config := Default()
+		mutate(&config.Runtime)
+		if err := config.Validate(); err == nil {
+			t.Fatalf("Validate() accepted runtime config %#v", config.Runtime)
+		}
 	}
 }
 

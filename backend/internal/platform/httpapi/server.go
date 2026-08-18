@@ -22,6 +22,7 @@ import (
 	domainaudit "github.com/feranydev/homeloom/backend/internal/domain/audit"
 	domaincommand "github.com/feranydev/homeloom/backend/internal/domain/command"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
+	"github.com/feranydev/homeloom/backend/internal/domain/logicaldevice"
 	domainmedia "github.com/feranydev/homeloom/backend/internal/domain/media"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	domainstate "github.com/feranydev/homeloom/backend/internal/domain/state"
@@ -47,6 +48,7 @@ type Server struct {
 	audit                      *application.AuditService
 	exports                    *application.ExportService
 	profiles                   *application.ProfileService
+	logicalDevices             *application.LogicalDeviceService
 	auth                       *application.AuthService
 	maintenance                *application.MaintenanceService
 	media                      *application.MediaService
@@ -77,6 +79,37 @@ func runtimeChanges(previousProviders, previousDiagnostics []byte, providers, di
 const apiVersionHeader = "HomeLoom-API-Version"
 
 const (
+	runtimeLogReplayLimit  = 200
+	runtimeLogEventsPerSec = 100
+)
+
+func runtimeLogCursor(request *http.Request) uint64 {
+	value := strings.TrimSpace(request.Header.Get("Last-Event-ID"))
+	if value == "" {
+		value = strings.TrimSpace(request.URL.Query().Get("logAfter"))
+	}
+	cursor, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return cursor
+}
+
+func writeSSEEvent(writer io.Writer, name string, payload any, id uint64) error {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	if id > 0 {
+		if _, err := fmt.Fprintf(writer, "id: %d\n", id); err != nil {
+			return err
+		}
+	}
+	_, err = fmt.Fprintf(writer, "event: %s\ndata: %s\n\n", name, encoded)
+	return err
+}
+
+const (
 	sessionCookieName = "homeloom_session"
 	csrfCookieName    = "homeloom_csrf"
 	csrfHeaderName    = "X-CSRF-Token"
@@ -100,6 +133,11 @@ type sonoffLoginRequest struct {
 
 type confirmationRequest struct {
 	Confirmation string `json:"confirmation"`
+}
+
+type masterKeyRotationRequest struct {
+	Confirmation string `json:"confirmation"`
+	Resume       bool   `json:"resume"`
 }
 
 type loginAttempt struct {
@@ -638,9 +676,9 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		}
 		return c.JSON(http.StatusOK, map[string]any{"data": server.settings.Get()})
 	})
-	e.GET("/api/v1/system/subprocess-logs", func(c echo.Context) error {
+	runtimeLogs := func(c echo.Context) error {
 		if server.subprocessLogs == nil {
-			return echo.NewHTTPError(http.StatusServiceUnavailable, "subprocess logs are unavailable")
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "runtime logs are unavailable")
 		}
 		afterValue := c.QueryParam("after")
 		if afterValue == "" {
@@ -660,7 +698,12 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		}
 		c.Response().Header().Set("Cache-Control", "no-store")
 		return c.JSON(http.StatusOK, map[string]any{"data": server.subprocessLogs.Snapshot(after, limit)})
-	})
+	}
+	// runtime-logs includes the structured HomeLoom process as well as bounded
+	// Camera Kernel and Matter child output. Keep the previous endpoint as a
+	// compatibility alias for older web UIs.
+	e.GET("/api/v1/system/runtime-logs", runtimeLogs)
+	e.GET("/api/v1/system/subprocess-logs", runtimeLogs)
 	e.PUT("/api/v1/system/settings", func(c echo.Context) error {
 		if server.settings == nil {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "runtime settings are unavailable")
@@ -945,6 +988,36 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		}
 		return c.JSON(http.StatusAccepted, map[string]any{"data": result})
 	})
+	e.GET("/api/v1/system/master-key", func(c echo.Context) error {
+		if server.maintenance == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "database maintenance is unavailable")
+		}
+		status, err := server.maintenance.MasterKeyStatus(c.Request().Context())
+		if err != nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "master key rotation is unavailable").SetInternal(err)
+		}
+		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+		return c.JSON(http.StatusOK, map[string]any{"data": status})
+	})
+	e.POST("/api/v1/system/master-key/rotate", func(c echo.Context) error {
+		if server.maintenance == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "database maintenance is unavailable")
+		}
+		var input masterKeyRotationRequest
+		if err := c.Bind(&input); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid master key rotation confirmation")
+		}
+		result, err := server.maintenance.RotateMasterKey(c.Request().Context(), input.Confirmation, input.Resume)
+		if err != nil {
+			var validation *application.ValidationError
+			if errors.As(err, &validation) {
+				return err
+			}
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "master key rotation did not complete; inspect status and retry safely").SetInternal(err)
+		}
+		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+		return c.JSON(http.StatusOK, map[string]any{"data": result})
+	})
 	e.GET("/api/v1/audit-events", func(c echo.Context) error {
 		if server.audit == nil {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "audit log is unavailable")
@@ -1021,6 +1094,82 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 			return echo.NewHTTPError(http.StatusInternalServerError, "failed to list devices").SetInternal(err)
 		}
 		return c.JSON(http.StatusOK, map[string]any{"data": items})
+	})
+	e.GET("/api/v1/logical-devices", func(c echo.Context) error {
+		if server.logicalDevices == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "logical devices are unavailable")
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": server.logicalDevices.List()})
+	})
+	e.GET("/api/v1/logical-devices/candidates", func(c echo.Context) error {
+		if server.logicalDevices == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "logical devices are unavailable")
+		}
+		items, err := server.logicalDevices.Candidates(c.Request().Context())
+		if err != nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "logical device candidates are unavailable").SetInternal(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": items})
+	})
+	e.POST("/api/v1/logical-devices", func(c echo.Context) error {
+		if server.logicalDevices == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "logical devices are unavailable")
+		}
+		var item logicaldevice.Config
+		if err := c.Bind(&item); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid logical device")
+		}
+		if err := server.logicalDevices.Save(c.Request().Context(), item); err != nil {
+			return logicalDeviceHTTPError(err)
+		}
+		return c.JSON(http.StatusCreated, map[string]any{"data": item})
+	})
+	e.GET("/api/v1/logical-devices/:id", func(c echo.Context) error {
+		if server.logicalDevices == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "logical devices are unavailable")
+		}
+		for _, item := range server.logicalDevices.List() {
+			if item.ID == c.Param("id") {
+				return c.JSON(http.StatusOK, map[string]any{"data": item})
+			}
+		}
+		return echo.NewHTTPError(http.StatusNotFound, "logical device not found")
+	})
+	e.GET("/api/v1/logical-devices/:id/explanations", func(c echo.Context) error {
+		if server.logicalDevices == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "logical devices are unavailable")
+		}
+		items, err := server.logicalDevices.Explanations(c.Param("id"))
+		if err != nil {
+			return logicalDeviceHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": items})
+	})
+	e.PUT("/api/v1/logical-devices/:id", func(c echo.Context) error {
+		if server.logicalDevices == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "logical devices are unavailable")
+		}
+		var item logicaldevice.Config
+		if err := c.Bind(&item); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid logical device")
+		}
+		if item.ID != "" && item.ID != c.Param("id") {
+			return echo.NewHTTPError(http.StatusBadRequest, "logical device id cannot be changed")
+		}
+		item.ID = c.Param("id")
+		if err := server.logicalDevices.Save(c.Request().Context(), item); err != nil {
+			return logicalDeviceHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": item})
+	})
+	e.DELETE("/api/v1/logical-devices/:id", func(c echo.Context) error {
+		if server.logicalDevices == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "logical devices are unavailable")
+		}
+		if err := server.logicalDevices.Delete(c.Request().Context(), c.Param("id")); err != nil {
+			return logicalDeviceHTTPError(err)
+		}
+		return c.NoContent(http.StatusNoContent)
 	})
 	e.GET("/api/v1/locations", func(c echo.Context) error {
 		homes, err := devices.ListDeviceLocationHomes(c.Request().Context())
@@ -1176,7 +1325,7 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 	e.GET("/api/v1/events", func(c echo.Context) error {
 		response := c.Response()
 		response.Header().Set(echo.HeaderContentType, "text/event-stream")
-		response.Header().Set(echo.HeaderCacheControl, "no-cache")
+		response.Header().Set(echo.HeaderCacheControl, "no-store")
 		response.Header().Set("X-Accel-Buffering", "no")
 		response.WriteHeader(http.StatusOK)
 		flusher, ok := response.Writer.(http.Flusher)
@@ -1211,6 +1360,12 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 			unsubscribeAudit = server.audit.Subscribe(func(item domainaudit.Event) { enqueue("audit", item) })
 		}
 		defer unsubscribeAudit()
+		var logEvents <-chan subprocesslog.Entry
+		unsubscribeLogs := func() {}
+		if server.subprocessLogs != nil {
+			logEvents, unsubscribeLogs = server.subprocessLogs.Subscribe()
+		}
+		defer unsubscribeLogs()
 
 		providerSnapshot := func() any {
 			var providerSnapshot any = devices.ProviderInfos()
@@ -1225,10 +1380,25 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 			return nil
 		}
 		flusher.Flush()
+		// Browser EventSource reconnects with Last-Event-ID. Replaying only the
+		// most recent bounded slice keeps this sensitive diagnostics stream from
+		// becoming an unbounded catch-up channel. A subscriber is registered
+		// before the snapshot; duplicate sequences are harmless to clients and
+		// avoid a gap between snapshot and live delivery.
+		if logEvents != nil {
+			for _, entry := range server.subprocessLogs.Snapshot(runtimeLogCursor(c.Request()), runtimeLogReplayLimit) {
+				if err := writeSSEEvent(response, "runtime-log", entry, entry.Sequence); err != nil {
+					return nil
+				}
+			}
+			flusher.Flush()
+		}
 		runtimeTicker := time.NewTicker(5 * time.Second)
 		defer runtimeTicker.Stop()
 		heartbeat := time.NewTicker(15 * time.Second)
 		defer heartbeat.Stop()
+		logWindowStarted := time.Now()
+		logEventsSent := 0
 		for {
 			select {
 			case event := <-events:
@@ -1237,6 +1407,19 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 					continue
 				}
 				if _, err := fmt.Fprintf(response, "event: %s\ndata: %s\n\n", event.name, payload); err != nil {
+					return nil
+				}
+				flusher.Flush()
+			case entry := <-logEvents:
+				now := time.Now()
+				if now.Sub(logWindowStarted) >= time.Second {
+					logWindowStarted, logEventsSent = now, 0
+				}
+				if logEventsSent >= runtimeLogEventsPerSec {
+					continue
+				}
+				logEventsSent++
+				if err := writeSSEEvent(response, "runtime-log", entry, entry.Sequence); err != nil {
 					return nil
 				}
 				flusher.Flush()
@@ -1530,6 +1713,27 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
 		return c.NoContent(http.StatusNoContent)
+	})
+	e.POST("/api/v1/providers/:id/credentials/revoke", func(c echo.Context) error {
+		if providers == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "provider management is unavailable")
+		}
+		var request struct {
+			Confirmation string `json:"confirmation"`
+		}
+		if err := c.Bind(&request); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid credential revocation request")
+		}
+		id := c.Param("id")
+		if strings.TrimSpace(request.Confirmation) != "REVOKE "+id {
+			return echo.NewHTTPError(http.StatusBadRequest, "credential revocation confirmation does not match this provider")
+		}
+		result, err := providers.RevokeXiaomiCredentials(c.Request().Context(), id)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+		return c.JSON(http.StatusOK, map[string]any{"data": result})
 	})
 	e.POST("/api/v1/providers/:id/restart", func(c echo.Context) error {
 		if providers == nil {
@@ -1920,6 +2124,10 @@ func (s *Server) SetExportService(exports *application.ExportService) { s.export
 
 func (s *Server) SetProfileService(profiles *application.ProfileService) { s.profiles = profiles }
 
+func (s *Server) SetLogicalDeviceService(logicalDevices *application.LogicalDeviceService) {
+	s.logicalDevices = logicalDevices
+}
+
 func (s *Server) SetAuthService(auth *application.AuthService) { s.auth = auth }
 
 func (s *Server) SetMaintenanceService(maintenance *application.MaintenanceService) {
@@ -2216,6 +2424,17 @@ func profileHTTPError(err error) error {
 		return validation
 	}
 	return echo.NewHTTPError(http.StatusInternalServerError, "mapping profile operation failed").SetInternal(err)
+}
+
+func logicalDeviceHTTPError(err error) error {
+	if errors.Is(err, application.ErrLogicalDeviceNotFound) {
+		return echo.NewHTTPError(http.StatusNotFound, "logical device not found")
+	}
+	var validation *application.ValidationError
+	if errors.As(err, &validation) {
+		return validation
+	}
+	return echo.NewHTTPError(http.StatusServiceUnavailable, "logical device configuration operation failed").SetInternal(err)
 }
 
 func mediaHTTPError(err error) error {

@@ -21,7 +21,7 @@ func TestProfileServicePersistsVersionsAndProtectsBuiltIns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(service.List()) != 4 {
+	if len(service.List()) != len(application.BuiltInProfiles()) {
 		t.Fatalf("built-ins = %#v", service.List())
 	}
 	factor := 2.0
