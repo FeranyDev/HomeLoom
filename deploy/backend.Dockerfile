@@ -1,12 +1,12 @@
 # syntax=docker/dockerfile:1.7
-FROM node:24-alpine AS web
+FROM --platform=$BUILDPLATFORM node:24-alpine AS web
 WORKDIR /src/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci
 COPY frontend/ ./
 RUN npm run build:embed
 
-FROM golang:1.26-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
 WORKDIR /src/backend
 COPY backend/go.mod backend/go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
@@ -15,8 +15,10 @@ COPY --from=web /src/backend/internal/webui/dist ./internal/webui/dist
 ARG VERSION
 ARG COMMIT=unknown
 ARG BUILD_TIME=unknown
+ARG TARGETOS
+ARG TARGETARCH
 RUN --mount=type=cache,target=/root/.cache/go-build test -n "$VERSION" \
-    && CGO_ENABLED=0 go build -trimpath -tags embed_webui \
+    && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -tags embed_webui \
     -ldflags "-s -w -X github.com/feranydev/homeloom/backend/internal/buildinfo.Version=${VERSION} -X github.com/feranydev/homeloom/backend/internal/buildinfo.Commit=${COMMIT} -X github.com/feranydev/homeloom/backend/internal/buildinfo.BuildTime=${BUILD_TIME}" \
     -o /out/homeloom ./cmd/homeloom
 
