@@ -26,18 +26,22 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with:
           go-version-file: backend/go.mod
           cache: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: |
+            frontend/package-lock.json
+            matter-runtime/package-lock.json
       - run: npm ci
         working-directory: frontend
+      - run: npm ci
+        working-directory: matter-runtime
       - run: ./scripts/check.sh --race
       - name: Verify PostgreSQL persistence dialect
         run: ./scripts/dev-env.sh sh -c 'cd backend && go test -count=1 ./internal/persistence/gormstore'
@@ -54,8 +58,10 @@ jobs:
       matrix:
         platform: [linux/amd64, linux/arm64]
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+        with:
+          cache-image: false
+      - uses: docker/setup-buildx-action@v4
       - name: Build single-binary image
-        run: docker buildx build --platform ${{ matrix.platform }} --file deploy/backend.Dockerfile --build-arg VERSION=ci --build-arg COMMIT=${GITHUB_SHA::12} --build-arg BUILD_TIME=ci .
+        run: docker buildx build --platform ${{ matrix.platform }} --file deploy/backend.Dockerfile --build-arg VERSION=ci --build-arg COMMIT=${GITHUB_SHA::12} --build-arg BUILD_TIME=ci --output=type=cacheonly .
