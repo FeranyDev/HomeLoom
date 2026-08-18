@@ -280,6 +280,47 @@ func TestHTTPMiotCloudClientHTTP426ServiceTokenExpiredRetriesAfterPasswordLogin(
 	}
 }
 
+func TestHTTPMiotCloudClientHTTP426ServiceTokenExpiredReturnsIdentityChallenge(t *testing.T) {
+	security := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef"))
+	apiCalls, serviceLoginCalls, serviceLoginAuthCalls := 0, 0, 0
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/app/miotspec/prop/get":
+			apiCalls++
+			response.WriteHeader(http.StatusUpgradeRequired)
+			_, _ = response.Write([]byte(`{"code":0,"message":"SERVICETOKEN_EXPIRED"}`))
+		case "/pass/serviceLogin":
+			serviceLoginCalls++
+			_, _ = response.Write([]byte(`&&&START&&&{"_sign":"sign","qs":"qs","callback":"callback"}`))
+		case "/pass/serviceLoginAuth2":
+			serviceLoginAuthCalls++
+			response.WriteHeader(http.StatusUpgradeRequired)
+			_, _ = response.Write([]byte(`&&&START&&&{"code":81003,"notificationUrl":"` + server.URL + `/fe/service/identity/authStart?context=renewal"}`))
+		default:
+			response.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := newHTTPMiotCloudClient(CloudConfig{
+		Region: "cn", Username: "owner@example.com", Password: "password",
+		UserID: "stale-user", Ssecurity: security, ServiceToken: "stale-service-token", RequestTimeoutSec: 5,
+	})
+	client.accountBase, client.apiBase, client.http = server.URL, server.URL+"/app", server.Client()
+	_, err := client.GetProperties(context.Background(), []cloudProperty{{DID: "device-1", SIID: 2, PIID: 1}})
+	var required *IdentityVerificationRequiredError
+	if !errors.As(err, &required) {
+		t.Fatalf("error=%v, want identity verification challenge", err)
+	}
+	if required.URL != server.URL+"/fe/service/identity/authStart?context=renewal" {
+		t.Fatalf("verification URL=%q", required.URL)
+	}
+	if apiCalls != 1 || serviceLoginCalls != 1 || serviceLoginAuthCalls != 1 {
+		t.Fatalf("api calls=%d login=%d auth2=%d", apiCalls, serviceLoginCalls, serviceLoginAuthCalls)
+	}
+}
+
 func TestHTTPMiotCloudClientHTTP426ServiceTokenExpiredWithoutPasswordRequestsReauthorization(t *testing.T) {
 	const serviceToken = "stale-service-token"
 	apiCalls := 0

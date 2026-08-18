@@ -187,6 +187,6 @@ MIoT Spec 只用于构造 Provider 原始目录，不会自动改变统一模型
 
 发布到设备中心的设备携带粗粒度 `runtimeMode` 与精确 `stateTransport`。`stateTransport` 分为 `local-mqtt`、`cloud-mqtt`、`cloud-http` 和 `pending`，页面分别显示“中枢实时”“官方云实时”“官方云校准”和“等待判定”；第三方 `xiaomi-miot-cloud` 未提供精确传输信息时仍按 `runtimeMode` 显示“局域网/云端轮询”。云 HTTP 快照进入状态仓库时标记为 `polled`，两类 MQTT 推送标记为 `reported`。
 
-账号密码、`ssecurity` 与 `serviceToken` 都属于敏感 Provider 配置：写入 PostgreSQL 时使用项目主密钥加密，管理 API 返回 `********`。页面会先调用登录入口；如果小米要求身份验证，HomeLoom 创建一个仅保存在内存、10 分钟过期且最多尝试 5 次的登录挑战。用户在小米验证页发送短信或邮件验证码但不在该页提交，再回到 HomeLoom 回填验证码。后端在原 Cookie 会话中完成验证，成功取得完整三元组后才允许保存并初始化 Provider。一次性验证码和账号密码不会写入挑战数据库，登录响应统一使用 `Cache-Control: no-store`。
+账号密码、`ssecurity` 与 `serviceToken` 都属于敏感 Provider 配置：写入 PostgreSQL 时使用项目主密钥加密，管理 API 返回 `********`。页面会先调用登录入口；如果小米要求身份验证，HomeLoom 创建一个仅保存在内存、10 分钟过期且最多尝试 5 次的登录挑战。用户在小米验证页发送短信或邮件验证码但不在该页提交，再回到 HomeLoom 回填验证码。后端在原 Cookie 会话中完成验证，成功取得完整三元组后才允许保存并初始化 Provider。服务运行期间 `serviceToken` 过期而自动密码重登又触发身份验证时，也会复用原 HTTP Cookie 会话创建同样的 Provider 挑战，并暂停后续云端请求，直到管理员完成验证或挑战过期。一次性验证码和账号密码不会写入挑战数据库，登录响应统一使用 `Cache-Control: no-store`。
 
 该接口依赖未公开的兼容 API，可能随小米服务变化。它采用轮询，适合空调、净化器、灯、插座等持续状态 Wi‑Fi 设备；不适合无线开关、人体/门窗传感器等需要瞬时事件的设备。事件型设备继续优先使用中枢 MQTT。

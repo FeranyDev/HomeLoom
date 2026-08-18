@@ -140,9 +140,9 @@ func (p *CloudProvider) Capabilities() providersdk.Capabilities {
 }
 
 // IdentityVerificationURL reports the short-lived Xiaomi account URL held by
-// this provider after Initialize returned IdentityVerificationRequiredError.
-// The boolean is false once the challenge has been completed, discarded, or
-// expired by the application layer.
+// this provider when either startup or a later session renewal reaches
+// Xiaomi's SMS/email gate. The boolean is false once the challenge has been
+// completed, discarded, or expired by the application layer.
 func (p *CloudProvider) IdentityVerificationURL() (string, bool) {
 	p.mu.RLock()
 	url := p.identityURL
@@ -376,7 +376,7 @@ func (p *CloudProvider) DiscoverCloudDevices(ctx context.Context) ([]HubDevice, 
 	items, err := client.DeviceList(ctx)
 	if err != nil {
 		p.errors.Add(1)
-		return nil, err
+		return nil, p.captureIdentityVerification(client, err)
 	}
 	p.mu.Lock()
 	p.directory = append([]HubDevice(nil), items...)
@@ -639,6 +639,7 @@ func (p *CloudProvider) getProperties(ctx context.Context, configured DeviceConf
 	}
 	p.requests.Add(1)
 	result, err := client.GetProperties(ctx, input)
+	err = p.captureIdentityVerification(client, err)
 	if err == nil {
 		p.setRuntimeMode(configured.ID, device.RuntimeModeCloud)
 	}
@@ -691,7 +692,8 @@ func (p *CloudProvider) setProperties(ctx context.Context, configured DeviceConf
 		return nil, err
 	}
 	p.requests.Add(1)
-	return client.SetProperties(ctx, input)
+	result, err := client.SetProperties(ctx, input)
+	return result, p.captureIdentityVerification(client, err)
 }
 
 func (p *CloudProvider) doAction(ctx context.Context, configured DeviceConfig, input cloudAction) error {
@@ -718,7 +720,7 @@ func (p *CloudProvider) doAction(ctx context.Context, configured DeviceConfig, i
 		return err
 	}
 	p.requests.Add(1)
-	return client.Action(ctx, input)
+	return p.captureIdentityVerification(client, client.Action(ctx, input))
 }
 
 func (p *CloudProvider) localAccess(configured DeviceConfig) (miotLocalAccess, string, bool) {
@@ -899,12 +901,37 @@ sendDevices:
 
 func (p *CloudProvider) currentCloudClient() (miotCloudClient, error) {
 	p.mu.RLock()
-	client := p.client
+	client, verificationURL := p.client, p.identityURL
 	p.mu.RUnlock()
 	if client == nil {
 		return nil, providersdk.ErrProviderUnavailable
 	}
+	if strings.TrimSpace(verificationURL) != "" {
+		return nil, &IdentityVerificationRequiredError{URL: verificationURL}
+	}
 	return client, nil
+}
+
+// captureIdentityVerification promotes a password-relogin SMS/email gate from
+// a cloud request into the Provider-level challenge. This matters after a
+// previously healthy serviceToken expires: the poll loop has no startup error
+// to hand to ProviderService, so the retained HTTP client and its cookie jar
+// must be exposed here for the administrator to complete verification.
+func (p *CloudProvider) captureIdentityVerification(client miotCloudClient, err error) error {
+	if err == nil {
+		return nil
+	}
+	var required *IdentityVerificationRequiredError
+	if !errors.As(err, &required) || strings.TrimSpace(required.URL) == "" {
+		return err
+	}
+	p.mu.Lock()
+	if p.client == client && strings.TrimSpace(p.identityURL) == "" {
+		p.identityURL = strings.TrimSpace(required.URL)
+		p.identityExpiresAt = time.Now().Add(cloudLoginChallengeTTL)
+	}
+	p.mu.Unlock()
+	return err
 }
 
 func (p *CloudProvider) updateCloudProperty(id string, mapping PropertyMapping, value device.PropertyValue) device.Device {
