@@ -1,7 +1,9 @@
 package subprocesslog
 
 import (
+	"bytes"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -63,5 +65,72 @@ func TestStoreSubscriptionStopsAfterUnsubscribe(t *testing.T) {
 	store.Append("backend", "main", []byte("not delivered"))
 	if _, open := <-updates; open {
 		t.Fatal("subscription channel remained open after unsubscribe")
+	}
+}
+
+func TestLineWriterFlushesUnterminatedTailExactlyOnce(t *testing.T) {
+	store := New(5)
+	writer := store.Writer("matter", "bridge-main")
+	if _, err := writer.Write([]byte("last line")); err != nil {
+		t.Fatal(err)
+	}
+	flusher, ok := writer.(interface{ Flush() })
+	if !ok {
+		t.Fatal("store writer does not expose Flush")
+	}
+	flusher.Flush()
+	flusher.Flush()
+
+	entries := store.Snapshot(0, 5)
+	if len(entries) != 1 || entries[0].Message != "last line" {
+		t.Fatalf("entries after repeated flush = %#v", entries)
+	}
+}
+
+func TestLineWriterFlushIsSafeDuringConcurrentWrites(t *testing.T) {
+	store := New(64)
+	writer := store.Writer("camera-kernel", "camera-main")
+	flusher := writer.(interface{ Flush() })
+
+	var wait sync.WaitGroup
+	for index := 0; index < 32; index++ {
+		wait.Add(1)
+		go func(value int) {
+			defer wait.Done()
+			_, _ = writer.Write([]byte("line-" + string(rune('a'+value)) + "\n"))
+		}(index)
+	}
+	for index := 0; index < 32; index++ {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			flusher.Flush()
+		}()
+	}
+	wait.Wait()
+	flusher.Flush()
+
+	entries := store.Snapshot(0, 64)
+	if len(entries) != 32 {
+		t.Fatalf("entry count = %d, want 32", len(entries))
+	}
+}
+
+func TestLineWriterBoundsUnterminatedPayloadBeforeAppending(t *testing.T) {
+	store := New(5)
+	writer := store.Writer("camera-kernel", "camera-main").(*lineWriter)
+	payload := bytes.Repeat([]byte("x"), maxPendingLineBytes*2+17)
+	if _, err := writer.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(writer.pending) != 17 {
+		t.Fatalf("pending bytes = %d, want 17", len(writer.pending))
+	}
+	if cap(writer.pending) > maxPendingLineBytes*2 {
+		t.Fatalf("pending capacity = %d, want bounded", cap(writer.pending))
+	}
+	writer.Flush()
+	if entries := store.Snapshot(0, 5); len(entries) != 3 {
+		t.Fatalf("chunked entries = %d, want 3", len(entries))
 	}
 }

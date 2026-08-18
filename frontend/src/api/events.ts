@@ -9,13 +9,22 @@ export interface RuntimeDelta {
 	diagnostics?: Diagnostics
 }
 
+// The server keeps SSE log delivery bounded. A gap is a control event, not a
+// log record: callers recover the retained window with their REST cursor.
+export interface RuntimeLogGap {
+	after: number
+	before: number
+}
+
 export interface EventHandlers {
 	onConnection?: (connected: boolean) => void
 	onDevice?: (device: Device) => void
 	onState?: (state: StateValue) => void
 	onCommand?: (command: DeviceCommand) => void
 	onAudit?: (event: AuditEvent) => void
+	onReady?: () => void
 	onRuntimeLog?: (entry: SubprocessLogEntry) => void
+	onRuntimeLogGap?: (gap: RuntimeLogGap) => void
 	onTarget?: (target: Target) => void
 	onRuntime?: (delta: RuntimeDelta) => void
 }
@@ -37,12 +46,16 @@ function parse<T>(event: Event): T | undefined {
 function ensureSource() {
 	if (source) return
 	source = new EventSource('/api/v1/events')
-	source.addEventListener('ready', () => dispatch('onConnection', true))
+	source.addEventListener('ready', () => {
+		dispatch('onConnection', true)
+		for (const handlers of subscriptions) handlers.onReady?.()
+	})
 	source.addEventListener('device', (event) => { const value = parse<Device>(event); if (value) dispatch('onDevice', value) })
 	source.addEventListener('state', (event) => { const value = parse<StateValue>(event); if (value) dispatch('onState', value) })
 	source.addEventListener('command', (event) => { const value = parse<DeviceCommand>(event); if (value) dispatch('onCommand', value) })
 	source.addEventListener('audit', (event) => { const value = parse<AuditEvent>(event); if (value) dispatch('onAudit', value) })
 	source.addEventListener('runtime-log', (event) => { const value = parse<SubprocessLogEntry>(event); if (value) dispatch('onRuntimeLog', value) })
+	source.addEventListener('runtime-log-gap', (event) => { const value = parse<RuntimeLogGap>(event); if (value) dispatch('onRuntimeLogGap', value) })
 	source.addEventListener('target', (event) => { const value = parse<unknown>(event); if (value) dispatch('onTarget', normalizeTarget(value)) })
 	source.addEventListener('runtime', (event) => { const value = parse<RuntimeDelta>(event); if (value) dispatch('onRuntime', value) })
 	source.onerror = () => dispatch('onConnection', false)

@@ -18,9 +18,10 @@ const (
 )
 
 // publisherDiagnosticLog stores both camera-kernel output and Core lifecycle
-// events in the per-stream file. Only Write input from the child is mirrored
-// to the Web collector, keeping Core logs on the terminal/file paths. Writes
-// become no-ops after a filesystem error so logging cannot break media.
+// events in the per-stream file. Both kinds are mirrored to the bounded Web
+// collector through the same serialized writer; that collector redacts before
+// retaining or streaming an entry. Writes become no-ops after a filesystem
+// error so logging cannot break media.
 type publisherDiagnosticLog struct {
 	mu       sync.Mutex
 	path     string
@@ -90,6 +91,21 @@ func (l *publisherDiagnosticLog) Write(payload []byte) (int, error) {
 	return l.write(payload, true)
 }
 
+// Flush forwards an unterminated final child log line to the runtime-log
+// collector when its writer supports flushing. It is deliberately independent
+// of the diagnostic file lifecycle and can be called repeatedly.
+func (l *publisherDiagnosticLog) Flush() {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	mirror := l.mirror
+	l.mu.Unlock()
+	if flusher, ok := mirror.(interface{ Flush() }); ok {
+		flusher.Flush()
+	}
+}
+
 func (l *publisherDiagnosticLog) write(payload []byte, mirror bool) (int, error) {
 	if l == nil {
 		return len(payload), nil
@@ -141,7 +157,10 @@ func (l *publisherDiagnosticLog) Event(level, message string, fields map[string]
 		return
 	}
 	encoded = append(encoded, '\n')
-	_, _ = l.write(encoded, false)
+	// Lifecycle records share the child-output mirror so that start, readiness
+	// and exit diagnostics are visible in the unified runtime-log stream. The
+	// mutex in write keeps this JSON record intact when it races child output.
+	_, _ = l.write(encoded, true)
 }
 
 func (l *publisherDiagnosticLog) rotateLocked() error {
@@ -185,15 +204,19 @@ func (l *publisherDiagnosticLog) Close() error {
 		return nil
 	}
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	if l.closed {
+		l.mu.Unlock()
 		return nil
 	}
 	l.closed = true
-	if l.file == nil {
+	file := l.file
+	l.file = nil
+	l.mu.Unlock()
+	// Mark the logger closed before flushing so a concurrent child write cannot
+	// add a new unterminated tail between Flush and closing the diagnostic file.
+	l.Flush()
+	if file == nil {
 		return nil
 	}
-	err := l.file.Close()
-	l.file = nil
-	return err
+	return file.Close()
 }

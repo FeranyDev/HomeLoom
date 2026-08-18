@@ -24,6 +24,7 @@ import (
 	pkg "github.com/AlexxIT/go2rtc/pkg/rtsp"
 	"github.com/AlexxIT/go2rtc/pkg/shell"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func Init() {
@@ -84,12 +85,7 @@ func execHandle(rawURL string) (prod core.Producer, err error) {
 	cmd := shell.NewCommand(rawURL[5:]) // remove `exec:`
 	logSource := executableLogSource(cmd.Args[0])
 	processLog := app.GetLogger(logSource)
-	writer := &logWriter{
-		buf:     make([]byte, 512),
-		enabled: processLog.Core().Enabled(zap.InfoLevel),
-		logger:  processLog,
-		source:  logSource,
-	}
+	writer := newLogWriter(processLog, logSource)
 	cmd.Stderr = writer
 
 	if allowPaths != nil && !slices.Contains(allowPaths, cmd.Args[0]) {
@@ -236,11 +232,39 @@ type logWriter struct {
 	buf               []byte
 	enabled           bool
 	logger            *zap.Logger
+	logLevel          zapcore.Level
 	source            string
 	n                 int
 	hardwareFailures  int
 	onHardwareFailure func()
 	hardwareKillArmed bool
+}
+
+// newLogWriter preserves subprocess stderr at the configured module level.
+// FFmpeg writes diagnostics to stderr even for non-fatal conditions, so using
+// a fixed Info event would make that output disappear when log.ffmpeg is warn
+// or error. We use the least severe enabled non-terminal level instead.
+func newLogWriter(logger *zap.Logger, source string) *logWriter {
+	level := subprocessLogLevel(logger)
+	return &logWriter{
+		buf:      make([]byte, 512),
+		enabled:  logger.Core().Enabled(level),
+		logger:   logger,
+		logLevel: level,
+		source:   source,
+	}
+}
+
+func subprocessLogLevel(logger *zap.Logger) zapcore.Level {
+	for _, level := range []zapcore.Level{zap.InfoLevel, zap.WarnLevel, zap.ErrorLevel} {
+		if logger.Core().Enabled(level) {
+			return level
+		}
+	}
+	// Do not use DPanic, Panic, or Fatal for subprocess output: those levels
+	// alter process control flow. The logger will suppress this Error event if
+	// its configured threshold is higher or logging is disabled.
+	return zap.ErrorLevel
 }
 
 func (l *logWriter) String() string {
@@ -257,7 +281,7 @@ func (l *logWriter) Write(p []byte) (n int, err error) {
 	n = len(p)
 	line := trimSpace(p)
 	if l.enabled && line != nil {
-		l.logger.Info(string(line), zap.String("output_stream", "stderr"))
+		l.logger.Log(l.logLevel, string(line), zap.String("output_stream", "stderr"))
 	}
 	if l.onHardwareFailure != nil && !l.hardwareKillArmed && isHardwareAccelFailure(line) {
 		l.hardwareFailures++

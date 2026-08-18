@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/feranydev/homeloom/backend/internal/platform/subprocesslog"
 )
 
 func TestPublisherDiagnosticLogMirrorsCollectedOutput(t *testing.T) {
@@ -22,8 +24,29 @@ func TestPublisherDiagnosticLogMirrorsCollectedOutput(t *testing.T) {
 		t.Fatalf("mirror = %q", mirror.String())
 	}
 	log.Event("info", "core lifecycle", nil)
-	if strings.Contains(mirror.String(), "core lifecycle") {
-		t.Fatal("Core lifecycle event leaked into the child-process collector")
+	if !strings.Contains(mirror.String(), "core lifecycle") || !strings.Contains(mirror.String(), `"component":"homeloom-core"`) {
+		t.Fatalf("lifecycle event was not mirrored as a structured runtime record: %q", mirror.String())
+	}
+}
+
+func TestPublisherDiagnosticLogFlushesMirrorTail(t *testing.T) {
+	store := subprocesslog.New(5)
+	mirror := store.Writer("camera-kernel", "camera-1")
+	log, err := openPublisherDiagnosticLog(t.TempDir(), mirror)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = log.Write([]byte("unterminated child tail"))
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	entries := store.Snapshot(0, 5)
+	if len(entries) != 1 || entries[0].Message != "unterminated child tail" {
+		t.Fatalf("flushed mirrored entries = %#v", entries)
 	}
 }
 

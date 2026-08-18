@@ -529,6 +529,7 @@ func (p *PublisherKernel) watchProcess() <-chan error {
 	done := make(chan error, 1)
 	go func() {
 		err := p.cmd.Wait()
+		p.diagnostics.Flush()
 		_ = p.repairConfigPermissions()
 		fields := map[string]any{"stream_id": p.output.StreamID}
 		if err != nil {

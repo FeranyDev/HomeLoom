@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AuditEvent, DeviceCommand, Diagnostics, RuntimeSettings, SubprocessLogEntry } from '../types/diagnostics'
-import { listRuntimeLogs } from '../api/diagnostics'
+import { listRuntimeLogs, runtimeLogRecoveryLimit } from '../api/diagnostics'
 import { subscribeEvents } from '../api/events'
 import { downloadDatabaseBackup, getMasterKeyStatus, rotateMasterKey, stageDatabaseRestore, type MasterKeyStatus } from '../api/maintenance'
 import { confirmExactPhrase } from '../confirmations'
@@ -155,6 +155,7 @@ function RuntimeLogDialog({ onClose }: { onClose: () => void }) {
 	const [query, setQuery] = useState('')
 	const [process, setProcess] = useState('all')
 	const [error, setError] = useState<string | null>(null)
+	const [retainedWindowNotice, setRetainedWindowNotice] = useState<string | null>(null)
 	const cursor = useRef(0)
 
 	useEffect(() => {
@@ -171,22 +172,56 @@ function RuntimeLogDialog({ onClose }: { onClose: () => void }) {
 	useEffect(() => {
 		let active = true
 		const controller = new AbortController()
-		const append = (next: SubprocessLogEntry[]) => {
+		let recovery: Promise<void> | null = null
+		let recoveryAfter: number | null = null
+		const append = (next: SubprocessLogEntry[], detectLiveGap = true) => {
 			if (!active || next.length === 0) return
+			const ordered = [...next].sort((left, right) => left.sequence - right.sequence)
+			const previousCursor = cursor.current
+			const firstAfterCursor = ordered.find((entry) => entry.sequence > previousCursor)
+			if (detectLiveGap && firstAfterCursor && firstAfterCursor.sequence > previousCursor + 1) requestRecovery(previousCursor)
 			cursor.current = Math.max(cursor.current, ...next.map((entry) => entry.sequence))
 			setEntries((current) => mergeRuntimeLogs(current, next))
 		}
+		const scheduleRecovery = (after: number) => {
+			recoveryAfter = recoveryAfter === null ? after : Math.min(recoveryAfter, after)
+		}
+		const requestRecovery = (after = cursor.current): Promise<void> => {
+			scheduleRecovery(after)
+			if (recovery) return recovery
+			recovery = (async () => {
+				while (active && recoveryAfter !== null) {
+					const requestedAfter = recoveryAfter
+					recoveryAfter = null
+					try {
+						const history = await listRuntimeLogs(requestedAfter, controller.signal)
+						if (!active) return
+						const first = history[0]
+						if (first && first.sequence > requestedAfter + 1) {
+							setRetainedWindowNotice(`序号 ${requestedAfter + 1} 至 ${first.sequence - 1} 的较早运行日志已超出 2000 条保留窗口。`)
+						}
+						setError(null)
+						append(history, false)
+						// A full response can have raced a busy stream. Follow the
+						// cursor once more, never by timer or once per live entry.
+						if (history.length === runtimeLogRecoveryLimit) scheduleRecovery(cursor.current)
+					} catch (cause) {
+						if (active && !(cause instanceof DOMException && cause.name === 'AbortError')) setError(cause instanceof Error ? cause.message : '读取运行日志失败')
+						return
+					}
+				}
+			})().finally(() => { recovery = null })
+			return recovery
+		}
 		// Subscribe before reading the retained snapshot so a log emitted during
 		// the initial request is de-duplicated instead of lost.
-		const unsubscribe = subscribeEvents({ onRuntimeLog: (entry) => append([entry]) })
-		void listRuntimeLogs(0, controller.signal).then((history) => {
-			if (!active) return
-			setError(null)
-			append(history)
-		}).catch((cause) => {
-			if (active && !(cause instanceof DOMException && cause.name === 'AbortError')) setError(cause instanceof Error ? cause.message : '读取运行日志失败')
+		const unsubscribe = subscribeEvents({
+			onReady: () => { if (!recovery) void requestRecovery() },
+			onRuntimeLog: (entry) => append([entry]),
+			onRuntimeLogGap: () => { void requestRecovery() },
 		})
-		return () => { active = false; controller.abort(); unsubscribe() }
+		void requestRecovery(0)
+		return () => { active = false; recoveryAfter = null; controller.abort(); unsubscribe() }
 	}, [])
 
 	const processes = useMemo(() => [...new Set(entries.map((entry) => entry.subsystem ?? entry.process))].sort(), [entries])
@@ -195,6 +230,7 @@ function RuntimeLogDialog({ onClose }: { onClose: () => void }) {
 	return <div className="modal-backdrop subprocess-log-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className="subprocess-log-dialog" role="dialog" aria-modal="true" aria-label="运行日志管理">
 		<div className="command-heading"><div><p className="eyebrow">运行诊断（RUNTIME DIAGNOSTICS）</p><h3>实时运行日志</h3></div><div className="subprocess-log-heading-actions"><span>主进程与子进程 · SSE 自动重连 · 内存最多 2000 条</span><button type="button" onClick={onClose}>关闭</button></div></div>
 		<div className="command-filters subprocess-log-filters"><input aria-label="搜索运行日志" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索进程、实例、等级或内容" /><select aria-label="进程类型" value={process} onChange={(event) => setProcess(event.target.value)}><option value="all">全部进程</option>{processes.map((item) => <option key={item} value={item}>{subprocessLabel(item)}</option>)}</select><span>{filtered.length} / {entries.length}</span></div>
+		{retainedWindowNotice && <div className="maintenance-message" role="status">{retainedWindowNotice}</div>}
 		{error && <div className="command-empty" role="alert">{error}</div>}
 		{!error && filtered.length === 0 ? <div className="command-empty">暂无运行日志</div> : <div className="subprocess-log-view" role="log" aria-label="运行日志内容">{filtered.map((entry) => <div key={entry.sequence}><time>{new Date(entry.time).toLocaleTimeString()}</time><b className={`is-${entry.level ?? 'unknown'}`}>{entry.level ?? 'log'}</b><span>{subprocessLabel(entry.subsystem ?? entry.process)}/{entry.instance}</span><code>{entry.message}{entry.error ? ` · ${entry.error}` : ''}</code></div>)}</div>}
 	</section></div>

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,6 +20,7 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	domaintarget "github.com/feranydev/homeloom/backend/internal/domain/target"
+	"github.com/feranydev/homeloom/backend/internal/platform/subprocesslog"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
 )
 
@@ -34,6 +36,25 @@ func TestRuntimeCommandCollectsOutputAndSetsConfiguredLevel(t *testing.T) {
 	environment := strings.Join(command.Env, "\n")
 	if !strings.Contains(environment, "HOMELOOM_MATTER_LOG_LEVEL=warn") || !strings.Contains(environment, "HOMELOOM_MATTER_LOG_FORMAT=json") {
 		t.Fatalf("environment = %q", environment)
+	}
+}
+
+func TestWaitForMatterRuntimeFlushesUnterminatedChildOutput(t *testing.T) {
+	store := subprocesslog.New(5)
+	writer := store.Writer("matter", "matter-test")
+	command := exec.Command("/bin/sh", "-c", "printf stdout-tail; printf stderr-tail >&2")
+	command.Stdout, command.Stderr = writer, writer
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitForMatterRuntime(command, writer); err != nil {
+		t.Fatal(err)
+	}
+	flushChildLogWriter(writer)
+
+	entries := store.Snapshot(0, 5)
+	if len(entries) != 1 || !strings.Contains(entries[0].Message, "stdout-tail") || !strings.Contains(entries[0].Message, "stderr-tail") {
+		t.Fatalf("flushed Matter child output = %#v", entries)
 	}
 }
 

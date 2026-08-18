@@ -13,6 +13,12 @@ import (
 
 const DefaultCapacity = 2000
 
+// maxPendingLineBytes bounds memory retained for a child process that writes
+// an unterminated line. Its output is emitted in chunks once the limit is
+// reached, rather than allowing a misbehaving process to grow the collector
+// without bound.
+const maxPendingLineBytes = 64 << 10
+
 // SubscriberBuffer bounds a single consumer's pending live log entries. A
 // slow browser must never be able to delay a process that is writing logs.
 const SubscriberBuffer = 256
@@ -168,19 +174,49 @@ type lineWriter struct {
 func (w *lineWriter) Write(payload []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.pending = append(w.pending, payload...)
+	written := len(payload)
+	for len(payload) > 0 {
+		remaining := maxPendingLineBytes - len(w.pending)
+		if remaining == 0 {
+			w.appendPendingLocked()
+			remaining = maxPendingLineBytes
+		}
+		if remaining > len(payload) {
+			remaining = len(payload)
+		}
+		w.pending = append(w.pending, payload[:remaining]...)
+		payload = payload[remaining:]
+		w.appendCompleteLinesLocked()
+		if len(w.pending) == maxPendingLineBytes {
+			w.appendPendingLocked()
+		}
+	}
+	return written, nil
+}
+
+// Flush appends a final unterminated line. It is safe to call repeatedly and
+// concurrently with Write; after a successful flush the pending tail is empty.
+func (w *lineWriter) Flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.appendPendingLocked()
+}
+
+func (w *lineWriter) appendCompleteLinesLocked() {
 	for {
 		index := bytes.IndexByte(w.pending, '\n')
 		if index < 0 {
-			break
+			return
 		}
 		w.store.Append(w.process, w.instance, w.pending[:index])
 		w.pending = w.pending[index+1:]
 	}
-	// Prevent a child without newlines from retaining unbounded memory.
-	if len(w.pending) > 64<<10 {
-		w.store.Append(w.process, w.instance, w.pending[:64<<10])
-		w.pending = w.pending[64<<10:]
+}
+
+func (w *lineWriter) appendPendingLocked() {
+	if len(w.pending) == 0 {
+		return
 	}
-	return len(payload), nil
+	w.store.Append(w.process, w.instance, w.pending)
+	w.pending = w.pending[:0]
 }

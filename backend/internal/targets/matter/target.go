@@ -234,7 +234,7 @@ func (t *Target) runOnce(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("start Matter runtime: %w", err)
 	}
 	processDone := make(chan error, 1)
-	go func() { processDone <- command.Wait() }()
+	go func() { processDone <- waitForMatterRuntime(command, t.config.LogWriter) }()
 	client, err := t.connect(childCtx, processDone)
 	if err != nil {
 		cancel()
@@ -269,6 +269,21 @@ func (t *Target) runOnce(ctx context.Context) (bool, error) {
 		cancel()
 		<-processDone
 		return true, ErrClosed
+	}
+}
+
+func waitForMatterRuntime(command *exec.Cmd, output io.Writer) error {
+	err := command.Wait()
+	flushChildLogWriter(output)
+	return err
+}
+
+func flushChildLogWriter(output io.Writer) {
+	if output == nil {
+		return
+	}
+	if flusher, ok := output.(interface{ Flush() }); ok {
+		flusher.Flush()
 	}
 }
 

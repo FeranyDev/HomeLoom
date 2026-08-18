@@ -83,6 +83,16 @@ const (
 	runtimeLogEventsPerSec = 100
 )
 
+// runtimeLogGap tells a client that the live SSE path intentionally omitted
+// one or more runtime-log entries. The REST cursor endpoint remains the source
+// of truth for recovery: after is the last sequence the stream had delivered
+// and before is the first sequence that was not delivered (or the first
+// sequence observed after a subscriber-buffer gap).
+type runtimeLogGap struct {
+	After  uint64 `json:"after"`
+	Before uint64 `json:"before"`
+}
+
 func runtimeLogCursor(request *http.Request) uint64 {
 	value := strings.TrimSpace(request.Header.Get("Last-Event-ID"))
 	if value == "" {
@@ -1385,10 +1395,25 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		// becoming an unbounded catch-up channel. A subscriber is registered
 		// before the snapshot; duplicate sequences are harmless to clients and
 		// avoid a gap between snapshot and live delivery.
+		logCursor := runtimeLogCursor(c.Request())
+		lastObservedLogSequence := logCursor
+		lastDeliveredLogSequence := logCursor
 		if logEvents != nil {
-			for _, entry := range server.subprocessLogs.Snapshot(runtimeLogCursor(c.Request()), runtimeLogReplayLimit) {
+			replayedLogs := server.subprocessLogs.Snapshot(logCursor, runtimeLogReplayLimit)
+			if len(replayedLogs) > 0 && replayedLogs[0].Sequence > logCursor+1 {
+				if err := writeSSEEvent(response, "runtime-log-gap", runtimeLogGap{After: logCursor, Before: replayedLogs[0].Sequence}, 0); err != nil {
+					return nil
+				}
+			}
+			for _, entry := range replayedLogs {
 				if err := writeSSEEvent(response, "runtime-log", entry, entry.Sequence); err != nil {
 					return nil
+				}
+				if entry.Sequence > lastObservedLogSequence {
+					lastObservedLogSequence = entry.Sequence
+				}
+				if entry.Sequence > lastDeliveredLogSequence {
+					lastDeliveredLogSequence = entry.Sequence
 				}
 			}
 			flusher.Flush()
@@ -1399,6 +1424,7 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		defer heartbeat.Stop()
 		logWindowStarted := time.Now()
 		logEventsSent := 0
+		logGapSent := false
 		for {
 			select {
 			case event := <-events:
@@ -1410,18 +1436,46 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 					return nil
 				}
 				flusher.Flush()
-			case entry := <-logEvents:
+			case entry, open := <-logEvents:
+				if !open {
+					logEvents = nil
+					continue
+				}
 				now := time.Now()
 				if now.Sub(logWindowStarted) >= time.Second {
-					logWindowStarted, logEventsSent = now, 0
+					logWindowStarted, logEventsSent, logGapSent = now, 0, false
 				}
+				// The subscription is deliberately bounded. If its producer had to
+				// skip entries, emit one control event and let the browser recover
+				// with its cursor instead of removing the SSE backpressure bound.
+				if entry.Sequence <= lastObservedLogSequence {
+					continue
+				}
+				if lastObservedLogSequence > 0 && entry.Sequence > lastObservedLogSequence+1 {
+					if !logGapSent {
+						if err := writeSSEEvent(response, "runtime-log-gap", runtimeLogGap{After: lastObservedLogSequence, Before: entry.Sequence}, 0); err != nil {
+							return nil
+						}
+						flusher.Flush()
+						logGapSent = true
+					}
+				}
+				lastObservedLogSequence = entry.Sequence
 				if logEventsSent >= runtimeLogEventsPerSec {
+					if !logGapSent {
+						if err := writeSSEEvent(response, "runtime-log-gap", runtimeLogGap{After: lastDeliveredLogSequence, Before: entry.Sequence}, 0); err != nil {
+							return nil
+						}
+						flusher.Flush()
+						logGapSent = true
+					}
 					continue
 				}
 				logEventsSent++
 				if err := writeSSEEvent(response, "runtime-log", entry, entry.Sequence); err != nil {
 					return nil
 				}
+				lastDeliveredLogSequence = entry.Sequence
 				flusher.Flush()
 			case <-runtimeTicker.C:
 				currentProviders := providerSnapshot()

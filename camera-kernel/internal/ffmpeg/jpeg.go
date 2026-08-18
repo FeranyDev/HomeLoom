@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"net/url"
 	"os/exec"
+	"regexp"
 
 	"github.com/AlexxIT/go2rtc/internal/ffmpeg/hardware"
 	"github.com/AlexxIT/go2rtc/pkg/core"
 	"github.com/AlexxIT/go2rtc/pkg/ffmpeg"
 	"github.com/AlexxIT/go2rtc/pkg/shell"
+	"go.uber.org/zap"
 )
 
 func JPEGWithQuery(b []byte, query url.Values) ([]byte, error) {
@@ -36,10 +38,33 @@ func JPEGWithScaleContext(ctx context.Context, b []byte, width, height int) ([]b
 	cmd.Stdout = output
 	stderr := &boundedDiagnosticBuffer{remaining: 4096}
 	cmd.Stderr = stderr
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("snapshot transcode failed: %w", err)
+	return snapshotTranscodeResult(output.Bytes(), stderr.Bytes(), cmd.Run())
+}
+
+func snapshotTranscodeResult(output, stderr []byte, err error) ([]byte, error) {
+	if err == nil {
+		return output, nil
 	}
-	return output.Bytes(), nil
+
+	fields := []zap.Field{zap.Error(err)}
+	if diagnostic := snapshotDiagnostic(stderr); diagnostic != "" {
+		fields = append(fields, zap.String("stderr", diagnostic))
+	}
+	// The configured ffmpeg logger writes through app's secret-redacting sink.
+	// Keep the command arguments and input out of this event: snapshots are
+	// supplied over stdin, and logging those values could expose a source URI.
+	log.Error("snapshot transcode failed", fields...)
+	return nil, fmt.Errorf("snapshot transcode failed: %w", err)
+}
+
+var snapshotURI = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s"'<>,;]+`)
+
+func snapshotDiagnostic(stderr []byte) string {
+	// FFmpeg normally receives snapshots through stdin, but its diagnostics can
+	// still repeat a URI supplied by a wrapper. Do not expose that URI in the
+	// runtime log; app's logger then redacts any registered secrets left in the
+	// remaining diagnostic text.
+	return snapshotURI.ReplaceAllString(string(stderr), "<redacted-uri>")
 }
 
 func transcode(b []byte, args string) ([]byte, error) {

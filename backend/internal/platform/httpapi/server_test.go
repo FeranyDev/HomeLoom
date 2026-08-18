@@ -1766,6 +1766,41 @@ func TestUnifiedEventStreamPublishesBoundedRuntimeLogsWithCursor(t *testing.T) {
 	}
 }
 
+func TestUnifiedEventStreamSignalsRuntimeLogGapWhenReplayWindowWasOverwritten(t *testing.T) {
+	devices := application.NewDeviceService(virtual.NewProvider())
+	defer devices.Close()
+	logs := subprocesslog.New(2)
+	logs.Append("backend", "main", []byte("first"))
+	logs.Append("backend", "main", []byte("second"))
+	logs.Append("backend", "main", []byte("third"))
+	server := NewServer(":0", devices, application.NewTargetService(nil, nil), zap.NewNop())
+	server.SetSubprocessLogs(logs)
+	httpServer := httptest.NewServer(server.Handler())
+	defer httpServer.Close()
+
+	response, err := http.Get(httpServer.URL + "/api/v1/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	scanner := bufio.NewScanner(response.Body)
+	for index, want := range []string{"event: ready", "data: {}", "", "event: runtime-log-gap"} {
+		if !scanner.Scan() || scanner.Text() != want {
+			t.Fatalf("line %d = %q, want %q", index, scanner.Text(), want)
+		}
+	}
+	if !scanner.Scan() {
+		t.Fatal("missing runtime-log-gap payload")
+	}
+	var gap runtimeLogGap
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(scanner.Text(), "data: ")), &gap); err != nil {
+		t.Fatal(err)
+	}
+	if gap != (runtimeLogGap{After: 0, Before: 2}) {
+		t.Fatalf("gap = %#v", gap)
+	}
+}
+
 func TestLegacySplitEventStreamsAreRemoved(t *testing.T) {
 	httpServer := httptest.NewServer(newTestServer().Handler())
 	defer httpServer.Close()
