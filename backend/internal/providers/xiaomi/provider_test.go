@@ -72,22 +72,30 @@ func TestProviderDebouncesGatewayDirectoryChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer provider.Close(ctx)
+	provider.directoryRefreshDebounce = 20 * time.Millisecond
+	hub.mu.Lock()
+	initialCalls := hub.deviceLists
+	hub.mu.Unlock()
 	for index := 0; index < 3; index++ {
 		hub.handler(hubIncoming{Topic: topicDeviceListChange, Payload: json.RawMessage(`{}`)})
 	}
+	deadline := time.Now().Add(time.Second)
 	for {
-		hub.mu.Lock()
-		calls := hub.deviceLists
-		hub.mu.Unlock()
-		if calls >= 2 || ctx.Err() != nil {
+		if provider.ProviderMetrics()["directoryRefreshes"] >= 1 || time.Now().After(deadline) {
 			break
 		}
 		time.Sleep(time.Millisecond)
 	}
+	if provider.ProviderMetrics()["directoryRefreshes"] != 1 {
+		t.Fatalf("directory refresh did not complete: metrics=%#v", provider.ProviderMetrics())
+	}
+	// Allow a queued notification to run, if one escaped the coalescing gate.
+	// A burst must still result in exactly one completed refresh.
+	time.Sleep(2 * provider.directoryRefreshDebounce)
 	hub.mu.Lock()
 	calls := hub.deviceLists
 	hub.mu.Unlock()
-	if calls != 2 || provider.ProviderMetrics()["directoryRefreshes"] != 1 {
+	if calls != initialCalls+1 || provider.ProviderMetrics()["directoryRefreshes"] != 1 {
 		t.Fatalf("device list calls=%d metrics=%#v", calls, provider.ProviderMetrics())
 	}
 }
