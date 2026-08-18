@@ -165,9 +165,14 @@ test("official camera endpoint 0x0142 is a direct Node child with mandatory skel
 });
 
 function cameraReplay(): RuntimeReplayState {
+  const bridge = bridgeConfiguration("matter-camera", { nodeKind: "camera" });
+  // `en0` is a macOS convention from the shared test fixture. This contract
+  // test does not start networking, so an OS-specific interface would only
+  // make Matter's environment setup fail on Linux CI runners.
+  delete bridge.networkInterface;
   return {
     revision: 1,
-    bridge: bridgeConfiguration("matter-camera", { nodeKind: "camera" }),
+    bridge,
     devices: [cameraDevice()],
     media: {
       streamId: "camera-front-door-main",
