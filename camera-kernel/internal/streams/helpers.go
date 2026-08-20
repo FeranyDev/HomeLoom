@@ -2,6 +2,7 @@ package streams
 
 import (
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -19,6 +20,35 @@ func ParseQuery(s string) url.Values {
 		params[key] = append(params[key], value)
 	}
 	return params
+}
+
+// hardwareRetryLimit returns the number of transient producer restarts that a
+// hardware source may survive before it is demoted to software. A configured
+// limit is useful for live HEVC sources that occasionally begin mid-GOP: the
+// hardware device is healthy, but the first decoder instance cannot yet emit
+// a complete frame. Sources without the marker preserve the historical
+// immediate-demotion behavior.
+func hardwareRetryLimit(source string) int {
+	_, rawQuery, hasQuery := strings.Cut(source, "#")
+	if !hasQuery {
+		return 0
+	}
+	for _, part := range strings.Split(rawQuery, "#") {
+		key, value, _ := strings.Cut(part, "=")
+		if key != "hardware_retry" {
+			continue
+		}
+		limit, err := strconv.Atoi(value)
+		if err != nil || limit < 1 {
+			return 0
+		}
+		return limit
+	}
+	return 0
+}
+
+func shouldDemoteHardware(source string, retry int) bool {
+	return retry >= hardwareRetryLimit(source)
 }
 
 // demoteHardwareURL strips hardware acceleration selectors so reconnect can

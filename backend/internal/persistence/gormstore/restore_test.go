@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/feranydev/homeloom/backend/internal/domain/audit"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	"github.com/feranydev/homeloom/backend/internal/domain/target"
@@ -121,6 +122,55 @@ func TestRestoreRejectsMissingKeyAndInvalidSnapshot(t *testing.T) {
 	}
 	if _, err := Restore(ctx, invalid, databaseURL, keyPath, true); err == nil || !strings.Contains(err.Error(), "decode database snapshot") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestRestoreBatchesLargeAuditSnapshot(t *testing.T) {
+	ctx := context.Background()
+	sourceURL, sourceKey := testCredentials(t)
+	source, err := Open(ctx, sourceURL, sourceKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < 100; index++ {
+		if _, err := source.AppendAuditEvent(ctx, audit.Event{
+			CorrelationID: "restore-batch",
+			Actor:         "test",
+			Action:        "restore",
+			ResourceType:  "snapshot",
+			ResourceID:    "batch",
+			Method:        "POST",
+			Route:         "/restore",
+			Status:        200,
+			Outcome:       audit.OutcomeSucceeded,
+			CreatedAt:     time.UnixMilli(int64(index) + 1).UTC(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	backup := filepath.Join(t.TempDir(), "large-audit-snapshot.json")
+	if err := source.Backup(ctx, backup); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	destinationURL, destinationKey := testCredentials(t)
+	if _, err := Restore(ctx, backup, destinationURL, destinationKey, true); err != nil {
+		t.Fatal(err)
+	}
+	destination, err := Open(ctx, destinationURL, destinationKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destination.Close()
+	events, err := destination.ListAuditEvents(ctx, 101)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 100 {
+		t.Fatalf("restored audit event count = %d, want 100", len(events))
 	}
 }
 

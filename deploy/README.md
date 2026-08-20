@@ -8,13 +8,40 @@ HOMELOOM_VERSION=0.1.0 docker compose up --build -d
 
 管理界面和后端 API 均由 `http://主机地址:8090` 提供。PostgreSQL 17 数据保存在 `postgres-data` 卷；HomeKit HAP 身份和 HomeLoom 主密钥保存在 `homeloom-data` 卷。
 
-> Matter 发布边界：当前镜像未包含 Node.js 20+ 和 `matter-runtime`，因此容器中的 Matter Target 会明确启动失败，不会回退到 HomeKit。Matter 实机部署暂时使用宿主机双制品方式；后续专用镜像必须同时包含 sidecar，并继续使用 host network。
+## SQLite 模式
+
+单机部署可叠加 `deploy/compose.sqlite.yaml`，以 `/data/homeloom.db` 作为数据库且不启动 PostgreSQL：
+
+```bash
+HOMELOOM_VERSION=0.1.0 docker compose -f compose.yaml -f deploy/compose.sqlite.yaml up -d backend
+```
+
+SQLite 数据库、主密钥、HomeKit HAP 身份及媒体资料都保存在 `homeloom-data` 卷；备份或迁移时必须一并保留该卷的内容。
+
+镜像包含 Node.js、锁定版本的 `matter-runtime`、Camera Kernel 与 FFmpeg，因此 Matter Target 和摄像头发布均可在同一个容器内运行。它们仍必须使用 host network，保证 mDNS、IPv6 与动态服务端口可被局域网控制器访问。
+
+构建环境无法直连 Go 或 npm 官方依赖源时，Dockerfile 会离线使用项目 `.cache/go-mod` 和 `.cache/npm`。执行构建前运行一次 `./scripts/check.sh` 即可预热它们；缓存只存在于构建阶段，不会写入最终运行镜像。
 
 ## 为什么使用 host network
 
 HomeKit 和 Matter 都依赖局域网 mDNS 发现；Matter 还要求 IPv6 与控制器可直连每座桥的 UDP 端口。普通 Docker bridge 的 multicast、IPv6、动态端口映射和容器地址通常无法满足这些条件。Linux 上应使用 host network，并在主机防火墙中仅允许可信局域网访问管理端口、HAP TCP 端口和所配置的 Matter UDP 端口。
 
 Docker Desktop、Apple Container 和原生 Linux 的 host network/mDNS 行为不同。macOS/Windows 开发环境建议直接运行双制品完成 HomeKit/Matter 实机验证，容器主要用于 Web/API 构建检查。Matter 控制器与 HomeLoom 必须位于允许 IPv6 link-local、UDP 单播和 mDNS multicast 的同一可达网络。
+
+## Intel 核显（VAAPI）
+
+Intel 核显主机可叠加 `deploy/compose.intel-gpu.yaml`，把最小必要的 DRM render 节点交给后台容器。OpenWrt 默认会把该节点设为 root 专用，因此先创建仅供 HomeLoom 使用的组，并安装随项目提供的启动脚本以在每次开机后恢复权限：
+
+```bash
+addgroup homeloom-render
+install -m 755 deploy/openwrt-homeloom-render.init /etc/init.d/homeloom-render
+/etc/init.d/homeloom-render enable
+/etc/init.d/homeloom-render start
+HOMELOOM_RENDER_GID="$(awk -F: '$1 == "homeloom-render" { print $3 }' /etc/group)" \
+  docker compose -f compose.yaml -f deploy/compose.intel-gpu.yaml up -d backend
+```
+
+镜像包含 Intel Media Driver、VAAPI 工具和支持 VAAPI 的 FFmpeg。摄像头链会先尝试 `hardware=vaapi`，不可用时再回退到软件编码。可在运行后以 `docker compose exec backend vainfo --display drm --device /dev/dri/renderD128` 和 `ffmpeg -hwaccels` 验证驱动与编解码能力。
 
 ## 数据与升级
 

@@ -18,6 +18,10 @@ import (
 const (
 	snapshotFormatVersion       = 1
 	pendingRestoreFormatVersion = 1
+	// SQLite commonly accepts no more than 999 bound variables per statement.
+	// Snapshot rows have varying widths, so keep restore batches deliberately
+	// small to stay portable across SQLite builds and PostgreSQL.
+	snapshotRestoreBatchSize = 25
 )
 
 type databaseSnapshot struct {
@@ -383,7 +387,7 @@ func createSnapshotRows(tx *gorm.DB, rows any) error {
 	if !value.IsValid() || value.Len() == 0 {
 		return nil
 	}
-	return tx.Omit(clause.Associations).Create(rows).Error
+	return tx.Omit(clause.Associations).CreateInBatches(rows, snapshotRestoreBatchSize).Error
 }
 
 func PendingRestorePaths(keyPath string) (snapshot, key, marker string) {

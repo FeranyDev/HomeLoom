@@ -1,0 +1,5 @@
+services:
+  backend:
+    environment:
+      HOMELOOM_DATABASE_URL: sqlite:///data/homeloom.db
+    depends_on: !reset []

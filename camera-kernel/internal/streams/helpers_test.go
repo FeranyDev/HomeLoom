@@ -29,3 +29,26 @@ func TestDemoteHardwareURL(t *testing.T) {
 		}
 	}
 }
+
+func TestHardwareRetryPolicy(t *testing.T) {
+	tests := []struct {
+		source string
+		retry  int
+		limit  int
+		demote bool
+	}{
+		{source: "ffmpeg:cam#video=h264#hardware=vaapi", retry: 0, limit: 0, demote: true},
+		{source: "ffmpeg:cam#video=h264#hardware=vaapi#hardware_retry=3", retry: 0, limit: 3, demote: false},
+		{source: "ffmpeg:cam#video=h264#hardware=vaapi#hardware_retry=3", retry: 2, limit: 3, demote: false},
+		{source: "ffmpeg:cam#video=h264#hardware=vaapi#hardware_retry=3", retry: 3, limit: 3, demote: true},
+		{source: "ffmpeg:cam#video=h264#hardware=vaapi#hardware_retry=bad", retry: 0, limit: 0, demote: true},
+	}
+	for _, test := range tests {
+		if got := hardwareRetryLimit(test.source); got != test.limit {
+			t.Fatalf("hardwareRetryLimit(%q) = %d, want %d", test.source, got, test.limit)
+		}
+		if got := shouldDemoteHardware(test.source, test.retry); got != test.demote {
+			t.Fatalf("shouldDemoteHardware(%q, %d) = %v, want %v", test.source, test.retry, got, test.demote)
+		}
+	}
+}

@@ -353,23 +353,29 @@ func TestTranscodeSourceMatchesAdvertisedHomeKitMedia(t *testing.T) {
 	}
 }
 
-func TestAlwaysOnPublisherUsesUnscaledH264Fallback(t *testing.T) {
+func TestAlwaysOnPublisherBoundsFallbackAndGivesVAAPIAnIDRWindow(t *testing.T) {
 	config := publisherTestConfig(t.TempDir())
 	config.ConnectionMode = "always_on"
 	text := publisherYAML(config)
-	for _, required := range []string{"connection_mode: \"always_on\"", "ffmpeg:camera-main#video=h264#audio=opus/16000"} {
+	for _, required := range []string{
+		"connection_mode: \"always_on\"",
+		"ffmpeg:camera-main#video=h264#audio=opus/16000#width=1920#height=1080",
+	} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("always_on publisher config missing %q:\n%s", required, text)
 		}
 	}
+	if runtime.GOOS != "darwin" && !strings.Contains(text, "ffmpeg:camera-main#video=h264#hardware=vaapi#starttimeout=30#hardware_retry=3#audio=opus/16000#width=1920#height=1080") {
+		t.Fatalf("always_on publisher config missing VAAPI GOP retry policy:\n%s", text)
+	}
 	for _, forbidden := range []string{"#width=1280", "#height=720", "#bitrate="} {
 		if strings.Contains(text, forbidden) {
-			t.Fatalf("always_on publisher config retained shared quality clamp %q:\n%s", forbidden, text)
+			t.Fatalf("always_on publisher config retained preview policy %q:\n%s", forbidden, text)
 		}
 	}
 }
 
-func TestOnlyAlwaysOnUsesUnscaledSharedTranscode(t *testing.T) {
+func TestOnlyAlwaysOnUsesLongLivedTranscodePolicy(t *testing.T) {
 	for _, mode := range []string{"on_demand", "preload"} {
 		uris := publisherTranscodeURIs("camera-main", mode)
 		if len(uris) == 0 || !strings.Contains(uris[len(uris)-1], "#width=1280#height=720") {
@@ -377,8 +383,11 @@ func TestOnlyAlwaysOnUsesUnscaledSharedTranscode(t *testing.T) {
 		}
 	}
 	uris := publisherTranscodeURIs("camera-main", "always_on")
-	if len(uris) == 0 || strings.Contains(uris[len(uris)-1], "#width=") || strings.Contains(uris[len(uris)-1], "#height=") {
-		t.Fatalf("always_on retained a fixed preview size: %#v", uris)
+	if len(uris) == 0 || !strings.Contains(uris[len(uris)-1], "#width=1920#height=1080") {
+		t.Fatalf("always_on persistent fallback is not bounded to 1080p: %#v", uris)
+	}
+	if runtime.GOOS != "darwin" && !strings.Contains(uris[0], "#starttimeout=30#hardware_retry=3") {
+		t.Fatalf("always_on hardware producer did not retain its GOP retry policy: %#v", uris)
 	}
 }
 

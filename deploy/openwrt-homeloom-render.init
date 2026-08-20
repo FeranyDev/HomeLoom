@@ -1,0 +1,11 @@
+#!/bin/sh /etc/rc.common
+
+START=99
+
+start() {
+	for device in /dev/dri/card* /dev/dri/renderD*; do
+		[ -e "$device" ] || continue
+		chgrp homeloom-render "$device"
+		chmod 660 "$device"
+	done
+}

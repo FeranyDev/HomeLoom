@@ -17,6 +17,10 @@ const (
 	EngineDXVA2        = "dxva2"        // Intel on Windows
 	EngineVideoToolbox = "videotoolbox" // macOS
 	EngineRKMPP        = "rkmpp"        // Rockchip
+	// vaapiDevice explicitly shares one VAAPI device between the decoder,
+	// filters and encoder. Initialising a device alone only enables the latter
+	// two; -hwaccel vaapi is what selects hardware decoding for the input.
+	vaapiDevice = "-init_hw_device vaapi=va -hwaccel vaapi -hwaccel_device va -filter_hw_device va"
 )
 
 func Init(bin string) {
@@ -58,7 +62,7 @@ func MakeHardware(args *ffmpeg.Args, engine string, defaults map[string]string) 
 			args.Codecs[i] = defaults[name+"/"+engine]
 
 			if !args.HasFilters("drawtext=") {
-				args.Input = "-init_hw_device vaapi -hwaccel_output_format vaapi -hwaccel_flags allow_profile_mismatch " + args.Input
+				args.Input = vaapiDevice + " -hwaccel_output_format vaapi -hwaccel_flags allow_profile_mismatch " + args.Input
 
 				if name == "h264" {
 					fixPixelFormat(args)
@@ -82,7 +86,7 @@ func MakeHardware(args *ffmpeg.Args, engine string, defaults map[string]string) 
 				args.InsertFilter("format=vaapi|nv12,hwupload")
 			} else {
 				// enable software pixel for drawtext, scale and transpose
-				args.Input = "-init_hw_device vaapi -hwaccel_output_format nv12 -hwaccel_flags allow_profile_mismatch " + args.Input
+				args.Input = vaapiDevice + " -hwaccel_output_format nv12 -hwaccel_flags allow_profile_mismatch " + args.Input
 
 				args.AddFilter("hwupload")
 			}

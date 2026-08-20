@@ -1,0 +1,9 @@
+services:
+  backend:
+    # VAAPI only needs the render node; exposing card0 is unnecessary.
+    devices:
+      - /dev/dri/renderD128:/dev/dri/renderD128
+    group_add:
+      - "${HOMELOOM_RENDER_GID:?HOMELOOM_RENDER_GID must be the host homeloom-render group ID}"
+    environment:
+      LIBVA_DRIVER_NAME: iHD

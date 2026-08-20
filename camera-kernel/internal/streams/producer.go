@@ -155,10 +155,10 @@ func (p *Producer) start() {
 	p.state = stateStart
 	p.workerID++
 
-	go p.worker(p.conn, p.workerID)
+	go p.worker(p.conn, p.workerID, 0)
 }
 
-func (p *Producer) worker(conn core.Producer, workerID int) {
+func (p *Producer) worker(conn core.Producer, workerID, retry int) {
 	if err := conn.Start(); err != nil {
 		p.mu.Lock()
 		closed := p.workerID != workerID
@@ -171,7 +171,7 @@ func (p *Producer) worker(conn core.Producer, workerID int) {
 		log.Warn("producer stopped with error", zap.Error(err), zap.String("url", p.url))
 	}
 
-	p.reconnect(workerID, 0)
+	p.reconnect(workerID, retry+1)
 }
 
 func (p *Producer) reconnect(workerID, retry int) {
@@ -183,7 +183,11 @@ func (p *Producer) reconnect(workerID, retry int) {
 		return
 	}
 
-	if demoted := demoteHardwareURL(p.url); demoted != p.url {
+	// A temporary upstream failure is not evidence that the accelerator is
+	// unavailable. In particular, live HEVC sources can start mid-GOP and make
+	// the first decoder instance fail before an IDR arrives. Honor an explicit
+	// retry policy before latching a long-lived stream onto libx264.
+	if demoted := demoteHardwareURL(p.url); demoted != p.url && shouldDemoteHardware(p.url, retry) {
 		log.Warn("demoting hardware producer to software", zap.String("from", p.url), zap.String("to", demoted))
 		p.url = demoted
 	}
@@ -193,7 +197,7 @@ func (p *Producer) reconnect(workerID, retry int) {
 	conn, err := GetProducer(p.url)
 	if err != nil {
 		log.Debug("producer dial failed", zap.Error(err), zap.String("url", p.url))
-		if demoted := demoteHardwareURL(p.url); demoted != p.url {
+		if demoted := demoteHardwareURL(p.url); demoted != p.url && shouldDemoteHardware(p.url, retry) {
 			log.Warn("producer dial failed; demoting hardware producer", zap.String("from", p.url), zap.String("to", demoted))
 			p.url = demoted
 			time.AfterFunc(time.Second, func() {
@@ -253,7 +257,7 @@ func (p *Producer) reconnect(workerID, retry int) {
 	// swap connections
 	p.conn = conn
 
-	go p.worker(conn, workerID)
+	go p.worker(conn, workerID, retry)
 }
 
 func (p *Producer) stop() {

@@ -945,15 +945,26 @@ func sharedTranscodeURIs(streamID string) []string {
 		"audio=opus/16000",
 		"width=1280",
 		"height=720",
-	})
+	}, 8, 0)
 }
 
-// alwaysOnTranscodeURIs is the permanent H.264 compatibility output. It does
-// not impose the 720p dimensions used by the on-demand preview fallback, so a
-// single always-on producer can be shared by web preview and HomeKit without
-// reducing the camera's source resolution or applying a controller bitrate.
+// alwaysOnTranscodeURIs is the permanent H.264 compatibility output. A camera
+// can expose a much higher upstream stream than its configured media profile
+// (Xiaomi MISS may expose 4K at 48fps for a nominal 1080p profile). Letting a
+// hardware fallback failure turn that into a permanent libx264 transcode can
+// consume several CPU cores. Bound the long-lived compatibility stream to a
+// high-quality 1080p maximum, while still keeping its bitrate controller-free.
+//
+// Xiaomi streams may begin mid-GOP, so their first usable HEVC IDR can arrive
+// after the normal preview deadline. The longer VAAPI startup window and a few
+// transient reconnect attempts prevent a healthy GPU path from being latched
+// into software mode by one incomplete GOP.
 func alwaysOnTranscodeURIs(streamID string) []string {
-	return transcodeFallbackURIs(streamID, []string{"audio=opus/16000"})
+	return transcodeFallbackURIs(streamID, []string{
+		"audio=opus/16000",
+		"width=1920",
+		"height=1080",
+	}, 30, 3)
 }
 
 func publisherTranscodeURIs(streamID, connectionMode string) []string {
@@ -972,11 +983,11 @@ func streamProducerListYAML(native string, fallbacks []string) string {
 	return "[" + strings.Join(parts, ", ") + "]"
 }
 
-// transcodeFallbackURIs builds the shared always-on H.264 producer chain.
+// transcodeFallbackURIs builds the shared H.264 producer chain.
 // Xiaomi MISS HEVC on macOS fails VideoToolbox hardware decode mid-GOP, so
 // Darwin uses software decode + libx264 only. Other platforms may still try
 // hardware encode-only before falling back to software.
-func transcodeFallbackURIs(streamID string, query []string) []string {
+func transcodeFallbackURIs(streamID string, query []string, hardwareStartTimeout, hardwareRetries int) []string {
 	join := func(videoParts ...string) string {
 		uri := "ffmpeg:" + streamID
 		for _, part := range videoParts {
@@ -992,6 +1003,14 @@ func transcodeFallbackURIs(streamID string, query []string) []string {
 		return uri
 	}
 	software := join("video=h264")
+	hardware := func(video, engine string, startTimeout, retries int) string {
+		parts := []string{video}
+		if engine != "" {
+			parts = append(parts, engine)
+		}
+		parts = append(parts, hardwareTranscodePolicy(startTimeout, retries)...)
+		return join(parts...)
+	}
 	switch runtime.GOOS {
 	case "darwin":
 		// Do not attempt #hardware=videotoolbox (HEVC hard-decode). It fails
@@ -999,19 +1018,30 @@ func transcodeFallbackURIs(streamID string, query []string) []string {
 		return []string{software}
 	case "windows":
 		return []string{
-			join("video=h264/dxva2", "starttimeout=8"),
-			join("video=h264/cuda", "starttimeout=8"),
+			hardware("video=h264/dxva2", "", hardwareStartTimeout, hardwareRetries),
+			hardware("video=h264/cuda", "", 8, 0),
 			software,
 		}
 	default:
 		return []string{
-			join("video=h264#hardware=vaapi", "starttimeout=8"),
-			join("video=h264/cuda", "starttimeout=8"),
-			join("video=h264/v4l2m2m", "starttimeout=8"),
-			join("video=h264/rkmpp", "starttimeout=8"),
+			hardware("video=h264", "hardware=vaapi", hardwareStartTimeout, hardwareRetries),
+			hardware("video=h264/cuda", "", 8, 0),
+			hardware("video=h264/v4l2m2m", "", 8, 0),
+			hardware("video=h264/rkmpp", "", 8, 0),
 			software,
 		}
 	}
+}
+
+func hardwareTranscodePolicy(startTimeout, retries int) []string {
+	if startTimeout <= 0 {
+		startTimeout = 8
+	}
+	policy := []string{"starttimeout=" + strconv.Itoa(startTimeout)}
+	if retries > 0 {
+		policy = append(policy, "hardware_retry="+strconv.Itoa(retries))
+	}
+	return policy
 }
 
 func applyFFmpegH264Template(content, template string) string {
