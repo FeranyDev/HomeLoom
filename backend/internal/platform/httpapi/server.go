@@ -1086,6 +1086,8 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		writeMetric("database_max_latency_milliseconds", metrics.DatabaseMaxLatencyMS)
 		writeMetric("provider_clock_skew_events_total", metrics.ProviderClockSkewEvents)
 		writeMetric("provider_max_clock_skew_milliseconds", metrics.ProviderMaxClockSkewMS)
+		writeMetric("provider_snapshot_age_events_total", metrics.ProviderSnapshotAgeEvents)
+		writeMetric("provider_max_snapshot_age_milliseconds", metrics.ProviderMaxSnapshotAgeMS)
 		writeMetric("provider_events_ignored_total", metrics.ProviderEventsIgnored)
 		writeMetric("provider_messages_received_total", metrics.ProviderMessagesReceived)
 		writeMetric("provider_messages_invalid_total", metrics.ProviderMessagesInvalid)

@@ -300,7 +300,12 @@ export function SystemDashboard({ diagnostics, commands, auditEvents = [], setti
 	['数据库操作', diagnostics.databaseOperations],
 	['数据库平均延迟', `${diagnostics.databaseAverageLatencyMs.toFixed(1)}ms`],
 	['数据库最大延迟', `${diagnostics.databaseMaxLatencyMs.toFixed(1)}ms`],
-	['Provider 时钟漂移', diagnostics.providerClockSkewEvents],
+	['Provider 事件时钟漂移', diagnostics.providerClockSkewEvents],
+	['事件最大时钟偏差', `${diagnostics.providerMaxClockSkewMs.toFixed(0)}ms`],
+	['事件偏差来源', diagnostics.providerClockSkewSource || '—'],
+	['Provider 刷新旧快照', diagnostics.providerSnapshotAgeEvents ?? 0],
+	['最大快照年龄', `${(diagnostics.providerMaxSnapshotAgeMs ?? 0).toFixed(0)}ms`],
+	['旧快照来源', diagnostics.providerSnapshotAgeSource || '—'],
 	['忽略乱序/重复事件', diagnostics.providerEventsIgnored ?? 0],
 	['Provider 消息', diagnostics.providerMessagesReceived ?? 0],
 	['Provider 无效消息', diagnostics.providerMessagesInvalid ?? 0],
@@ -308,7 +313,6 @@ export function SystemDashboard({ diagnostics, commands, auditEvents = [], setti
 	['Provider 已发命令', diagnostics.providerCommandsPublished ?? 0],
 	['属性映射命中', diagnostics.mappingApplied ?? 0],
 	['属性映射失败', diagnostics.mappingErrors ?? 0],
-	['最大时钟偏差', `${diagnostics.providerMaxClockSkewMs.toFixed(0)}ms`],
   ]
   return <section className="system-dashboard"><div className="metric-grid">{metrics.map(([label, value]) => <article key={label}><span>{label}</span><strong>{value}</strong></article>)}</div>
     <div className="queue-card"><div><span>事件队列</span><strong>{diagnostics.eventQueuePending} / {diagnostics.eventQueueCapacity}</strong></div><div className="queue-track"><span style={{ width: `${Math.min(queueRate, 100)}%` }} /></div><small>当前占用 {queueRate}% · 核心队列满时会丢弃并计数，不阻塞 Provider 线程。</small></div>

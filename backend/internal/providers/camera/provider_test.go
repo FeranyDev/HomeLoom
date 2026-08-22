@@ -134,6 +134,27 @@ func TestCameraProviderExposesConfiguredConnectionModes(t *testing.T) {
 	}
 }
 
+func TestCameraProviderRetainsDisabledMediaSourceForLifecycleReconciliation(t *testing.T) {
+	disabled := false
+	provider := newTestProvider(t, Config{Cameras: []Entry{{
+		ID: "front-door", Name: "Front Door", Driver: "rtsp", Enabled: &disabled,
+		Profiles: []media.MediaProfile{testProfile()},
+		RTSP:     &RTSPConfig{Host: "192.0.2.10", Path: "/live"},
+	}}})
+
+	devices, err := provider.DiscoverDevices(context.Background())
+	if err != nil || len(devices) != 0 {
+		t.Fatalf("disabled DiscoverDevices() = %#v, %v", devices, err)
+	}
+	sources, err := provider.DiscoverMediaSources(context.Background())
+	if err != nil || len(sources) != 1 {
+		t.Fatalf("disabled DiscoverMediaSources() = %#v, %v", sources, err)
+	}
+	if sources[0].DeviceID != "front-door" || sources[0].Enabled {
+		t.Fatalf("disabled source = %#v", sources[0])
+	}
+}
+
 func TestONVIFCameraProviderOwnsDiscoveryInputAndDigestAuthorization(t *testing.T) {
 	provider := newTestProvider(t, Config{Cameras: []Entry{{
 		ID: "garage", Name: "Garage", Driver: "onvif", Profiles: []media.MediaProfile{testProfile()},

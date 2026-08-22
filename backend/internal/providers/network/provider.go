@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os/exec"
 	"sort"
 	"strconv"
 	"sync"
@@ -16,21 +17,51 @@ import (
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 )
 
-// Prober is deliberately narrow so protocol behavior is testable without a
-// real LAN. A nil error is a TCP connection that completed successfully.
-type Prober interface {
-	Probe(context.Context, string, int) error
+// ProbeRequest carries the configured reachability method. Keeping it explicit
+// lets tests cover TCP and ICMP behavior without depending on a real LAN.
+type ProbeRequest struct {
+	Method ProbeMethod
+	Host   string
+	Port   int
 }
 
-type tcpProber struct{}
+// Prober is deliberately narrow so protocol behavior is testable without a
+// real LAN. A nil error means the requested reachability check succeeded.
+type Prober interface {
+	Probe(context.Context, ProbeRequest) error
+}
 
-func (tcpProber) Probe(ctx context.Context, host string, port int) error {
+type systemProber struct{}
+
+func (systemProber) Probe(ctx context.Context, request ProbeRequest) error {
+	switch request.Method {
+	case ProbeMethodTCP:
+		return probeTCP(ctx, request.Host, request.Port)
+	case ProbeMethodICMP:
+		return probeICMP(ctx, request.Host)
+	default:
+		return fmt.Errorf("unsupported network probe method %q", request.Method)
+	}
+}
+
+func probeTCP(ctx context.Context, host string, port int) error {
 	dialer := net.Dialer{}
 	connection, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {
 		return err
 	}
 	return connection.Close()
+}
+
+func probeICMP(ctx context.Context, host string) error {
+	// One echo request is enough because the Provider already applies online
+	// and offline thresholds. CommandContext enforces the configured timeout
+	// consistently across BusyBox (OpenWrt/Alpine), Linux and macOS ping.
+	command := exec.CommandContext(ctx, "ping", "-n", "-c", "1", host)
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("icmp echo to %q: %w", host, err)
+	}
+	return nil
 }
 
 // Waker sends a Magic Packet. It is injected in tests and can be replaced by
@@ -85,7 +116,7 @@ var (
 )
 
 func NewProviderFromConfig(item providerconfig.Config) (*Provider, error) {
-	return newProvider(item, tcpProber{}, udpWaker{})
+	return newProvider(item, systemProber{}, udpWaker{})
 }
 
 // NewProviderWithDependencies is intended for deterministic tests and hosts
@@ -175,7 +206,7 @@ func (p *Provider) TestConnection(ctx context.Context) error {
 	var lastErr error
 	for _, entry := range entries {
 		probeCtx, cancel := context.WithTimeout(ctx, entry.probeTimeout)
-		err := p.prober.Probe(probeCtx, entry.Host, entry.ProbePort)
+		err := p.probe(probeCtx, entry)
 		cancel()
 		if err == nil {
 			return nil
@@ -251,7 +282,7 @@ func (p *Provider) WriteProperty(ctx context.Context, request providersdk.Proper
 	}
 	p.wakes.Add(1)
 	// Magic Packets have no acknowledgement. Return the existing state and let
-	// the next TCP probe become the sole authority for the power state.
+	// the next reachability probe become the sole authority for the power state.
 	return snapshot, nil
 }
 
@@ -341,13 +372,17 @@ func (p *Provider) probeDue(parent context.Context, all bool) {
 		go func() {
 			defer group.Done()
 			probeCtx, cancel := context.WithTimeout(parent, entry.probeTimeout)
-			err := p.prober.Probe(probeCtx, entry.Host, entry.ProbePort)
+			err := p.probe(probeCtx, entry)
 			cancel()
 			p.probes.Add(1)
 			p.recordProbe(entry.ID, err)
 		}()
 	}
 	group.Wait()
+}
+
+func (p *Provider) probe(ctx context.Context, entry monitoredDevice) error {
+	return p.prober.Probe(ctx, ProbeRequest{Method: entry.probeMethod, Host: entry.Host, Port: entry.ProbePort})
 }
 
 func (p *Provider) recordProbe(id string, probeErr error) {

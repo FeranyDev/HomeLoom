@@ -195,14 +195,26 @@ type deviceMetrics struct {
 	commandsCoalesced     atomic.Uint64
 	homeKitPushes         atomic.Uint64
 	providerClockSkews    atomic.Uint64
+	providerSnapshotAges  atomic.Uint64
 	providerEventsIgnored atomic.Uint64
 	mappingApplied        atomic.Uint64
 	mappingErrors         atomic.Uint64
 	stateCheckpoints      atomic.Uint64
 	stateCheckpointErrors atomic.Uint64
 	statesRestored        atomic.Uint64
-	maxClockSkewNanos     atomic.Uint64
+	timingMu              sync.RWMutex
+	maxClockSkewNanos     uint64
+	maxSnapshotAgeNanos   uint64
+	clockSkewSource       string
+	snapshotAgeSource     string
 }
+
+type snapshotTimeOrigin uint8
+
+const (
+	snapshotTimeOriginProviderEvent snapshotTimeOrigin = iota
+	snapshotTimeOriginRefresh
+)
 
 type DeviceMetrics struct {
 	EventsReceived            uint64  `json:"eventsReceived"`
@@ -243,6 +255,10 @@ type DeviceMetrics struct {
 	DatabaseMaxLatencyMS      float64 `json:"databaseMaxLatencyMs"`
 	ProviderClockSkewEvents   uint64  `json:"providerClockSkewEvents"`
 	ProviderMaxClockSkewMS    float64 `json:"providerMaxClockSkewMs"`
+	ProviderClockSkewSource   string  `json:"providerClockSkewSource,omitempty"`
+	ProviderSnapshotAgeEvents uint64  `json:"providerSnapshotAgeEvents"`
+	ProviderMaxSnapshotAgeMS  float64 `json:"providerMaxSnapshotAgeMs"`
+	ProviderSnapshotAgeSource string  `json:"providerSnapshotAgeSource,omitempty"`
 	ProviderEventsIgnored     uint64  `json:"providerEventsIgnored"`
 	ProviderMessagesReceived  uint64  `json:"providerMessagesReceived"`
 	ProviderMessagesInvalid   uint64  `json:"providerMessagesInvalid"`
@@ -339,7 +355,7 @@ func NewDeviceService(provider providersdk.Provider, dependencies ...any) *Devic
 		service.registry.Upsert(item)
 		if item.IsOnline() {
 			service.acceptSnapshotSequence(item)
-			service.applySnapshot(item, "")
+			service.applySnapshot(item, "", snapshotTimeOriginRefresh)
 		} else {
 			service.ensureUnknownStates(item, unavailableReason(item), "")
 		}
@@ -818,7 +834,7 @@ func (s *DeviceService) SetDeviceEnabled(ctx context.Context, id string, enabled
 	s.registry.Upsert(item)
 	if item.IsOnline() {
 		s.acceptSnapshotSequence(item)
-		s.applySnapshot(item, "")
+		s.applySnapshot(item, "", snapshotTimeOriginRefresh)
 	} else {
 		s.ensureUnknownStates(item, unavailableReason(item), "")
 		stale := s.states.MarkDeviceUnavailable(id, unavailableReason(item))
@@ -886,7 +902,7 @@ func (s *DeviceService) RefreshDevices(ctx context.Context) error {
 	}
 	for _, item := range s.sourceSnapshots(ctx, items) {
 		s.resetSnapshotSequence(item.ID)
-		s.handleEvent(eventbus.Event{DeviceID: item.ID, Payload: item, TraceID: CorrelationID(ctx)})
+		s.handleDeviceSnapshot(item, CorrelationID(ctx), snapshotTimeOriginRefresh)
 	}
 	return nil
 }
@@ -949,6 +965,10 @@ func (s *DeviceService) Metrics() DeviceMetrics {
 	if s.storageMetrics != nil {
 		databaseOperations, databaseAverage, databaseMaximum = s.storageMetrics.DatabaseOperationMetrics()
 	}
+	s.metrics.timingMu.RLock()
+	maxClockSkewNanos, maxSnapshotAgeNanos := s.metrics.maxClockSkewNanos, s.metrics.maxSnapshotAgeNanos
+	clockSkewSource, snapshotAgeSource := s.metrics.clockSkewSource, s.metrics.snapshotAgeSource
+	s.metrics.timingMu.RUnlock()
 	return DeviceMetrics{
 		EventsReceived: s.metrics.eventsReceived.Load(), EventsProcessed: s.metrics.eventsProcessed.Load(),
 		EventsDropped: s.metrics.eventsDropped.Load(), EventQueuePending: s.dispatcher.Pending(), EventQueueCapacity: s.dispatcher.Capacity(),
@@ -962,7 +982,9 @@ func (s *DeviceService) Metrics() DeviceMetrics {
 		CommandQueuePending:     commandQueuePending, CommandQueueMaxPending: commandQueueMaxPending,
 		EventAverageLatencyMS: float64(eventStats.AverageLatency.Nanoseconds()) / float64(time.Millisecond), EventMaxLatencyMS: float64(eventStats.MaxLatency.Nanoseconds()) / float64(time.Millisecond), SlowEventHandlers: eventStats.SlowHandlers,
 		DatabaseOperations: databaseOperations, DatabaseAverageLatencyMS: float64(databaseAverage.Nanoseconds()) / float64(time.Millisecond), DatabaseMaxLatencyMS: float64(databaseMaximum.Nanoseconds()) / float64(time.Millisecond),
-		ProviderClockSkewEvents: s.metrics.providerClockSkews.Load(), ProviderMaxClockSkewMS: float64(s.metrics.maxClockSkewNanos.Load()) / float64(time.Millisecond), ProviderEventsIgnored: s.metrics.providerEventsIgnored.Load(),
+		ProviderClockSkewEvents: s.metrics.providerClockSkews.Load(), ProviderMaxClockSkewMS: float64(maxClockSkewNanos) / float64(time.Millisecond), ProviderClockSkewSource: clockSkewSource,
+		ProviderSnapshotAgeEvents: s.metrics.providerSnapshotAges.Load(), ProviderMaxSnapshotAgeMS: float64(maxSnapshotAgeNanos) / float64(time.Millisecond), ProviderSnapshotAgeSource: snapshotAgeSource,
+		ProviderEventsIgnored:    s.metrics.providerEventsIgnored.Load(),
 		ProviderMessagesReceived: providerMessagesReceived, ProviderMessagesInvalid: providerMessagesInvalid, ProviderMessagesDropped: providerMessagesDropped, ProviderCommandsPublished: providerCommandsPublished,
 		MappingApplied: s.metrics.mappingApplied.Load(), MappingErrors: s.metrics.mappingErrors.Load(),
 		Goroutines: runtime.NumGoroutine(), HeapAllocBytes: memory.HeapAlloc, HeapObjects: memory.HeapObjects,
@@ -1017,7 +1039,7 @@ func (s *DeviceService) ReportDeviceAvailability(id string, availability device.
 	s.registry.Upsert(item)
 	switch availability {
 	case device.AvailabilityOnline:
-		s.applySnapshot(item, "")
+		s.applySnapshot(item, "", snapshotTimeOriginRefresh)
 	case device.AvailabilityOffline:
 		stale := s.states.MarkDeviceUnavailable(id, domainstate.UnavailableDeviceOffline)
 		s.metrics.statesMarkedStale.Add(uint64(len(stale)))
@@ -1659,6 +1681,14 @@ func (s *DeviceService) handleEvent(event eventbus.Event) {
 	if !ok {
 		return
 	}
+	s.handleDeviceSnapshot(item, event.TraceID, snapshotTimeOriginProviderEvent)
+}
+
+// handleDeviceSnapshot reconciles both Provider events and explicit catalog
+// refreshes. The origin is retained because a refresh can legitimately carry
+// a device's last-change timestamp, while an event timestamp must be close to
+// the time HomeLoom received it.
+func (s *DeviceService) handleDeviceSnapshot(item device.Device, traceID string, origin snapshotTimeOrigin) {
 	s.metrics.eventsProcessed.Add(1)
 	// Provider events are deliberately public/narrow snapshots. Pull the
 	// Provider-native snapshot from SourceCatalog only inside the mapping
@@ -1703,10 +1733,10 @@ func (s *DeviceService) handleEvent(event eventbus.Event) {
 		s.registry.Upsert(item)
 	}
 	if item.IsOnline() {
-		s.applySnapshot(item, event.TraceID)
+		s.applySnapshot(item, traceID, origin)
 	} else {
-		s.ensureUnknownStates(item, unavailableReason(item), event.TraceID)
-		stale := s.states.MarkDeviceUnavailable(item.ID, unavailableReason(item), event.TraceID)
+		s.ensureUnknownStates(item, unavailableReason(item), traceID)
+		stale := s.states.MarkDeviceUnavailable(item.ID, unavailableReason(item), traceID)
 		s.metrics.statesMarkedStale.Add(uint64(len(stale)))
 		for _, value := range stale {
 			s.publishState(value)
@@ -2115,9 +2145,9 @@ func (s *DeviceService) resetSnapshotSequence(deviceID string) {
 	s.snapshotMu.Unlock()
 }
 
-func (s *DeviceService) applySnapshot(item device.Device, traceID string) {
+func (s *DeviceService) applySnapshot(item device.Device, traceID string, origin snapshotTimeOrigin) {
 	receivedAt := time.Now().UTC()
-	observedAt := s.safeObservedAt(item.LastUpdateAt, receivedAt)
+	observedAt := s.safeObservedAt(item, receivedAt, origin)
 	for _, endpoint := range item.Endpoints {
 		for _, capability := range endpoint.Capabilities {
 			for _, property := range capability.Properties {
@@ -2205,7 +2235,8 @@ func unavailableReason(item device.Device) domainstate.UnavailableReason {
 	return domainstate.UnavailableDeviceOffline
 }
 
-func (s *DeviceService) safeObservedAt(observedAt, receivedAt time.Time) time.Time {
+func (s *DeviceService) safeObservedAt(item device.Device, receivedAt time.Time, origin snapshotTimeOrigin) time.Time {
+	observedAt := item.LastUpdateAt
 	if observedAt.IsZero() {
 		return receivedAt
 	}
@@ -2216,15 +2247,26 @@ func (s *DeviceService) safeObservedAt(observedAt, receivedAt time.Time) time.Ti
 	if skew <= 5*time.Minute {
 		return observedAt
 	}
-	s.metrics.providerClockSkews.Add(1)
-	nanos := uint64(skew)
-	for {
-		current := s.metrics.maxClockSkewNanos.Load()
-		if nanos <= current || s.metrics.maxClockSkewNanos.CompareAndSwap(current, nanos) {
-			break
-		}
-	}
+	s.recordTimingOffset(item, skew, origin)
 	return receivedAt
+}
+
+func (s *DeviceService) recordTimingOffset(item device.Device, offset time.Duration, origin snapshotTimeOrigin) {
+	source := item.ProviderID + "/" + item.ID
+	nanos := uint64(offset)
+	s.metrics.timingMu.Lock()
+	defer s.metrics.timingMu.Unlock()
+	if origin == snapshotTimeOriginProviderEvent {
+		s.metrics.providerClockSkews.Add(1)
+		if nanos > s.metrics.maxClockSkewNanos {
+			s.metrics.maxClockSkewNanos, s.metrics.clockSkewSource = nanos, source
+		}
+		return
+	}
+	s.metrics.providerSnapshotAges.Add(1)
+	if nanos > s.metrics.maxSnapshotAgeNanos {
+		s.metrics.maxSnapshotAgeNanos, s.metrics.snapshotAgeSource = nanos, source
+	}
 }
 
 func (s *DeviceService) runStaleScanner(ctx context.Context) {

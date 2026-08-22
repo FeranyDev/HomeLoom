@@ -15,6 +15,9 @@ export interface Diagnostics {
 	eventAverageLatencyMs: number; eventMaxLatencyMs: number; slowEventHandlers: number
 	databaseOperations: number; databaseAverageLatencyMs: number; databaseMaxLatencyMs: number
 	providerClockSkewEvents: number; providerMaxClockSkewMs: number
+	providerClockSkewSource?: string
+	providerSnapshotAgeEvents?: number; providerMaxSnapshotAgeMs?: number
+	providerSnapshotAgeSource?: string
 	providerEventsIgnored?: number
 	providerMessagesReceived?: number; providerMessagesInvalid?: number; providerMessagesDropped?: number; providerCommandsPublished?: number
 	mappingApplied?: number; mappingErrors?: number

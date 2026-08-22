@@ -106,6 +106,11 @@ type blockingWriteProvider struct {
 
 type skewedSnapshotProvider struct{ inner *virtual.Provider }
 
+type skewedEventProvider struct {
+	inner   *virtual.Provider
+	handler func(device.Device)
+}
+
 type devicePreferenceMetrics struct {
 	mu       sync.Mutex
 	disabled map[string]bool
@@ -289,6 +294,25 @@ func (p *skewedSnapshotProvider) DiscoverDevices(ctx context.Context) ([]device.
 		items[0].LastUpdateAt = time.Now().UTC().Add(24 * time.Hour)
 	}
 	return items, err
+}
+
+func (p *skewedEventProvider) Manifest() providersdk.Manifest { return p.inner.Manifest() }
+func (p *skewedEventProvider) Capabilities() providersdk.Capabilities {
+	return p.inner.Capabilities()
+}
+func (p *skewedEventProvider) Initialize(ctx context.Context) error { return p.inner.Initialize(ctx) }
+func (p *skewedEventProvider) Close(ctx context.Context) error      { return p.inner.Close(ctx) }
+func (p *skewedEventProvider) DiscoverDevices(ctx context.Context) ([]device.Device, error) {
+	return p.inner.DiscoverDevices(ctx)
+}
+func (p *skewedEventProvider) Subscribe(handler func(device.Device)) func() {
+	p.handler = handler
+	return func() { p.handler = nil }
+}
+func (p *skewedEventProvider) emit(item device.Device) {
+	if p.handler != nil {
+		p.handler(item)
+	}
 }
 
 func (p *silentProvider) Manifest() providersdk.Manifest         { return p.inner.Manifest() }
@@ -645,17 +669,53 @@ func TestLocationCatalogRejectsNormalizedDuplicateNames(t *testing.T) {
 	}
 }
 
-func TestDeviceServiceDetectsAndClampsProviderClockSkew(t *testing.T) {
+func TestDeviceServiceClassifiesOldRefreshSnapshotAsSnapshotAge(t *testing.T) {
 	service := application.NewDeviceService(&skewedSnapshotProvider{inner: virtual.NewProvider()})
 	defer service.Close()
 	metrics := service.Metrics()
-	if metrics.ProviderClockSkewEvents != 1 || metrics.ProviderMaxClockSkewMS < float64((23*time.Hour)/time.Millisecond) {
-		t.Fatalf("clock metrics = %#v", metrics)
+	if metrics.ProviderClockSkewEvents != 0 || metrics.ProviderSnapshotAgeEvents != 1 || metrics.ProviderMaxSnapshotAgeMS < float64((23*time.Hour)/time.Millisecond) || metrics.ProviderSnapshotAgeSource != "virtual-main/virtual-switch-1" {
+		t.Fatalf("timing metrics = %#v", metrics)
 	}
 	states := service.States("virtual-switch-1")
 	if len(states) != 1 || states[0].ObservedAt.After(time.Now().Add(time.Minute)) {
 		t.Fatalf("clamped states = %#v", states)
 	}
+}
+
+func TestDeviceServiceClassifiesSkewedProviderEventSeparately(t *testing.T) {
+	provider := &skewedEventProvider{inner: virtual.NewProvider()}
+	service := application.NewDeviceService(provider)
+	defer service.Close()
+	items, err := provider.DiscoverDevices(context.Background())
+	if err != nil {
+		t.Fatalf("provider snapshot = %#v, %v", items, err)
+	}
+	var item device.Device
+	for _, candidate := range items {
+		if candidate.ID == "virtual-switch-1" {
+			item = candidate
+			break
+		}
+	}
+	if item.ID == "" {
+		t.Fatalf("switch snapshot not found: %#v", items)
+	}
+	item.Sequence++
+	item.LastUpdateAt = time.Now().UTC().Add(24 * time.Hour)
+	provider.emit(item)
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		metrics := service.Metrics()
+		if metrics.ProviderClockSkewEvents == 1 {
+			if metrics.ProviderSnapshotAgeEvents != 0 || metrics.ProviderMaxClockSkewMS < float64((23*time.Hour)/time.Millisecond) || metrics.ProviderClockSkewSource != "virtual-main/virtual-switch-1" {
+				t.Fatalf("timing metrics = %#v", metrics)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("skewed Provider event was not recorded: %#v", service.Metrics())
 }
 
 func TestDeviceServicePublishesIntegerState(t *testing.T) {

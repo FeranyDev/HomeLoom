@@ -1114,7 +1114,7 @@ func TestDiagnosticsAndPrometheusMetrics(t *testing.T) {
 			t.Fatalf("metrics missing device counts: %s", response.Body.String())
 		}
 		if path == "/metrics" {
-			for _, name := range []string{"homeloom_event_average_latency_milliseconds", "homeloom_slow_event_handlers_total", "homeloom_database_operations_total", "homeloom_homekit_pushes_total", "homeloom_devices_unknown", "homeloom_command_queue_pending", "homeloom_command_queue_max_pending", "homeloom_commands_outcome_unknown_total", "homeloom_commands_coalesced_total", "homeloom_provider_clock_skew_events_total"} {
+			for _, name := range []string{"homeloom_event_average_latency_milliseconds", "homeloom_slow_event_handlers_total", "homeloom_database_operations_total", "homeloom_homekit_pushes_total", "homeloom_devices_unknown", "homeloom_command_queue_pending", "homeloom_command_queue_max_pending", "homeloom_commands_outcome_unknown_total", "homeloom_commands_coalesced_total", "homeloom_provider_clock_skew_events_total", "homeloom_provider_snapshot_age_events_total", "homeloom_provider_max_snapshot_age_milliseconds"} {
 				if !bytes.Contains(response.Body.Bytes(), []byte(name)) {
 					t.Fatalf("metrics missing %s: %s", name, response.Body.String())
 				}

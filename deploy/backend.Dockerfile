@@ -50,7 +50,7 @@ FROM node:24-alpine
 # The target OpenWrt host reaches this mirror substantially faster than the
 # default CDN. This affects only this image-build stage, not host APK settings.
 RUN sed -i 's|https://dl-cdn.alpinelinux.org|https://mirrors.ustc.edu.cn|g' /etc/apk/repositories \
-    && apk add --no-cache ca-certificates ffmpeg intel-media-driver libva-utils tzdata \
+	&& apk add --no-cache ca-certificates ffmpeg intel-media-driver iputils-ping libva-utils tzdata \
     && addgroup -S homeloom \
     && adduser -S -G homeloom -h /app homeloom \
     && mkdir -p /data /app/matter-runtime \

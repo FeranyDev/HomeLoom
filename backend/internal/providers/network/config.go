@@ -21,11 +21,19 @@ const (
 	defaultWOLPort       = 9
 )
 
+type ProbeMethod string
+
+const (
+	ProbeMethodTCP  ProbeMethod = "tcp"
+	ProbeMethodICMP ProbeMethod = "icmp"
+)
+
 // Config owns the durable catalog for a LAN power-state Provider. Devices can
 // override each timing and Wake-on-LAN option so a sleeping computer does not
 // have to share the probing policy of an always-on NAS.
 type Config struct {
 	Devices              []DeviceConfig `json:"devices"`
+	ProbeMethod          ProbeMethod    `json:"probeMethod,omitempty"`
 	ProbeIntervalSeconds int            `json:"probeIntervalSeconds,omitempty"`
 	ProbeTimeoutSeconds  int            `json:"probeTimeoutSeconds,omitempty"`
 	OnlineThreshold      int            `json:"onlineThreshold,omitempty"`
@@ -38,22 +46,24 @@ type Config struct {
 // DeviceConfig identifies one independently monitored network device. MAC is
 // optional for a monitor-only device and required only when wake is invoked.
 type DeviceConfig struct {
-	ID                   string `json:"id"`
-	Name                 string `json:"name"`
-	Host                 string `json:"host"`
-	ProbePort            int    `json:"probePort"`
-	MAC                  string `json:"mac,omitempty"`
-	ProbeIntervalSeconds int    `json:"probeIntervalSeconds,omitempty"`
-	ProbeTimeoutSeconds  int    `json:"probeTimeoutSeconds,omitempty"`
-	OnlineThreshold      int    `json:"onlineThreshold,omitempty"`
-	OfflineThreshold     int    `json:"offlineThreshold,omitempty"`
-	WOLBroadcastAddress  string `json:"wolBroadcastAddress,omitempty"`
-	WOLPort              int    `json:"wolPort,omitempty"`
-	WOLInterface         string `json:"wolInterface,omitempty"`
+	ID                   string      `json:"id"`
+	Name                 string      `json:"name"`
+	Host                 string      `json:"host"`
+	ProbeMethod          ProbeMethod `json:"probeMethod,omitempty"`
+	ProbePort            int         `json:"probePort,omitempty"`
+	MAC                  string      `json:"mac,omitempty"`
+	ProbeIntervalSeconds int         `json:"probeIntervalSeconds,omitempty"`
+	ProbeTimeoutSeconds  int         `json:"probeTimeoutSeconds,omitempty"`
+	OnlineThreshold      int         `json:"onlineThreshold,omitempty"`
+	OfflineThreshold     int         `json:"offlineThreshold,omitempty"`
+	WOLBroadcastAddress  string      `json:"wolBroadcastAddress,omitempty"`
+	WOLPort              int         `json:"wolPort,omitempty"`
+	WOLInterface         string      `json:"wolInterface,omitempty"`
 }
 
 type monitoredDevice struct {
 	DeviceConfig
+	probeMethod      ProbeMethod
 	mac              net.HardwareAddr
 	probeInterval    time.Duration
 	probeTimeout     time.Duration
@@ -90,6 +100,11 @@ func normalizeConfig(item providerconfig.Config, config *Config) error {
 	if len(config.Devices) == 0 {
 		return errors.New("network provider requires at least one device")
 	}
+	probeMethod, err := resolveProbeMethod(config.ProbeMethod, ProbeMethodTCP)
+	if err != nil {
+		return fmt.Errorf("probeMethod: %w", err)
+	}
+	config.ProbeMethod = probeMethod
 	if err := validateSeconds("probeIntervalSeconds", config.ProbeIntervalSeconds, 1, 3600); err != nil {
 		return err
 	}
@@ -121,8 +136,18 @@ func normalizeConfig(item providerconfig.Config, config *Config) error {
 		if configured.Name == "" || configured.Host == "" {
 			return fmt.Errorf("network device %q requires name and host", configured.ID)
 		}
-		if configured.ProbePort < 1 || configured.ProbePort > 65535 {
-			return fmt.Errorf("network device %q probePort must be between 1 and 65535", configured.ID)
+		if strings.HasPrefix(configured.Host, "-") {
+			return fmt.Errorf("network device %q host must not start with a hyphen", configured.ID)
+		}
+		deviceProbeMethod, err := resolveProbeMethod(configured.ProbeMethod, probeMethod)
+		if err != nil {
+			return fmt.Errorf("network device %q probeMethod: %w", configured.ID, err)
+		}
+		if deviceProbeMethod == ProbeMethodTCP && (configured.ProbePort < 1 || configured.ProbePort > 65535) {
+			return fmt.Errorf("network device %q probePort must be between 1 and 65535 for TCP probes", configured.ID)
+		}
+		if deviceProbeMethod == ProbeMethodICMP && (configured.ProbePort < 0 || configured.ProbePort > 65535) {
+			return fmt.Errorf("network device %q probePort must be between 0 and 65535", configured.ID)
 		}
 		if err := validateSeconds("network device "+configured.ID+" probeIntervalSeconds", configured.ProbeIntervalSeconds, 1, 3600); err != nil {
 			return err
@@ -193,8 +218,10 @@ func materializeDevices(config Config) ([]monitoredDevice, error) {
 	wolPort := intOrDefault(config.WOLPort, defaultWOLPort)
 	devices := make([]monitoredDevice, 0, len(config.Devices))
 	for _, item := range config.Devices {
+		probeMethod, _ := resolveProbeMethod(item.ProbeMethod, config.ProbeMethod)
 		configured := monitoredDevice{
 			DeviceConfig:     item,
+			probeMethod:      probeMethod,
 			probeInterval:    secondsOrDefault(item.ProbeIntervalSeconds, interval),
 			probeTimeout:     secondsOrDefault(item.ProbeTimeoutSeconds, timeout),
 			onlineThreshold:  thresholdOrDefaultWith(item.OnlineThreshold, onlineThreshold),
@@ -209,6 +236,19 @@ func materializeDevices(config Config) ([]monitoredDevice, error) {
 		devices = append(devices, configured)
 	}
 	return devices, nil
+}
+
+func resolveProbeMethod(value, fallback ProbeMethod) (ProbeMethod, error) {
+	method := ProbeMethod(strings.ToLower(strings.TrimSpace(string(value))))
+	if method == "" {
+		method = fallback
+	}
+	switch method {
+	case ProbeMethodTCP, ProbeMethodICMP:
+		return method, nil
+	default:
+		return "", errors.New("must be tcp or icmp")
+	}
 }
 
 func secondsOrDefault(value int, fallback time.Duration) time.Duration {

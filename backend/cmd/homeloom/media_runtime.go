@@ -144,9 +144,6 @@ func reconcileDiscoveredMedia(ctx context.Context, discoverer mediaSourceDiscove
 	}
 	discovered := make(map[string]struct{}, len(sources))
 	for _, source := range sources {
-		if !source.Enabled {
-			continue
-		}
 		discovered[source.DeviceID] = struct{}{}
 		profiles, err := json.Marshal(source.Profiles)
 		if err != nil {
@@ -182,13 +179,19 @@ func reconcileDiscoveredMedia(ctx context.Context, discoverer mediaSourceDiscove
 				existing[index].Mode = string(desiredMode)
 				changed = true
 			}
+			if existing[index].Enabled != source.Enabled {
+				existing[index].Enabled = source.Enabled
+				changed = true
+			}
 			if changed {
 				if _, err := store.SaveMediaStreamVersioned(ctx, existing[index]); err != nil {
 					return fmt.Errorf("update camera stream policy %q: %w", existing[index].ID, err)
 				}
 			}
 		}
-		if len(existing) > 0 || len(source.Profiles) == 0 {
+		// A newly configured disabled camera has no stream to preserve yet.
+		// Create the default preview stream only once it is enabled.
+		if !source.Enabled || len(existing) > 0 || len(source.Profiles) == 0 {
 			continue
 		}
 		profile := source.Profiles[0]

@@ -170,6 +170,75 @@ func TestPruneOrphanedCameraPublisherDirectoriesRetainsCatalogStreams(t *testing
 	}
 }
 
+func TestReconcileDisabledCameraRetainsHomeKitPublicationState(t *testing.T) {
+	store := newMediaCatalogStoreStub()
+	source := domainmedia.MediaSourceDescriptor{
+		SchemaVersion: domainmedia.SchemaVersion,
+		DeviceID:      "camera-1", ProviderID: "camera-main", ProviderDeviceID: "camera-1",
+		Protocol: domainmedia.ProtocolRTSP,
+		Profiles: []domainmedia.MediaProfile{{
+			SchemaVersion: domainmedia.SchemaVersion, ID: "main", Width: 1920, Height: 1080, FPS: 25,
+			VideoCodec: domainmedia.VideoCodecH264, AudioCodec: domainmedia.AudioCodecAAC,
+		}},
+		SourceConfig: json.RawMessage(`{"host":"192.0.2.10","port":554,"path":"/live"}`),
+		Revision:     1, Enabled: true,
+	}
+	streamID := defaultCameraStreamID(source.DeviceID)
+	store.sources[source.DeviceID] = gormstore.MediaSource{
+		DeviceID: source.DeviceID, ProviderID: source.ProviderID, ProviderDeviceID: source.ProviderDeviceID,
+		Protocol: string(source.Protocol), Revision: source.Revision, Enabled: true,
+	}
+	store.streams[source.DeviceID] = []gormstore.MediaStream{{
+		ID: streamID, DeviceID: source.DeviceID, Protocol: string(source.Protocol), Profile: "main",
+		Mode: string(domainmedia.StreamOnDemand), Enabled: true,
+		OptionsJSON: json.RawMessage(`{"publisher":"apple-home"}`),
+	}}
+
+	runtimeDir := t.TempDir()
+	publisherDir := filepath.Join(runtimeDir, streamID)
+	if err := os.MkdirAll(publisherDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	pairingsPath := filepath.Join(publisherDir, "homekit-pairings.json")
+	if err := os.WriteFile(pairingsPath, []byte(`{"schemaVersion":1,"pairings":["controller"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	disabled := source
+	disabled.Enabled = false
+	if err := reconcileDiscoveredMedia(context.Background(), mediaSourceDiscovererStub{sources: []domainmedia.MediaSourceDescriptor{disabled}}, store, cameraProviderConfigs()); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.sources[source.DeviceID]; got.Enabled {
+		t.Fatalf("disabled source remained enabled: %#v", got)
+	}
+	streams := store.streams[source.DeviceID]
+	if len(streams) != 1 || streams[0].ID != streamID || streams[0].Enabled || string(streams[0].OptionsJSON) != `{"publisher":"apple-home"}` {
+		t.Fatalf("disabled stream did not retain publication state: %#v", streams)
+	}
+	removed, err := pruneOrphanedCameraPublisherDirectories(context.Background(), runtimeDir, mediaReplayStoreStub{streams: streams})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 0 {
+		t.Fatalf("disabled publisher directories removed = %d", removed)
+	}
+	if _, err := os.Stat(pairingsPath); err != nil {
+		t.Fatalf("HomeKit pairing state was removed: %v", err)
+	}
+
+	if err := reconcileDiscoveredMedia(context.Background(), mediaSourceDiscovererStub{sources: []domainmedia.MediaSourceDescriptor{source}}, store, cameraProviderConfigs()); err != nil {
+		t.Fatal(err)
+	}
+	streams = store.streams[source.DeviceID]
+	if len(streams) != 1 || streams[0].ID != streamID || !streams[0].Enabled || string(streams[0].OptionsJSON) != `{"publisher":"apple-home"}` {
+		t.Fatalf("re-enabled stream did not reuse publication state: %#v", streams)
+	}
+	if _, err := os.Stat(pairingsPath); err != nil {
+		t.Fatalf("HomeKit pairing state did not survive re-enable: %v", err)
+	}
+}
+
 func TestReconcileDiscoveredMediaCreatesPreviewOnlyCameraStream(t *testing.T) {
 	store := newMediaCatalogStoreStub()
 	source := domainmedia.MediaSourceDescriptor{

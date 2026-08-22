@@ -15,17 +15,25 @@ import (
 type sequenceProber struct {
 	mu        sync.Mutex
 	responses []error
+	requests  []ProbeRequest
 }
 
-func (p *sequenceProber) Probe(_ context.Context, _ string, _ int) error {
+func (p *sequenceProber) Probe(_ context.Context, request ProbeRequest) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.requests = append(p.requests, request)
 	if len(p.responses) == 0 {
 		return nil
 	}
 	result := p.responses[0]
 	p.responses = p.responses[1:]
 	return result
+}
+
+func (p *sequenceProber) recordedRequests() []ProbeRequest {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]ProbeRequest(nil), p.requests...)
 }
 
 type recordingWaker struct {
@@ -159,11 +167,32 @@ func TestConnectionSucceedsWhenAnyConfiguredDeviceIsReachable(t *testing.T) {
 	}
 }
 
+func TestProviderSupportsICMPAndPerDeviceProbeOverrides(t *testing.T) {
+	config := networkProviderConfig()
+	config.Config = []byte(`{"probeMethod":"icmp","devices":[{"id":"nas","name":"NAS","host":"192.0.2.10"},{"id":"pc","name":"PC","host":"192.0.2.11","probeMethod":"tcp","probePort":3389}]}`)
+	prober := &sequenceProber{responses: []error{errors.New("no echo response"), nil}}
+	provider, err := NewProviderWithDependencies(config, prober, &recordingWaker{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.TestConnection(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	requests := prober.recordedRequests()
+	if len(requests) != 2 || requests[0] != (ProbeRequest{Method: ProbeMethodICMP, Host: "192.0.2.10"}) || requests[1] != (ProbeRequest{Method: ProbeMethodTCP, Host: "192.0.2.11", Port: 3389}) {
+		t.Fatalf("probe requests = %#v", requests)
+	}
+}
+
 func TestConfigValidationAndMagicPacket(t *testing.T) {
 	config := networkProviderConfig()
 	config.Config = []byte(`{"devices":[{"id":"NAS","name":"NAS","host":"192.0.2.10","probePort":443,"mac":"not-a-mac"}]}`)
 	if _, err := NewProviderFromConfig(config); err == nil {
 		t.Fatal("invalid network config was accepted")
+	}
+	config.Config = []byte(`{"probeMethod":"udp","devices":[{"id":"nas","name":"NAS","host":"192.0.2.10","probePort":443}]}`)
+	if _, err := NewProviderFromConfig(config); err == nil {
+		t.Fatal("unsupported probe method was accepted")
 	}
 	provider, err := NewProviderWithDependencies(networkProviderConfig(), &sequenceProber{}, &recordingWaker{})
 	if err != nil {

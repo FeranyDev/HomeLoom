@@ -194,13 +194,15 @@ func (p *Provider) DiscoverMediaSources(ctx context.Context) ([]media.MediaSourc
 	p.mu.RUnlock()
 	result := make([]media.MediaSourceDescriptor, 0, len(entries))
 	for _, entry := range entries {
-		if !entryEnabled(entry) {
-			continue
-		}
 		source, err := p.source(ctx, entry)
 		if err != nil {
 			return nil, err
 		}
+		// A disabled configured camera remains a known media source so the
+		// catalog can stop its stream without treating the source as removed.
+		// That distinction keeps stable Camera Target publication state, such
+		// as the HomeKit accessory identity and pairings, intact for re-enable.
+		source.Enabled = entryEnabled(entry)
 		result = append(result, source)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].DeviceID < result[j].DeviceID })
