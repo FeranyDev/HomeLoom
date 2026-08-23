@@ -16,9 +16,12 @@ export type ParameterLevel = 'required' | 'optional' | 'custom'
 export type DeviceRuntimeMode = 'pending' | 'local' | 'cloud'
 export type DeviceStateTransport = 'pending' | 'local-mqtt' | 'cloud-mqtt' | 'cloud-http'
 export type DeviceLocationMode = 'source' | 'custom'
+export type MCPAccess = 'hidden' | 'read' | 'confirm' | 'inherit'
 
 export interface DeviceLocationRoom { id: string; homeId: string; name: string }
 export interface DeviceLocationHome { id: string; name: string; rooms: DeviceLocationRoom[] }
+export interface MCPDeviceConfig { deviceId: string; enabled: boolean; usageNote: string; defaultAccess: Exclude<MCPAccess, 'inherit'> }
+export interface MCPPropertyConfig { deviceId: string; endpointId: string; capabilityId: string; propertyId: string; usageNote: string; access: MCPAccess }
 
 export interface PropertyValue { type: ValueType; bool?: boolean; int?: number; number?: number; string?: string }
 export interface PropertyDefinition { id: string; name: string; type: ValueType; parameterLevel?: ParameterLevel; unit?: string; readable: boolean; writable: boolean; notifiable: boolean; min?: number; max?: number; step?: number; enum?: string[]; staleAfterSeconds?: number }

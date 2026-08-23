@@ -21,6 +21,16 @@ runtime:
   # state cache; every restored value is marked stale until a Provider reports.
   state_checkpoint_interval_seconds: 0
 
+# Core creates a private Unix Socket and directly manages the separate
+# homeloom-mcp-agent child process. The Agent exposes authenticated MCP and AI
+# HTTP endpoints only on the local loopback address.
+mcp:
+  enabled: false
+  socket_path: "./data/mcp/core.sock"
+  agent_binary: "homeloom-mcp-agent"
+  runtime_dir: "./data/mcp"
+  agent_listen_address: "127.0.0.1:8091"
+
 media:
   # Core directly owns media lifecycle and authorization. Only the constrained
   # per-camera kernel and FFmpeg remain external executables.

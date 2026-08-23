@@ -68,6 +68,10 @@ Web 管理面只有这一个管理员身份，不实现普通用户、角色或�
 - `GET /ready`：检查必要运行依赖；所选数据库可访问时返回 200，否则返回 503 和分项原因；
 - `GET /api/v1/system/version`：版本、commit、构建时间和 Go 版本；
 - `GET/PUT /api/v1/system/settings`：读取或实时更新数据库中的运行时设置；
+- `GET/PUT /api/v1/ai-service/config`：读取或保存独立 MCP Agent 的通用 AI 服务地址、Key、模型、协议（`responses` 或 `chat-completions`）及可编辑的智能体提示词；响应不包含 Key，Key 不写入 Core 数据库。响应同时给出内置默认提示词，提交空提示词可恢复默认；
+- `GET /api/v1/ai-service/models`：通过已保存服务的兼容 `GET /models` 接口获取模型 ID；
+- `POST /api/v1/ai-service/runs`、`GET /api/v1/ai-service/runs/{id}`、`POST /api/v1/ai-service/runs/{id}/approve`：由管理页通过 Core 认证代理到本机 Agent 的 AI 对话与明确批准入口；单次模型请求最多两分钟，完整对话最多六分钟，超出上限返回 `408`，且不会执行设备写入；
+- `GET/POST /api/v1/ai-service/automations`、`PUT/DELETE /api/v1/ai-service/automations/{id}`：持久化 AI 定时和状态触发任务、每任务最近 50 条 AI 返回与执行记录；每次自动化运行是独立 AI 会话。任务默认 `unattended`，由任务策略自动批准 AI 生成的设备计划，但 Core 仍重查授权和状态版本；`manual` 任务可通过 `POST /api/v1/ai-service/automations/{id}/runs/{runId}/approve` 人工批准；
 - `GET /api/v1/system/config-export`：下载脱敏后的数据库配置快照；
 - `GET /api/v1/system/diagnostic-bundle`：下载版本、指标、脱敏配置和最近审计事件组成的诊断包；
 - `POST /api/v1/system/backup`：输入精确确认短语 `BACKUP` 后下载数据库中立逻辑快照与主密钥组成的 ZIP 完整备份；
@@ -78,6 +82,9 @@ Web 管理面只有这一个管理员身份，不实现普通用户、角色或�
 - `GET /metrics`：Prometheus 文本指标；
 - `GET /api/v1/devices/{id}/states`：内存状态、来源和质量；
 - `PUT /api/v1/devices/{id}/enabled`：持久禁用或重新启用设备；
+- `GET/PUT /api/v1/devices/{id}/mcp-config`：读取或保存该设备的 MCP 开关、默认权限和使用备注；
+- `GET /api/v1/devices/{id}/mcp-properties`：读取该设备已保存的属性级 MCP 覆盖；
+- `PUT/DELETE /api/v1/devices/{id}/mcp-properties/{endpoint}/{capability}/{property}`：保存或清除已绑定属性的 MCP 权限与使用备注；
 - `GET /api/v1/commands`：命令生命周期历史。
 - `GET /api/v1/audit-events?limit=200`：按时间倒序读取持久化审计事件，`limit` 范围为 1–500；
 - `GET /api/v1/events`：唯一的 SSE 长连接；按变化发送 `device`、`device-event`、`state`、`command`、`audit`、`target` 和 `runtime` 事件，不在连接时重复发送全量快照。`runtime` 每 5 秒只比较内存中的 Provider 状态和诊断指标，并且仅在对应类别变化时发送；该采样不会读取设备或访问小米云。每 15 秒发送一次注释心跳。
@@ -85,6 +92,18 @@ Web 管理面只有这一个管理员身份，不实现普通用户、角色或�
 管理前端首次进入时通过 REST 获取全量数据，此后由统一 SSE 应用增量变化，并每 5 分钟重新获取一次全量数据以修复断线或慢客户端丢失的事件。手动刷新和完成配置写入后仍会立即获取全量数据。
 
 所有 `/api/v1` 下的 POST、PUT、PATCH 和 DELETE 都记录审计事件，包括失败的操作。审计表只保存 actor、方法、模板化路由、资源 ID、状态码、结果和 correlation ID，不保存请求体或配置值，避免 Provider 凭据和 HomeKit PIN 进入日志。记录保存在所选数据库的 `audit_events` 表中，当前自动保留最近 5000 条；写请求会在返回前同步尝试持久化，审计失败会写入结构化错误日志，但不会把已经完成的业务操作伪装成失败。SSE 订阅使用有界缓冲，慢客户端只会漏掉实时通知，不影响已经落库的历史。
+
+## MCP / AI 设备授权
+
+MCP 授权由管理员在“AI → 设备与属性授权”集中保存，默认所有设备均不可见。设备级配置包含 `enabled`、`defaultAccess`（`hidden`、`read`、`confirm`）和 `usageNote`；已绑定属性可用 `access`（额外支持 `inherit`）与 `usageNote` 覆盖。备注只作为 AI 的业务上下文，不能放宽 Core 的权限判定。
+
+`confirm` 不是直接写权限：独立 Agent 只能根据当前状态创建待批准计划；只有调用其明确的批准 API 后，Core 才会再次检查该属性仍可见、仍为 `confirm`、仍可写，并比较计划时的 State 版本。全部配置变更走管理 API 审计，实际 Agent 写入以 `mcp-agent-runtime` 身份单独记录。MCP 与 Agent 的外部 HTTP 端点不在 Core 管理 API 内，具体部署和协议见 [MCP 与 AI Agent](mcp-ai-agent.md)。
+
+## AI 对话与自动任务
+
+“AI”页通过已登录管理员的 Core API 提供对话入口；浏览器不会获得本机 Agent Token。普通对话能返回文本或 `awaiting_approval` 设备操作计划，后者必须由管理员显式调用批准入口，不能因任何自动任务设置而自行执行。
+
+自动任务保存在数据库中：`schedule` 以 60 秒至 7 天的间隔运行；`trigger` 在指定的已知、可用状态精确匹配 typed value 时运行，并有同样范围的冷却时间。状态触发属性除了必须存在且类型一致，还必须保有 AI 的有效 `read` 或 `confirm` 授权。每次运行都是新 AI 会话，并随任务保存最近 50 条回复、设备计划和执行结果。默认 `unattended` 策略会自动批准 AI 已生成的计划；Core 在写入前仍重新检查 `confirm` 授权、属性可写性和 State 版本。可将任务设为 `manual`，保留人工批准流程。
 
 逻辑设备使用 `/api/v1/logical-devices` CRUD 手动保存 `Logical Device → Provider Binding`。`GET /api/v1/logical-devices/candidates` 仅返回供管理员确认的候选，必须同时满足统一模型类型、规范化名称和来源家庭或房间一致；名称相同本身绝不会创建或合并设备。已链接来源从设备中心隐藏，解除链接会重新发布来源设备。属性和命令可通过 `propertyRoutes`/`commandRoutes` 指定具体 Provider、Endpoint、Capability 与 Property/Command；无显式路由时按 Binding priority 选择同路径来源。回退只发生在前一来源明确 offline、Provider unavailable 或来源已不存在时；写入不会在超时或拒绝后重试，命令还必须声明 `idempotent` 且在候选中显式允许回退。`GET /api/v1/logical-devices/{id}/explanations` 返回每个多来源属性或命令当前的候选、可用性、选择结果和原因。
 

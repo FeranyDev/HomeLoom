@@ -6,7 +6,44 @@ import (
 	"testing"
 
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
+	domainmcp "github.com/feranydev/homeloom/backend/internal/domain/mcp"
 )
+
+func TestMCPConfigsPersistUpdateAndClearPropertyOverride(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	deviceConfig := domainmcp.DeviceConfig{DeviceID: "desk-lamp", Enabled: true, UsageNote: "书房主灯", DefaultAccess: domainmcp.AccessRead}
+	if err := store.SaveMCPDeviceConfig(ctx, deviceConfig); err != nil {
+		t.Fatal(err)
+	}
+	storedDevice, found, err := store.GetMCPDeviceConfig(ctx, deviceConfig.DeviceID)
+	if err != nil || !found || storedDevice != deviceConfig {
+		t.Fatalf("device config = %#v, found=%v, err=%v", storedDevice, found, err)
+	}
+	propertyConfig := domainmcp.PropertyConfig{PropertyPath: domainmcp.PropertyPath{DeviceID: "desk-lamp", EndpointID: "main", CapabilityID: "switch", PropertyID: "power"}, UsageNote: "离开时可以关闭", Access: domainmcp.AccessConfirm}
+	if err := store.SaveMCPPropertyConfig(ctx, propertyConfig); err != nil {
+		t.Fatal(err)
+	}
+	propertyConfig.UsageNote = "仅在已打开时建议关闭"
+	if err := store.SaveMCPPropertyConfig(ctx, propertyConfig); err != nil {
+		t.Fatal(err)
+	}
+	items, err := store.ListMCPPropertyConfigs(ctx, deviceConfig.DeviceID)
+	if err != nil || len(items) != 1 || items[0] != propertyConfig {
+		t.Fatalf("property configs = %#v, %v", items, err)
+	}
+	if err := store.DeleteMCPPropertyConfig(ctx, propertyConfig.PropertyPath); err != nil {
+		t.Fatal(err)
+	}
+	_, found, err = store.GetMCPPropertyConfig(ctx, propertyConfig.PropertyPath)
+	if err != nil || found {
+		t.Fatalf("property config found=%v, err=%v", found, err)
+	}
+}
 
 func TestDeviceLocationPreferencesPersistAndClear(t *testing.T) {
 	ctx := context.Background()

@@ -27,6 +27,7 @@ esac
 CAMERA_KERNEL_OUTPUT=$(dirname "$OUTPUT")/homeloom-camera-kernel
 FFMPEG_OUTPUT=$(dirname "$OUTPUT")/ffmpeg
 MATTER_RUNTIME_OUTPUT=$(dirname "$OUTPUT")/homeloom-matter-runtime
+MCP_AGENT_OUTPUT=$(dirname "$OUTPUT")/homeloom-mcp-agent
 
 case "$MATTER_RUNTIME_MODE" in
   js|sea) ;;
@@ -46,10 +47,14 @@ fi
 (cd backend && CGO_ENABLED=0 "$ROOT/scripts/dev-env.sh" go build -trimpath -tags embed_webui \
   -ldflags "-s -w -X ${PACKAGE}.Version=${VERSION} -X ${PACKAGE}.Commit=${COMMIT} -X ${PACKAGE}.BuildTime=${BUILD_TIME}" \
   -o "$OUTPUT" ./cmd/homeloom)
+(cd backend && CGO_ENABLED=0 "$ROOT/scripts/dev-env.sh" go build -trimpath \
+  -ldflags "-s -w -X ${PACKAGE}.Version=${VERSION} -X ${PACKAGE}.Commit=${COMMIT} -X ${PACKAGE}.BuildTime=${BUILD_TIME}" \
+  -o "$MCP_AGENT_OUTPUT" ./cmd/homeloom-mcp-agent)
 "$ROOT/scripts/check-camera-kernel-scope.sh"
 (cd camera-kernel && CGO_ENABLED=0 "$ROOT/scripts/dev-env.sh" go build -trimpath \
   -o "$CAMERA_KERNEL_OUTPUT" .)
 test -s "$OUTPUT"
+test -s "$MCP_AGENT_OUTPUT"
 test -s "$CAMERA_KERNEL_OUTPUT"
 if [ "$MATTER_RUNTIME_MODE" = sea ]; then
   test -x "$MATTER_RUNTIME_OUTPUT"
@@ -59,6 +64,7 @@ fi
 test -x "$FFMPEG_OUTPUT"
 "$OUTPUT" -version
 printf 'built HomeLoom core %s (%s): %s\n' "$VERSION" "$COMMIT" "$OUTPUT"
+printf 'built HomeLoom MCP Agent sidecar: %s\n' "$MCP_AGENT_OUTPUT"
 printf 'built HomeLoom camera kernel: %s\n' "$CAMERA_KERNEL_OUTPUT"
 printf 'built FFmpeg media transcoder: %s\n' "$FFMPEG_OUTPUT"
 if [ "$MATTER_RUNTIME_MODE" = sea ]; then

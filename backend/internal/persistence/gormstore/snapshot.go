@@ -45,6 +45,9 @@ type databaseSnapshot struct {
 	HomeKitAccessoryUUIDs []homeKitAccessoryUUIDRow     `json:"homeKitAccessoryUuids"`
 	SystemSettings        []systemSettingRow            `json:"systemSettings"`
 	DevicePreferences     []devicePreferenceRow         `json:"devicePreferences"`
+	MCPDeviceConfigs      []mcpDeviceConfigRow          `json:"mcpDeviceConfigs"`
+	MCPPropertyConfigs    []mcpPropertyConfigRow        `json:"mcpPropertyConfigs"`
+	AIAutomations         []aiAutomationRow             `json:"aiAutomations"`
 	LogicalDevices        []logicalDeviceRow            `json:"logicalDevices"`
 	ProviderDeviceIDs     []providerDeviceIdentityRow   `json:"providerDeviceIdentities"`
 	LogicalDeviceIDs      []logicalDeviceIdentityRow    `json:"logicalDeviceIdentities"`
@@ -122,7 +125,7 @@ func (s *Store) readSnapshot(ctx context.Context) (databaseSnapshot, error) {
 			{"media config state", &result.MediaConfigState},
 			{"Matter runtime values", &result.MatterRuntimeValues}, {"Matter endpoint identities", &result.MatterEndpointIDs},
 			{"HomeKit IIDs", &result.HomeKitIIDs}, {"system settings", &result.SystemSettings},
-			{"device preferences", &result.DevicePreferences}, {"logical devices", &result.LogicalDevices}, {"provider device identities", &result.ProviderDeviceIDs}, {"logical device identities", &result.LogicalDeviceIDs}, {"device capability identities", &result.DeviceCapabilities}, {"device location homes", &result.DeviceLocationHomes},
+			{"device preferences", &result.DevicePreferences}, {"MCP device configs", &result.MCPDeviceConfigs}, {"MCP property configs", &result.MCPPropertyConfigs}, {"AI automations", &result.AIAutomations}, {"logical devices", &result.LogicalDevices}, {"provider device identities", &result.ProviderDeviceIDs}, {"logical device identities", &result.LogicalDeviceIDs}, {"device capability identities", &result.DeviceCapabilities}, {"device location homes", &result.DeviceLocationHomes},
 			{"device location rooms", &result.DeviceLocationRooms}, {"device locations", &result.DeviceLocations}, {"audit events", &result.AuditEvents},
 			{"mapping profiles", &result.MappingProfiles}, {"mapping bindings", &result.MappingBindings},
 			{"custom model properties", &result.CustomModelProperties}, {"model enum overrides", &result.ModelEnumOverrides}, {"administrator users", &result.AdminUsers},
@@ -316,7 +319,7 @@ func (s *Store) replaceRows(ctx context.Context, snapshot databaseSnapshot) erro
 			&mediaAuthLeaseRow{}, &mediaStreamRow{}, &mediaCredentialRow{}, &mediaSourceRow{},
 			&mediaRuntimeKVRow{}, &mediaAuthAuditRow{}, &mediaConfigStateRow{},
 			&mappingBindingRow{}, &mappingProfileRow{}, &customModelPropertyRow{}, &modelEnumOverrideRow{}, &customUnifiedModelRow{},
-			&miotSpecCacheRow{}, &auditEventRow{}, &deviceLocationPreferenceRow{}, &deviceLocationRoomRow{}, &deviceLocationHomeRow{}, &deviceCapabilityIdentityRow{}, &logicalDeviceIdentityRow{}, &providerDeviceIdentityRow{}, &logicalDeviceRow{}, &devicePreferenceRow{}, &systemSettingRow{},
+			&miotSpecCacheRow{}, &auditEventRow{}, &aiAutomationRow{}, &mcpPropertyConfigRow{}, &mcpDeviceConfigRow{}, &deviceLocationPreferenceRow{}, &deviceLocationRoomRow{}, &deviceLocationHomeRow{}, &deviceCapabilityIdentityRow{}, &logicalDeviceIdentityRow{}, &providerDeviceIdentityRow{}, &logicalDeviceRow{}, &devicePreferenceRow{}, &systemSettingRow{},
 			&providerRow{}, &targetRow{}, &adminUserRow{},
 		}
 		for _, model := range deleteOrder {
@@ -333,7 +336,7 @@ func (s *Store) replaceRows(ctx context.Context, snapshot databaseSnapshot) erro
 			{"media streams", &snapshot.MediaStreams}, {"media runtime values", &snapshot.MediaRuntimeValues},
 			{"media authorization leases", &snapshot.MediaAuthLeases}, {"media authorization audits", &snapshot.MediaAuthAudits},
 			{"media config state", &snapshot.MediaConfigState},
-			{"system settings", &snapshot.SystemSettings}, {"device preferences", &snapshot.DevicePreferences}, {"logical devices", &snapshot.LogicalDevices}, {"provider device identities", &snapshot.ProviderDeviceIDs}, {"logical device identities", &snapshot.LogicalDeviceIDs}, {"device capability identities", &snapshot.DeviceCapabilities},
+			{"system settings", &snapshot.SystemSettings}, {"device preferences", &snapshot.DevicePreferences}, {"MCP device configs", &snapshot.MCPDeviceConfigs}, {"MCP property configs", &snapshot.MCPPropertyConfigs}, {"AI automations", &snapshot.AIAutomations}, {"logical devices", &snapshot.LogicalDevices}, {"provider device identities", &snapshot.ProviderDeviceIDs}, {"logical device identities", &snapshot.LogicalDeviceIDs}, {"device capability identities", &snapshot.DeviceCapabilities},
 			{"device location homes", &snapshot.DeviceLocationHomes}, {"device location rooms", &snapshot.DeviceLocationRooms}, {"device locations", &snapshot.DeviceLocations},
 			{"audit events", &snapshot.AuditEvents}, {"mapping profiles", &snapshot.MappingProfiles},
 			{"mapping bindings", &snapshot.MappingBindings}, {"custom model properties", &snapshot.CustomModelProperties}, {"model enum overrides", &snapshot.ModelEnumOverrides},

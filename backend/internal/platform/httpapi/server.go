@@ -19,15 +19,18 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/buildinfo"
 	commandtracker "github.com/feranydev/homeloom/backend/internal/command"
+	"github.com/feranydev/homeloom/backend/internal/domain/aiautomation"
 	domainaudit "github.com/feranydev/homeloom/backend/internal/domain/audit"
 	domaincommand "github.com/feranydev/homeloom/backend/internal/domain/command"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	"github.com/feranydev/homeloom/backend/internal/domain/logicaldevice"
+	domainmcp "github.com/feranydev/homeloom/backend/internal/domain/mcp"
 	domainmedia "github.com/feranydev/homeloom/backend/internal/domain/media"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	domainstate "github.com/feranydev/homeloom/backend/internal/domain/state"
 	domaintarget "github.com/feranydev/homeloom/backend/internal/domain/target"
 	"github.com/feranydev/homeloom/backend/internal/mapping"
+	"github.com/feranydev/homeloom/backend/internal/mcpagent"
 	"github.com/feranydev/homeloom/backend/internal/platform/subprocesslog"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	sonoffcloud "github.com/feranydev/homeloom/backend/internal/providers/sonoff/cloud"
@@ -52,6 +55,9 @@ type Server struct {
 	auth                       *application.AuthService
 	maintenance                *application.MaintenanceService
 	media                      *application.MediaService
+	mcpConfigs                 *application.MCPConfigService
+	aiService                  aiService
+	aiAutomations              *application.AIAutomationService
 	mediaPreview               *http.Client
 	mediaPreviewStartupTimeout time.Duration
 	mediaRuntimeDir            string
@@ -61,6 +67,15 @@ type Server struct {
 	tuyaSharingLogin           *tuya.SharingLoginService
 	trustedProxies             []*net.IPNet
 	subprocessLogs             *subprocesslog.Store
+}
+
+type aiService interface {
+	AIServiceStatus(context.Context) (mcpagent.AIServiceStatus, error)
+	UpdateAIService(context.Context, mcpagent.AIServiceConfig) (mcpagent.AIServiceStatus, error)
+	ListAIModels(context.Context) ([]mcpagent.AIModel, error)
+	StartAIRun(context.Context, string) (mcpagent.Run, error)
+	AIRun(context.Context, string) (mcpagent.Run, error)
+	ApproveAIRun(context.Context, string) (mcpagent.Run, error)
 }
 
 func runtimeChanges(previousProviders, previousDiagnostics []byte, providers, diagnostics any) (map[string]any, []byte, []byte) {
@@ -287,6 +302,41 @@ func deviceLocationHTTPError(err error) error {
 		return echo.NewHTTPError(http.StatusConflict, "configured location name already exists")
 	default:
 		return echo.NewHTTPError(http.StatusServiceUnavailable, "device location catalog is unavailable").SetInternal(err)
+	}
+}
+
+func aiServiceHTTPError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return echo.NewHTTPError(http.StatusRequestTimeout, "AI 思考超时，请稍后重试或缩短请求")
+	}
+	var remote *mcpagent.AgentControlError
+	if errors.As(err, &remote) {
+		switch remote.Status {
+		case http.StatusBadRequest:
+			return echo.NewHTTPError(http.StatusBadRequest, "AI service configuration was rejected")
+		case http.StatusNotFound:
+			return echo.NewHTTPError(http.StatusNotFound, "AI run not found")
+		case http.StatusConflict:
+			return echo.NewHTTPError(http.StatusConflict, "AI run cannot be approved")
+		case http.StatusServiceUnavailable:
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "AI service is not configured")
+		case http.StatusGatewayTimeout:
+			return echo.NewHTTPError(http.StatusRequestTimeout, "AI 思考超时，请稍后重试或缩短请求")
+		}
+	}
+	return echo.NewHTTPError(http.StatusBadGateway, "AI service is unavailable").SetInternal(err)
+}
+
+func aiAutomationHTTPError(err error) error {
+	switch {
+	case errors.Is(err, application.ErrAIAutomationNotFound):
+		return echo.NewHTTPError(http.StatusNotFound, "AI automation not found")
+	case errors.Is(err, application.ErrAIAutomationDisabled):
+		return echo.NewHTTPError(http.StatusConflict, "AI automation is disabled")
+	case errors.Is(err, aiautomation.ErrInvalidAutomation):
+		return echo.NewHTTPError(http.StatusBadRequest, "AI automation configuration was rejected")
+	default:
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "AI automation is unavailable").SetInternal(err)
 	}
 }
 
@@ -732,6 +782,149 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 			return err
 		}
 		return c.JSON(http.StatusOK, map[string]any{"data": updated})
+	})
+	e.GET("/api/v1/ai-service/config", func(c echo.Context) error {
+		if server.aiService == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "AI service configuration is unavailable")
+		}
+		status, err := server.aiService.AIServiceStatus(c.Request().Context())
+		if err != nil {
+			return aiServiceHTTPError(err)
+		}
+		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+		return c.JSON(http.StatusOK, map[string]any{"data": status})
+	})
+	e.PUT("/api/v1/ai-service/config", func(c echo.Context) error {
+		if server.aiService == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "AI service configuration is unavailable")
+		}
+		var input mcpagent.AIServiceConfig
+		if err := c.Bind(&input); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid AI service configuration")
+		}
+		status, err := server.aiService.UpdateAIService(c.Request().Context(), input)
+		if err != nil {
+			return aiServiceHTTPError(err)
+		}
+		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+		return c.JSON(http.StatusOK, map[string]any{"data": status})
+	})
+	e.GET("/api/v1/ai-service/models", func(c echo.Context) error {
+		if server.aiService == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "AI service configuration is unavailable")
+		}
+		models, err := server.aiService.ListAIModels(c.Request().Context())
+		if err != nil {
+			return aiServiceHTTPError(err)
+		}
+		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+		return c.JSON(http.StatusOK, map[string]any{"data": models})
+	})
+	e.POST("/api/v1/ai-service/runs", func(c echo.Context) error {
+		if server.aiService == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "AI service is unavailable")
+		}
+		var input struct {
+			Message string `json:"message"`
+		}
+		if err := c.Bind(&input); err != nil || strings.TrimSpace(input.Message) == "" || len(input.Message) > 16<<10 {
+			return echo.NewHTTPError(http.StatusBadRequest, "AI message is required and must not exceed 16384 characters")
+		}
+		run, err := server.aiService.StartAIRun(c.Request().Context(), strings.TrimSpace(input.Message))
+		if err != nil {
+			return aiServiceHTTPError(err)
+		}
+		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+		return c.JSON(http.StatusOK, map[string]any{"data": run})
+	})
+	e.GET("/api/v1/ai-service/runs/:id", func(c echo.Context) error {
+		if server.aiService == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "AI service is unavailable")
+		}
+		run, err := server.aiService.AIRun(c.Request().Context(), c.Param("id"))
+		if err != nil {
+			return aiServiceHTTPError(err)
+		}
+		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+		return c.JSON(http.StatusOK, map[string]any{"data": run})
+	})
+	e.POST("/api/v1/ai-service/runs/:id/approve", func(c echo.Context) error {
+		if server.aiService == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "AI service is unavailable")
+		}
+		run, err := server.aiService.ApproveAIRun(c.Request().Context(), c.Param("id"))
+		if err != nil {
+			return aiServiceHTTPError(err)
+		}
+		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
+		return c.JSON(http.StatusOK, map[string]any{"data": run})
+	})
+	e.GET("/api/v1/ai-service/automations", func(c echo.Context) error {
+		if server.aiAutomations == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "AI automation is unavailable")
+		}
+		items, err := server.aiAutomations.List(c.Request().Context())
+		if err != nil {
+			return aiAutomationHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": items})
+	})
+	e.POST("/api/v1/ai-service/automations", func(c echo.Context) error {
+		if server.aiAutomations == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "AI automation is unavailable")
+		}
+		var input aiautomation.Automation
+		if err := c.Bind(&input); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid AI automation configuration")
+		}
+		item, err := server.aiAutomations.Create(c.Request().Context(), input)
+		if err != nil {
+			return aiAutomationHTTPError(err)
+		}
+		return c.JSON(http.StatusCreated, map[string]any{"data": item})
+	})
+	e.PUT("/api/v1/ai-service/automations/:id", func(c echo.Context) error {
+		if server.aiAutomations == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "AI automation is unavailable")
+		}
+		var input aiautomation.Automation
+		if err := c.Bind(&input); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid AI automation configuration")
+		}
+		item, err := server.aiAutomations.Update(c.Request().Context(), c.Param("id"), input)
+		if err != nil {
+			return aiAutomationHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": item})
+	})
+	e.DELETE("/api/v1/ai-service/automations/:id", func(c echo.Context) error {
+		if server.aiAutomations == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "AI automation is unavailable")
+		}
+		if err := server.aiAutomations.Delete(c.Request().Context(), c.Param("id")); err != nil {
+			return aiAutomationHTTPError(err)
+		}
+		return c.NoContent(http.StatusNoContent)
+	})
+	e.POST("/api/v1/ai-service/automations/:id/run", func(c echo.Context) error {
+		if server.aiAutomations == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "AI automation is unavailable")
+		}
+		item, run, err := server.aiAutomations.RunNow(c.Request().Context(), c.Param("id"))
+		if err != nil {
+			return aiAutomationHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": map[string]any{"automation": item, "run": run}})
+	})
+	e.POST("/api/v1/ai-service/automations/:id/runs/:runID/approve", func(c echo.Context) error {
+		if server.aiAutomations == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "AI automation is unavailable")
+		}
+		item, run, err := server.aiAutomations.ApproveRun(c.Request().Context(), c.Param("id"), c.Param("runID"))
+		if err != nil {
+			return aiAutomationHTTPError(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": map[string]any{"automation": item, "run": run}})
 	})
 	e.GET("/api/v1/diagnostics", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"data": devices.Metrics()})
@@ -1264,6 +1457,93 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "device preferences are unavailable").SetInternal(err)
 		}
 		return c.JSON(http.StatusOK, map[string]any{"data": item})
+	})
+	e.GET("/api/v1/devices/:id/mcp-config", func(c echo.Context) error {
+		if server.mcpConfigs == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "MCP configuration is unavailable")
+		}
+		config, err := server.mcpConfigs.Device(c.Request().Context(), c.Param("id"))
+		if errors.Is(err, application.ErrMCPDeviceNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "device not found")
+		}
+		if err != nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "failed to get MCP configuration").SetInternal(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": config})
+	})
+	e.PUT("/api/v1/devices/:id/mcp-config", func(c echo.Context) error {
+		if server.mcpConfigs == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "MCP configuration is unavailable")
+		}
+		var config domainmcp.DeviceConfig
+		if err := c.Bind(&config); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid MCP device configuration")
+		}
+		if config.DeviceID != "" && config.DeviceID != c.Param("id") {
+			return echo.NewHTTPError(http.StatusBadRequest, "device id cannot be changed")
+		}
+		config.DeviceID = c.Param("id")
+		saved, err := server.mcpConfigs.SaveDevice(c.Request().Context(), config)
+		if errors.Is(err, application.ErrMCPDeviceNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "device not found")
+		}
+		if errors.Is(err, domainmcp.ErrInvalidConfig) {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		if err != nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "failed to save MCP configuration").SetInternal(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": saved})
+	})
+	e.GET("/api/v1/devices/:id/mcp-properties", func(c echo.Context) error {
+		if server.mcpConfigs == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "MCP configuration is unavailable")
+		}
+		configs, err := server.mcpConfigs.Properties(c.Request().Context(), c.Param("id"))
+		if errors.Is(err, application.ErrMCPDeviceNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "device not found")
+		}
+		if err != nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "failed to list MCP property configurations").SetInternal(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": configs})
+	})
+	e.PUT("/api/v1/devices/:id/mcp-properties/:endpoint/:capability/:property", func(c echo.Context) error {
+		if server.mcpConfigs == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "MCP configuration is unavailable")
+		}
+		var config domainmcp.PropertyConfig
+		if err := c.Bind(&config); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid MCP property configuration")
+		}
+		config.PropertyPath = domainmcp.PropertyPath{DeviceID: c.Param("id"), EndpointID: c.Param("endpoint"), CapabilityID: c.Param("capability"), PropertyID: c.Param("property")}
+		saved, err := server.mcpConfigs.SaveProperty(c.Request().Context(), config)
+		if errors.Is(err, application.ErrMCPPropertyNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "device property not found")
+		}
+		if errors.Is(err, domainmcp.ErrInvalidConfig) {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		if err != nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "failed to save MCP property configuration").SetInternal(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": saved})
+	})
+	e.DELETE("/api/v1/devices/:id/mcp-properties/:endpoint/:capability/:property", func(c echo.Context) error {
+		if server.mcpConfigs == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "MCP configuration is unavailable")
+		}
+		path := domainmcp.PropertyPath{DeviceID: c.Param("id"), EndpointID: c.Param("endpoint"), CapabilityID: c.Param("capability"), PropertyID: c.Param("property")}
+		if err := server.mcpConfigs.DeleteProperty(c.Request().Context(), path); err != nil {
+			if errors.Is(err, application.ErrMCPPropertyNotFound) {
+				return echo.NewHTTPError(http.StatusNotFound, "device property not found")
+			}
+			if errors.Is(err, domainmcp.ErrInvalidConfig) {
+				return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+			}
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "failed to clear MCP property configuration").SetInternal(err)
+		}
+		return c.NoContent(http.StatusNoContent)
 	})
 	e.PUT("/api/v1/devices/:id/location", func(c echo.Context) error {
 		var input deviceLocationRequest
@@ -2196,6 +2476,14 @@ func (s *Server) SetMaintenanceService(maintenance *application.MaintenanceServi
 }
 
 func (s *Server) SetMediaService(media *application.MediaService) { s.media = media }
+
+func (s *Server) SetMCPConfigService(configs *application.MCPConfigService) { s.mcpConfigs = configs }
+
+func (s *Server) SetAIService(service aiService) { s.aiService = service }
+
+func (s *Server) SetAIAutomationService(service *application.AIAutomationService) {
+	s.aiAutomations = service
+}
 
 func (s *Server) SetMediaPreview(runtimeDir string) {
 	root, err := filepath.Abs(runtimeDir)

@@ -977,6 +977,7 @@ func (s *DeviceService) Metrics() DeviceMetrics {
 	s.metrics.timingMu.RLock()
 	maxClockSkewNanos, maxSnapshotAgeNanos := s.metrics.maxClockSkewNanos, s.metrics.maxSnapshotAgeNanos
 	clockSkewSource, snapshotAgeSource := s.metrics.clockSkewSource, s.metrics.snapshotAgeSource
+	providerClockSkewEvents, providerSnapshotAgeEvents := s.metrics.providerClockSkews.Load(), s.metrics.providerSnapshotAges.Load()
 	s.metrics.timingMu.RUnlock()
 	return DeviceMetrics{
 		EventsReceived: s.metrics.eventsReceived.Load(), EventsProcessed: s.metrics.eventsProcessed.Load(),
@@ -991,8 +992,8 @@ func (s *DeviceService) Metrics() DeviceMetrics {
 		CommandQueuePending:     commandQueuePending, CommandQueueMaxPending: commandQueueMaxPending,
 		EventAverageLatencyMS: float64(eventStats.AverageLatency.Nanoseconds()) / float64(time.Millisecond), EventMaxLatencyMS: float64(eventStats.MaxLatency.Nanoseconds()) / float64(time.Millisecond), SlowEventHandlers: eventStats.SlowHandlers,
 		DatabaseOperations: databaseOperations, DatabaseAverageLatencyMS: float64(databaseAverage.Nanoseconds()) / float64(time.Millisecond), DatabaseMaxLatencyMS: float64(databaseMaximum.Nanoseconds()) / float64(time.Millisecond),
-		ProviderClockSkewEvents: s.metrics.providerClockSkews.Load(), ProviderMaxClockSkewMS: float64(maxClockSkewNanos) / float64(time.Millisecond), ProviderClockSkewSource: clockSkewSource,
-		ProviderSnapshotAgeEvents: s.metrics.providerSnapshotAges.Load(), ProviderMaxSnapshotAgeMS: float64(maxSnapshotAgeNanos) / float64(time.Millisecond), ProviderSnapshotAgeSource: snapshotAgeSource,
+		ProviderClockSkewEvents: providerClockSkewEvents, ProviderMaxClockSkewMS: float64(maxClockSkewNanos) / float64(time.Millisecond), ProviderClockSkewSource: clockSkewSource,
+		ProviderSnapshotAgeEvents: providerSnapshotAgeEvents, ProviderMaxSnapshotAgeMS: float64(maxSnapshotAgeNanos) / float64(time.Millisecond), ProviderSnapshotAgeSource: snapshotAgeSource,
 		ProviderEventsIgnored:    s.metrics.providerEventsIgnored.Load(),
 		ProviderMessagesReceived: providerMessagesReceived, ProviderMessagesInvalid: providerMessagesInvalid, ProviderMessagesDropped: providerMessagesDropped, ProviderCommandsPublished: providerCommandsPublished,
 		MappingApplied: s.metrics.mappingApplied.Load(), MappingErrors: s.metrics.mappingErrors.Load(),
@@ -2297,16 +2298,16 @@ func (s *DeviceService) recordTimingOffset(item device.Device, offset time.Durat
 	s.metrics.timingMu.Lock()
 	defer s.metrics.timingMu.Unlock()
 	if origin == snapshotTimeOriginProviderEvent {
-		s.metrics.providerClockSkews.Add(1)
 		if nanos > s.metrics.maxClockSkewNanos {
 			s.metrics.maxClockSkewNanos, s.metrics.clockSkewSource = nanos, source
 		}
+		s.metrics.providerClockSkews.Add(1)
 		return
 	}
-	s.metrics.providerSnapshotAges.Add(1)
 	if nanos > s.metrics.maxSnapshotAgeNanos {
 		s.metrics.maxSnapshotAgeNanos, s.metrics.snapshotAgeSource = nanos, source
 	}
+	s.metrics.providerSnapshotAges.Add(1)
 }
 
 func (s *DeviceService) runStaleScanner(ctx context.Context) {

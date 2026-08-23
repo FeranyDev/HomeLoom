@@ -1,4 +1,4 @@
-import type { Device, DeviceAvailability, DeviceLocationHome, DeviceLocationMode, DeviceLocationRoom, Property, PropertyValue, StateValue } from '../types/device'
+import type { Device, DeviceAvailability, DeviceLocationHome, DeviceLocationMode, DeviceLocationRoom, MCPDeviceConfig, MCPPropertyConfig, Property, PropertyValue, StateValue } from '../types/device'
 import { requestData, requestJSON } from './client'
 import { subscribeEvents } from './events'
 
@@ -48,6 +48,26 @@ export async function getDeviceStates(id: string, signal?: AbortSignal): Promise
 
 export async function getDeviceProperty(id: string, endpointId: string, capabilityId: string, propertyId: string, signal?: AbortSignal): Promise<Property> {
   return requestData<Property>(`/api/v1/devices/${encodeURIComponent(id)}/endpoints/${encodeURIComponent(endpointId)}/capabilities/${encodeURIComponent(capabilityId)}/properties/${encodeURIComponent(propertyId)}`, { signal })
+}
+
+export async function getDeviceMCPConfig(id: string, signal?: AbortSignal): Promise<MCPDeviceConfig> {
+  return requestData<MCPDeviceConfig>(`/api/v1/devices/${encodeURIComponent(id)}/mcp-config`, { signal })
+}
+
+export async function saveDeviceMCPConfig(id: string, config: Omit<MCPDeviceConfig, 'deviceId'>): Promise<MCPDeviceConfig> {
+  return requestData<MCPDeviceConfig>(`/api/v1/devices/${encodeURIComponent(id)}/mcp-config`, { method: 'PUT', body: JSON.stringify(config) })
+}
+
+export async function listDeviceMCPPropertyConfigs(id: string, signal?: AbortSignal): Promise<MCPPropertyConfig[]> {
+  return requestData<MCPPropertyConfig[]>(`/api/v1/devices/${encodeURIComponent(id)}/mcp-properties`, { signal })
+}
+
+export async function saveDeviceMCPPropertyConfig(id: string, config: Omit<MCPPropertyConfig, 'deviceId' | 'endpointId' | 'capabilityId' | 'propertyId'> & Pick<MCPPropertyConfig, 'endpointId' | 'capabilityId' | 'propertyId'>): Promise<MCPPropertyConfig> {
+  return requestData<MCPPropertyConfig>(`/api/v1/devices/${encodeURIComponent(id)}/mcp-properties/${encodeURIComponent(config.endpointId)}/${encodeURIComponent(config.capabilityId)}/${encodeURIComponent(config.propertyId)}`, { method: 'PUT', body: JSON.stringify({ usageNote: config.usageNote, access: config.access }) })
+}
+
+export async function deleteDeviceMCPPropertyConfig(id: string, endpointId: string, capabilityId: string, propertyId: string): Promise<void> {
+  await requestJSON<void>(`/api/v1/devices/${encodeURIComponent(id)}/mcp-properties/${encodeURIComponent(endpointId)}/${encodeURIComponent(capabilityId)}/${encodeURIComponent(propertyId)}`, { method: 'DELETE' })
 }
 
 export function subscribeDeviceStates(id: string, onState: (state: StateValue) => void): () => void {

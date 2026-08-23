@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 
-export type Page = 'devices' | 'providers' | 'targets' | 'mapping' | 'system'
+export type Page = 'devices' | 'providers' | 'targets' | 'mapping' | 'ai' | 'system'
 export type MappingSection = 'models' | 'profiles'
 
-const pages = new Set<Page>(['devices', 'providers', 'targets', 'mapping', 'system'])
+const pages = new Set<Page>(['devices', 'providers', 'targets', 'mapping', 'ai', 'system'])
 const mappingSections = new Set<MappingSection>(['models', 'profiles'])
 
 function routeParts(): string[] {

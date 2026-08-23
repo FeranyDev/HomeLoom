@@ -28,6 +28,10 @@ RUN test -n "$VERSION" \
     && CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="${TARGETARCH:-$(go env GOARCH)}" go build -trimpath -tags embed_webui \
     -ldflags "-s -w -X github.com/feranydev/homeloom/backend/internal/buildinfo.Version=${VERSION} -X github.com/feranydev/homeloom/backend/internal/buildinfo.Commit=${COMMIT} -X github.com/feranydev/homeloom/backend/internal/buildinfo.BuildTime=${BUILD_TIME}" \
     -o /out/homeloom ./cmd/homeloom
+RUN test -n "$VERSION" \
+    && CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="${TARGETARCH:-$(go env GOARCH)}" go build -trimpath \
+    -ldflags "-s -w -X github.com/feranydev/homeloom/backend/internal/buildinfo.Version=${VERSION} -X github.com/feranydev/homeloom/backend/internal/buildinfo.Commit=${COMMIT} -X github.com/feranydev/homeloom/backend/internal/buildinfo.BuildTime=${BUILD_TIME}" \
+    -o /out/homeloom-mcp-agent ./cmd/homeloom-mcp-agent
 
 FROM go-deps AS camera-kernel
 WORKDIR /src/camera-kernel
@@ -59,6 +63,7 @@ RUN sed -i 's|https://dl-cdn.alpinelinux.org|https://mirrors.ustc.edu.cn|g' /etc
     && ln -s /usr/bin/ffmpeg /usr/local/bin/ffmpeg
 WORKDIR /app
 COPY --from=build /out/homeloom /usr/local/bin/homeloom
+COPY --from=build /out/homeloom-mcp-agent /usr/local/bin/homeloom-mcp-agent
 COPY --from=camera-kernel /out/homeloom-camera-kernel /usr/local/bin/homeloom-camera-kernel
 COPY --from=matter-runtime /src/matter-runtime/dist /app/matter-runtime/dist
 COPY --from=matter-runtime /src/matter-runtime/node_modules /app/matter-runtime/node_modules

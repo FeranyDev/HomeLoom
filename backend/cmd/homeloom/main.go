@@ -18,6 +18,7 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	"github.com/feranydev/homeloom/backend/internal/eventbus"
 	"github.com/feranydev/homeloom/backend/internal/mapping"
+	"github.com/feranydev/homeloom/backend/internal/mcpbridge"
 	"github.com/feranydev/homeloom/backend/internal/persistence/gormstore"
 	"github.com/feranydev/homeloom/backend/internal/platform/httpapi"
 	"github.com/feranydev/homeloom/backend/internal/platform/logging"
@@ -134,6 +135,8 @@ func main() {
 	}
 	defer store.Close()
 	var mediaRuntime *embeddedMediaRuntime
+	var mcpAgentRuntime *embeddedMCPAgent
+	var aiAutomationRuntime *application.AIAutomationService
 	if *initializeVirtualModels {
 		changed, initializeErr := initializeAllVirtualModels(ctx, store)
 		if initializeErr != nil {
@@ -426,6 +429,42 @@ func main() {
 	server.SetSubprocessLogs(childLogs)
 	auditService := application.NewAuditService(store)
 	server.SetAuditService(auditService)
+	mcpConfigs := application.NewMCPConfigService(store, service)
+	server.SetMCPConfigService(mcpConfigs)
+	if settings.MCP.Enabled {
+		gateway := mcpbridge.NewServer(settings.MCP.SocketPath, application.NewMCPToolService(service, mcpConfigs), service)
+		gateway.SetAuditService(auditService)
+		go func() {
+			if gatewayErr := gateway.Serve(ctx); gatewayErr != nil && ctx.Err() == nil {
+				logger.Error("MCP Core gateway stopped", zap.Error(gatewayErr))
+				stop()
+			}
+		}()
+		logger.Info("MCP Core gateway enabled", zap.String("socket_path", settings.MCP.SocketPath))
+		mcpAgentRuntime, err = newEmbeddedMCPAgent(ctx, embeddedMCPAgentConfig{
+			Binary: settings.MCP.AgentBinary, SocketPath: settings.MCP.SocketPath,
+			RuntimeDir: settings.MCP.RuntimeDir, ListenAddress: settings.MCP.AgentListenAddr,
+			LogWriter: childLogs.Writer("mcp-agent", "local"),
+		}, logger)
+		if err != nil {
+			logger.Error("embedded MCP Agent initialization failed", zap.Error(err))
+			os.Exit(1)
+		}
+		server.SetAIService(mcpAgentRuntime.Control())
+		aiAutomationRuntime, err = application.NewAIAutomationService(ctx, store, service, mcpAgentAutomationRunner{agent: mcpAgentRuntime.Control()}, mcpConfigs)
+		if err != nil {
+			logger.Error("AI automation initialization failed", zap.Error(err))
+			os.Exit(1)
+		}
+		server.SetAIAutomationService(aiAutomationRuntime)
+		go func(runtime *embeddedMCPAgent) {
+			<-runtime.Done()
+			if ctx.Err() == nil {
+				logger.Error("embedded MCP Agent stopped", zap.Error(runtime.Err()))
+				stop()
+			}
+		}(mcpAgentRuntime)
+	}
 	server.SetProfileService(profileService)
 	server.SetLogicalDeviceService(logicalDeviceService)
 	server.SetExportService(application.NewExportService(service, providerService, targetService, settingsService, auditService, profileService))
@@ -449,6 +488,16 @@ func main() {
 	if mediaRuntime != nil {
 		if err := mediaRuntime.Close(); err != nil && !errors.Is(err, context.Canceled) {
 			logger.Error("embedded media runtime shutdown failed", zap.Error(err))
+		}
+	}
+	if mcpAgentRuntime != nil {
+		if aiAutomationRuntime != nil {
+			if err := aiAutomationRuntime.Close(); err != nil {
+				logger.Error("AI automation shutdown failed", zap.Error(err))
+			}
+		}
+		if err := mcpAgentRuntime.Close(); err != nil {
+			logger.Error("embedded MCP Agent shutdown failed", zap.Error(err))
 		}
 	}
 	if err := server.Shutdown(shutdownCtx); err != nil {

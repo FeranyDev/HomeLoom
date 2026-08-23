@@ -28,6 +28,17 @@ HomeKit 和 Matter 都依赖局域网 mDNS 发现；Matter 还要求 IPv6 与控
 
 Docker Desktop、Apple Container 和原生 Linux 的 host network/mDNS 行为不同。macOS/Windows 开发环境建议直接运行双制品完成 HomeKit/Matter 实机验证，容器主要用于 Web/API 构建检查。Matter 控制器与 HomeLoom 必须位于允许 IPv6 link-local、UDP 单播和 mDNS multicast 的同一可达网络。
 
+## MCP Agent（可选）
+
+AI/MCP 控制使用由 Core 托管的 `homeloom-mcp-agent` 子程序，不会额外启动容器。它和 Core 只通过 `/data/mcp` 中的私有 Unix Socket 通信；Core 每次启动时生成仅本地 Core/子程序用户可读的随机 Token，Agent API 默认仅监听主机回环地址 `127.0.0.1:8091`。叠加 MCP Compose 文件即可：
+
+```bash
+HOMELOOM_VERSION=0.1.0 docker compose \
+  -f compose.yaml -f deploy/compose.sqlite.yaml -f deploy/compose.mcp-agent.yaml up -d --remove-orphans
+```
+
+已从双容器版本升级的实例必须使用 `--remove-orphans`，以删除旧的 `mcp-agent` 容器并释放本机回环端口。不要将 `agent.token`、AI API Key 或 `/data` 卷导出到仓库。仅启用 MCP 只读工具时无需配置 AI 服务；如需 AI Agent，在“AI → AI 服务”填写兼容 API 的地址、Key、模型和可编辑的智能体提示词即可。Key 与提示词保存到子程序的 `/data/mcp/ai-config.json`（`0600`），不写入 Core 数据库。完整的 MCP API、确认机制和权限模型见 [MCP AI Agent](mcp-ai-agent.md)。
+
 ## Intel 核显（VAAPI）
 
 Intel 核显主机可叠加 `deploy/compose.intel-gpu.yaml`，把最小必要的 DRM render 节点交给后台容器。OpenWrt 默认会把该节点设为 root 专用，因此先创建仅供 HomeLoom 使用的组，并安装随项目提供的启动脚本以在每次开机后恢复权限：

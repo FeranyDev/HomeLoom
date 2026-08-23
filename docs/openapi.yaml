@@ -397,6 +397,80 @@ paths:
         "200":
           description: The single server-sent event stream. Named device, device-event, state, command, audit, target and runtime events are emitted only after changes. Runtime data is sampled from memory every 5 seconds and contains only changed categories. No initial full snapshot is sent; clients reconcile full REST resources separately. Heartbeat comments are emitted every 15 seconds.
           content: { text/event-stream: { schema: { type: string } } }
+  /api/v1/ai-service/config:
+    get:
+      operationId: getAIServiceConfig
+      description: Returns the local Agent's generic AI-service configuration, including the effective and default Agent system prompts. The API key is never returned.
+      responses:
+        "200": { description: AI service status, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/AIServiceStatus" } } } } } }
+        "503": { $ref: "#/components/responses/Unavailable" }
+    put:
+      operationId: saveAIServiceConfig
+      description: Proxies the administrator's configuration to the same-host MCP Agent. The key is stored only in the Agent's private file and is excluded from all responses and Core persistence.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AIServiceConfigInput" } } } }
+      responses:
+        "200": { description: Saved AI service status, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/AIServiceStatus" } } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/v1/ai-service/models:
+    get:
+      operationId: listAIServiceModels
+      description: Fetches model IDs from the configured service's OpenAI-compatible GET /models endpoint.
+      responses:
+        "200": { description: Model IDs, content: { application/json: { schema: { type: object, required: [data], properties: { data: { type: array, items: { $ref: "#/components/schemas/AIModel" } } } } } } }
+        "503": { $ref: "#/components/responses/Unavailable" }
+        "502": { description: The configured AI service could not be reached or rejected model discovery. }
+  /api/v1/ai-service/runs:
+    post:
+      operationId: startAIServiceRun
+      description: Sends an administrator message to the same-host Agent. One model request may take up to two minutes and the complete tool loop up to six minutes. A device write is returned as an awaiting-approval plan and is never executed by this call.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [message], properties: { message: { type: string, minLength: 1, maxLength: 16384 } } } } } }
+      responses:
+        "200": { description: AI run result, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/AIRun" } } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "408": { description: The model reasoning or complete Agent run exceeded its bounded timeout. No device write was executed. }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/v1/ai-service/runs/{runId}:
+    parameters: [{ name: runId, in: path, required: true, schema: { type: string } }]
+    get:
+      operationId: getAIServiceRun
+      responses: { "200": { description: AI run result, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/AIRun" } } } } } }, "404": { $ref: "#/components/responses/NotFound" }, "503": { $ref: "#/components/responses/Unavailable" } }
+  /api/v1/ai-service/runs/{runId}/approve:
+    parameters: [{ name: runId, in: path, required: true, schema: { type: string } }]
+    post:
+      operationId: approveAIServiceRun
+      description: Explicitly approves one non-expired AI device-operation plan. Core rechecks authorization and state version before writing.
+      responses: { "200": { description: AI run after approval, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/AIRun" } } } } } }, "404": { $ref: "#/components/responses/NotFound" }, "409": { description: Plan expired or cannot be approved }, "503": { $ref: "#/components/responses/Unavailable" } }
+  /api/v1/ai-service/automations:
+    get:
+      operationId: listAIAutomations
+      responses: { "200": { description: Persisted AI automation definitions, content: { application/json: { schema: { type: object, required: [data], properties: { data: { type: array, items: { $ref: "#/components/schemas/AIAutomation" } } } } } } }, "503": { $ref: "#/components/responses/Unavailable" } }
+    post:
+      operationId: createAIAutomation
+      description: Creates a scheduled or typed state-triggered task. A trigger property must be authorized for AI.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AIAutomationInput" } } } }
+      responses: { "201": { description: Automation created, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/AIAutomation" } } } } } }, "400": { $ref: "#/components/responses/BadRequest" }, "503": { $ref: "#/components/responses/Unavailable" } }
+  /api/v1/ai-service/automations/{automationId}:
+    parameters: [{ name: automationId, in: path, required: true, schema: { type: string } }]
+    put:
+      operationId: updateAIAutomation
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AIAutomationInput" } } } }
+      responses: { "200": { description: Automation updated, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/AIAutomation" } } } } } }, "400": { $ref: "#/components/responses/BadRequest" }, "404": { $ref: "#/components/responses/NotFound" }, "503": { $ref: "#/components/responses/Unavailable" } }
+    delete:
+      operationId: deleteAIAutomation
+      responses: { "204": { description: Automation deleted }, "404": { $ref: "#/components/responses/NotFound" }, "503": { $ref: "#/components/responses/Unavailable" } }
+  /api/v1/ai-service/automations/{automationId}/run:
+    parameters: [{ name: automationId, in: path, required: true, schema: { type: string } }]
+    post:
+      operationId: runAIAutomationNow
+      description: Manually invokes a task once in a new AI session. Unattended tasks automatically approve an AI-prepared device plan after Core rechecks authorization and current state.
+      responses: { "200": { description: Task and its Agent run summary, content: { application/json: { schema: { type: object, required: [data], properties: { data: { type: object, required: [automation, run], properties: { automation: { $ref: "#/components/schemas/AIAutomation" }, run: { $ref: "#/components/schemas/AIAutomationRun" } } } } } } } }, "404": { $ref: "#/components/responses/NotFound" }, "409": { description: Automation disabled or already running }, "503": { $ref: "#/components/responses/Unavailable" } }
+  /api/v1/ai-service/automations/{automationId}/runs/{runId}/approve:
+    parameters: [{ name: automationId, in: path, required: true, schema: { type: string } }, { name: runId, in: path, required: true, schema: { type: string } }]
+    post:
+      operationId: approveAIAutomationRun
+      description: Explicitly approves one unexpired plan from a task configured for manual execution, then updates its persisted run history.
+      responses: { "200": { description: Task and its approved Agent run, content: { application/json: { schema: { type: object, required: [data], properties: { data: { type: object, required: [automation, run], properties: { automation: { $ref: "#/components/schemas/AIAutomation" }, run: { $ref: "#/components/schemas/AIAutomationRun" } } } } } } } }, "404": { $ref: "#/components/responses/NotFound" }, "409": { description: Plan expired or cannot be approved }, "503": { $ref: "#/components/responses/Unavailable" } }
   /api/v1/devices:
     get:
       operationId: listDevices
@@ -443,6 +517,49 @@ paths:
       operationId: listDeviceStates
       responses:
         "200": { description: In-memory state with provenance and explicit unknown/unavailable semantics, content: { application/json: { schema: { type: object, required: [data], properties: { data: { type: array, items: { $ref: "#/components/schemas/StateValue" } } } } } } }
+  /api/v1/devices/{deviceId}/mcp-config:
+    parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+    get:
+      operationId: getDeviceMCPConfig
+      description: Gets the device-level MCP exposure flag, default access, and AI usage note. A device with no stored configuration is returned as disabled and hidden by default.
+      responses:
+        "200": { description: Device MCP configuration, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/MCPDeviceConfig" } } } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: saveDeviceMCPConfig
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/MCPDeviceConfigInput" } } } }
+      responses:
+        "200": { description: Persisted device MCP configuration, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/MCPDeviceConfig" } } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/devices/{deviceId}/mcp-properties:
+    parameters: [{ $ref: "#/components/parameters/DeviceId" }]
+    get:
+      operationId: listDeviceMCPPropertyConfigs
+      description: Lists only explicit property-level overrides; absent properties inherit the device default.
+      responses:
+        "200": { description: Property MCP configurations, content: { application/json: { schema: { type: object, required: [data], properties: { data: { type: array, items: { $ref: "#/components/schemas/MCPPropertyConfig" } } } } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/devices/{deviceId}/mcp-properties/{endpointId}/{capabilityId}/{propertyId}:
+    parameters:
+      - { $ref: "#/components/parameters/DeviceId" }
+      - { $ref: "#/components/parameters/EndpointId" }
+      - { $ref: "#/components/parameters/CapabilityId" }
+      - { $ref: "#/components/parameters/PropertyId" }
+    put:
+      operationId: saveDeviceMCPPropertyConfig
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/MCPPropertyConfigInput" } } } }
+      responses:
+        "200": { description: Persisted property MCP override, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/MCPPropertyConfig" } } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: deleteDeviceMCPPropertyConfig
+      description: Clears the property override so it inherits the device default and no longer has a property-specific note.
+      responses:
+        "204": { description: Property MCP override cleared }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/v1/devices/{deviceId}/enabled:
     parameters: [{ $ref: "#/components/parameters/DeviceId" }]
     put:
@@ -910,6 +1027,130 @@ components:
       properties:
         commandTimeoutSeconds: { type: integer, minimum: 1, maximum: 300, description: Applied only to commands created after the update. }
         commandHistoryLimit: { type: integer, minimum: 100, maximum: 10000, description: Maximum in-memory command records; lowering it immediately removes the oldest terminal records. }
+    AIServiceConfigInput:
+      type: object
+      properties:
+        apiBaseUrl: { type: string, format: uri, description: OpenAI-compatible Responses or Chat Completions API base URL. }
+        apiProxyUrl: { type: string, maxLength: 2048, description: Optional unauthenticated HTTP(S) forward proxy used only for AI provider requests. An empty value clears the dedicated proxy. }
+        apiKey: { type: string, writeOnly: true, description: Stored only by the MCP Agent; omit to keep the existing key. }
+        model: { type: string, maxLength: 512 }
+        apiProtocol: { type: string, enum: [responses, chat-completions], default: responses }
+        agentInstructions: { type: string, maxLength: 16384, description: Editable Agent system prompt. Submit an empty value to restore the default prompt. }
+    AIServiceStatus:
+      type: object
+      required: [apiBaseUrl, apiProxyUrl, model, apiProtocol, agentInstructions, defaultAgentInstructions, apiKeyConfigured, configured]
+      properties:
+        apiBaseUrl: { type: string, format: uri }
+        apiProxyUrl: { type: string, maxLength: 2048, description: Configured unauthenticated HTTP(S) forward proxy, or an empty string when none is configured. }
+        model: { type: string }
+        apiProtocol: { type: string, enum: [responses, chat-completions] }
+        agentInstructions: { type: string, description: Effective Agent system prompt. }
+        defaultAgentInstructions: { type: string, description: Built-in prompt used by the restore-default control. }
+        apiKeyConfigured: { type: boolean }
+        configured: { type: boolean, description: True only when both a key and model are configured. }
+    AIModel:
+      type: object
+      required: [id]
+      properties: { id: { type: string } }
+    AIRunAction:
+      type: object
+      required: [deviceId, endpointId, capabilityId, propertyId, value]
+      properties:
+        deviceId: { type: string }
+        endpointId: { type: string }
+        capabilityId: { type: string }
+        propertyId: { type: string }
+        value: { $ref: "#/components/schemas/PropertyValue" }
+        expectedStateVersion: { type: integer, format: int64 }
+        deviceName: { type: string }
+        propertyName: { type: string }
+        usageNote: { type: string, description: Untrusted device/property context supplied to the Agent. }
+    AIRun:
+      type: object
+      required: [id, status, message, createdAt]
+      properties:
+        id: { type: string }
+        status: { type: string, enum: [completed, awaiting_approval, executed, failed] }
+        message: { type: string }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        action: { $ref: "#/components/schemas/AIRunAction" }
+    AIAutomationTrigger:
+      type: object
+      required: [deviceId, endpointId, capabilityId, propertyId, value]
+      properties:
+        deviceId: { type: string }
+        endpointId: { type: string }
+        capabilityId: { type: string }
+        propertyId: { type: string }
+        value: { $ref: "#/components/schemas/PropertyValue" }
+    AIAutomationInput:
+      type: object
+      required: [name, enabled, kind, prompt]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        enabled: { type: boolean }
+        kind: { type: string, enum: [schedule, trigger] }
+        prompt: { type: string, minLength: 1, maxLength: 16384 }
+        executionMode: { type: string, enum: [unattended, manual], default: unattended, description: Unattended tasks automatically approve an AI-prepared device plan after Core policy checks. }
+        intervalSeconds: { type: integer, minimum: 60, maximum: 604800, description: Required for schedule tasks. }
+        cooldownSeconds: { type: integer, minimum: 60, maximum: 604800, description: Required for trigger tasks. }
+        trigger: { $ref: "#/components/schemas/AIAutomationTrigger" }
+    AIAutomation:
+      allOf:
+        - { $ref: "#/components/schemas/AIAutomationInput" }
+        - type: object
+          required: [id, createdAt, updatedAt]
+          properties:
+            id: { type: string }
+            lastRunId: { type: string }
+            lastRunStatus: { type: string }
+            lastRunMessage: { type: string }
+            lastRunAt: { type: string, format: date-time }
+            runHistory: { type: array, maxItems: 50, items: { $ref: "#/components/schemas/AIAutomationRun" } }
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
+    AIAutomationRun:
+      type: object
+      required: [id, status, message]
+      properties:
+        id: { type: string }
+        source: { type: string, enum: [manual, schedule, trigger] }
+        status: { type: string }
+        message: { type: string }
+        autoApproved: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        action: { $ref: "#/components/schemas/AIRunAction" }
+    MCPDeviceConfigInput:
+      type: object
+      required: [enabled, usageNote, defaultAccess]
+      properties:
+        enabled: { type: boolean, description: Device must be explicitly enabled before any property can be exposed to MCP. }
+        usageNote: { type: string, maxLength: 1000, description: Untrusted business context given to the Agent; it never changes Core policy. }
+        defaultAccess: { type: string, enum: [hidden, read, confirm] }
+    MCPDeviceConfig:
+      allOf:
+        - { $ref: "#/components/schemas/MCPDeviceConfigInput" }
+        - type: object
+          required: [deviceId]
+          properties: { deviceId: { type: string } }
+    MCPPropertyConfigInput:
+      type: object
+      required: [usageNote, access]
+      properties:
+        usageNote: { type: string, maxLength: 1000, description: Untrusted business context given to the Agent; it never changes Core policy. }
+        access: { type: string, enum: [inherit, hidden, read, confirm] }
+    MCPPropertyConfig:
+      allOf:
+        - { $ref: "#/components/schemas/MCPPropertyConfigInput" }
+        - type: object
+          required: [deviceId, endpointId, capabilityId, propertyId]
+          properties:
+            deviceId: { type: string }
+            endpointId: { type: string }
+            capabilityId: { type: string }
+            propertyId: { type: string }
     SubprocessLogEntry:
       type: object
       required: [sequence, time, process, instance, message]

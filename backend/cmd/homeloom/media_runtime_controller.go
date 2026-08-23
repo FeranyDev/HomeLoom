@@ -50,7 +50,7 @@ func newEmbeddedMediaRuntime(ctx context.Context, store mediaReplayStore, auth d
 	if store == nil || auth == nil {
 		return nil, errors.New("embedded media runtime dependencies are required")
 	}
-	binary := resolveBundledMediaBinary(config.CameraKernelBinary)
+	binary := resolveBundledExecutable(config.CameraKernelBinary)
 	runtime, err := mediaruntime.Start(mediaruntime.Config{
 		CameraKernelBinary: binary, RuntimeDir: config.RuntimeDir,
 		HAPHost: config.HAPHost, HAPPort: config.HAPPortBase,
@@ -203,7 +203,7 @@ func embeddedStreamSpec(value domainmedia.StreamSpec) mediaruntime.StreamSpec {
 	}
 }
 
-func resolveBundledMediaBinary(binary string) string {
+func resolveBundledExecutable(binary string) string {
 	if filepath.IsAbs(binary) {
 		return filepath.Clean(binary)
 	}

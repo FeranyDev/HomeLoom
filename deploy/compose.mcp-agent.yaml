@@ -1,0 +1,8 @@
+services:
+  backend:
+    environment:
+      HOMELOOM_MCP_ENABLED: "true"
+      HOMELOOM_MCP_SOCKET: /data/mcp/core.sock
+      HOMELOOM_MCP_AGENT_LISTEN: 127.0.0.1:8091
+      HOMELOOM_MCP_AGENT_BIN: /usr/local/bin/homeloom-mcp-agent
+      HOMELOOM_MCP_RUNTIME_DIR: /data/mcp

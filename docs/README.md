@@ -16,6 +16,7 @@
 - [Device Model v1](device-model.md)：设备、Endpoint、Capability、Property 和状态语义。
 - [统一模型参数](unified-model-parameters.md)：模型参数分级以及 Provider/Consumer 的职责。
 - [HTTP API](http-api.md) / [OpenAPI](openapi.yaml)：管理 API 的行为和机器可读契约。
+- [MCP 与 AI Agent](mcp-ai-agent.md)：独立 `homeloom-mcp-agent` 子程序的部署、授权与审批边界。
 - [MQTT 协议](mqtt-protocol.md) / [JSON Schema](schemas/mqtt-protocol.schema.json)：`homeloom-v1` 消息协议。
 - [HomeKit 基础设备契约](homekit-device-contracts.md) / [支持矩阵](homekit-model-support.md)：HomeKit Consumer 映射。
 

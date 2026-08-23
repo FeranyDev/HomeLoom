@@ -16,7 +16,9 @@ import (
 	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/application"
+	"github.com/feranydev/homeloom/backend/internal/domain/aiautomation"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
+	"github.com/feranydev/homeloom/backend/internal/mcpagent"
 	"github.com/feranydev/homeloom/backend/internal/persistence/gormstore"
 	"github.com/feranydev/homeloom/backend/internal/platform/subprocesslog"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
@@ -33,6 +35,68 @@ type apiProviderStore struct {
 type unavailableDatabase struct{}
 
 type apiSettingsStore struct{ values map[string]string }
+
+type apiAIService struct {
+	status mcpagent.AIServiceStatus
+	input  mcpagent.AIServiceConfig
+	models []mcpagent.AIModel
+	run    mcpagent.Run
+}
+
+type apiAutomationStore struct {
+	items map[string]aiautomation.Automation
+}
+
+func (s *apiAutomationStore) ListAIAutomations(context.Context) ([]aiautomation.Automation, error) {
+	items := make([]aiautomation.Automation, 0, len(s.items))
+	for _, item := range s.items {
+		items = append(items, item)
+	}
+	return items, nil
+}
+func (s *apiAutomationStore) GetAIAutomation(_ context.Context, id string) (aiautomation.Automation, bool, error) {
+	item, found := s.items[id]
+	return item, found, nil
+}
+func (s *apiAutomationStore) SaveAIAutomation(_ context.Context, item aiautomation.Automation) error {
+	s.items[item.ID] = item
+	return nil
+}
+func (s *apiAutomationStore) DeleteAIAutomation(_ context.Context, id string) error {
+	delete(s.items, id)
+	return nil
+}
+
+type apiAutomationRunner struct{}
+
+func (apiAutomationRunner) StartAutomation(context.Context, string) (application.AIAutomationRun, error) {
+	return application.AIAutomationRun{ID: "run-task-1", Status: "awaiting_approval", Message: "等待批准"}, nil
+}
+func (apiAutomationRunner) ApproveAutomation(context.Context, string) (application.AIAutomationRun, error) {
+	return application.AIAutomationRun{ID: "run-task-1", Status: "executed", Message: "设备操作已提交"}, nil
+}
+
+func (s *apiAIService) AIServiceStatus(context.Context) (mcpagent.AIServiceStatus, error) {
+	return s.status, nil
+}
+func (s *apiAIService) UpdateAIService(_ context.Context, input mcpagent.AIServiceConfig) (mcpagent.AIServiceStatus, error) {
+	s.input = input
+	s.status = mcpagent.AIServiceStatus{APIBaseURL: input.APIBaseURL, APIProxyURL: input.APIProxyURL, Model: input.Model, APIProtocol: input.APIProtocol, AgentInstructions: input.AgentInstructions, DefaultAgentInstructions: mcpagent.DefaultAgentInstructions, APIKeyConfigured: input.APIKey != "", Configured: input.APIKey != "" && input.Model != ""}
+	return s.status, nil
+}
+func (s *apiAIService) ListAIModels(context.Context) ([]mcpagent.AIModel, error) {
+	return s.models, nil
+}
+
+func (s *apiAIService) StartAIRun(_ context.Context, message string) (mcpagent.Run, error) {
+	s.run.Message = message
+	return s.run, nil
+}
+func (s *apiAIService) AIRun(context.Context, string) (mcpagent.Run, error) { return s.run, nil }
+func (s *apiAIService) ApproveAIRun(context.Context, string) (mcpagent.Run, error) {
+	s.run.Status = mcpagent.RunExecuted
+	return s.run, nil
+}
 
 type apiScanProvider struct{ id string }
 
@@ -251,6 +315,149 @@ func TestManagementAuthenticationLifecycleAndCSRF(t *testing.T) {
 	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("read after logout = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestDeviceMCPConfigRoutesPersistDeviceAndPropertyNotes(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	devices := application.NewDeviceService(virtual.NewProvider())
+	defer devices.Close()
+	server := NewServer(":0", devices, application.NewTargetService(nil, nil), zap.NewNop())
+	server.SetMCPConfigService(application.NewMCPConfigService(store, devices))
+
+	deviceRequest := httptest.NewRequest(http.MethodPut, "/api/v1/devices/virtual-switch-1/mcp-config", strings.NewReader(`{"enabled":true,"usageNote":"走廊主灯","defaultAccess":"read"}`))
+	deviceRequest.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	deviceResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(deviceResponse, deviceRequest)
+	if deviceResponse.Code != http.StatusOK || !strings.Contains(deviceResponse.Body.String(), `"usageNote":"走廊主灯"`) {
+		t.Fatalf("save device MCP config = %d %s", deviceResponse.Code, deviceResponse.Body.String())
+	}
+
+	propertyRequest := httptest.NewRequest(http.MethodPut, "/api/v1/devices/virtual-switch-1/mcp-properties/main/switch/power", strings.NewReader(`{"usageNote":"夜间才建议关闭","access":"confirm"}`))
+	propertyRequest.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	propertyResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(propertyResponse, propertyRequest)
+	if propertyResponse.Code != http.StatusOK || !strings.Contains(propertyResponse.Body.String(), `"access":"confirm"`) {
+		t.Fatalf("save property MCP config = %d %s", propertyResponse.Code, propertyResponse.Body.String())
+	}
+
+	listResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(listResponse, httptest.NewRequest(http.MethodGet, "/api/v1/devices/virtual-switch-1/mcp-properties", nil))
+	if listResponse.Code != http.StatusOK || !strings.Contains(listResponse.Body.String(), `"usageNote":"夜间才建议关闭"`) {
+		t.Fatalf("list property MCP configs = %d %s", listResponse.Code, listResponse.Body.String())
+	}
+}
+
+func TestAIServiceConfigRoutesProxyWithoutReturningAPIKey(t *testing.T) {
+	server := newTestServer()
+	ai := &apiAIService{status: mcpagent.AIServiceStatus{APIBaseURL: "https://models.example.test/v1", APIProxyURL: "http://127.0.0.1:7890", Model: "model-a", APIKeyConfigured: true, Configured: true, AgentInstructions: "默认提示词", DefaultAgentInstructions: "默认提示词"}, models: []mcpagent.AIModel{{ID: "model-a"}}}
+	server.SetAIService(ai)
+
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/ai-service/config", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"apiKeyConfigured":true`) || !strings.Contains(response.Body.String(), `"apiProxyUrl":"http://127.0.0.1:7890"`) || !strings.Contains(response.Body.String(), `"defaultAgentInstructions":"默认提示词"`) || strings.Contains(response.Body.String(), "secret-api-key") {
+		t.Fatalf("get AI config = %d %s", response.Code, response.Body.String())
+	}
+
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/ai-service/config", strings.NewReader(`{"apiBaseUrl":"https://models.example.test/v1","apiProxyUrl":"https://proxy.example.test:8443","apiKey":"secret-api-key","model":"model-b","agentInstructions":"用简洁 Markdown 回复。"}`))
+	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || ai.input.APIKey != "secret-api-key" || ai.input.APIProxyURL != "https://proxy.example.test:8443" || ai.input.AgentInstructions != "用简洁 Markdown 回复。" || strings.Contains(response.Body.String(), "secret-api-key") || !strings.Contains(response.Body.String(), `"model":"model-b"`) || !strings.Contains(response.Body.String(), `"apiProxyUrl":"https://proxy.example.test:8443"`) {
+		t.Fatalf("save AI config = %d %s input=%#v", response.Code, response.Body.String(), ai.input)
+	}
+
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/ai-service/models", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"id":"model-a"`) {
+		t.Fatalf("list AI models = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestAIServiceTimeoutErrorsAreRetryableRequestTimeouts(t *testing.T) {
+	for _, source := range []error{context.DeadlineExceeded, &mcpagent.AgentControlError{Status: http.StatusGatewayTimeout}} {
+		err := aiServiceHTTPError(source)
+		httpErr, ok := err.(*echo.HTTPError)
+		if !ok || httpErr.Code != http.StatusRequestTimeout || httpErr.Message != "AI 思考超时，请稍后重试或缩短请求" {
+			t.Fatalf("timeout error = %#v", err)
+		}
+	}
+}
+
+func TestAIServiceRunRoutesRemainBehindCoreAuthentication(t *testing.T) {
+	server := newTestServer()
+	server.SetAIService(&apiAIService{run: mcpagent.Run{ID: "run-1", Status: mcpagent.RunAwaitingApproval}})
+
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/ai-service/runs", strings.NewReader(`{"message":"打开客厅灯"}`))
+	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"run-1"`) || !strings.Contains(response.Body.String(), "打开客厅灯") {
+		t.Fatalf("create run = %d %s", response.Code, response.Body.String())
+	}
+
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/ai-service/runs/run-1/approve", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"executed"`) {
+		t.Fatalf("approve run = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestAIAutomationRoutesPersistHistoryAndRunUnattendedByDefault(t *testing.T) {
+	store := &apiAutomationStore{items: map[string]aiautomation.Automation{}}
+	service, err := application.NewAIAutomationService(context.Background(), store, nil, apiAutomationRunner{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	server := newTestServer()
+	server.SetAIAutomationService(service)
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/ai-service/automations", strings.NewReader(`{"name":"检查","enabled":true,"kind":"schedule","prompt":"检查状态","intervalSeconds":60}`))
+	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || !strings.Contains(response.Body.String(), `"kind":"schedule"`) || !strings.Contains(response.Body.String(), `"executionMode":"unattended"`) {
+		t.Fatalf("create AI automation = %d %s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Data aiautomation.Automation `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || body.Data.ID == "" {
+		t.Fatalf("decode created automation: %#v err=%v", body, err)
+	}
+
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/ai-service/automations/"+body.Data.ID+"/run", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"status":"executed"`) || !strings.Contains(response.Body.String(), `"runHistory"`) || !strings.Contains(response.Body.String(), `"autoApproved":true`) {
+		t.Fatalf("run AI automation = %d %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/ai-service/automations", strings.NewReader(`{"name":"人工确认","enabled":true,"kind":"schedule","prompt":"检查状态","executionMode":"manual","intervalSeconds":60}`))
+	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create manual AI automation = %d %s", response.Code, response.Body.String())
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || body.Data.ID == "" {
+		t.Fatalf("decode manual automation: %#v err=%v", body, err)
+	}
+
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/ai-service/automations/"+body.Data.ID+"/run", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"status":"awaiting_approval"`) {
+		t.Fatalf("run manual AI automation = %d %s", response.Code, response.Body.String())
+	}
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/ai-service/automations/"+body.Data.ID+"/runs/run-task-1/approve", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"status":"executed"`) {
+		t.Fatalf("approve manual AI automation = %d %s", response.Code, response.Body.String())
 	}
 }
 

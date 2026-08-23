@@ -167,6 +167,7 @@ for PLATFORM in $TARGETS; do
   SUFFIX=""
   if [ "$GOOS" = windows ]; then SUFFIX=".exe"; fi
   TARGET="$TARGET_DIR/homeloom${SUFFIX}"
+  MCP_AGENT_TARGET="$TARGET_DIR/homeloom-mcp-agent${SUFFIX}"
   MATTER_RUNTIME_TARGET="$TARGET_DIR/homeloom-matter-runtime${SUFFIX}"
   mkdir -p "$TARGET_DIR"
   SEA_SIGN_ARGUMENT=--skip-sign
@@ -179,6 +180,11 @@ for PLATFORM in $TARGETS; do
     -ldflags "-s -w -X ${PACKAGE}.Version=${VERSION} -X ${PACKAGE}.Commit=${COMMIT} -X ${PACKAGE}.BuildTime=${BUILD_TIME}" \
     -o "$TARGET" ./cmd/homeloom)
   test -s "$TARGET"
+  (cd "$ROOT/backend" && CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" "$ROOT/scripts/dev-env.sh" go build \
+    -trimpath \
+    -ldflags "-s -w -X ${PACKAGE}.Version=${VERSION} -X ${PACKAGE}.Commit=${COMMIT} -X ${PACKAGE}.BuildTime=${BUILD_TIME}" \
+    -o "$MCP_AGENT_TARGET" ./cmd/homeloom-mcp-agent)
+  test -s "$MCP_AGENT_TARGET"
 
   if [ "$MATTER_RUNTIME_MODE" = sea ]; then
     TARGET_NODE=$(resolve_target_node "$GOOS" "$GOARCH")
@@ -195,6 +201,7 @@ for PLATFORM in $TARGETS; do
   fi
 
   append_checksum "$TARGET"
+  append_checksum "$MCP_AGENT_TARGET"
   if is_host_target "$GOOS" "$GOARCH" && [ "$MATTER_RUNTIME_MODE" = sea ]; then
     "$ROOT/scripts/tests/matter-runtime-sea_test.sh" "$MATTER_RUNTIME_TARGET"
   else

@@ -18,6 +18,7 @@ type Config struct {
 	Logging LoggingConfig `yaml:"logging"`
 	Media   MediaConfig   `yaml:"media"`
 	Runtime RuntimeConfig `yaml:"runtime"`
+	MCP     MCPConfig     `yaml:"mcp"`
 }
 
 type LoggingConfig struct {
@@ -42,6 +43,17 @@ type MediaConfig struct {
 	HAPPortBase        int    `yaml:"hap_port_base"`
 	RTSPPortBase       int    `yaml:"rtsp_port_base"`
 	SRTPPortBase       int    `yaml:"srtp_port_base"`
+}
+
+// MCPConfig controls Core's private Unix-domain-socket gateway and its
+// locally managed MCP/AI child process. The child owns the AI-facing HTTP
+// surface and credentials, while Core remains the device-policy authority.
+type MCPConfig struct {
+	Enabled         bool   `yaml:"enabled"`
+	SocketPath      string `yaml:"socket_path"`
+	AgentBinary     string `yaml:"agent_binary"`
+	RuntimeDir      string `yaml:"runtime_dir"`
+	AgentListenAddr string `yaml:"agent_listen_address"`
 }
 
 // RuntimeConfig covers bounded in-memory pipelines. EventQueueCapacity is per
@@ -74,6 +86,10 @@ func Default() Config {
 		Runtime: RuntimeConfig{
 			EventQueueShards:   8,
 			EventQueueCapacity: 128,
+		},
+		MCP: MCPConfig{
+			SocketPath: "./data/mcp/core.sock", AgentBinary: "homeloom-mcp-agent",
+			RuntimeDir: "./data/mcp", AgentListenAddr: "127.0.0.1:8091",
 		},
 	}
 }
@@ -155,6 +171,29 @@ func (c Config) Validate() error {
 	if interval := c.Runtime.StateCheckpointIntervalSecond; interval != 0 && (interval < 60 || interval > 86_400) {
 		return errors.New("runtime.state_checkpoint_interval_seconds must be 0 or between 60 and 86400")
 	}
+	if c.MCP.Enabled && strings.TrimSpace(c.MCP.SocketPath) == "" {
+		return errors.New("mcp.socket_path is required when mcp.enabled is true")
+	}
+	if c.MCP.Enabled {
+		if strings.TrimSpace(c.MCP.AgentBinary) == "" {
+			return errors.New("mcp.agent_binary is required when mcp.enabled is true")
+		}
+		if strings.TrimSpace(c.MCP.RuntimeDir) == "" {
+			return errors.New("mcp.runtime_dir is required when mcp.enabled is true")
+		}
+		host, port, err := net.SplitHostPort(strings.TrimSpace(c.MCP.AgentListenAddr))
+		if err != nil || host == "" || port == "" {
+			return errors.New("mcp.agent_listen_address must be a loopback host and port")
+		}
+		ip := net.ParseIP(strings.Trim(host, "[]"))
+		if ip == nil || !ip.IsLoopback() {
+			return errors.New("mcp.agent_listen_address must use a loopback IP address")
+		}
+		parsedPort, err := strconv.Atoi(port)
+		if err != nil || parsedPort < 1 || parsedPort > 65_535 {
+			return errors.New("mcp.agent_listen_address must include a valid TCP port")
+		}
+	}
 	for _, value := range c.Server.TrustedProxies {
 		value = strings.TrimSpace(value)
 		if value == "" {
@@ -199,6 +238,25 @@ func applyEnvironment(config *Config) error {
 	}
 	if value := os.Getenv("HOMELOOM_MEDIA_RUNTIME_DIR"); value != "" {
 		config.Media.RuntimeDir = strings.TrimSpace(value)
+	}
+	if value, present := os.LookupEnv("HOMELOOM_MCP_ENABLED"); present {
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			return errors.New("HOMELOOM_MCP_ENABLED must be a boolean")
+		}
+		config.MCP.Enabled = enabled
+	}
+	if value := os.Getenv("HOMELOOM_MCP_SOCKET"); value != "" {
+		config.MCP.SocketPath = strings.TrimSpace(value)
+	}
+	if value := os.Getenv("HOMELOOM_MCP_AGENT_BIN"); value != "" {
+		config.MCP.AgentBinary = strings.TrimSpace(value)
+	}
+	if value := os.Getenv("HOMELOOM_MCP_RUNTIME_DIR"); value != "" {
+		config.MCP.RuntimeDir = strings.TrimSpace(value)
+	}
+	if value := os.Getenv("HOMELOOM_MCP_AGENT_LISTEN"); value != "" {
+		config.MCP.AgentListenAddr = strings.TrimSpace(value)
 	}
 	if value := os.Getenv("HOMELOOM_HAP_HOST"); value != "" {
 		config.Media.HAPHost = strings.TrimSpace(value)

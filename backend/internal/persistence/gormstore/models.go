@@ -256,6 +256,44 @@ type devicePreferenceRow struct {
 
 func (devicePreferenceRow) TableName() string { return "device_preferences" }
 
+// MCP configuration is intentionally separate from Provider snapshots. A
+// Provider can rediscover a device without overwriting the administrator's AI
+// exposure policy or operational notes.
+type mcpDeviceConfigRow struct {
+	DeviceID      string `gorm:"column:device_id;primaryKey"`
+	Enabled       bool   `gorm:"column:enabled;not null;default:false"`
+	UsageNote     string `gorm:"column:usage_note;not null;default:''"`
+	DefaultAccess string `gorm:"column:default_access;not null;default:'hidden'"`
+	CreatedAt     int64  `gorm:"column:created_at;not null"`
+	UpdatedAt     int64  `gorm:"column:updated_at;not null"`
+}
+
+func (mcpDeviceConfigRow) TableName() string { return "mcp_device_configs" }
+
+type mcpPropertyConfigRow struct {
+	DeviceID     string `gorm:"column:device_id;primaryKey"`
+	EndpointID   string `gorm:"column:endpoint_id;primaryKey"`
+	CapabilityID string `gorm:"column:capability_id;primaryKey"`
+	PropertyID   string `gorm:"column:property_id;primaryKey"`
+	UsageNote    string `gorm:"column:usage_note;not null;default:''"`
+	Access       string `gorm:"column:access;not null;default:'inherit'"`
+	CreatedAt    int64  `gorm:"column:created_at;not null"`
+	UpdatedAt    int64  `gorm:"column:updated_at;not null"`
+}
+
+func (mcpPropertyConfigRow) TableName() string { return "mcp_property_configs" }
+
+// aiAutomationRow stores a whole task document. Task definitions evolve with
+// their trigger form, while the document never contains an AI provider key.
+type aiAutomationRow struct {
+	ID           string       `gorm:"column:id;primaryKey"`
+	DocumentJSON jsonDocument `gorm:"column:document_json;not null"`
+	CreatedAt    int64        `gorm:"column:created_at;not null"`
+	UpdatedAt    int64        `gorm:"column:updated_at;not null"`
+}
+
+func (aiAutomationRow) TableName() string { return "ai_automations" }
+
 // logicalDeviceRow stores the complete validated configuration in one document.
 // Routes evolve as a unit and are not queried independently, so a document keeps
 // PostgreSQL and SQLite migration behaviour identical without duplicating the
@@ -484,7 +522,7 @@ func currentModels() []any {
 		&mediaAuthLeaseRow{}, &mediaAuthAuditRow{}, &mediaConfigStateRow{},
 		&matterRuntimeKVRow{}, &matterEndpointIdentityRow{},
 		&homeKitAccessoryIDRow{}, &homeKitIIDRow{}, &homeKitAccessoryUUIDRow{}, &systemSettingRow{},
-		&devicePreferenceRow{}, &logicalDeviceRow{}, &providerDeviceIdentityRow{}, &logicalDeviceIdentityRow{}, &deviceCapabilityIdentityRow{}, &deviceLocationHomeRow{}, &deviceLocationRoomRow{}, &deviceLocationPreferenceRow{}, &auditEventRow{}, &mappingProfileRow{},
+		&devicePreferenceRow{}, &mcpDeviceConfigRow{}, &mcpPropertyConfigRow{}, &aiAutomationRow{}, &logicalDeviceRow{}, &providerDeviceIdentityRow{}, &logicalDeviceIdentityRow{}, &deviceCapabilityIdentityRow{}, &deviceLocationHomeRow{}, &deviceLocationRoomRow{}, &deviceLocationPreferenceRow{}, &auditEventRow{}, &mappingProfileRow{},
 		&mappingBindingRow{}, &customModelPropertyRow{}, &modelEnumOverrideRow{}, &adminUserRow{},
 		&adminSessionRow{}, &miotSpecCacheRow{}, &customUnifiedModelRow{},
 	}
