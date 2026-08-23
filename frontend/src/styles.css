@@ -1446,11 +1446,14 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto; padding: 68px 0 80
 .queue-track { height: 7px; overflow: hidden; background: #dedfd8; }
 .queue-track span { display: block; height: 100%; background: #66806a; }
 .command-section { border: 1px solid #d2d0c7; background: rgba(250, 249, 245, .72); }
-.audit-table { min-width: 760px; }
-.audit-row { display: grid; grid-template-columns: minmax(220px, 1.6fr) minmax(90px, .55fr) minmax(180px, 1fr) minmax(140px, .8fr); gap: 16px; align-items: center; padding: 13px 18px; border-top: 1px solid #e3e1d9; }
+.audit-table { min-width: 920px; }
+.audit-row { display: grid; grid-template-columns: minmax(300px, 1.8fr) minmax(110px, .65fr) minmax(180px, 1fr) minmax(140px, .8fr); gap: 16px; align-items: center; padding: 13px 18px; border-top: 1px solid #e3e1d9; }
 .audit-row > span { display: grid; gap: 3px; }
 .audit-row small { color: #898d85; overflow-wrap: anywhere; }
 .audit-row code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.audit-detail { grid-template-columns: max-content minmax(0, 1fr); align-items: baseline; gap: 7px; }
+.audit-detail em { color: #686e65; font-style: normal; }
+.audit-detail code { color: #4f574d; }
 .audit-section { overflow-x: auto; }
 .command-heading { display: flex; align-items: center; justify-content: space-between; padding: 24px; border-bottom: 1px solid #d8d7cf; }
 .command-heading h3 { margin: 0; font-size: 21px; }

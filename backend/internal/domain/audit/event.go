@@ -9,8 +9,17 @@ const (
 	OutcomeFailed    Outcome = "failed"
 )
 
-// Event contains operation metadata only. Request bodies and configuration
-// values are deliberately excluded so credentials cannot enter the audit log.
+// Detail is an allow-listed, human-readable part of an audited operation.
+// It must never contain credentials, configuration payloads, pairing codes, or
+// other secrets.
+type Detail struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
+}
+
+// Event contains operation metadata and a small set of allow-listed details.
+// Request bodies and configuration values are deliberately excluded so
+// credentials cannot enter the audit log.
 type Event struct {
 	ID            int64     `json:"id"`
 	CorrelationID string    `json:"correlationId"`
@@ -22,5 +31,6 @@ type Event struct {
 	Route         string    `json:"route"`
 	Status        int       `json:"status"`
 	Outcome       Outcome   `json:"outcome"`
+	Details       []Detail  `json:"details,omitempty"`
 	CreatedAt     time.Time `json:"createdAt"`
 }

@@ -23,13 +23,13 @@ func TestAuditEventsArePersistedNewestFirst(t *testing.T) {
 	}
 	defer store.Close()
 	for index, correlationID := range []string{"trace-old", "trace-new"} {
-		event, err := store.AppendAuditEvent(ctx, domainaudit.Event{CorrelationID: correlationID, Actor: "local-api", Action: "put", ResourceType: "device", ResourceID: "switch-1", Method: "PUT", Route: "/api/v1/devices/:id/enabled", Status: 200, Outcome: domainaudit.OutcomeSucceeded, CreatedAt: time.Unix(int64(index+1), 0).UTC()})
+		event, err := store.AppendAuditEvent(ctx, domainaudit.Event{CorrelationID: correlationID, Actor: "local-api", Action: "put", ResourceType: "device", ResourceID: "switch-1", Method: "PUT", Route: "/api/v1/devices/:id/enabled", Status: 200, Outcome: domainaudit.OutcomeSucceeded, Details: []domainaudit.Detail{{Label: "设备状态", Value: "已启用"}}, CreatedAt: time.Unix(int64(index+1), 0).UTC()})
 		if err != nil || event.ID == 0 {
 			t.Fatalf("append = %#v, %v", event, err)
 		}
 	}
 	events, err := store.ListAuditEvents(ctx, 1)
-	if err != nil || len(events) != 1 || events[0].CorrelationID != "trace-new" || events[0].CreatedAt.Unix() != 2 {
+	if err != nil || len(events) != 1 || events[0].CorrelationID != "trace-new" || events[0].CreatedAt.Unix() != 2 || len(events[0].Details) != 1 || events[0].Details[0].Value != "已启用" {
 		t.Fatalf("events = %#v, %v", events, err)
 	}
 }

@@ -164,15 +164,20 @@ func (s *Store) ClearMatterRuntimeValues(ctx context.Context, targetID string) e
 	})
 }
 
-func (s *Store) AllocateMatterEndpoint(ctx context.Context, targetID, consumerDeviceID string, deviceType device.Type) (uint16, error) {
+// AllocateMatterEndpoint returns a stable endpoint ID and whether persistent
+// state changed. Calls that reuse an active identity are intentionally
+// reported as unchanged so callers can avoid treating reconciliation as a
+// lifecycle event.
+func (s *Store) AllocateMatterEndpoint(ctx context.Context, targetID, consumerDeviceID string, deviceType device.Type) (uint16, bool, error) {
 	defer s.observe(time.Now())
 	if strings.TrimSpace(targetID) == "" || strings.TrimSpace(consumerDeviceID) == "" {
-		return 0, errors.New("Matter target ID and consumer device ID are required")
+		return 0, false, errors.New("Matter target ID and consumer device ID are required")
 	}
 	if _, supported := device.ModelContractFor(deviceType); deviceType == "" || !supported {
-		return 0, fmt.Errorf("Matter endpoint device type %q is unsupported", deviceType)
+		return 0, false, fmt.Errorf("Matter endpoint device type %q is unsupported", deviceType)
 	}
 	var endpointID uint16
+	var changed bool
 	err := s.orm.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// The target row is the per-target allocation mutex on PostgreSQL.
 		// SQLite transactions are already IMMEDIATE through the configured DSN.
@@ -192,6 +197,7 @@ func (s *Store) AllocateMatterEndpoint(ctx context.Context, targetID, consumerDe
 					Updates(map[string]any{"tombstone": false, "updated_at": time.Now().UTC().UnixMilli()}).Error; err != nil {
 					return fmt.Errorf("restore Matter endpoint identity: %w", err)
 				}
+				changed = true
 			}
 			return nil
 		}
@@ -214,12 +220,13 @@ func (s *Store) AllocateMatterEndpoint(ctx context.Context, targetID, consumerDe
 		if err := tx.Create(&row).Error; err != nil {
 			return fmt.Errorf("save Matter endpoint identity: %w", err)
 		}
+		changed = true
 		return nil
 	})
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
-	return endpointID, nil
+	return endpointID, changed, nil
 }
 
 func (s *Store) TombstoneMatterEndpoint(ctx context.Context, targetID, consumerDeviceID string) error {

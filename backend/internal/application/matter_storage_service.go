@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"strconv"
 	"time"
 
 	domainaudit "github.com/feranydev/homeloom/backend/internal/domain/audit"
@@ -19,7 +20,9 @@ type MatterStorageStore interface {
 	ListMatterRuntimeValues(context.Context, string) ([]target.MatterRuntimeValue, error)
 	DeleteMatterRuntimeValue(context.Context, string, string) error
 	ClearMatterRuntimeValues(context.Context, string) error
-	AllocateMatterEndpoint(context.Context, string, string, device.Type) (uint16, error)
+	// AllocateMatterEndpoint reports whether it created or restored an identity.
+	// Reusing an active endpoint is intentionally not a state change.
+	AllocateMatterEndpoint(context.Context, string, string, device.Type) (uint16, bool, error)
 	TombstoneMatterEndpoint(context.Context, string, string) error
 	ConfirmMatterEndpointDeviceType(context.Context, string, string, device.Type, bool) error
 	MatterEndpointIdentity(context.Context, string, string) (target.MatterEndpointIdentity, bool, error)
@@ -55,7 +58,10 @@ func (s *MatterStorageService) Put(ctx context.Context, targetID, key string, va
 	if err := s.store.PutMatterRuntimeValue(ctx, targetID, key, append([]byte(nil), value...)); err != nil {
 		return err
 	}
-	return s.record(ctx, "matter.identity.write", targetID)
+	// Matter runtimes checkpoint identity state frequently. These opaque storage
+	// writes are not administrative lifecycle events and must not fill the
+	// operator audit log.
+	return nil
 }
 
 func (s *MatterStorageService) Get(ctx context.Context, targetID, key string) ([]byte, bool, error) {
@@ -63,9 +69,6 @@ func (s *MatterStorageService) Get(ctx context.Context, targetID, key string) ([
 		return nil, false, err
 	}
 	value, found, err := s.store.GetMatterRuntimeValue(ctx, targetID, key)
-	if err == nil && found {
-		err = s.record(ctx, "matter.identity.read", targetID)
-	}
 	return append([]byte(nil), value...), found, err
 }
 
@@ -80,7 +83,7 @@ func (s *MatterStorageService) List(ctx context.Context, targetID string) ([]tar
 	for index := range values {
 		values[index].Value = append([]byte(nil), values[index].Value...)
 	}
-	return values, s.record(ctx, "matter.identity.list", targetID)
+	return values, nil
 }
 
 func (s *MatterStorageService) Delete(ctx context.Context, targetID, key string) error {
@@ -107,9 +110,12 @@ func (s *MatterStorageService) AllocateEndpoint(ctx context.Context, targetID, c
 	if err := s.available(); err != nil {
 		return 0, err
 	}
-	id, err := s.store.AllocateMatterEndpoint(ctx, targetID, consumerDeviceID, deviceType)
-	if err == nil {
-		err = s.record(ctx, "matter.endpoint.allocate", targetID)
+	id, changed, err := s.store.AllocateMatterEndpoint(ctx, targetID, consumerDeviceID, deviceType)
+	if err == nil && changed {
+		err = s.record(ctx, "matter.endpoint.allocate", targetID,
+			domainaudit.Detail{Label: "Matter 端点", Value: strconv.FormatUint(uint64(id), 10)},
+			domainaudit.Detail{Label: "设备", Value: consumerDeviceID},
+		)
 	}
 	return id, err
 }
@@ -148,7 +154,7 @@ func (s *MatterStorageService) Endpoints(ctx context.Context, targetID string) (
 	return s.store.ListMatterEndpointIdentities(ctx, targetID)
 }
 
-func (s *MatterStorageService) record(ctx context.Context, action, targetID string) error {
+func (s *MatterStorageService) record(ctx context.Context, action, targetID string, details ...domainaudit.Detail) error {
 	if s.audit == nil {
 		return nil
 	}
@@ -156,7 +162,7 @@ func (s *MatterStorageService) record(ctx context.Context, action, targetID stri
 		CorrelationID: CorrelationID(ctx), Actor: "matter-runtime", Action: action,
 		ResourceType: "matter-identity", ResourceID: targetID,
 		Method: "IPC", Route: "matter-runtime/storage", Status: 200,
-		Outcome: domainaudit.OutcomeSucceeded, CreatedAt: time.Now().UTC(),
+		Outcome: domainaudit.OutcomeSucceeded, Details: details, CreatedAt: time.Now().UTC(),
 	})
 	return err
 }

@@ -719,7 +719,7 @@ func TestMutationAuditAndCommandCorrelationID(t *testing.T) {
 	list := httptest.NewRequest(http.MethodGet, "/api/v1/audit-events?limit=20", nil)
 	response = httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, list)
-	for _, expected := range []string{`"correlationId":"trace-command-1"`, `"resourceType":"device"`, `"resourceId":"virtual-switch-1"`, `"outcome":"succeeded"`} {
+	for _, expected := range []string{`"correlationId":"trace-command-1"`, `"resourceType":"device"`, `"resourceId":"virtual-switch-1"`, `"outcome":"succeeded"`, `"label":"目标属性"`, `"value":"main.switch.power"`, `"label":"属性变更"`, `"value":"power: off → on"`} {
 		if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(expected)) {
 			t.Fatalf("audit response = %d %s", response.Code, response.Body.String())
 		}

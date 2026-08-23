@@ -357,17 +357,18 @@ type deviceLocationRoomRow struct {
 func (deviceLocationRoomRow) TableName() string { return "device_location_rooms" }
 
 type auditEventRow struct {
-	ID            int64  `gorm:"column:id;primaryKey;autoIncrement"`
-	CorrelationID string `gorm:"column:correlation_id;not null;index:audit_events_correlation_id_idx"`
-	Actor         string `gorm:"column:actor;not null"`
-	Action        string `gorm:"column:action;not null"`
-	ResourceType  string `gorm:"column:resource_type;not null"`
-	ResourceID    string `gorm:"column:resource_id;not null;default:''"`
-	Method        string `gorm:"column:method;not null"`
-	Route         string `gorm:"column:route;not null"`
-	Status        int    `gorm:"column:status;not null"`
-	Outcome       string `gorm:"column:outcome;not null"`
-	CreatedAt     int64  `gorm:"column:created_at;not null;index:audit_events_created_at_idx,sort:desc"`
+	ID            int64        `gorm:"column:id;primaryKey;autoIncrement"`
+	CorrelationID string       `gorm:"column:correlation_id;not null;index:audit_events_correlation_id_idx"`
+	Actor         string       `gorm:"column:actor;not null"`
+	Action        string       `gorm:"column:action;not null"`
+	ResourceType  string       `gorm:"column:resource_type;not null"`
+	ResourceID    string       `gorm:"column:resource_id;not null;default:''"`
+	Method        string       `gorm:"column:method;not null"`
+	Route         string       `gorm:"column:route;not null"`
+	Status        int          `gorm:"column:status;not null"`
+	Outcome       string       `gorm:"column:outcome;not null"`
+	DetailsJSON   jsonDocument `gorm:"column:details_json;not null;default:'[]'"`
+	CreatedAt     int64        `gorm:"column:created_at;not null;index:audit_events_created_at_idx,sort:desc"`
 }
 
 func (auditEventRow) TableName() string { return "audit_events" }

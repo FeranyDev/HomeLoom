@@ -64,5 +64,6 @@ export interface AuditEvent {
 	route: string
 	status: number
 	outcome: 'succeeded' | 'failed'
+	details?: Array<{ label: string; value: string }>
 	createdAt: string
 }

@@ -255,7 +255,7 @@ func TestMatterEndpointConcurrentAllocationIsUniqueAndStable(t *testing.T) {
 		wait.Add(1)
 		go func(index int) {
 			defer wait.Done()
-			ids[index], errs[index] = store.AllocateMatterEndpoint(ctx, "matter-concurrent", "switch-"+string(rune('a'+index)), device.TypeSwitch)
+			ids[index], _, errs[index] = store.AllocateMatterEndpoint(ctx, "matter-concurrent", "switch-"+string(rune('a'+index)), device.TypeSwitch)
 		}(index)
 	}
 	wait.Wait()
@@ -269,9 +269,9 @@ func TestMatterEndpointConcurrentAllocationIsUniqueAndStable(t *testing.T) {
 		}
 		seen[endpointID] = true
 	}
-	again, err := store.AllocateMatterEndpoint(ctx, "matter-concurrent", "switch-a", device.TypeSwitch)
-	if err != nil || again != ids[0] {
-		t.Fatalf("stable endpoint = %d, %v; original %d", again, err, ids[0])
+	again, changed, err := store.AllocateMatterEndpoint(ctx, "matter-concurrent", "switch-a", device.TypeSwitch)
+	if err != nil || changed || again != ids[0] {
+		t.Fatalf("stable endpoint = %d, changed=%t, %v; original %d", again, changed, err, ids[0])
 	}
 	shared := make([]uint16, 16)
 	errs = make([]error, len(shared))
@@ -279,7 +279,7 @@ func TestMatterEndpointConcurrentAllocationIsUniqueAndStable(t *testing.T) {
 		wait.Add(1)
 		go func(index int) {
 			defer wait.Done()
-			shared[index], errs[index] = store.AllocateMatterEndpoint(ctx, "matter-concurrent", "shared", device.TypeSwitch)
+			shared[index], _, errs[index] = store.AllocateMatterEndpoint(ctx, "matter-concurrent", "shared", device.TypeSwitch)
 		}(index)
 	}
 	wait.Wait()
@@ -299,20 +299,20 @@ func TestMatterEndpointTombstoneRecoveryNoReuseAndNamespaceIsolation(t *testing.
 	}
 	saveMatterTarget(t, ctx, store, "matter-endpoint-a")
 	saveMatterTarget(t, ctx, store, "matter-endpoint-b")
-	first, err := store.AllocateMatterEndpoint(ctx, "matter-endpoint-a", "virtual-a", device.TypeSwitch)
-	if err != nil || first != 2 {
-		t.Fatalf("first endpoint = %d, %v", first, err)
+	first, firstChanged, err := store.AllocateMatterEndpoint(ctx, "matter-endpoint-a", "virtual-a", device.TypeSwitch)
+	if err != nil || !firstChanged || first != 2 {
+		t.Fatalf("first endpoint = %d, changed=%t, %v", first, firstChanged, err)
 	}
-	other, err := store.AllocateMatterEndpoint(ctx, "matter-endpoint-b", "virtual-a", device.TypeSwitch)
-	if err != nil || other != 2 {
-		t.Fatalf("other target first endpoint = %d, %v", other, err)
+	other, otherChanged, err := store.AllocateMatterEndpoint(ctx, "matter-endpoint-b", "virtual-a", device.TypeSwitch)
+	if err != nil || !otherChanged || other != 2 {
+		t.Fatalf("other target first endpoint = %d, changed=%t, %v", other, otherChanged, err)
 	}
 	if err := store.TombstoneMatterEndpoint(ctx, "matter-endpoint-a", "virtual-a"); err != nil {
 		t.Fatal(err)
 	}
-	second, err := store.AllocateMatterEndpoint(ctx, "matter-endpoint-a", "virtual-b", device.TypeSwitch)
-	if err != nil || second != 3 {
-		t.Fatalf("endpoint after tombstone = %d, %v", second, err)
+	second, secondChanged, err := store.AllocateMatterEndpoint(ctx, "matter-endpoint-a", "virtual-b", device.TypeSwitch)
+	if err != nil || !secondChanged || second != 3 {
+		t.Fatalf("endpoint after tombstone = %d, changed=%t, %v", second, secondChanged, err)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
@@ -322,9 +322,9 @@ func TestMatterEndpointTombstoneRecoveryNoReuseAndNamespaceIsolation(t *testing.
 		t.Fatal(err)
 	}
 	defer store.Close()
-	restored, err := store.AllocateMatterEndpoint(ctx, "matter-endpoint-a", "virtual-a", device.TypeSwitch)
-	if err != nil || restored != first {
-		t.Fatalf("restored endpoint = %d, %v", restored, err)
+	restored, restoredChanged, err := store.AllocateMatterEndpoint(ctx, "matter-endpoint-a", "virtual-a", device.TypeSwitch)
+	if err != nil || !restoredChanged || restored != first {
+		t.Fatalf("restored endpoint = %d, changed=%t, %v", restored, restoredChanged, err)
 	}
 	identity, found, err := store.MatterEndpointIdentity(ctx, "matter-endpoint-a", "virtual-a")
 	if err != nil || !found || identity.Tombstone || identity.EndpointID != first {
@@ -340,10 +340,10 @@ func TestMatterEndpointDeviceTypeChangeRequiresConfirmationAndExhaustionIsExplic
 	}
 	defer store.Close()
 	saveMatterTarget(t, ctx, store, "matter-guard")
-	if _, err := store.AllocateMatterEndpoint(ctx, "matter-guard", "virtual", device.TypeSwitch); err != nil {
+	if _, _, err := store.AllocateMatterEndpoint(ctx, "matter-guard", "virtual", device.TypeSwitch); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AllocateMatterEndpoint(ctx, "matter-guard", "virtual", device.TypeLightbulb); !errors.Is(err, target.ErrMatterDeviceTypeChange) {
+	if _, _, err := store.AllocateMatterEndpoint(ctx, "matter-guard", "virtual", device.TypeLightbulb); !errors.Is(err, target.ErrMatterDeviceTypeChange) {
 		t.Fatalf("device type change = %v", err)
 	}
 	if err := store.ConfirmMatterEndpointDeviceType(ctx, "matter-guard", "virtual", device.TypeLightbulb, false); !errors.Is(err, target.ErrMatterDeviceTypeChange) {
@@ -359,7 +359,7 @@ func TestMatterEndpointDeviceTypeChangeRequiresConfirmationAndExhaustionIsExplic
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AllocateMatterEndpoint(ctx, "matter-guard", "overflow", device.TypeSwitch); !errors.Is(err, target.ErrMatterEndpointIDsExhausted) {
+	if _, _, err := store.AllocateMatterEndpoint(ctx, "matter-guard", "overflow", device.TypeSwitch); !errors.Is(err, target.ErrMatterEndpointIDsExhausted) {
 		t.Fatalf("endpoint exhaustion = %v", err)
 	}
 }
@@ -379,7 +379,7 @@ func TestMatterTargetVirtualDeviceUpdatesSynchronizeEndpointTombstones(t *testin
 	if err := store.SaveTarget(ctx, item); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AllocateMatterEndpoint(ctx, item.ID, "virtual", device.TypeSwitch); err != nil {
+	if _, _, err := store.AllocateMatterEndpoint(ctx, item.ID, "virtual", device.TypeSwitch); err != nil {
 		t.Fatal(err)
 	}
 	item.Devices = nil
@@ -418,7 +418,7 @@ func TestMatterIdentityBackupContainsEncryptedStateAndRestoresIt(t *testing.T) {
 	if err := source.PutMatterRuntimeValue(ctx, "matter-backup", "fabric/noc", []byte("backup-secret")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := source.AllocateMatterEndpoint(ctx, "matter-backup", "virtual", device.TypeSwitch); err != nil {
+	if _, _, err := source.AllocateMatterEndpoint(ctx, "matter-backup", "virtual", device.TypeSwitch); err != nil {
 		t.Fatal(err)
 	}
 	backup := t.TempDir() + "/database.json"

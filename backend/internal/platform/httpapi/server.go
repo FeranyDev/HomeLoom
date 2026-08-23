@@ -429,6 +429,10 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 	})
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
+			captureAuditRequestBody(c)
+			if server.audit != nil {
+				captureAuditPropertyBefore(c, devices)
+			}
 			err := next(c)
 			if server.audit == nil || !auditMethod(c.Request().Method) || !strings.HasPrefix(c.Request().URL.Path, "/api/v1/") || c.Path() == "/api/v1/mapping/preview" {
 				return err
@@ -462,6 +466,7 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 				CorrelationID: application.CorrelationID(c.Request().Context()), Actor: actor,
 				Action: action, ResourceType: resourceType, ResourceID: resourceID,
 				Method: c.Request().Method, Route: route, Status: status, Outcome: outcome,
+				Details: auditRequestDetails(c, status),
 			}
 			if _, auditErr := server.audit.Record(c.Request().Context(), event); auditErr != nil {
 				logger.Error("audit event persistence failed", zap.String("request_id", event.CorrelationID), zap.String("method", event.Method), zap.String("route", event.Route), zap.Error(auditErr))

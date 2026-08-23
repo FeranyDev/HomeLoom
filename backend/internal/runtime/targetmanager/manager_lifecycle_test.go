@@ -48,8 +48,8 @@ func (lifecycleMatterStore) DeleteMatterRuntimeValue(context.Context, string, st
 	return nil
 }
 func (lifecycleMatterStore) ClearMatterRuntimeValues(context.Context, string) error { return nil }
-func (lifecycleMatterStore) AllocateMatterEndpoint(context.Context, string, string, device.Type) (uint16, error) {
-	return 2, nil
+func (lifecycleMatterStore) AllocateMatterEndpoint(context.Context, string, string, device.Type) (uint16, bool, error) {
+	return 2, true, nil
 }
 func (lifecycleMatterStore) TombstoneMatterEndpoint(context.Context, string, string) error {
 	return nil

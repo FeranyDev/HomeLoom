@@ -919,6 +919,63 @@ func TestManagerHotAppliesAndRemovesProvider(t *testing.T) {
 	}
 }
 
+func TestManagerSeparatesDiscoveryRefreshesFromSnapshotEvents(t *testing.T) {
+	ctx := context.Background()
+	manager, err := providermanager.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close(ctx)
+
+	legacy := make(chan device.Device, 2)
+	events := make(chan device.Device, 1)
+	refreshes := make(chan device.Device, 2)
+	stopLegacy := manager.Subscribe(func(item device.Device) { legacy <- item })
+	stopEvents := manager.SubscribeSnapshotEvents(func(item device.Device) { events <- item })
+	stopRefreshes := manager.SubscribeSnapshotRefreshes(func(item device.Device) { refreshes <- item })
+	defer stopLegacy()
+	defer stopEvents()
+	defer stopRefreshes()
+
+	if err := manager.Apply(ctx, virtual.NewProviderWithIdentity("virtual-refresh", "Refresh")); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		select {
+		case <-legacy:
+		case <-time.After(time.Second):
+			t.Fatal("legacy subscriber missed discovery refresh")
+		}
+		select {
+		case <-refreshes:
+		case <-time.After(time.Second):
+			t.Fatal("refresh subscriber missed discovery refresh")
+		}
+	}
+	select {
+	case item := <-events:
+		t.Fatalf("discovery was published as a live snapshot event: %#v", item)
+	default:
+	}
+
+	if _, err := manager.WriteProperty(ctx, providersdk.PropertyWriteRequest{
+		DeviceID: "virtual-refresh-switch-1", EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Value: device.BoolValue(true),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case item := <-events:
+		if item.ProviderID != "virtual-refresh" || item.ID != "virtual-refresh-switch-1" {
+			t.Fatalf("live snapshot event = %#v", item)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("live Provider snapshot was not published as an event")
+	}
+}
+
 func TestManagerUsesLiveReconfigurationWithoutInitializingReplacement(t *testing.T) {
 	ctx := context.Background()
 	virtualDevices, err := virtual.NewProvider().DiscoverDevices(ctx)

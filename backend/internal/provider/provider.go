@@ -312,6 +312,20 @@ type EventSubscriber interface {
 	Subscribe(func(device.Device)) func()
 }
 
+// SnapshotEventSubscriber separates live Provider state notifications from a
+// catalog refresh. Managers that aggregate Providers implement it so consumers
+// can preserve the timestamp semantics of each delivery.
+type SnapshotEventSubscriber interface {
+	SubscribeSnapshotEvents(func(device.Device)) func()
+}
+
+// SnapshotRefreshSubscriber delivers catalog reconciliation snapshots. Their
+// LastUpdateAt may be the time of the last state change rather than delivery,
+// so they must not be interpreted as live Provider events.
+type SnapshotRefreshSubscriber interface {
+	SubscribeSnapshotRefreshes(func(device.Device)) func()
+}
+
 // DeviceEvent is a transient Provider occurrence. Unlike a Device snapshot it
 // has no durable current value and must not be projected into the state store.
 type DeviceEvent struct {

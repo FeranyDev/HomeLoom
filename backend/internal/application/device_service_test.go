@@ -15,6 +15,7 @@ import (
 	domainstate "github.com/feranydev/homeloom/backend/internal/domain/state"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
+	"github.com/feranydev/homeloom/backend/internal/runtime/providermanager"
 )
 
 type silentProvider struct{ inner *virtual.Provider }
@@ -313,6 +314,44 @@ func (p *skewedEventProvider) emit(item device.Device) {
 	if p.handler != nil {
 		p.handler(item)
 	}
+}
+
+type mutableCameraDiscoveryProvider struct {
+	mu   sync.RWMutex
+	item device.Device
+}
+
+func newMutableCameraDiscoveryProvider() *mutableCameraDiscoveryProvider {
+	item := device.Device{
+		SchemaVersion: device.SchemaVersion, ID: "living-camera", ProviderID: "camera-main", Name: "客厅摄像头", Type: device.TypeCamera,
+		Endpoints: []device.Endpoint{{ID: "main", Name: "Camera", Type: string(device.TypeCamera), Capabilities: []device.Capability{{
+			ID: "media", Type: "media", Properties: []device.Property{{
+				Definition: device.PropertyDefinition{ID: "live-stream", Name: "实时视频", Type: device.ValueTypeBool, Readable: true}, Value: device.BoolValue(true),
+			}},
+		}}}},
+		LastUpdateAt: time.Now().UTC(),
+	}
+	item.SetAvailability(device.AvailabilityOnline)
+	return &mutableCameraDiscoveryProvider{item: item}
+}
+
+func (*mutableCameraDiscoveryProvider) Manifest() providersdk.Manifest {
+	return providersdk.Manifest{ID: "camera-main", Type: "camera", Name: "Camera"}
+}
+func (*mutableCameraDiscoveryProvider) Capabilities() providersdk.Capabilities {
+	return providersdk.Capabilities{Discovery: true}
+}
+func (*mutableCameraDiscoveryProvider) Initialize(context.Context) error { return nil }
+func (*mutableCameraDiscoveryProvider) Close(context.Context) error      { return nil }
+func (p *mutableCameraDiscoveryProvider) DiscoverDevices(context.Context) ([]device.Device, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return []device.Device{p.item.Clone()}, nil
+}
+func (p *mutableCameraDiscoveryProvider) setLastUpdateAt(value time.Time) {
+	p.mu.Lock()
+	p.item.LastUpdateAt = value
+	p.mu.Unlock()
 }
 
 func (p *silentProvider) Manifest() providersdk.Manifest         { return p.inner.Manifest() }
@@ -716,6 +755,70 @@ func TestDeviceServiceClassifiesSkewedProviderEventSeparately(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("skewed Provider event was not recorded: %#v", service.Metrics())
+}
+
+func TestDeviceServiceClassifiesOldProviderEventAsSnapshotAge(t *testing.T) {
+	provider := &skewedEventProvider{inner: virtual.NewProvider()}
+	service := application.NewDeviceService(provider)
+	defer service.Close()
+	items, err := provider.DiscoverDevices(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := items[0]
+	item.Sequence++
+	item.LastUpdateAt = time.Now().UTC().Add(-24 * time.Hour)
+	provider.emit(item)
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		metrics := service.Metrics()
+		if metrics.ProviderSnapshotAgeEvents == 1 {
+			if metrics.ProviderClockSkewEvents != 0 || metrics.ProviderMaxSnapshotAgeMS < float64((23*time.Hour)/time.Millisecond) || metrics.ProviderSnapshotAgeSource != "virtual-main/virtual-switch-1" {
+				t.Fatalf("timing metrics = %#v", metrics)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("old Provider event was not recorded as a snapshot age: %#v", service.Metrics())
+}
+
+func TestDeviceServiceClassifiesManagerCameraDiscoveryAsRefresh(t *testing.T) {
+	ctx := context.Background()
+	camera := newMutableCameraDiscoveryProvider()
+	manager, err := providermanager.New(camera)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	service := application.NewDeviceService(manager)
+	defer service.Close()
+
+	// The camera is fresh during initial discovery. Another Provider then causes
+	// manager-wide discovery after the camera's last-change timestamp is old.
+	camera.setLastUpdateAt(time.Now().UTC().Add(-24 * time.Hour))
+	if err := manager.Apply(ctx, virtual.NewProviderWithIdentity("virtual-manager-refresh", "Virtual")); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		metrics := service.Metrics()
+		if metrics.ProviderSnapshotAgeEvents > 0 {
+			if metrics.ProviderClockSkewEvents != 0 {
+				t.Fatalf("clock skew events = %d, want 0", metrics.ProviderClockSkewEvents)
+			}
+			if metrics.ProviderSnapshotAgeSource != "camera-main/living-camera" || metrics.ProviderMaxSnapshotAgeMS < float64((23*time.Hour)/time.Millisecond) {
+				t.Fatalf("snapshot age metrics = %#v", metrics)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("manager discovery was not recorded as a refresh: %#v", service.Metrics())
 }
 
 func TestDeviceServicePublishesIntegerState(t *testing.T) {

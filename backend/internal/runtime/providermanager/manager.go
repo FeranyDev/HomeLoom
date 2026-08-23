@@ -58,10 +58,14 @@ type Manager struct {
 	logicalExplanations                map[string][]logicaldevice.RouteExplanation
 	identityStore                      DeviceIdentityStore
 	listeners                          map[uint64]func(device.Device)
+	snapshotEventListeners             map[uint64]func(device.Device)
+	snapshotRefreshListeners           map[uint64]func(device.Device)
 	eventListeners                     map[uint64]func(providersdk.DeviceEvent)
 	capabilityAvailabilityListeners    map[uint64]func(providersdk.CapabilityAvailability)
 	propertyInterests                  map[string][]providersdk.PropertyInterest
 	nextListener                       uint64
+	nextSnapshotEventListener          uint64
+	nextSnapshotRefreshListener        uint64
 	nextEventListener                  uint64
 	nextCapabilityAvailabilityListener uint64
 	initialized                        bool
@@ -73,7 +77,7 @@ type Manager struct {
 }
 
 func New(items ...providersdk.Provider) (*Manager, error) {
-	m := &Manager{providers: make(map[string]*managedProvider), routes: make(map[string]string), mediaRoutes: make(map[string]string), capabilityRoutes: make(map[capabilityRoute]capabilityDelegate), boundSources: make(map[string]string), hiddenSources: make(map[string]struct{}), canonicalSnapshots: make(map[string]device.Device), logicalDevices: make(map[string]logicaldevice.Config), logicalSourceIDs: make(map[string]map[string]struct{}), logicalSourceSnapshots: make(map[string]device.Device), logicalSnapshots: make(map[string]device.Device), logicalExplanations: make(map[string][]logicaldevice.RouteExplanation), listeners: make(map[uint64]func(device.Device)), eventListeners: make(map[uint64]func(providersdk.DeviceEvent)), capabilityAvailabilityListeners: make(map[uint64]func(providersdk.CapabilityAvailability)), propertyInterests: make(map[string][]providersdk.PropertyInterest)}
+	m := &Manager{providers: make(map[string]*managedProvider), routes: make(map[string]string), mediaRoutes: make(map[string]string), capabilityRoutes: make(map[capabilityRoute]capabilityDelegate), boundSources: make(map[string]string), hiddenSources: make(map[string]struct{}), canonicalSnapshots: make(map[string]device.Device), logicalDevices: make(map[string]logicaldevice.Config), logicalSourceIDs: make(map[string]map[string]struct{}), logicalSourceSnapshots: make(map[string]device.Device), logicalSnapshots: make(map[string]device.Device), logicalExplanations: make(map[string][]logicaldevice.RouteExplanation), listeners: make(map[uint64]func(device.Device)), snapshotEventListeners: make(map[uint64]func(device.Device)), snapshotRefreshListeners: make(map[uint64]func(device.Device)), eventListeners: make(map[uint64]func(providersdk.DeviceEvent)), capabilityAvailabilityListeners: make(map[uint64]func(providersdk.CapabilityAvailability)), propertyInterests: make(map[string][]providersdk.PropertyInterest)}
 	for _, item := range items {
 		id := item.Manifest().ID
 		if id == "" {
@@ -816,7 +820,7 @@ func (m *Manager) Apply(ctx context.Context, item providersdk.Provider) error {
 		snapshot.ProviderID = id
 		snapshot.Removed = true
 		snapshot.SetOnline(false)
-		m.broadcast(snapshot)
+		m.broadcastRefresh(snapshot)
 	}
 	return m.broadcastDiscovery(ctx)
 }
@@ -891,7 +895,7 @@ func (m *Manager) reconcileReconfigured(ctx context.Context, id string, current 
 		snapshot.ProviderID = id
 		snapshot.Removed = true
 		snapshot.SetOnline(false)
-		m.broadcast(snapshot)
+		m.broadcastRefresh(snapshot)
 	}
 	return m.broadcastDiscovery(ctx)
 }
@@ -935,7 +939,7 @@ func (m *Manager) Remove(ctx context.Context, id string) error {
 				item.ProviderID = id
 				item.Removed = true
 				item.SetOnline(false)
-				m.broadcast(item)
+				m.broadcastRefresh(item)
 			}
 		}
 	}
@@ -1011,29 +1015,29 @@ func (m *Manager) attachSnapshots(id string, current *managedProvider) {
 		}
 		if boundSource {
 			if !item.IsOnline() && projectedOK {
-				m.broadcast(projected)
+				m.broadcastEvent(projected)
 			}
 			for _, availability := range availabilityChanges {
 				m.broadcastCapabilityAvailability(availability)
 			}
 			if item.IsOnline() && projectedOK {
-				m.broadcast(projected)
+				m.broadcastEvent(projected)
 			}
 			for _, logical := range logicalProjected {
-				m.broadcast(logical)
+				m.broadcastEvent(logical)
 			}
 			return
 		}
 		if logicalSource {
 			for _, logical := range logicalProjected {
-				m.broadcast(logical)
+				m.broadcastEvent(logical)
 			}
 			return
 		}
 		if hiddenSource {
 			return
 		}
-		m.broadcast(item)
+		m.broadcastEvent(item)
 	})
 	m.mu.Lock()
 	if m.providers[id] == current && current.unsubscribe == nil {
@@ -1097,6 +1101,37 @@ func (m *Manager) broadcast(item device.Device) {
 	m.mu.RUnlock()
 	for _, h := range handlers {
 		h(item.Clone())
+	}
+}
+
+// broadcastEvent preserves the legacy aggregate subscription while also
+// telling timestamp-aware consumers that this snapshot originated from a live
+// Provider notification.
+func (m *Manager) broadcastEvent(item device.Device) {
+	m.broadcast(item)
+	m.mu.RLock()
+	handlers := make([]func(device.Device), 0, len(m.snapshotEventListeners))
+	for _, handler := range m.snapshotEventListeners {
+		handlers = append(handlers, handler)
+	}
+	m.mu.RUnlock()
+	for _, handler := range handlers {
+		handler(item.Clone())
+	}
+}
+
+// broadcastRefresh preserves the legacy aggregate subscription while marking
+// manager-driven catalog reconciliation as a refresh instead of a live event.
+func (m *Manager) broadcastRefresh(item device.Device) {
+	m.broadcast(item)
+	m.mu.RLock()
+	handlers := make([]func(device.Device), 0, len(m.snapshotRefreshListeners))
+	for _, handler := range m.snapshotRefreshListeners {
+		handlers = append(handlers, handler)
+	}
+	m.mu.RUnlock()
+	for _, handler := range handlers {
+		handler(item.Clone())
 	}
 }
 
@@ -1419,6 +1454,36 @@ func (m *Manager) Subscribe(handler func(device.Device)) func() {
 	return func() { once.Do(func() { m.mu.Lock(); delete(m.listeners, id); m.mu.Unlock() }) }
 }
 
+// SubscribeSnapshotEvents receives only live snapshot notifications emitted by
+// underlying Providers. It deliberately excludes manager catalog refreshes.
+func (m *Manager) SubscribeSnapshotEvents(handler func(device.Device)) func() {
+	if handler == nil {
+		return func() {}
+	}
+	m.mu.Lock()
+	m.nextSnapshotEventListener++
+	id := m.nextSnapshotEventListener
+	m.snapshotEventListeners[id] = handler
+	m.mu.Unlock()
+	var once sync.Once
+	return func() { once.Do(func() { m.mu.Lock(); delete(m.snapshotEventListeners, id); m.mu.Unlock() }) }
+}
+
+// SubscribeSnapshotRefreshes receives snapshots broadcast while the manager
+// reconciles its Provider catalog after apply, remove, or retry operations.
+func (m *Manager) SubscribeSnapshotRefreshes(handler func(device.Device)) func() {
+	if handler == nil {
+		return func() {}
+	}
+	m.mu.Lock()
+	m.nextSnapshotRefreshListener++
+	id := m.nextSnapshotRefreshListener
+	m.snapshotRefreshListeners[id] = handler
+	m.mu.Unlock()
+	var once sync.Once
+	return func() { once.Do(func() { m.mu.Lock(); delete(m.snapshotRefreshListeners, id); m.mu.Unlock() }) }
+}
+
 func (m *Manager) SubscribeDeviceEvents(handler func(providersdk.DeviceEvent)) func() {
 	m.mu.Lock()
 	m.nextEventListener++
@@ -1653,7 +1718,7 @@ func (m *Manager) broadcastDiscovery(ctx context.Context) error {
 		return err
 	}
 	for _, item := range items {
-		m.broadcast(item)
+		m.broadcastRefresh(item)
 	}
 	return nil
 }

@@ -45,6 +45,7 @@ type DeviceService struct {
 	commands                          *commandtracker.Tracker
 	commandQueue                      *commandCoordinator
 	unsubscribe                       func()
+	unsubscribeSnapshotRefreshes      func()
 	unsubscribeDeviceEvents           func()
 	unsubscribeCapabilityAvailability func()
 	mu                                sync.RWMutex
@@ -375,15 +376,23 @@ func NewDeviceService(provider providersdk.Provider, dependencies ...any) *Devic
 	staleCtx, staleCancel := context.WithCancel(context.Background())
 	service.staleCancel, service.staleDone = staleCancel, make(chan struct{})
 	go service.runStaleScanner(staleCtx)
-	if subscriber, ok := provider.(providersdk.EventSubscriber); ok {
+	if subscriber, ok := provider.(providersdk.SnapshotEventSubscriber); ok {
+		service.unsubscribe = subscriber.SubscribeSnapshotEvents(func(item device.Device) {
+			service.enqueueSnapshot(item, snapshotTimeOriginProviderEvent)
+		})
+	} else if subscriber, ok := provider.(providersdk.EventSubscriber); ok {
 		service.unsubscribe = subscriber.Subscribe(func(item device.Device) {
-			service.metrics.eventsReceived.Add(1)
-			if err := service.dispatcher.Publish(eventbus.Event{DeviceID: item.ID, Payload: item}); err != nil {
-				service.metrics.eventsDropped.Add(1)
-			}
+			service.enqueueSnapshot(item, snapshotTimeOriginProviderEvent)
 		})
 	} else {
 		service.unsubscribe = func() {}
+	}
+	if subscriber, ok := provider.(providersdk.SnapshotRefreshSubscriber); ok {
+		service.unsubscribeSnapshotRefreshes = subscriber.SubscribeSnapshotRefreshes(func(item device.Device) {
+			service.enqueueSnapshot(item, snapshotTimeOriginRefresh)
+		})
+	} else {
+		service.unsubscribeSnapshotRefreshes = func() {}
 	}
 	if subscriber, ok := provider.(providersdk.DeviceEventSubscriber); ok {
 		service.unsubscribeDeviceEvents = subscriber.SubscribeDeviceEvents(service.publishDeviceEvent)
@@ -1656,6 +1665,7 @@ func subscribe[T any](s *DeviceService, nextID *uint64, listeners map[uint64]*su
 
 func (s *DeviceService) Close() error {
 	s.unsubscribe()
+	s.unsubscribeSnapshotRefreshes()
 	s.unsubscribeDeviceEvents()
 	s.unsubscribeCapabilityAvailability()
 	s.closeSubscriptions()
@@ -1677,11 +1687,29 @@ func (s *DeviceService) handleEvent(event eventbus.Event) {
 		s.handleCapabilityAvailability(availability, event.TraceID)
 		return
 	}
+	if update, ok := event.Payload.(snapshotUpdate); ok {
+		s.handleDeviceSnapshot(update.item, event.TraceID, update.origin)
+		return
+	}
 	item, ok := event.Payload.(device.Device)
 	if !ok {
 		return
 	}
 	s.handleDeviceSnapshot(item, event.TraceID, snapshotTimeOriginProviderEvent)
+}
+
+type snapshotUpdate struct {
+	item   device.Device
+	origin snapshotTimeOrigin
+}
+
+func (s *DeviceService) enqueueSnapshot(item device.Device, origin snapshotTimeOrigin) {
+	if origin == snapshotTimeOriginProviderEvent {
+		s.metrics.eventsReceived.Add(1)
+	}
+	if err := s.dispatcher.Publish(eventbus.Event{DeviceID: item.ID, Payload: snapshotUpdate{item: item, origin: origin}}); err != nil {
+		s.metrics.eventsDropped.Add(1)
+	}
 }
 
 // handleDeviceSnapshot reconciles both Provider events and explicit catalog
@@ -2240,15 +2268,27 @@ func (s *DeviceService) safeObservedAt(item device.Device, receivedAt time.Time,
 	if observedAt.IsZero() {
 		return receivedAt
 	}
-	skew := receivedAt.Sub(observedAt)
-	if skew < 0 {
-		skew = -skew
-	}
-	if skew <= 5*time.Minute {
+	if !observedAt.Before(receivedAt.Add(-5*time.Minute)) && !observedAt.After(receivedAt.Add(5*time.Minute)) {
 		return observedAt
 	}
-	s.recordTimingOffset(item, skew, origin)
+	// An old timestamp proves only that this is a historical Provider snapshot;
+	// it does not establish that the Provider clock is slow. This happens when
+	// a control source projects an unchanged camera state during an otherwise
+	// live notification. Only a future timestamp from a live event is evidence
+	// of clock drift. Refreshes remain snapshots in either direction.
+	if observedAt.Before(receivedAt) || origin == snapshotTimeOriginRefresh {
+		s.recordTimingOffset(item, absDuration(receivedAt.Sub(observedAt)), snapshotTimeOriginRefresh)
+		return receivedAt
+	}
+	s.recordTimingOffset(item, observedAt.Sub(receivedAt), snapshotTimeOriginProviderEvent)
 	return receivedAt
+}
+
+func absDuration(value time.Duration) time.Duration {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 func (s *DeviceService) recordTimingOffset(item device.Device, offset time.Duration, origin snapshotTimeOrigin) {

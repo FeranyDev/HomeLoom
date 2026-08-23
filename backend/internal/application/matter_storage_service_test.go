@@ -10,7 +10,9 @@ import (
 )
 
 type matterStorageStub struct {
-	value []byte
+	value             []byte
+	allocationChanges []bool
+	allocationCalls   int
 }
 
 type matterStorageAuditStub struct {
@@ -37,8 +39,13 @@ func (*matterStorageStub) DeleteMatterRuntimeValue(context.Context, string, stri
 	return nil
 }
 func (*matterStorageStub) ClearMatterRuntimeValues(context.Context, string) error { return nil }
-func (*matterStorageStub) AllocateMatterEndpoint(context.Context, string, string, device.Type) (uint16, error) {
-	return 2, nil
+func (s *matterStorageStub) AllocateMatterEndpoint(context.Context, string, string, device.Type) (uint16, bool, error) {
+	changed := true
+	if s.allocationCalls < len(s.allocationChanges) {
+		changed = s.allocationChanges[s.allocationCalls]
+	}
+	s.allocationCalls++
+	return 2, changed, nil
 }
 func (*matterStorageStub) TombstoneMatterEndpoint(context.Context, string, string) error {
 	return nil
@@ -82,7 +89,7 @@ func TestMatterStorageServiceRejectsUnavailableStore(t *testing.T) {
 	}
 }
 
-func TestMatterStorageServiceAuditsIdentityLifecycleWithoutValues(t *testing.T) {
+func TestMatterStorageServiceDoesNotAuditRoutineIdentityStorage(t *testing.T) {
 	store := &matterStorageAuditStub{matterStorageStub: &matterStorageStub{}}
 	service := NewMatterStorageService(store)
 	ctx := context.Background()
@@ -92,10 +99,16 @@ func TestMatterStorageServiceAuditsIdentityLifecycleWithoutValues(t *testing.T) 
 	if _, _, err := service.Get(ctx, "matter-main", "fabric/secret"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := service.List(ctx, "matter-main"); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.events) != 0 {
+		t.Fatalf("routine identity operations wrote audit events: %#v", store.events)
+	}
 	if err := service.Clear(ctx, "matter-main"); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"matter.identity.write", "matter.identity.read", "matter.identity.clear"}
+	want := []string{"matter.identity.clear"}
 	if len(store.events) != len(want) {
 		t.Fatalf("audit events = %#v", store.events)
 	}
@@ -105,6 +118,25 @@ func TestMatterStorageServiceAuditsIdentityLifecycleWithoutValues(t *testing.T) 
 		}
 		if event.Action == "credential" || event.Route == "credential" {
 			t.Fatal("audit event leaked identity value")
+		}
+	}
+}
+
+func TestMatterStorageServiceAuditsOnlyMatterEndpointChanges(t *testing.T) {
+	store := &matterStorageAuditStub{matterStorageStub: &matterStorageStub{allocationChanges: []bool{true, false, true}}}
+	service := NewMatterStorageService(store)
+	ctx := context.Background()
+	for range 3 {
+		if _, err := service.AllocateEndpoint(ctx, "matter-main", "virtual-switch-1", device.TypeSwitch); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(store.events) != 2 {
+		t.Fatalf("endpoint audit events = %#v", store.events)
+	}
+	for _, event := range store.events {
+		if event.Action != "matter.endpoint.allocate" || len(event.Details) != 2 || event.Details[0].Value != "2" || event.Details[1].Value != "virtual-switch-1" {
+			t.Fatalf("endpoint audit event = %#v", event)
 		}
 	}
 }
