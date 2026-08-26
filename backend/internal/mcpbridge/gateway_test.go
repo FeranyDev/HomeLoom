@@ -94,4 +94,31 @@ func TestGatewayOnlyExecutesConfirmProperties(t *testing.T) {
 	}
 }
 
+func TestGatewayRequiresExplicitPerPropertyGrantForUnattendedAI(t *testing.T) {
+	ctx := context.Background()
+	devices := application.NewDeviceService(virtual.NewProvider())
+	defer devices.Close()
+	configs := application.NewMCPConfigService(newMemoryConfigStore(), devices)
+	path := domainmcp.PropertyPath{DeviceID: "virtual-switch-1", EndpointID: "main", CapabilityID: "switch", PropertyID: "power"}
+	if _, err := configs.SaveDevice(ctx, domainmcp.DeviceConfig{DeviceID: path.DeviceID, Enabled: true, DefaultAccess: domainmcp.AccessHidden}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := configs.SaveProperty(ctx, domainmcp.PropertyConfig{PropertyPath: path, Access: domainmcp.AccessConfirm}); err != nil {
+		t.Fatal(err)
+	}
+	gateway := NewServer("unused.sock", application.NewMCPToolService(devices, configs), devices)
+	params, _ := json.Marshal(PropertyWriteRequest{PropertyPath: path, Value: device.BoolValue(true), AIExecution: &AIExecutionMetadata{RunID: "run-1", AutomationID: "task-1", Source: "schedule", AutoApproved: true}})
+	response := gateway.Handle(ctx, Request{Version: ProtocolVersion, ID: "unattended-denied", Method: MethodExecuteProperty, Params: params})
+	if response.Error == nil || response.Error.Code != "access_denied" {
+		t.Fatalf("ungranted unattended response = %#v", response)
+	}
+	if _, err := configs.SaveProperty(ctx, domainmcp.PropertyConfig{PropertyPath: path, Access: domainmcp.AccessConfirm, AllowUnattendedAI: true}); err != nil {
+		t.Fatal(err)
+	}
+	response = gateway.Handle(ctx, Request{Version: ProtocolVersion, ID: "unattended-granted", Method: MethodExecuteProperty, Params: params})
+	if response.Error != nil {
+		t.Fatalf("granted unattended response = %#v", response)
+	}
+}
+
 func pointer[T any](value T) *T { return &value }

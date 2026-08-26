@@ -32,3 +32,19 @@ func TestReadTokenRequiresPrivateSufficientlyLongFile(t *testing.T) {
 		t.Fatal("short token was accepted")
 	}
 }
+
+func TestBoolEnvDefaultsParsesAndRejectsInvalidValues(t *testing.T) {
+	const key = "HOMELOOM_TEST_MCP_HTTP_ENABLED"
+	t.Setenv(key, "")
+	if enabled, err := boolEnv(key, false); err != nil || enabled {
+		t.Fatalf("empty bool env = %t, %v", enabled, err)
+	}
+	t.Setenv(key, "true")
+	if enabled, err := boolEnv(key, false); err != nil || !enabled {
+		t.Fatalf("true bool env = %t, %v", enabled, err)
+	}
+	t.Setenv(key, "not-a-bool")
+	if _, err := boolEnv(key, false); err == nil {
+		t.Fatal("invalid bool env was accepted")
+	}
+}

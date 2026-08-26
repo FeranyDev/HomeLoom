@@ -46,6 +46,17 @@ describe('ProviderCard simulation', () => {
 		expect(await screen.findByLabelText('Provider 小米短信验证码')).toBeInTheDocument()
 	})
 
+	it('guides an expired runtime challenge back to a fresh account login', async () => {
+		const challenged: Provider = { ...provider, id: 'xiaomi-cloud-missing', type: 'xiaomi-miot-cloud', status: 'auth_required', config: { username: 'owner@example.com', password: '********' } }
+		const onEdit = vi.fn()
+		xiaomiAPI.getXiaomiProviderAuthChallenge.mockResolvedValueOnce(null)
+		render(<ProviderCard provider={challenged} devices={[]} onEdit={onEdit} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} />)
+		expect(await screen.findByRole('alert')).toHaveTextContent('此前的短信验证会话已经失效')
+		expect(screen.getByRole('button', { name: '重新登录小米云账号' })).toBeInTheDocument()
+		await userEvent.click(screen.getByRole('button', { name: '打开配置并重新登录' }))
+		expect(onEdit).toHaveBeenCalledWith(challenged)
+	})
+
 	it('distinguishes MQTT client and server runtime modes', () => {
 		const server: Provider = { ...provider, id: 'mqtt-server', type: 'mqtt', name: '设备接入', config: { mode: 'server', listenAddress: '0.0.0.0:1883', devices: [] } }
 		render(<ProviderCard provider={server} devices={[]} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} onTest={vi.fn()} />)

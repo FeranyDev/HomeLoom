@@ -92,8 +92,18 @@ export async function getXiaomiProviderAuthChallenge(providerId: string): Promis
 	try {
 		return await requestData<XiaomiCloudLoginResult | null>(xiaomiPath)
 	} catch (cause) {
+		// A missing challenge is an expected recovery state: it is retained only
+		// in memory and disappears after expiry, a process restart, or a completed
+		// verification. Present it as null so callers can guide the administrator
+		// to start a fresh account login instead of surfacing a transport failure.
+		if (cause instanceof ApiError && cause.status === 409) return null
 		if (!(cause instanceof ApiError) || (cause.status !== 404 && cause.status !== 405)) throw cause
-		return requestData<XiaomiCloudLoginResult | null>(`/api/v1/providers/${encoded}/auth-challenge`)
+		try {
+			return await requestData<XiaomiCloudLoginResult | null>(`/api/v1/providers/${encoded}/auth-challenge`)
+		} catch (fallbackCause) {
+			if (fallbackCause instanceof ApiError && fallbackCause.status === 409) return null
+			throw fallbackCause
+		}
 	}
 }
 

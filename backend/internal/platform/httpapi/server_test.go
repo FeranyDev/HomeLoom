@@ -37,10 +37,11 @@ type unavailableDatabase struct{}
 type apiSettingsStore struct{ values map[string]string }
 
 type apiAIService struct {
-	status mcpagent.AIServiceStatus
-	input  mcpagent.AIServiceConfig
-	models []mcpagent.AIModel
-	run    mcpagent.Run
+	status      mcpagent.AIServiceStatus
+	input       mcpagent.AIServiceConfig
+	models      []mcpagent.AIModel
+	run         mcpagent.Run
+	streamInput mcpagent.RunRequest
 }
 
 type apiAutomationStore struct {
@@ -69,10 +70,10 @@ func (s *apiAutomationStore) DeleteAIAutomation(_ context.Context, id string) er
 
 type apiAutomationRunner struct{}
 
-func (apiAutomationRunner) StartAutomation(context.Context, string) (application.AIAutomationRun, error) {
+func (apiAutomationRunner) StartAutomation(context.Context, application.AIAutomationInvocation) (application.AIAutomationRun, error) {
 	return application.AIAutomationRun{ID: "run-task-1", Status: "awaiting_approval", Message: "等待批准"}, nil
 }
-func (apiAutomationRunner) ApproveAutomation(context.Context, string) (application.AIAutomationRun, error) {
+func (apiAutomationRunner) ApproveAutomation(context.Context, string, bool) (application.AIAutomationRun, error) {
 	return application.AIAutomationRun{ID: "run-task-1", Status: "executed", Message: "设备操作已提交"}, nil
 }
 
@@ -81,7 +82,15 @@ func (s *apiAIService) AIServiceStatus(context.Context) (mcpagent.AIServiceStatu
 }
 func (s *apiAIService) UpdateAIService(_ context.Context, input mcpagent.AIServiceConfig) (mcpagent.AIServiceStatus, error) {
 	s.input = input
-	s.status = mcpagent.AIServiceStatus{APIBaseURL: input.APIBaseURL, APIProxyURL: input.APIProxyURL, Model: input.Model, APIProtocol: input.APIProtocol, AgentInstructions: input.AgentInstructions, DefaultAgentInstructions: mcpagent.DefaultAgentInstructions, APIKeyConfigured: input.APIKey != "", Configured: input.APIKey != "" && input.Model != ""}
+	sessionContext := mcpagent.DefaultSessionContextSettings()
+	if input.SessionContext != nil {
+		sessionContext = *input.SessionContext
+	}
+	homePreferences := mcpagent.DefaultHomePreferences()
+	if input.HomePreferences != nil {
+		homePreferences = *input.HomePreferences
+	}
+	s.status = mcpagent.AIServiceStatus{APIBaseURL: input.APIBaseURL, APIProxyURL: input.APIProxyURL, Model: input.Model, APIProtocol: input.APIProtocol, AgentInstructions: input.AgentInstructions, DefaultAgentInstructions: mcpagent.DefaultAgentInstructions, SessionContext: sessionContext, HomePreferences: homePreferences, APIKeyConfigured: input.APIKey != "", Configured: input.APIKey != "" && input.Model != ""}
 	return s.status, nil
 }
 func (s *apiAIService) ListAIModels(context.Context) ([]mcpagent.AIModel, error) {
@@ -91,6 +100,14 @@ func (s *apiAIService) ListAIModels(context.Context) ([]mcpagent.AIModel, error)
 func (s *apiAIService) StartAIRun(_ context.Context, message string) (mcpagent.Run, error) {
 	s.run.Message = message
 	return s.run, nil
+}
+func (s *apiAIService) StreamAIRun(_ context.Context, input mcpagent.RunRequest, onEvent func(mcpagent.StreamEvent) error) error {
+	s.streamInput = input
+	if err := onEvent(mcpagent.StreamEvent{Type: "delta", Delta: input.Message}); err != nil {
+		return err
+	}
+	s.run.Message = input.Message
+	return onEvent(mcpagent.StreamEvent{Type: "run", Run: &s.run})
 }
 func (s *apiAIService) AIRun(context.Context, string) (mcpagent.Run, error) { return s.run, nil }
 func (s *apiAIService) ApproveAIRun(context.Context, string) (mcpagent.Run, error) {
@@ -355,20 +372,20 @@ func TestDeviceMCPConfigRoutesPersistDeviceAndPropertyNotes(t *testing.T) {
 
 func TestAIServiceConfigRoutesProxyWithoutReturningAPIKey(t *testing.T) {
 	server := newTestServer()
-	ai := &apiAIService{status: mcpagent.AIServiceStatus{APIBaseURL: "https://models.example.test/v1", APIProxyURL: "http://127.0.0.1:7890", Model: "model-a", APIKeyConfigured: true, Configured: true, AgentInstructions: "默认提示词", DefaultAgentInstructions: "默认提示词"}, models: []mcpagent.AIModel{{ID: "model-a"}}}
+	ai := &apiAIService{status: mcpagent.AIServiceStatus{APIBaseURL: "https://models.example.test/v1", APIProxyURL: "http://127.0.0.1:7890", Model: "model-a", APIKeyConfigured: true, Configured: true, AgentInstructions: "默认提示词", DefaultAgentInstructions: "默认提示词", SessionContext: mcpagent.DefaultSessionContextSettings()}, models: []mcpagent.AIModel{{ID: "model-a"}}}
 	server.SetAIService(ai)
 
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/ai-service/config", nil))
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"apiKeyConfigured":true`) || !strings.Contains(response.Body.String(), `"apiProxyUrl":"http://127.0.0.1:7890"`) || !strings.Contains(response.Body.String(), `"defaultAgentInstructions":"默认提示词"`) || strings.Contains(response.Body.String(), "secret-api-key") {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"apiKeyConfigured":true`) || !strings.Contains(response.Body.String(), `"apiProxyUrl":"http://127.0.0.1:7890"`) || !strings.Contains(response.Body.String(), `"defaultAgentInstructions":"默认提示词"`) || !strings.Contains(response.Body.String(), `"sessionContext":{"enabled":true`) || strings.Contains(response.Body.String(), "secret-api-key") {
 		t.Fatalf("get AI config = %d %s", response.Code, response.Body.String())
 	}
 
-	request := httptest.NewRequest(http.MethodPut, "/api/v1/ai-service/config", strings.NewReader(`{"apiBaseUrl":"https://models.example.test/v1","apiProxyUrl":"https://proxy.example.test:8443","apiKey":"secret-api-key","model":"model-b","agentInstructions":"用简洁 Markdown 回复。"}`))
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/ai-service/config", strings.NewReader(`{"apiBaseUrl":"https://models.example.test/v1","apiProxyUrl":"https://proxy.example.test:8443","apiKey":"secret-api-key","model":"model-b","agentInstructions":"用简洁 Markdown 回复。","sessionContext":{"enabled":false,"currentTime":true,"timeZone":false,"weekday":true,"runSource":true,"triggerState":false,"regionLanguage":true,"temperatureUnit":false},"homePreferences":{"timeZone":"America/New_York","regionLanguage":"en-US","temperatureUnit":"fahrenheit"}}`))
 	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	response = httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)
-	if response.Code != http.StatusOK || ai.input.APIKey != "secret-api-key" || ai.input.APIProxyURL != "https://proxy.example.test:8443" || ai.input.AgentInstructions != "用简洁 Markdown 回复。" || strings.Contains(response.Body.String(), "secret-api-key") || !strings.Contains(response.Body.String(), `"model":"model-b"`) || !strings.Contains(response.Body.String(), `"apiProxyUrl":"https://proxy.example.test:8443"`) {
+	if response.Code != http.StatusOK || ai.input.APIKey != "secret-api-key" || ai.input.APIProxyURL != "https://proxy.example.test:8443" || ai.input.AgentInstructions != "用简洁 Markdown 回复。" || ai.input.SessionContext == nil || ai.input.SessionContext.Enabled || ai.input.SessionContext.TimeZone || ai.input.SessionContext.TriggerState || ai.input.SessionContext.TemperatureUnit || ai.input.HomePreferences == nil || ai.input.HomePreferences.TimeZone != "America/New_York" || ai.input.HomePreferences.RegionLanguage != "en-US" || ai.input.HomePreferences.TemperatureUnit != mcpagent.TemperatureUnitFahrenheit || strings.Contains(response.Body.String(), "secret-api-key") || !strings.Contains(response.Body.String(), `"model":"model-b"`) || !strings.Contains(response.Body.String(), `"apiProxyUrl":"https://proxy.example.test:8443"`) || !strings.Contains(response.Body.String(), `"temperatureUnit":"fahrenheit"`) {
 		t.Fatalf("save AI config = %d %s input=%#v", response.Code, response.Body.String(), ai.input)
 	}
 
@@ -391,7 +408,8 @@ func TestAIServiceTimeoutErrorsAreRetryableRequestTimeouts(t *testing.T) {
 
 func TestAIServiceRunRoutesRemainBehindCoreAuthentication(t *testing.T) {
 	server := newTestServer()
-	server.SetAIService(&apiAIService{run: mcpagent.Run{ID: "run-1", Status: mcpagent.RunAwaitingApproval}})
+	ai := &apiAIService{run: mcpagent.Run{ID: "run-1", Status: mcpagent.RunAwaitingApproval}}
+	server.SetAIService(ai)
 
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/ai-service/runs", strings.NewReader(`{"message":"打开客厅灯"}`))
@@ -399,6 +417,14 @@ func TestAIServiceRunRoutesRemainBehindCoreAuthentication(t *testing.T) {
 	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"run-1"`) || !strings.Contains(response.Body.String(), "打开客厅灯") {
 		t.Fatalf("create run = %d %s", response.Code, response.Body.String())
+	}
+
+	response = httptest.NewRecorder()
+	streamRequest := httptest.NewRequest(http.MethodPost, "/api/v1/ai-service/runs/stream", strings.NewReader(`{"message":"流式检查","history":[{"role":"user","content":"上一条问题"}]}`))
+	streamRequest.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	server.Handler().ServeHTTP(response, streamRequest)
+	if response.Code != http.StatusOK || !strings.Contains(response.Header().Get(echo.HeaderContentType), "text/event-stream") || !strings.Contains(response.Body.String(), `"delta":"流式检查"`) || !strings.Contains(response.Body.String(), `"type":"run"`) || ai.streamInput.Context.Source != mcpagent.RunSourceInteractive || len(ai.streamInput.History) != 1 || ai.streamInput.History[0].Content != "上一条问题" {
+		t.Fatalf("stream run = %d %s input=%#v", response.Code, response.Body.String(), ai.streamInput)
 	}
 
 	response = httptest.NewRecorder()

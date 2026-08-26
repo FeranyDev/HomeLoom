@@ -52,11 +52,11 @@ export function DeviceMCPSettings({ device }: { device: Device }) {
 
   const saveProperty = async (property: PropertyTarget) => {
     const key = configKey(property)
-    const next = propertyConfigs[key] ?? { deviceId: device.id, ...property, usageNote: '', access: 'inherit' as const }
+    const next = propertyConfigs[key] ?? { deviceId: device.id, ...property, usageNote: '', access: 'inherit' as const, allowUnattendedAi: false }
     setSaving(key)
     setError(null)
     try {
-      if (next.access === 'inherit' && next.usageNote.trim() === '') {
+      if (next.access === 'inherit' && next.usageNote.trim() === '' && !next.allowUnattendedAi) {
         await deleteDeviceMCPPropertyConfig(device.id, property.endpointId, property.capabilityId, property.propertyId)
         setPropertyConfigs((current) => { const updated = { ...current }; delete updated[key]; return updated })
       } else {
@@ -70,11 +70,11 @@ export function DeviceMCPSettings({ device }: { device: Device }) {
     }
   }
 
-  const updateProperty = (property: PropertyTarget, update: Partial<Pick<MCPPropertyConfig, 'access' | 'usageNote'>>) => {
+  const updateProperty = (property: PropertyTarget, update: Partial<Pick<MCPPropertyConfig, 'access' | 'usageNote' | 'allowUnattendedAi'>>) => {
     const key = configKey(property)
     setPropertyConfigs((current) => {
       const existing = current[key]
-      const next = existing ? { ...existing, ...update } : { deviceId: device.id, endpointId: property.endpointId, capabilityId: property.capabilityId, propertyId: property.propertyId, usageNote: '', access: 'inherit' as const, ...update }
+      const next = existing ? { ...existing, ...update } : { deviceId: device.id, endpointId: property.endpointId, capabilityId: property.capabilityId, propertyId: property.propertyId, usageNote: '', access: 'inherit' as const, allowUnattendedAi: false, ...update }
       return { ...current, [key]: next }
     })
   }
@@ -93,12 +93,15 @@ export function DeviceMCPSettings({ device }: { device: Device }) {
       <small>属性可覆盖设备默认权限。只读属性即使标记为“确认执行”也不会被写入。</small>
       {properties.length === 0 ? <p>该设备没有可配置属性。</p> : properties.map((property) => {
         const key = configKey(property)
-        const item = propertyConfigs[key] ?? { deviceId: device.id, ...property, usageNote: '', access: 'inherit' as const }
+        const item = propertyConfigs[key] ?? { deviceId: device.id, ...property, usageNote: '', access: 'inherit' as const, allowUnattendedAi: false }
+        const effectiveAccess = item.access === 'inherit' ? config.defaultAccess : item.access
         return <article key={key}>
           <header><strong>{property.name}</strong><code>{property.endpointId}.{property.capabilityId}.{property.propertyId}</code>{!property.writable && <span>只读属性</span>}</header>
-          <label>属性权限<select aria-label={`${property.name} MCP 权限`} value={item.access} disabled={loading || saving !== null} onChange={(event) => updateProperty(property, { access: event.target.value as MCPAccess })}><option value="inherit">{accessLabel.inherit}</option><option value="hidden">{accessLabel.hidden}</option><option value="read">{accessLabel.read}</option><option value="confirm">{accessLabel.confirm}</option></select></label>
+          <label>属性权限<select aria-label={`${property.name} MCP 权限`} value={item.access} disabled={loading || saving !== null} onChange={(event) => { const access = event.target.value as MCPAccess; const nextEffectiveAccess = access === 'inherit' ? config.defaultAccess : access; updateProperty(property, { access, ...(nextEffectiveAccess !== 'confirm' ? { allowUnattendedAi: false } : {}) }) }}><option value="inherit">{accessLabel.inherit}</option><option value="hidden">{accessLabel.hidden}</option><option value="read">{accessLabel.read}</option><option value="confirm">{accessLabel.confirm}</option></select></label>
+          <label className="mcp-enabled"><input aria-label={`${property.name} 允许无人值守 AI 执行`} type="checkbox" checked={item.allowUnattendedAi} disabled={loading || saving !== null || !property.writable || effectiveAccess !== 'confirm'} onChange={(event) => updateProperty(property, { allowUnattendedAi: event.target.checked })} />允许已配置为无人值守的 AI 自动任务执行此属性</label>
+          <small>此开关独立于“人工确认”。未开启时，自动任务只能提出操作计划，不能写入设备。</small>
           <label>属性使用备注<textarea aria-label={`${property.name} MCP 使用备注`} maxLength={1000} value={item.usageNote} disabled={loading || saving !== null} onChange={(event) => updateProperty(property, { usageNote: event.target.value })} placeholder="告诉 AI 此属性的业务含义、边界或条件。" /></label>
-          <button type="button" disabled={loading || saving !== null} onClick={() => void saveProperty(property)}>{saving === key ? '保存中…' : item.access === 'inherit' && item.usageNote.trim() === '' ? '清除覆盖' : '保存属性配置'}</button>
+          <button type="button" disabled={loading || saving !== null} onClick={() => void saveProperty(property)}>{saving === key ? '保存中…' : item.access === 'inherit' && item.usageNote.trim() === '' && !item.allowUnattendedAi ? '清除覆盖' : '保存属性配置'}</button>
         </article>
       })}
     </section>

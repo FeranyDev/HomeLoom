@@ -182,6 +182,7 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 	const [cloudVerificationCode, setCloudVerificationCode] = useState('')
 	const [cloudAuthenticating, setCloudAuthenticating] = useState(false)
 	const [cloudChallengeClock, setCloudChallengeClock] = useState(() => Date.now())
+	const [providerChallengeUnavailable, setProviderChallengeUnavailable] = useState(false)
 	const [tuyaOAuthSession, setTuyaOAuthSession] = useState<TuyaOAuthStartResult | null>(null)
 	const [tuyaOAuthCallbackURL, setTuyaOAuthCallbackURL] = useState('')
 	const [tuyaOAuthBusy, setTuyaOAuthBusy] = useState(false)
@@ -400,16 +401,20 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 	useEffect(() => {
 		if (!providerNeedsCloudChallenge || !providerID) return
 		let active = true
+		setProviderChallengeUnavailable(false)
 		void getXiaomiProviderAuthChallenge(providerID).then((challenge) => {
 			if (!active) return
 			const normalized = normalizeCloudChallenge(challenge)
 			if (normalized) {
 				setCloudChallenge(normalized)
 				setCloudChallengeSource('provider')
+				setProviderChallengeUnavailable(false)
 				setTestResult('Provider 启动需要小米短信验证。请打开验证页发送验证码，再回到这里提交。')
-			}
+			} else setProviderChallengeUnavailable(true)
 		}).catch((cause) => {
-			if (active) setError(cause instanceof Error ? cause.message : '读取小米验证会话失败')
+			if (!active) return
+			setProviderChallengeUnavailable(true)
+			setError(cause instanceof Error ? cause.message : '读取小米验证会话失败')
 		})
 		return () => { active = false }
 	}, [providerNeedsCloudChallenge, providerID])
@@ -442,13 +447,13 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 		const username = String(configObject.username ?? '').trim()
 		const password = String(configObject.password ?? '')
 		if (!username || !password || password === '********') { setError('请输入当前的小米账号和真实密码后再登录'); return }
-		setCloudAuthenticating(true); setError(null); setTestResult(null); setCloudChallenge(null); setCloudChallengeSource(null); setCloudVerificationCode('')
+		setCloudAuthenticating(true); setError(null); setTestResult(null); setCloudChallenge(null); setCloudChallengeSource(null); setCloudVerificationCode(''); setProviderChallengeUnavailable(false)
 		try {
 			const result = await startXiaomiCloudLogin({ region: String(configObject.region ?? 'cn'), username, password, requestTimeoutSeconds: Number(configObject.requestTimeoutSeconds ?? 15) })
 			const challenge = normalizeCloudChallenge(result)
 			if (challenge && isCloudChallengeStatus(result.status)) {
 				if (!challenge.verificationUrl) throw new Error('小米要求身份验证，但没有返回验证入口')
-				setCloudChallenge(challenge); setCloudChallengeSource('login')
+				setCloudChallenge(challenge); setCloudChallengeSource('login'); setProviderChallengeUnavailable(false)
 				setTestResult('小米要求身份验证。请打开验证页面发送短信或邮件验证码，然后回到这里填写。')
 			} else applyCloudSession(result)
 		} catch (cause) { setError(cause instanceof Error ? cause.message : '小米云登录失败') } finally { setCloudAuthenticating(false) }
@@ -675,6 +680,7 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 					<button type="button" className="example-button" disabled={cloudAuthenticating || saving} onClick={() => void beginCloudLogin()}>{cloudAuthenticating ? '正在登录…' : cloudSessionReady ? '重新登录小米云账号' : '登录小米云账号'}</button>
 					{cloudSessionReady && cloudMediaSessionReady && <small className="test-success">云会话已就绪。保存后 Provider 将直接复用此会话，不会重复登录。</small>}
 					{cloudSessionReady && !cloudMediaSessionReady && <small className="inline-error">MIoT 会话可用于普通设备；摄像头还需要使用账号密码重新登录以取得 passToken。</small>}
+					{providerChallengeUnavailable && !cloudChallenge && <div role="alert" className="wide inline-error"><strong>此前的短信验证会话已经失效</strong><p>短信验证码只能提交到创建它的短时登录会话；请将密码框中的 `********` 替换为真实密码，点击“重新登录小米云账号”。新会话创建后，验证码输入框会显示在这里。</p></div>}
 					{cloudChallenge && <div className="wide xiaomi-oauth-callback"><strong>{cloudChallengeSource === 'provider' ? 'Provider 启动需要短信验证' : '需要短信或邮件验证'}</strong><ol>{cloudChallenge.verificationUrl && <li><a href={cloudChallenge.verificationUrl} target="_blank" rel="noreferrer">打开小米身份验证页面</a>；在小米页面选择手机号或邮箱并发送验证码。</li>}<li>收到验证码后回到 HomeLoom，在下方填写并提交；收到后不要在小米页面提交验证码。</li></ol>{cloudChallengeExpired ? <div role="alert" className="inline-error">小米验证会话已过期，请重新登录后再次获取验证码。</div> : <><label>短信 / 邮件验证码<input aria-label="小米 MIoT 云验证码" inputMode="numeric" autoComplete="one-time-code" value={cloudVerificationCode} onChange={(event) => setCloudVerificationCode(event.target.value)} /></label><button type="button" disabled={cloudAuthenticating || !cloudVerificationCode.trim()} onClick={() => void completeCloudVerification()}>{cloudAuthenticating ? '正在验证…' : cloudChallengeSource === 'provider' ? '提交验证码并继续 Provider' : '提交验证码并继续登录'}</button></>}{cloudChallenge.message && <small>{cloudChallenge.message}</small>}{cloudChallenge.expiresAt && cloudChallengeExpiresAt !== null && <small>此登录会话将在 {new Date(cloudChallengeExpiresAt).toLocaleTimeString()} 过期；过期后请重新登录。</small>}</div>}
 					{onTest && cloudSessionReady && <button type="button" className="example-button" disabled={testing || saving || cloudAuthenticating} onClick={() => void testConnection()}>{testing ? '正在读取…' : '测试 MIoT 云连接'}</button>}
 				</div></section>

@@ -50,6 +50,29 @@ func TestChatCompletionsModelPreservesToolCallConversation(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsModelStreamsDeltas(t *testing.T) {
+	model, err := NewChatCompletionsModel(AIServiceConfig{APIBaseURL: "https://example.test/v1", APIKey: "api-key", Model: "stream-model", APIProtocol: AIAPIProtocolChatCompletions})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.Client = &http.Client{Transport: responseRoundTripper(func(request *http.Request) (*http.Response, error) {
+		var payload map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["stream"] != true || request.Header.Get("Accept") != "text/event-stream" {
+			t.Fatalf("streaming request = %#v, accept=%q", payload, request.Header.Get("Accept"))
+		}
+		body := "data: {\"id\":\"chat-stream\",\"choices\":[{\"delta\":{\"content\":\"设备\"}}]}\n\ndata: {\"id\":\"chat-stream\",\"choices\":[{\"delta\":{\"content\":\"状态正常\"}}]}\n\ndata: [DONE]\n\n"
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+	})}
+	var deltas []string
+	result, err := model.StartStream(context.Background(), "rules", "检查状态", func(delta string) { deltas = append(deltas, delta) })
+	if err != nil || result.ID != "chat-stream" || result.Text != "设备状态正常" || strings.Join(deltas, "") != result.Text {
+		t.Fatalf("stream result = %#v deltas=%#v err=%v", result, deltas, err)
+	}
+}
+
 func TestAIServiceConfigMigratesExistingDeepSeekConfigurationToChatCompletions(t *testing.T) {
 	config, err := (AIServiceConfig{APIBaseURL: "https://api.deepseek.com", APIKey: "key", Model: "deepseek-v4-flash"}).normalized()
 	if err != nil || config.APIProtocol != AIAPIProtocolChatCompletions || config.AgentInstructions != DefaultAgentInstructions {

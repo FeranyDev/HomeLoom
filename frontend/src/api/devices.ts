@@ -63,7 +63,7 @@ export async function listDeviceMCPPropertyConfigs(id: string, signal?: AbortSig
 }
 
 export async function saveDeviceMCPPropertyConfig(id: string, config: Omit<MCPPropertyConfig, 'deviceId' | 'endpointId' | 'capabilityId' | 'propertyId'> & Pick<MCPPropertyConfig, 'endpointId' | 'capabilityId' | 'propertyId'>): Promise<MCPPropertyConfig> {
-  return requestData<MCPPropertyConfig>(`/api/v1/devices/${encodeURIComponent(id)}/mcp-properties/${encodeURIComponent(config.endpointId)}/${encodeURIComponent(config.capabilityId)}/${encodeURIComponent(config.propertyId)}`, { method: 'PUT', body: JSON.stringify({ usageNote: config.usageNote, access: config.access }) })
+  return requestData<MCPPropertyConfig>(`/api/v1/devices/${encodeURIComponent(id)}/mcp-properties/${encodeURIComponent(config.endpointId)}/${encodeURIComponent(config.capabilityId)}/${encodeURIComponent(config.propertyId)}`, { method: 'PUT', body: JSON.stringify({ usageNote: config.usageNote, access: config.access, allowUnattendedAi: config.allowUnattendedAi }) })
 }
 
 export async function deleteDeviceMCPPropertyConfig(id: string, endpointId: string, capabilityId: string, propertyId: string): Promise<void> {

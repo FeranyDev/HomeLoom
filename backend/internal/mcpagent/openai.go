@@ -1,6 +1,7 @@
 package mcpagent
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -138,6 +139,25 @@ func (m *ResponsesAPIModel) Continue(ctx context.Context, instructions, previous
 	})
 }
 
+func (m *ResponsesAPIModel) StartStream(ctx context.Context, instructions, input string, onDelta func(string)) (ModelResponse, error) {
+	if strings.TrimSpace(m.Model) == "" {
+		return ModelResponse{}, errors.New("AI model is required")
+	}
+	return m.createStream(ctx, map[string]any{
+		"model": m.Model, "instructions": instructions, "input": input, "tools": agentTools(), "parallel_tool_calls": false, "store": false, "stream": true,
+	}, onDelta)
+}
+
+func (m *ResponsesAPIModel) ContinueStream(ctx context.Context, instructions, previousResponseID string, outputs []ToolOutput, onDelta func(string)) (ModelResponse, error) {
+	input := make([]map[string]any, 0, len(outputs))
+	for _, output := range outputs {
+		input = append(input, map[string]any{"type": "function_call_output", "call_id": output.CallID, "output": string(output.Output)})
+	}
+	return m.createStream(ctx, map[string]any{
+		"model": m.Model, "instructions": instructions, "previous_response_id": previousResponseID, "input": input, "tools": agentTools(), "parallel_tool_calls": false, "store": false, "stream": true,
+	}, onDelta)
+}
+
 func (m *ResponsesAPIModel) create(ctx context.Context, payload any) (ModelResponse, error) {
 	encoded, err := json.Marshal(payload)
 	if err != nil {
@@ -165,6 +185,109 @@ func (m *ResponsesAPIModel) create(ctx context.Context, payload any) (ModelRespo
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return ModelResponse{}, fmt.Errorf("AI response failed with HTTP %d", response.StatusCode)
 	}
+	result, err := decodeResponsesModelResponse(payloadBytes)
+	if err != nil {
+		return ModelResponse{}, err
+	}
+	return result, nil
+}
+
+func (m *ResponsesAPIModel) createStream(ctx context.Context, payload any, onDelta func(string)) (ModelResponse, error) {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return ModelResponse{}, fmt.Errorf("encode AI streaming response request: %w", err)
+	}
+	client := m.Client
+	if client == nil {
+		client = &http.Client{Timeout: AIProviderRequestTimeout}
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, m.BaseURL+"/responses", bytes.NewReader(encoded))
+	if err != nil {
+		return ModelResponse{}, fmt.Errorf("create AI streaming response request: %w", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+m.APIKey)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "text/event-stream")
+	response, err := client.Do(request)
+	if err != nil {
+		return ModelResponse{}, fmt.Errorf("request AI streaming response: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return ModelResponse{}, fmt.Errorf("AI streaming response failed with HTTP %d", response.StatusCode)
+	}
+	var result ModelResponse
+	var event string
+	var data strings.Builder
+	handle := func() error {
+		payload := strings.TrimSpace(data.String())
+		defer data.Reset()
+		if payload == "" || payload == "[DONE]" {
+			return nil
+		}
+		switch event {
+		case "response.output_text.delta":
+			var delta struct {
+				Delta string `json:"delta"`
+			}
+			if err := json.Unmarshal([]byte(payload), &delta); err != nil {
+				return fmt.Errorf("decode AI response delta: %w", err)
+			}
+			result.Text += delta.Delta
+			if delta.Delta != "" && onDelta != nil {
+				onDelta(delta.Delta)
+			}
+		case "response.completed":
+			var completed struct {
+				Response json.RawMessage `json:"response"`
+			}
+			if err := json.Unmarshal([]byte(payload), &completed); err != nil {
+				return fmt.Errorf("decode completed AI response: %w", err)
+			}
+			final, err := decodeResponsesModelResponse(completed.Response)
+			if err != nil {
+				return err
+			}
+			if final.Text != "" {
+				result.Text = final.Text
+			}
+			result.ID, result.Calls = final.ID, final.Calls
+		case "error", "response.failed":
+			return errors.New("AI streaming response failed")
+		}
+		return nil
+	}
+	scanner := bufio.NewScanner(io.LimitReader(response.Body, 4<<20))
+	scanner.Buffer(make([]byte, 32<<10), 1<<20)
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case strings.HasPrefix(line, "event:"):
+			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		case strings.HasPrefix(line, "data:"):
+			if data.Len() > 0 {
+				data.WriteByte('\n')
+			}
+			data.WriteString(strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		case line == "":
+			if err := handle(); err != nil {
+				return ModelResponse{}, err
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return ModelResponse{}, fmt.Errorf("read AI response stream: %w", err)
+	}
+	if err := handle(); err != nil {
+		return ModelResponse{}, err
+	}
+	if result.ID == "" {
+		return ModelResponse{}, errors.New("AI streaming response has no completed response")
+	}
+	return result, nil
+}
+
+func decodeResponsesModelResponse(payloadBytes []byte) (ModelResponse, error) {
 	var decoded struct {
 		ID     string `json:"id"`
 		Output []struct {

@@ -15,7 +15,7 @@ describe('DeviceMCPSettings', () => {
   it('persists device authorization and a bound-property note separately', async () => {
     const fetchMock = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
       if (init?.method === 'PUT' && path.endsWith('/mcp-config')) return Promise.resolve(new Response(JSON.stringify({ data: { deviceId: 'switch-1', enabled: true, usageNote: '客厅照明', defaultAccess: 'read' } }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
-      if (init?.method === 'PUT') return Promise.resolve(new Response(JSON.stringify({ data: { deviceId: 'switch-1', endpointId: 'main', capabilityId: 'switch', propertyId: 'power', usageNote: '睡眠时不要打开', access: 'confirm' } }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      if (init?.method === 'PUT') return Promise.resolve(new Response(JSON.stringify({ data: { deviceId: 'switch-1', endpointId: 'main', capabilityId: 'switch', propertyId: 'power', usageNote: '睡眠时不要打开', access: 'confirm', allowUnattendedAi: true } }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
       if (path.endsWith('/mcp-config')) return Promise.resolve(new Response(JSON.stringify({ data: { deviceId: 'switch-1', enabled: false, usageNote: '', defaultAccess: 'hidden' } }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
       return Promise.resolve(new Response(JSON.stringify({ data: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     })
@@ -31,8 +31,9 @@ describe('DeviceMCPSettings', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/devices/switch-1/mcp-config', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ enabled: true, usageNote: '客厅照明', defaultAccess: 'read' }) })))
 
     await userEvent.selectOptions(screen.getByLabelText('开关 MCP 权限'), 'confirm')
+    await userEvent.click(screen.getByLabelText('开关 允许无人值守 AI 执行'))
     fireEvent.change(screen.getByLabelText('开关 MCP 使用备注'), { target: { value: '睡眠时不要打开' } })
     await userEvent.click(screen.getByRole('button', { name: '保存属性配置' }))
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/devices/switch-1/mcp-properties/main/switch/power', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ usageNote: '睡眠时不要打开', access: 'confirm' }) })))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/devices/switch-1/mcp-properties/main/switch/power', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ usageNote: '睡眠时不要打开', access: 'confirm', allowUnattendedAi: true }) })))
   })
 })

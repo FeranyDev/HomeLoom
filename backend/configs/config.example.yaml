@@ -22,10 +22,12 @@ runtime:
   state_checkpoint_interval_seconds: 0
 
 # Core creates a private Unix Socket and directly manages the separate
-# homeloom-mcp-agent child process. The Agent exposes authenticated MCP and AI
-# HTTP endpoints only on the local loopback address.
+# homeloom-mcp-agent child process. Its AI HTTP endpoints only listen on the
+# local loopback address. The optional MCP JSON-RPC endpoint is disabled by
+# default; the web AI page and automations do not require it.
 mcp:
   enabled: false
+  http_enabled: false
   socket_path: "./data/mcp/core.sock"
   agent_binary: "homeloom-mcp-agent"
   runtime_dir: "./data/mcp"

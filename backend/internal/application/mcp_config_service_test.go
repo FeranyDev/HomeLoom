@@ -64,8 +64,14 @@ func TestMCPConfigServiceValidatesLiveDevicePathsAndEffectiveAccess(t *testing.T
 	if _, err := service.SaveProperty(ctx, domainmcp.PropertyConfig{PropertyPath: path, UsageNote: "夜间才建议关闭", Access: domainmcp.AccessConfirm}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := service.SaveProperty(ctx, domainmcp.PropertyConfig{PropertyPath: path, Access: domainmcp.AccessInherit, AllowUnattendedAI: true}); err == nil {
+		t.Fatal("unattended grant inherited from read access was accepted")
+	}
+	if _, err := service.SaveProperty(ctx, domainmcp.PropertyConfig{PropertyPath: path, Access: domainmcp.AccessConfirm, AllowUnattendedAI: true}); err != nil {
+		t.Fatal(err)
+	}
 	effective, err := service.EffectiveProperty(ctx, path)
-	if err != nil || effective.EffectiveAccess != domainmcp.AccessConfirm || effective.UsageNote == "" {
+	if err != nil || effective.EffectiveAccess != domainmcp.AccessConfirm || effective.UsageNote != "" || !effective.UnattendedAIAllowed {
 		t.Fatalf("effective = %#v, err=%v", effective, err)
 	}
 	if _, err := service.SaveProperty(ctx, domainmcp.PropertyConfig{PropertyPath: domainmcp.PropertyPath{DeviceID: "virtual-switch-1", EndpointID: "main", CapabilityID: "switch", PropertyID: "missing"}}); err != application.ErrMCPPropertyNotFound {

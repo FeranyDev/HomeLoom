@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -40,11 +41,12 @@ type embeddedMCPAgent struct {
 }
 
 type embeddedMCPAgentConfig struct {
-	Binary        string
-	SocketPath    string
-	RuntimeDir    string
-	ListenAddress string
-	LogWriter     io.Writer
+	Binary         string
+	SocketPath     string
+	RuntimeDir     string
+	ListenAddress  string
+	MCPHTTPEnabled bool
+	LogWriter      io.Writer
 }
 
 func newEmbeddedMCPAgent(parent context.Context, config embeddedMCPAgentConfig, logger *zap.Logger) (*embeddedMCPAgent, error) {
@@ -73,7 +75,7 @@ func newEmbeddedMCPAgent(parent context.Context, config embeddedMCPAgentConfig, 
 		return nil, err
 	}
 	childCtx, cancel := context.WithCancel(parent)
-	command := mcpAgentCommand(childCtx, resolveBundledExecutable(config.Binary), config.SocketPath, config.ListenAddress, tokenFile, aiConfigFile)
+	command := mcpAgentCommand(childCtx, resolveBundledExecutable(config.Binary), config.SocketPath, config.ListenAddress, tokenFile, aiConfigFile, config.MCPHTTPEnabled)
 	if config.LogWriter != nil {
 		command.Stdout, command.Stderr = config.LogWriter, config.LogWriter
 	} else {
@@ -98,7 +100,7 @@ func newEmbeddedMCPAgent(parent context.Context, config embeddedMCPAgentConfig, 
 		_ = result.Close()
 		return nil, err
 	}
-	logger.Info("embedded MCP Agent enabled", zap.String("listen_address", config.ListenAddress))
+	logger.Info("embedded AI Agent enabled", zap.String("listen_address", config.ListenAddress), zap.Bool("mcp_http_enabled", config.MCPHTTPEnabled))
 	return result, nil
 }
 
@@ -156,12 +158,13 @@ func writeMCPAgentToken(path string) error {
 	return nil
 }
 
-func mcpAgentCommand(ctx context.Context, binary, socketPath, listenAddress, tokenFile, aiConfigFile string) *exec.Cmd {
+func mcpAgentCommand(ctx context.Context, binary, socketPath, listenAddress, tokenFile, aiConfigFile string, mcpHTTPEnabled bool) *exec.Cmd {
 	return exec.CommandContext(ctx, binary,
 		"--core-socket", socketPath,
 		"--listen", listenAddress,
 		"--auth-token-file", tokenFile,
 		"--ai-config-file", aiConfigFile,
+		"--mcp-http-enabled="+strconv.FormatBool(mcpHTTPEnabled),
 	)
 }
 
@@ -236,16 +239,29 @@ func (r *embeddedMCPAgent) Close() error {
 
 type mcpAgentAutomationRunner struct{ agent *mcpagent.AgentControlClient }
 
-func (r mcpAgentAutomationRunner) StartAutomation(ctx context.Context, prompt string) (application.AIAutomationRun, error) {
-	run, err := r.agent.StartAIRun(ctx, prompt)
+func (r mcpAgentAutomationRunner) StartAutomation(ctx context.Context, input application.AIAutomationInvocation) (application.AIAutomationRun, error) {
+	request := mcpagent.RunRequest{Message: input.Prompt, Context: mcpagent.RunContext{Source: mcpagent.RunSource(input.Source), AutomationID: input.AutomationID, AutomationName: input.AutomationName}}
+	if input.Trigger != nil {
+		trigger := mcpagent.NewTriggerContext(*input.Trigger)
+		request.Context.Trigger = &trigger
+	}
+	run, err := r.agent.StartAIRunWithContext(ctx, request)
 	if err != nil {
 		return application.AIAutomationRun{}, err
 	}
 	return automationRun(run), nil
 }
 
-func (r mcpAgentAutomationRunner) ApproveAutomation(ctx context.Context, id string) (application.AIAutomationRun, error) {
-	run, err := r.agent.ApproveAIRun(ctx, id)
+func (r mcpAgentAutomationRunner) ApproveAutomation(ctx context.Context, id string, unattended bool) (application.AIAutomationRun, error) {
+	var (
+		run mcpagent.Run
+		err error
+	)
+	if unattended {
+		run, err = r.agent.ApproveUnattendedAIRun(ctx, id)
+	} else {
+		run, err = r.agent.ApproveAIRun(ctx, id)
+	}
 	if err != nil {
 		return application.AIAutomationRun{}, err
 	}

@@ -406,7 +406,7 @@ paths:
         "503": { $ref: "#/components/responses/Unavailable" }
     put:
       operationId: saveAIServiceConfig
-      description: Proxies the administrator's configuration to the same-host MCP Agent. The key is stored only in the Agent's private file and is excluded from all responses and Core persistence.
+      description: Proxies the administrator's configuration to the same-host MCP Agent. The key is stored only in the Agent's private file and is excluded from all responses and Core persistence. Set clearApiKey to explicitly revoke the saved key.
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AIServiceConfigInput" } } } }
       responses:
         "200": { description: Saved AI service status, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/AIServiceStatus" } } } } } }
@@ -423,10 +423,29 @@ paths:
   /api/v1/ai-service/runs:
     post:
       operationId: startAIServiceRun
-      description: Sends an administrator message to the same-host Agent. One model request may take up to two minutes and the complete tool loop up to six minutes. A device write is returned as an awaiting-approval plan and is never executed by this call.
+      description: Sends an administrator message to the same-host Agent. The Agent receives server-generated local time, time zone, weekday, and interactive source context. One model request may take up to two minutes and the complete tool loop up to six minutes. A device write is returned as an awaiting-approval plan and is never executed by this call.
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [message], properties: { message: { type: string, minLength: 1, maxLength: 16384 } } } } } }
       responses:
         "200": { description: AI run result, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/AIRun" } } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "408": { description: The model reasoning or complete Agent run exceeded its bounded timeout. No device write was executed. }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /api/v1/ai-service/runs/stream:
+    post:
+      operationId: streamAIServiceRun
+      description: Starts an interactive Agent run and returns an SSE stream. The optional text-only history is marked as untrusted context; tool calls, approval state, and device authorization are never replayed from it. Events are ready, delta, run, and error. Closing the HTTP connection cancels the in-progress model and tool calls.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message: { type: string, minLength: 1, maxLength: 16384 }
+                history: { type: array, maxItems: 24, items: { $ref: "#/components/schemas/AIConversationTurn" } }
+      responses:
+        "200": { description: Server-sent Agent events, content: { text/event-stream: { schema: { $ref: "#/components/schemas/AIRunStreamEvent" } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
         "408": { description: The model reasoning or complete Agent run exceeded its bounded timeout. No device write was executed. }
         "503": { $ref: "#/components/responses/Unavailable" }
@@ -447,7 +466,7 @@ paths:
       responses: { "200": { description: Persisted AI automation definitions, content: { application/json: { schema: { type: object, required: [data], properties: { data: { type: array, items: { $ref: "#/components/schemas/AIAutomation" } } } } } } }, "503": { $ref: "#/components/responses/Unavailable" } }
     post:
       operationId: createAIAutomation
-      description: Creates a scheduled or typed state-triggered task. A trigger property must be authorized for AI.
+      description: Creates a scheduled or typed state-triggered task. Automatic starts require every configured condition to match a known, available state; trigger and condition properties must be authorized for AI.
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AIAutomationInput" } } } }
       responses: { "201": { description: Automation created, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/AIAutomation" } } } } } }, "400": { $ref: "#/components/responses/BadRequest" }, "503": { $ref: "#/components/responses/Unavailable" } }
   /api/v1/ai-service/automations/{automationId}:
@@ -1033,12 +1052,15 @@ components:
         apiBaseUrl: { type: string, format: uri, description: OpenAI-compatible Responses or Chat Completions API base URL. }
         apiProxyUrl: { type: string, maxLength: 2048, description: Optional unauthenticated HTTP(S) forward proxy used only for AI provider requests. An empty value clears the dedicated proxy. }
         apiKey: { type: string, writeOnly: true, description: Stored only by the MCP Agent; omit to keep the existing key. }
+        clearApiKey: { type: boolean, writeOnly: true, description: Explicitly removes the stored API key and disables AI until a new key is saved. }
         model: { type: string, maxLength: 512 }
         apiProtocol: { type: string, enum: [responses, chat-completions], default: responses }
         agentInstructions: { type: string, maxLength: 16384, description: Editable Agent system prompt. Submit an empty value to restore the default prompt. }
+        sessionContext: { $ref: "#/components/schemas/AISessionContextSettings" }
+        homePreferences: { $ref: "#/components/schemas/AIHomePreferences" }
     AIServiceStatus:
       type: object
-      required: [apiBaseUrl, apiProxyUrl, model, apiProtocol, agentInstructions, defaultAgentInstructions, apiKeyConfigured, configured]
+      required: [apiBaseUrl, apiProxyUrl, model, apiProtocol, agentInstructions, defaultAgentInstructions, sessionContext, homePreferences, apiKeyConfigured, configured]
       properties:
         apiBaseUrl: { type: string, format: uri }
         apiProxyUrl: { type: string, maxLength: 2048, description: Configured unauthenticated HTTP(S) forward proxy, or an empty string when none is configured. }
@@ -1046,8 +1068,29 @@ components:
         apiProtocol: { type: string, enum: [responses, chat-completions] }
         agentInstructions: { type: string, description: Effective Agent system prompt. }
         defaultAgentInstructions: { type: string, description: Built-in prompt used by the restore-default control. }
+        sessionContext: { $ref: "#/components/schemas/AISessionContextSettings" }
+        homePreferences: { $ref: "#/components/schemas/AIHomePreferences" }
         apiKeyConfigured: { type: boolean }
         configured: { type: boolean, description: True only when both a key and model are configured. }
+    AISessionContextSettings:
+      type: object
+      required: [enabled, currentTime, timeZone, weekday, runSource, triggerState, regionLanguage, temperatureUnit]
+      properties:
+        enabled: { type: boolean, description: Global switch for all server-generated session context. }
+        currentTime: { type: boolean }
+        timeZone: { type: boolean }
+        weekday: { type: boolean }
+        runSource: { type: boolean }
+        triggerState: { type: boolean, description: Includes the matching state observation only for state-triggered automations. }
+        regionLanguage: { type: boolean, description: Includes the configured household region language. }
+        temperatureUnit: { type: boolean, description: Includes the configured household temperature unit. }
+    AIHomePreferences:
+      type: object
+      required: [timeZone, regionLanguage, temperatureUnit]
+      properties:
+        timeZone: { type: string, description: IANA household time zone used for AI time and weekday context. }
+        regionLanguage: { type: string, description: Household BCP 47 language tag, for example zh-CN. }
+        temperatureUnit: { type: string, enum: [celsius, fahrenheit] }
     AIModel:
       type: object
       required: [id]
@@ -1075,6 +1118,20 @@ components:
         createdAt: { type: string, format: date-time }
         expiresAt: { type: string, format: date-time }
         action: { $ref: "#/components/schemas/AIRunAction" }
+    AIConversationTurn:
+      type: object
+      required: [role, content]
+      properties:
+        role: { type: string, enum: [user, assistant] }
+        content: { type: string, maxLength: 16384 }
+    AIRunStreamEvent:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, enum: [ready, delta, run, error] }
+        delta: { type: string }
+        run: { $ref: "#/components/schemas/AIRun" }
+        error: { type: string }
     AIAutomationTrigger:
       type: object
       required: [deviceId, endpointId, capabilityId, propertyId, value]
@@ -1084,6 +1141,16 @@ components:
         capabilityId: { type: string }
         propertyId: { type: string }
         value: { $ref: "#/components/schemas/PropertyValue" }
+    AIAutomationCondition:
+      type: object
+      required: [deviceId, endpointId, capabilityId, propertyId, operator, value]
+      properties:
+        deviceId: { type: string }
+        endpointId: { type: string }
+        capabilityId: { type: string }
+        propertyId: { type: string }
+        operator: { type: string, enum: [equals, not_equals, greater_than, greater_than_or_equal, less_than, less_than_or_equal] }
+        value: { $ref: "#/components/schemas/PropertyValue" }
     AIAutomationInput:
       type: object
       required: [name, enabled, kind, prompt]
@@ -1092,17 +1159,21 @@ components:
         enabled: { type: boolean }
         kind: { type: string, enum: [schedule, trigger] }
         prompt: { type: string, minLength: 1, maxLength: 16384 }
-        executionMode: { type: string, enum: [unattended, manual], default: unattended, description: Unattended tasks automatically approve an AI-prepared device plan after Core policy checks. }
-        intervalSeconds: { type: integer, minimum: 60, maximum: 604800, description: Required for schedule tasks. }
+        executionMode: { type: string, enum: [unattended, manual], default: unattended, description: Unattended tasks automatically approve an AI-prepared device plan only when the destination property has its separate unattended-AI grant. }
+        intervalSeconds: { type: integer, minimum: 60, maximum: 604800, description: Required for a schedule task unless cronExpression is supplied. }
+        cronExpression: { type: string, maxLength: 120, description: Five-field cron expression (minute hour day-of-month month day-of-week) evaluated in the configured household time zone. Mutually exclusive with intervalSeconds; 0 or 7 denotes Sunday. }
         cooldownSeconds: { type: integer, minimum: 60, maximum: 604800, description: Required for trigger tasks. }
         trigger: { $ref: "#/components/schemas/AIAutomationTrigger" }
+        conditions: { type: array, maxItems: 16, description: Conditions compare current known, available states before a scheduled or state-triggered task starts. Manual runs bypass these conditions., items: { $ref: "#/components/schemas/AIAutomationCondition" } }
+        conditionMatch: { type: string, enum: [all, any], default: all, description: Whether all conditions or any one condition must match before automatic execution starts. }
     AIAutomation:
       allOf:
         - { $ref: "#/components/schemas/AIAutomationInput" }
         - type: object
-          required: [id, createdAt, updatedAt]
+          required: [id, generation, createdAt, updatedAt]
           properties:
             id: { type: string }
+            generation: { type: integer, format: int64, description: Monotonic task revision used to invalidate in-flight runs and stale approvals. }
             lastRunId: { type: string }
             lastRunStatus: { type: string }
             lastRunMessage: { type: string }
@@ -1119,6 +1190,7 @@ components:
         status: { type: string }
         message: { type: string }
         autoApproved: { type: boolean }
+        automationGeneration: { type: integer, format: int64 }
         createdAt: { type: string, format: date-time }
         expiresAt: { type: string, format: date-time }
         action: { $ref: "#/components/schemas/AIRunAction" }
@@ -1141,6 +1213,7 @@ components:
       properties:
         usageNote: { type: string, maxLength: 1000, description: Untrusted business context given to the Agent; it never changes Core policy. }
         access: { type: string, enum: [inherit, hidden, read, confirm] }
+        allowUnattendedAi: { type: boolean, default: false, description: Allows unattended automation execution only for this writable property when its effective access is confirm. }
     MCPPropertyConfig:
       allOf:
         - { $ref: "#/components/schemas/MCPPropertyConfigInput" }

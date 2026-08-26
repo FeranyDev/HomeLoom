@@ -19,6 +19,11 @@ describe('AIServiceSettings', () => {
     await screen.findByText('未配置')
     await userEvent.type(screen.getByLabelText('AI API 密钥'), 'secret-api-key')
     await userEvent.type(screen.getByLabelText('网络代理'), 'http://127.0.0.1:7890')
+    await userEvent.clear(screen.getByLabelText('家庭默认时区'))
+    await userEvent.type(screen.getByLabelText('家庭默认时区'), 'America/New_York')
+    await userEvent.clear(screen.getByLabelText('家庭地区语言'))
+    await userEvent.type(screen.getByLabelText('家庭地区语言'), 'en-US')
+    await userEvent.selectOptions(screen.getByLabelText('家庭温度单位'), 'fahrenheit')
     await userEvent.clear(screen.getByLabelText('智能体提示词'))
     await userEvent.type(screen.getByLabelText('智能体提示词'), '自定义回复规则')
     await userEvent.click(screen.getByRole('button', { name: '保存 AI 服务配置' }))
@@ -28,6 +33,7 @@ describe('AIServiceSettings', () => {
     expect(saveRequest.body).toContain('"apiProxyUrl":"http://127.0.0.1:7890"')
     expect(saveRequest.body).toContain('"apiProtocol":"responses"')
     expect(saveRequest.body).toContain('"agentInstructions":"自定义回复规则"')
+    expect(saveRequest.body).toContain('"homePreferences":{"timeZone":"America/New_York","regionLanguage":"en-US","temperatureUnit":"fahrenheit"}')
     expect(screen.queryByDisplayValue('secret-api-key')).not.toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '恢复默认提示词' }))
     expect(screen.getByLabelText('智能体提示词')).toHaveValue('默认安全提示词')
@@ -46,5 +52,44 @@ describe('AIServiceSettings', () => {
     await userEvent.selectOptions(screen.getByLabelText('AI 服务预设'), 'groq')
     expect(screen.getByLabelText('AI API 地址')).toHaveValue('https://api.groq.com/openai/v1')
     expect(screen.getByText('Codex/ChatGPT 订阅登录不能代替 API Key；如需 OpenAI 模型，请使用单独开通的 OpenAI API Key。')).toBeInTheDocument()
+  })
+
+  it('persists the global and per-item session-context injection switches', async () => {
+    const status = { apiBaseUrl: 'https://models.example.test/v1', apiProxyUrl: '', model: 'model-a', apiProtocol: 'responses', agentInstructions: '默认安全提示词', defaultAgentInstructions: '默认安全提示词', sessionContext: { enabled: true, currentTime: true, timeZone: true, weekday: true, runSource: true, triggerState: true, regionLanguage: true, temperatureUnit: true }, homePreferences: { timeZone: 'Asia/Shanghai', regionLanguage: 'zh-CN', temperatureUnit: 'celsius' }, apiKeyConfigured: true, configured: true }
+    const fetchMock = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
+      if (path === '/api/v1/ai-service/config' && !init?.method) return Promise.resolve(new Response(JSON.stringify({ data: status }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      if (path === '/api/v1/ai-service/config' && init?.method === 'PUT') return Promise.resolve(new Response(JSON.stringify({ data: { ...status, sessionContext: { enabled: false, currentTime: true, timeZone: false, weekday: true, runSource: true, triggerState: true, regionLanguage: true, temperatureUnit: false } } }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      return Promise.reject(new Error(`unexpected request: ${path}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIServiceSettings />)
+
+    await screen.findByText('已启用')
+    await userEvent.click(screen.getByLabelText('注入时区'))
+    await userEvent.click(screen.getByLabelText('会话注入温度单位'))
+    await userEvent.click(screen.getByLabelText('启用会话上下文注入'))
+    expect(screen.getByLabelText('注入当前时间')).toBeDisabled()
+    await userEvent.click(screen.getByRole('button', { name: '保存 AI 服务配置' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/ai-service/config', expect.objectContaining({ method: 'PUT' })))
+    const saveRequest = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/ai-service/config' && init?.method === 'PUT')?.[1] as RequestInit
+    expect(JSON.parse(String(saveRequest.body)).sessionContext).toEqual({ enabled: false, currentTime: true, timeZone: false, weekday: true, runSource: true, triggerState: true, regionLanguage: true, temperatureUnit: false })
+  })
+
+  it('can explicitly remove a previously saved API key', async () => {
+    const status = { apiBaseUrl: 'https://models.example.test/v1', apiProxyUrl: '', model: 'model-a', apiProtocol: 'responses', agentInstructions: '默认安全提示词', defaultAgentInstructions: '默认安全提示词', sessionContext: { enabled: true, currentTime: true, timeZone: true, weekday: true, runSource: true, triggerState: true, regionLanguage: true, temperatureUnit: true }, homePreferences: { timeZone: 'Asia/Shanghai', regionLanguage: 'zh-CN', temperatureUnit: 'celsius' }, apiKeyConfigured: true, configured: true }
+    const fetchMock = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
+      if (path === '/api/v1/ai-service/config' && !init?.method) return Promise.resolve(new Response(JSON.stringify({ data: status }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      if (path === '/api/v1/ai-service/config' && init?.method === 'PUT') return Promise.resolve(new Response(JSON.stringify({ data: { ...status, apiKeyConfigured: false, configured: false } }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      return Promise.reject(new Error(`unexpected request: ${path}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIServiceSettings />)
+    await screen.findByText('已启用')
+    await userEvent.click(screen.getByLabelText('移除已保存的 AI API 密钥'))
+    expect(screen.getByLabelText('AI API 密钥')).toBeDisabled()
+    await userEvent.click(screen.getByRole('button', { name: '保存 AI 服务配置' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/ai-service/config', expect.objectContaining({ method: 'PUT' })))
+    const saveRequest = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/ai-service/config' && init?.method === 'PUT')?.[1] as RequestInit
+    expect(JSON.parse(String(saveRequest.body)).clearApiKey).toBe(true)
   })
 })

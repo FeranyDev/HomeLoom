@@ -271,14 +271,15 @@ type mcpDeviceConfigRow struct {
 func (mcpDeviceConfigRow) TableName() string { return "mcp_device_configs" }
 
 type mcpPropertyConfigRow struct {
-	DeviceID     string `gorm:"column:device_id;primaryKey"`
-	EndpointID   string `gorm:"column:endpoint_id;primaryKey"`
-	CapabilityID string `gorm:"column:capability_id;primaryKey"`
-	PropertyID   string `gorm:"column:property_id;primaryKey"`
-	UsageNote    string `gorm:"column:usage_note;not null;default:''"`
-	Access       string `gorm:"column:access;not null;default:'inherit'"`
-	CreatedAt    int64  `gorm:"column:created_at;not null"`
-	UpdatedAt    int64  `gorm:"column:updated_at;not null"`
+	DeviceID          string `gorm:"column:device_id;primaryKey"`
+	EndpointID        string `gorm:"column:endpoint_id;primaryKey"`
+	CapabilityID      string `gorm:"column:capability_id;primaryKey"`
+	PropertyID        string `gorm:"column:property_id;primaryKey"`
+	UsageNote         string `gorm:"column:usage_note;not null;default:''"`
+	Access            string `gorm:"column:access;not null;default:'inherit'"`
+	AllowUnattendedAI bool   `gorm:"column:allow_unattended_ai;not null;default:false"`
+	CreatedAt         int64  `gorm:"column:created_at;not null"`
+	UpdatedAt         int64  `gorm:"column:updated_at;not null"`
 }
 
 func (mcpPropertyConfigRow) TableName() string { return "mcp_property_configs" }

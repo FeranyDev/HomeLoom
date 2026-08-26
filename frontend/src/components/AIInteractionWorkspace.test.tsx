@@ -4,20 +4,21 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AIInteractionWorkspace } from './AIInteractionWorkspace'
 import type { Device } from '../types/device'
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
+afterEach(() => { cleanup(); sessionStorage.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 const devices: Device[] = [{
   schemaVersion: 1, id: 'living-light', providerId: 'virtual-main', name: '客厅灯', type: 'lightbulb', availability: 'online', online: true, lastUpdateAt: '2026-08-23T00:00:00Z',
-  endpoints: [{ id: 'main', name: '主端点', type: 'light', capabilities: [{ id: 'switch', type: 'switch', properties: [{ definition: { id: 'power', name: '电源', type: 'bool', readable: true, writable: true, notifiable: true }, value: { type: 'bool', bool: false } }] }] }],
+  endpoints: [{ id: 'main', name: '主端点', type: 'light', capabilities: [{ id: 'switch', type: 'switch', properties: [{ definition: { id: 'power', name: '电源', type: 'bool', readable: true, writable: true, notifiable: true }, value: { type: 'bool', bool: false } }] }, { id: 'brightness', type: 'brightness', properties: [{ definition: { id: 'level', name: '亮度', type: 'number', readable: true, writable: true, notifiable: true }, value: { type: 'number', number: 50 } }] }] }],
 }]
 
 function response(data: unknown, status = 200) { return Promise.resolve(new Response(JSON.stringify({ data }), { status, headers: { 'Content-Type': 'application/json' } })) }
+function stream(run: unknown) { return Promise.resolve(new Response(`event: delta\ndata: {"type":"delta","delta":"正在准备操作。"}\n\nevent: run\ndata: {"type":"run","run":${JSON.stringify(run)}}\n\n`, { status: 200, headers: { 'Content-Type': 'text/event-stream' } })) }
 
 describe('AIInteractionWorkspace', () => {
   it('provides direct AI interaction with an explicit device-operation approval step', async () => {
     const fetchMock = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
       if (path === '/api/v1/ai-service/automations') return response([])
-      if (path === '/api/v1/ai-service/runs' && init?.method === 'POST') return response({ id: 'run-1', status: 'awaiting_approval', message: '等待批准', createdAt: '2026-08-23T00:00:00Z', action: { deviceId: 'living-light', endpointId: 'main', capabilityId: 'switch', propertyId: 'power', value: { type: 'bool', bool: true }, deviceName: '客厅灯', propertyName: '电源' } })
+      if (path === '/api/v1/ai-service/runs/stream' && init?.method === 'POST') return stream({ id: 'run-1', status: 'awaiting_approval', message: '等待批准', createdAt: '2026-08-23T00:00:00Z', action: { deviceId: 'living-light', endpointId: 'main', capabilityId: 'switch', propertyId: 'power', value: { type: 'bool', bool: true }, deviceName: '客厅灯', propertyName: '电源' } })
       if (path === '/api/v1/ai-service/runs/run-1/approve') return response({ id: 'run-1', status: 'executed', message: '已执行', createdAt: '2026-08-23T00:00:00Z' })
       return Promise.reject(new Error(`unexpected request: ${path}`))
     })
@@ -26,13 +27,15 @@ describe('AIInteractionWorkspace', () => {
 
     await screen.findByText('尚未配置自动任务。')
     await userEvent.type(screen.getByLabelText('向 AI 发送消息'), '打开客厅灯')
-    expect(screen.getByText('复杂分析最多可能需要约 6 分钟；请勿重复提交，不会自动执行设备操作。')).toBeInTheDocument()
+    expect(screen.getByText('复杂分析最多可能需要约 6 分钟；取消会中断本次模型请求，且不会自动执行设备操作。')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '发送给 AI' }))
     expect(await screen.findByRole('button', { name: '批准设备操作' })).toBeInTheDocument()
     expect(screen.getByText('客厅灯')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '批准设备操作' }))
     expect(await screen.findByText('已执行', { selector: 'p' })).toBeInTheDocument()
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/ai-service/runs/run-1/approve', expect.objectContaining({ method: 'POST' }))
+    const streamRequest = fetchMock.mock.calls.find(([path]) => path === '/api/v1/ai-service/runs/stream')?.[1] as RequestInit
+    expect(JSON.parse(String(streamRequest.body))).toEqual({ message: '打开客厅灯', history: [] })
   })
 
   it('saves scheduled and state-triggered task configurations', async () => {
@@ -47,11 +50,20 @@ describe('AIInteractionWorkspace', () => {
     await screen.findByText('尚未配置自动任务。')
     await userEvent.type(screen.getByLabelText('自动任务名称'), '每日巡检')
     await userEvent.type(screen.getByLabelText('自动任务提示词'), '检查状态')
+    await userEvent.click(screen.getByRole('button', { name: '添加判断条件' }))
+    await userEvent.selectOptions(screen.getByLabelText('判断条件 1 属性'), ['living-light', 'main', 'switch', 'power'].join('\u0000'))
+    await userEvent.selectOptions(screen.getByLabelText('判断条件 1 值'), 'false')
+    await userEvent.click(screen.getByRole('button', { name: '添加判断条件' }))
+    await userEvent.selectOptions(screen.getByLabelText('判断条件 2 属性'), ['living-light', 'main', 'brightness', 'level'].join('\u0000'))
+    await userEvent.selectOptions(screen.getByLabelText('判断条件关系'), 'any')
     await userEvent.click(screen.getByRole('button', { name: '保存自动任务' }))
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/ai-service/automations', expect.objectContaining({ method: 'POST' })))
     const saveRequest = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/ai-service/automations' && init?.method === 'POST')?.[1] as RequestInit
     expect(saveRequest.body).toContain('"kind":"schedule"')
     expect(saveRequest.body).toContain('"executionMode":"unattended"')
+    expect(saveRequest.body).toContain('"conditions":[{"deviceId":"living-light"')
+    expect(saveRequest.body).toContain('"operator":"equals"')
+    expect(saveRequest.body).toContain('"conditionMatch":"any"')
     expect(await screen.findByText('每日巡检')).toBeInTheDocument()
   })
 
@@ -72,5 +84,26 @@ describe('AIInteractionWorkspace', () => {
     await userEvent.click(screen.getByRole('button', { name: '立即运行' }))
     expect(await screen.findByText('已手动启动自动任务；AI 生成的设备操作已按无人值守策略自动批准。')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '批准设备操作' })).not.toBeInTheDocument()
+  })
+
+  it('saves fixed household-time and Cron schedules', async () => {
+    const fetchMock = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
+      if (path === '/api/v1/ai-service/automations' && !init?.method) return response([])
+      if (path === '/api/v1/ai-service/automations' && init?.method === 'POST') return response({ id: 'ai-task-cron', name: '每日巡检', enabled: true, kind: 'schedule', prompt: '检查状态', cronExpression: '30 8 * * *', createdAt: '2026-08-23T00:00:00Z', updatedAt: '2026-08-23T00:00:00Z' }, 201)
+      return Promise.reject(new Error(`unexpected request: ${path}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<AIInteractionWorkspace devices={devices} />)
+    await screen.findByText('尚未配置自动任务。')
+    await userEvent.type(screen.getByLabelText('自动任务名称'), '每日巡检')
+    await userEvent.type(screen.getByLabelText('自动任务提示词'), '检查状态')
+    await userEvent.selectOptions(screen.getByLabelText('定时执行方式'), 'fixed')
+    await userEvent.clear(screen.getByLabelText('每天固定执行时间'))
+    await userEvent.type(screen.getByLabelText('每天固定执行时间'), '08:30')
+    await userEvent.click(screen.getByRole('button', { name: '保存自动任务' }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/ai-service/automations', expect.objectContaining({ method: 'POST' })))
+    const saved = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/ai-service/automations' && init?.method === 'POST')?.[1] as RequestInit
+    expect(JSON.parse(String(saved.body)).cronExpression).toBe('30 8 * * *')
+    expect(await screen.findByText(/每天 08:30（家庭时区）/)).toBeInTheDocument()
   })
 })

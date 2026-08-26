@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	domainstate "github.com/feranydev/homeloom/backend/internal/domain/state"
 )
 
 type memoryAIConfigStore struct {
@@ -44,6 +46,10 @@ func TestFileAIConfigStorePersistsPrivateConfiguration(t *testing.T) {
 	if err := store.Save(config); err != nil {
 		t.Fatal(err)
 	}
+	config, err = config.normalized()
+	if err != nil {
+		t.Fatal(err)
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
@@ -52,11 +58,16 @@ func TestFileAIConfigStorePersistsPrivateConfiguration(t *testing.T) {
 		t.Fatalf("config mode = %o", info.Mode().Perm())
 	}
 	loaded, err := store.Load()
-	if err != nil || loaded != config {
+	loadedSettings, loadedPreferences := loaded.SessionContext, loaded.HomePreferences
+	loaded.SessionContext, config.SessionContext = nil, nil
+	loaded.HomePreferences, config.HomePreferences = nil, nil
+	if err != nil || loaded != config || loadedSettings == nil || *loadedSettings != DefaultSessionContextSettings() || loadedPreferences == nil || *loadedPreferences != DefaultHomePreferences() {
 		t.Fatalf("load = %#v, %v", loaded, err)
 	}
 	encoded, _ := json.Marshal(loaded.status())
-	if strings.Contains(string(encoded), "secret-api-key") || !strings.Contains(string(encoded), `"apiKeyConfigured":true`) || !strings.Contains(string(encoded), "使用简洁的中文回复。") || !strings.Contains(string(encoded), DefaultAgentInstructions) {
+	var status AIServiceStatus
+	_ = json.Unmarshal(encoded, &status)
+	if strings.Contains(string(encoded), "secret-api-key") || !strings.Contains(string(encoded), `"apiKeyConfigured":true`) || !strings.Contains(string(encoded), "使用简洁的中文回复。") || status.DefaultAgentInstructions != DefaultAgentInstructions || !strings.Contains(string(encoded), `"sessionContext":{"enabled":true`) || !strings.Contains(string(encoded), `"homePreferences":{"timeZone":`) {
 		t.Fatalf("status leaked or omitted key state: %s", encoded)
 	}
 }
@@ -91,6 +102,21 @@ func TestRuntimeAIServiceConfigurationAndModelDiscoveryDoNotExposeKey(t *testing
 	}
 }
 
+func TestRuntimeCanExplicitlyClearSavedAIAPIKey(t *testing.T) {
+	runtime, err := NewRuntime("/tmp/homeloom-core.sock", strings.Repeat("t", 24), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &memoryAIConfigStore{config: AIServiceConfig{APIBaseURL: "https://models.example.test/v1", APIKey: "secret-api-key", Model: "model-a"}}
+	if err := runtime.ConfigureAIService(AIServiceConfig{}, store, func(AIServiceConfig) (Model, error) { return catalogModel{}, nil }); err != nil {
+		t.Fatal(err)
+	}
+	status, err := runtime.UpdateAIService(AIServiceConfig{APIBaseURL: "https://models.example.test/v1", Model: "model-a", ClearAPIKey: true})
+	if err != nil || status.APIKeyConfigured || status.Configured || store.config.APIKey != "" || store.config.ClearAPIKey {
+		t.Fatalf("clear key status=%#v stored=%#v err=%v", status, store.config, err)
+	}
+}
+
 type instructionModel struct{ instructions string }
 
 func (m *instructionModel) Start(_ context.Context, instructions, _ string) (ModelResponse, error) {
@@ -114,18 +140,61 @@ func TestRuntimeUsesConfiguredAgentInstructions(t *testing.T) {
 	if _, err := runtime.Run(context.Background(), "设备状态如何？"); err != nil {
 		t.Fatal(err)
 	}
-	if model.instructions != "只用一句话回答。" {
+	if !strings.Contains(model.instructions, "只用一句话回答。") || !strings.Contains(model.instructions, "<homeloom_runtime_context>") || !strings.Contains(model.instructions, "运行来源：网页管理员对话") {
 		t.Fatalf("instructions = %q", model.instructions)
 	}
 }
 
 func TestAIServiceConfigDefaultsAndLimitsAgentInstructions(t *testing.T) {
 	config, err := (AIServiceConfig{}).normalized()
-	if err != nil || config.AgentInstructions != DefaultAgentInstructions {
+	if err != nil || config.AgentInstructions != DefaultAgentInstructions || config.SessionContext == nil || *config.SessionContext != DefaultSessionContextSettings() || config.HomePreferences == nil || *config.HomePreferences != DefaultHomePreferences() {
 		t.Fatalf("default config = %#v, %v", config, err)
 	}
 	if _, err := (AIServiceConfig{AgentInstructions: strings.Repeat("a", maxAgentInstructionsBytes+1)}).normalized(); err == nil {
 		t.Fatal("oversized Agent instructions were accepted")
+	}
+}
+
+func TestAIServiceConfigUpgradesOnlyThePreviousDefaultAgentInstructions(t *testing.T) {
+	config, err := (AIServiceConfig{AgentInstructions: legacyDefaultAgentInstructions}).normalized()
+	if err != nil || config.AgentInstructions != DefaultAgentInstructions {
+		t.Fatalf("legacy default migration = %#v, %v", config, err)
+	}
+	const custom = "先只检查客厅设备，再用三行总结。"
+	config, err = (AIServiceConfig{AgentInstructions: custom}).normalized()
+	if err != nil || config.AgentInstructions != custom {
+		t.Fatalf("custom instructions changed = %#v, %v", config, err)
+	}
+	for _, expected := range []string{"先理解用户目标", "known、available、observedAt", "homeloom_prepare_property_write", "待确认"} {
+		if !strings.Contains(DefaultAgentInstructions, expected) {
+			t.Errorf("default instructions missing %q", expected)
+		}
+	}
+}
+
+func TestAIServiceConfigPreservesDisabledSessionContext(t *testing.T) {
+	disabled := SessionContextSettings{}
+	config, err := (AIServiceConfig{SessionContext: &disabled}).normalized()
+	if err != nil || config.SessionContext == nil || config.SessionContext.Enabled {
+		t.Fatalf("session context = %#v, %v", config.SessionContext, err)
+	}
+}
+
+func TestAIServiceConfigValidatesHomePreferences(t *testing.T) {
+	preferences := HomePreferences{TimeZone: "America/New_York", RegionLanguage: "en-US", TemperatureUnit: TemperatureUnitFahrenheit}
+	config, err := (AIServiceConfig{HomePreferences: &preferences}).normalized()
+	if err != nil || config.HomePreferences == nil || *config.HomePreferences != preferences {
+		t.Fatalf("home preferences = %#v, %v", config.HomePreferences, err)
+	}
+	for _, invalid := range []HomePreferences{
+		{TimeZone: "not/a-time-zone", RegionLanguage: "zh-CN", TemperatureUnit: TemperatureUnitCelsius},
+		{TimeZone: "Asia/Shanghai", RegionLanguage: "中文", TemperatureUnit: TemperatureUnitCelsius},
+		{TimeZone: "Asia/Shanghai", RegionLanguage: "1z", TemperatureUnit: TemperatureUnitCelsius},
+		{TimeZone: "Asia/Shanghai", RegionLanguage: "zh-CN", TemperatureUnit: "kelvin"},
+	} {
+		if _, err := (AIServiceConfig{HomePreferences: &invalid}).normalized(); err == nil {
+			t.Fatalf("accepted invalid home preferences %#v", invalid)
+		}
 	}
 }
 
@@ -238,6 +307,19 @@ func TestAgentControlClientUsesPrivateTokenAndNeverRequiresCoreKeyStorage(t *tes
 			_ = json.NewEncoder(writer).Encode(map[string]any{"data": AIServiceStatus{APIBaseURL: "https://models.example.test/v1", Model: "model-a", APIKeyConfigured: true, Configured: true}})
 		case "/api/v1/ai/models":
 			_ = json.NewEncoder(writer).Encode(map[string]any{"data": []AIModel{{ID: "model-a"}}})
+		case "/api/v1/agent/runs":
+			var input RunRequest
+			if request.Method != http.MethodPost || json.NewDecoder(request.Body).Decode(&input) != nil || input.Message != "检查传感器" || input.Context.Source != RunSourceTrigger || input.Context.Trigger == nil || input.Context.Trigger.Key.DeviceID != "sensor-1" {
+				t.Fatalf("run input = %#v", input)
+			}
+			_ = json.NewEncoder(writer).Encode(map[string]any{"data": Run{ID: "run-1", Status: RunCompleted, Message: "完成"}})
+		case "/api/v1/agent/runs/stream":
+			var input RunRequest
+			if request.Method != http.MethodPost || request.Header.Get("Accept") != "text/event-stream" || json.NewDecoder(request.Body).Decode(&input) != nil || input.Message != "流式检查" || len(input.History) != 1 || input.History[0].Content != "上一条问题" {
+				t.Fatalf("stream input = %#v", input)
+			}
+			writer.Header().Set("Content-Type", "text/event-stream")
+			_, _ = writer.Write([]byte("event: delta\ndata: {\"type\":\"delta\",\"delta\":\"正在检查\"}\n\nevent: run\ndata: {\"type\":\"run\",\"run\":{\"id\":\"stream-1\",\"status\":\"completed\",\"message\":\"检查完成\"}}\n\n"))
 		default:
 			writer.WriteHeader(http.StatusNotFound)
 		}
@@ -255,5 +337,18 @@ func TestAgentControlClientUsesPrivateTokenAndNeverRequiresCoreKeyStorage(t *tes
 	models, err := client.ListAIModels(context.Background())
 	if err != nil || len(models) != 1 || models[0].ID != "model-a" {
 		t.Fatalf("models = %#v, %v", models, err)
+	}
+	trigger := TriggerContext{Key: domainstate.Key{DeviceID: "sensor-1"}}
+	run, err := client.StartAIRunWithContext(context.Background(), RunRequest{Message: "检查传感器", Context: RunContext{Source: RunSourceTrigger, Trigger: &trigger}})
+	if err != nil || run.ID != "run-1" {
+		t.Fatalf("start AI run = %#v, %v", run, err)
+	}
+	var events []StreamEvent
+	err = client.StreamAIRun(context.Background(), RunRequest{Message: "流式检查", History: []ConversationTurn{{Role: "user", Content: "上一条问题"}}}, func(event StreamEvent) error {
+		events = append(events, event)
+		return nil
+	})
+	if err != nil || len(events) != 2 || events[0].Delta != "正在检查" || events[1].Run == nil || events[1].Run.ID != "stream-1" {
+		t.Fatalf("stream events = %#v, %v", events, err)
 	}
 }

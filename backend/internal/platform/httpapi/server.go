@@ -74,6 +74,7 @@ type aiService interface {
 	UpdateAIService(context.Context, mcpagent.AIServiceConfig) (mcpagent.AIServiceStatus, error)
 	ListAIModels(context.Context) ([]mcpagent.AIModel, error)
 	StartAIRun(context.Context, string) (mcpagent.Run, error)
+	StreamAIRun(context.Context, mcpagent.RunRequest, func(mcpagent.StreamEvent) error) error
 	AIRun(context.Context, string) (mcpagent.Run, error)
 	ApproveAIRun(context.Context, string) (mcpagent.Run, error)
 }
@@ -325,6 +326,16 @@ func aiServiceHTTPError(err error) error {
 		}
 	}
 	return echo.NewHTTPError(http.StatusBadGateway, "AI service is unavailable").SetInternal(err)
+}
+
+func aiStreamErrorMessage(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "AI 思考超时，请稍后重试或缩短请求"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "AI 请求已取消"
+	}
+	return "AI 服务暂时不可用"
 }
 
 func aiAutomationHTTPError(err error) error {
@@ -806,6 +817,11 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		if err != nil {
 			return aiServiceHTTPError(err)
 		}
+		if server.aiAutomations != nil {
+			if err := server.aiAutomations.SetHomeTimeZone(status.HomePreferences.TimeZone); err != nil {
+				return echo.NewHTTPError(http.StatusBadRequest, "invalid household time zone").SetInternal(err)
+			}
+		}
 		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
 		return c.JSON(http.StatusOK, map[string]any{"data": status})
 	})
@@ -836,6 +852,43 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		}
 		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
 		return c.JSON(http.StatusOK, map[string]any{"data": run})
+	})
+	e.POST("/api/v1/ai-service/runs/stream", func(c echo.Context) error {
+		if server.aiService == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "AI service is unavailable")
+		}
+		var input struct {
+			Message string                      `json:"message"`
+			History []mcpagent.ConversationTurn `json:"history,omitempty"`
+		}
+		if err := c.Bind(&input); err != nil || strings.TrimSpace(input.Message) == "" || len(input.Message) > 16<<10 || len(input.History) > 24 {
+			return echo.NewHTTPError(http.StatusBadRequest, "AI message or conversation history is invalid")
+		}
+		writer := c.Response().Writer
+		flusher, ok := writer.(http.Flusher)
+		if !ok {
+			return echo.NewHTTPError(http.StatusInternalServerError, "response streaming is unavailable")
+		}
+		writer.Header().Set(echo.HeaderContentType, "text/event-stream; charset=utf-8")
+		writer.Header().Set(echo.HeaderCacheControl, "no-cache, no-store")
+		writer.Header().Set("Connection", "keep-alive")
+		c.Response().WriteHeader(http.StatusOK)
+		if err := writeSSEEvent(writer, "ready", mcpagent.StreamEvent{Type: "ready"}, 0); err != nil {
+			return nil
+		}
+		flusher.Flush()
+		err := server.aiService.StreamAIRun(c.Request().Context(), mcpagent.RunRequest{Message: strings.TrimSpace(input.Message), Context: mcpagent.RunContext{Source: mcpagent.RunSourceInteractive}, History: input.History}, func(event mcpagent.StreamEvent) error {
+			if err := writeSSEEvent(writer, event.Type, event, 0); err != nil {
+				return err
+			}
+			flusher.Flush()
+			return nil
+		})
+		if err != nil && !errors.Is(err, context.Canceled) {
+			_ = writeSSEEvent(writer, "error", mcpagent.StreamEvent{Type: "error", Error: aiStreamErrorMessage(err)}, 0)
+			flusher.Flush()
+		}
+		return nil
 	})
 	e.GET("/api/v1/ai-service/runs/:id", func(c echo.Context) error {
 		if server.aiService == nil {

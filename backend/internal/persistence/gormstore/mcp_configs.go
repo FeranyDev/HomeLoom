@@ -68,11 +68,11 @@ func (s *Store) SaveMCPPropertyConfig(ctx context.Context, config domainmcp.Prop
 	now := time.Now().UTC().UnixMilli()
 	row := mcpPropertyConfigRow{
 		DeviceID: config.DeviceID, EndpointID: config.EndpointID, CapabilityID: config.CapabilityID, PropertyID: config.PropertyID,
-		UsageNote: config.UsageNote, Access: string(config.Access), CreatedAt: now, UpdatedAt: now,
+		UsageNote: config.UsageNote, Access: string(config.Access), AllowUnattendedAI: config.AllowUnattendedAI, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.orm.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "device_id"}, {Name: "endpoint_id"}, {Name: "capability_id"}, {Name: "property_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"usage_note", "access", "updated_at"}),
+		DoUpdates: clause.AssignmentColumns([]string{"usage_note", "access", "allow_unattended_ai", "updated_at"}),
 	}).Create(&row).Error; err != nil {
 		return fmt.Errorf("save MCP property config: %w", err)
 	}
@@ -90,6 +90,6 @@ func (s *Store) DeleteMCPPropertyConfig(ctx context.Context, path domainmcp.Prop
 func mcpPropertyConfig(row mcpPropertyConfigRow) domainmcp.PropertyConfig {
 	return domainmcp.PropertyConfig{
 		PropertyPath: domainmcp.PropertyPath{DeviceID: row.DeviceID, EndpointID: row.EndpointID, CapabilityID: row.CapabilityID, PropertyID: row.PropertyID},
-		UsageNote:    row.UsageNote, Access: domainmcp.Access(row.Access),
+		UsageNote:    row.UsageNote, Access: domainmcp.Access(row.Access), AllowUnattendedAI: row.AllowUnattendedAI,
 	}.Normalize()
 }

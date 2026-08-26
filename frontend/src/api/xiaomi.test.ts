@@ -63,4 +63,12 @@ describe('Xiaomi API', () => {
 		expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/v1/xiaomi-miot-cloud/providers/cloud-main/auth-challenge', expect.anything())
 		expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/v1/providers/cloud-main/auth-challenge', expect.anything())
 	})
+
+	it('treats an expired Provider challenge as an expected empty state', async () => {
+		const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ message: 'Xiaomi provider authentication challenge is missing or expired; start login again' }), { status: 409, headers: { 'Content-Type': 'application/json' } }))
+		vi.stubGlobal('fetch', fetchMock)
+
+		await expect(getXiaomiProviderAuthChallenge('cloud-main')).resolves.toBeNull()
+		expect(fetchMock).toHaveBeenCalledTimes(1)
+	})
 })

@@ -443,7 +443,7 @@ func main() {
 		logger.Info("MCP Core gateway enabled", zap.String("socket_path", settings.MCP.SocketPath))
 		mcpAgentRuntime, err = newEmbeddedMCPAgent(ctx, embeddedMCPAgentConfig{
 			Binary: settings.MCP.AgentBinary, SocketPath: settings.MCP.SocketPath,
-			RuntimeDir: settings.MCP.RuntimeDir, ListenAddress: settings.MCP.AgentListenAddr,
+			RuntimeDir: settings.MCP.RuntimeDir, ListenAddress: settings.MCP.AgentListenAddr, MCPHTTPEnabled: settings.MCP.HTTPEnabled,
 			LogWriter: childLogs.Writer("mcp-agent", "local"),
 		}, logger)
 		if err != nil {
@@ -455,6 +455,13 @@ func main() {
 		if err != nil {
 			logger.Error("AI automation initialization failed", zap.Error(err))
 			os.Exit(1)
+		}
+		if status, statusErr := mcpAgentRuntime.Control().AIServiceStatus(ctx); statusErr == nil {
+			if zoneErr := aiAutomationRuntime.SetHomeTimeZone(status.HomePreferences.TimeZone); zoneErr != nil {
+				logger.Warn("invalid AI household time zone; using local time", zap.Error(zoneErr))
+			}
+		} else {
+			logger.Warn("read AI household time zone", zap.Error(statusErr))
 		}
 		server.SetAIAutomationService(aiAutomationRuntime)
 		go func(runtime *embeddedMCPAgent) {

@@ -75,8 +75,9 @@ func (c DeviceConfig) Validate() error {
 
 type PropertyConfig struct {
 	PropertyPath
-	UsageNote string `json:"usageNote"`
-	Access    Access `json:"access"`
+	UsageNote         string `json:"usageNote"`
+	Access            Access `json:"access"`
+	AllowUnattendedAI bool   `json:"allowUnattendedAi"`
 }
 
 func (c PropertyConfig) Normalize() PropertyConfig {
@@ -107,8 +108,9 @@ func (c PropertyConfig) Validate() error {
 
 type EffectivePropertyConfig struct {
 	PropertyConfig
-	Enabled         bool   `json:"enabled"`
-	EffectiveAccess Access `json:"effectiveAccess"`
+	Enabled             bool   `json:"enabled"`
+	EffectiveAccess     Access `json:"effectiveAccess"`
+	UnattendedAIAllowed bool   `json:"unattendedAiAllowed"`
 }
 
 func Effective(deviceConfig DeviceConfig, propertyConfig PropertyConfig) EffectivePropertyConfig {
@@ -121,5 +123,10 @@ func Effective(deviceConfig DeviceConfig, propertyConfig PropertyConfig) Effecti
 	if !deviceConfig.Enabled {
 		access = AccessHidden
 	}
-	return EffectivePropertyConfig{PropertyConfig: propertyConfig, Enabled: deviceConfig.Enabled, EffectiveAccess: access}
+	return EffectivePropertyConfig{
+		PropertyConfig:      propertyConfig,
+		Enabled:             deviceConfig.Enabled,
+		EffectiveAccess:     access,
+		UnattendedAIAllowed: propertyConfig.AllowUnattendedAI && access == AccessConfirm,
+	}
 }

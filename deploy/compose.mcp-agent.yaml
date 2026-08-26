@@ -2,6 +2,9 @@ services:
   backend:
     environment:
       HOMELOOM_MCP_ENABLED: "true"
+      # Keep external MCP JSON-RPC off; Core still uses the local Agent APIs
+      # for the authenticated web AI page and automations.
+      HOMELOOM_MCP_HTTP_ENABLED: "false"
       HOMELOOM_MCP_SOCKET: /data/mcp/core.sock
       HOMELOOM_MCP_AGENT_LISTEN: 127.0.0.1:8091
       HOMELOOM_MCP_AGENT_BIN: /usr/local/bin/homeloom-mcp-agent

@@ -27,6 +27,7 @@ func TestLoadYAMLAndEnvironmentOverride(t *testing.T) {
 	t.Setenv("HOMELOOM_EVENT_QUEUE_CAPACITY", "256")
 	t.Setenv("HOMELOOM_STATE_CHECKPOINT_INTERVAL_SECONDS", "300")
 	t.Setenv("HOMELOOM_MCP_ENABLED", "true")
+	t.Setenv("HOMELOOM_MCP_HTTP_ENABLED", "true")
 	t.Setenv("HOMELOOM_MCP_SOCKET", "/var/lib/homeloom/mcp.sock")
 	t.Setenv("HOMELOOM_MCP_AGENT_BIN", "/opt/homeloom/homeloom-mcp-agent")
 	t.Setenv("HOMELOOM_MCP_RUNTIME_DIR", "/var/lib/homeloom/mcp")
@@ -62,7 +63,7 @@ func TestLoadYAMLAndEnvironmentOverride(t *testing.T) {
 	if loaded.Runtime.EventQueueShards != 12 || loaded.Runtime.EventQueueCapacity != 256 || loaded.Runtime.StateCheckpointIntervalSecond != 300 {
 		t.Fatalf("runtime settings = %#v", loaded.Runtime)
 	}
-	if !loaded.MCP.Enabled || loaded.MCP.SocketPath != "/var/lib/homeloom/mcp.sock" || loaded.MCP.AgentBinary != "/opt/homeloom/homeloom-mcp-agent" || loaded.MCP.RuntimeDir != "/var/lib/homeloom/mcp" || loaded.MCP.AgentListenAddr != "127.0.0.1:8091" {
+	if !loaded.MCP.Enabled || !loaded.MCP.HTTPEnabled || loaded.MCP.SocketPath != "/var/lib/homeloom/mcp.sock" || loaded.MCP.AgentBinary != "/opt/homeloom/homeloom-mcp-agent" || loaded.MCP.RuntimeDir != "/var/lib/homeloom/mcp" || loaded.MCP.AgentListenAddr != "127.0.0.1:8091" {
 		t.Fatalf("MCP settings = %#v", loaded.MCP)
 	}
 }
@@ -103,7 +104,7 @@ func TestDefaultOnlyListensOnLoopback(t *testing.T) {
 		defaults.Media.HAPHost != "0.0.0.0" {
 		t.Fatalf("default media = %#v", defaults.Media)
 	}
-	if defaults.MCP.AgentBinary != "homeloom-mcp-agent" || defaults.MCP.RuntimeDir != "./data/mcp" || defaults.MCP.AgentListenAddr != "127.0.0.1:8091" {
+	if defaults.MCP.HTTPEnabled || defaults.MCP.AgentBinary != "homeloom-mcp-agent" || defaults.MCP.RuntimeDir != "./data/mcp" || defaults.MCP.AgentListenAddr != "127.0.0.1:8091" {
 		t.Fatalf("default MCP child process = %#v", defaults.MCP)
 	}
 }
@@ -214,6 +215,13 @@ func TestLoadRejectsInvalidMCPEnvironment(t *testing.T) {
 	t.Setenv("HOMELOOM_MCP_ENABLED", "sometimes")
 	if _, err := Load(""); err == nil {
 		t.Fatal("Load() accepted an invalid MCP enabled value")
+	}
+}
+
+func TestLoadRejectsInvalidMCPHTTPEnvironment(t *testing.T) {
+	t.Setenv("HOMELOOM_MCP_HTTP_ENABLED", "sometimes")
+	if _, err := Load(""); err == nil {
+		t.Fatal("Load() accepted an invalid MCP HTTP enabled value")
 	}
 }
 

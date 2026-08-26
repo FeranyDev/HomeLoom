@@ -30,7 +30,7 @@ Docker Desktop、Apple Container 和原生 Linux 的 host network/mDNS 行为不
 
 ## MCP Agent（可选）
 
-AI/MCP 控制使用由 Core 托管的 `homeloom-mcp-agent` 子程序，不会额外启动容器。它和 Core 只通过 `/data/mcp` 中的私有 Unix Socket 通信；Core 每次启动时生成仅本地 Core/子程序用户可读的随机 Token，Agent API 默认仅监听主机回环地址 `127.0.0.1:8091`。叠加 MCP Compose 文件即可：
+AI 控制使用由 Core 托管的 `homeloom-mcp-agent` 子程序，不会额外启动容器。它和 Core 只通过 `/data/mcp` 中的私有 Unix Socket 通信；Core 每次启动时生成仅本地 Core/子程序用户可读的随机 Token，Agent API 默认仅监听主机回环地址 `127.0.0.1:8091`。外部 MCP JSON-RPC 默认关闭，网页 AI 对话和自动化不受影响；仅在确实需要给外部 MCP 客户端接入时，显式设置 `HOMELOOM_MCP_HTTP_ENABLED=true`。叠加 MCP Compose 文件即可：
 
 ```bash
 HOMELOOM_VERSION=0.1.0 docker compose \

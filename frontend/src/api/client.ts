@@ -35,6 +35,12 @@ async function request(path: string, init: RequestInit = {}): Promise<Response> 
 	return response
 }
 
+// requestStream shares authentication, CSRF, and error handling with JSON
+// requests while leaving the response body available to an SSE reader.
+export async function requestStream(path: string, init: RequestInit = {}): Promise<Response> {
+  return request(path, init)
+}
+
 export async function requestJSON<T>(path: string, init: RequestInit = {}): Promise<T> {
 	const response = await request(path, init)
   if (response.status === 204) return undefined as T

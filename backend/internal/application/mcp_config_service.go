@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	domainmcp "github.com/feranydev/homeloom/backend/internal/domain/mcp"
 )
@@ -72,6 +73,15 @@ func (s *MCPConfigService) SaveProperty(ctx context.Context, config domainmcp.Pr
 	}
 	if !s.hasProperty(config.PropertyPath) {
 		return domainmcp.PropertyConfig{}, ErrMCPPropertyNotFound
+	}
+	if config.AllowUnattendedAI {
+		deviceConfig, err := s.Device(ctx, config.DeviceID)
+		if err != nil {
+			return domainmcp.PropertyConfig{}, err
+		}
+		if domainmcp.Effective(deviceConfig, config).EffectiveAccess != domainmcp.AccessConfirm {
+			return domainmcp.PropertyConfig{}, fmt.Errorf("%w: unattended AI requires confirm access", domainmcp.ErrInvalidConfig)
+		}
 	}
 	if err := s.store.SaveMCPPropertyConfig(ctx, config); err != nil {
 		return domainmcp.PropertyConfig{}, err

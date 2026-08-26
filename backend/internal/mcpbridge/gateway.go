@@ -57,6 +57,19 @@ type PropertyWriteRequest struct {
 	domainmcp.PropertyPath
 	Value                device.PropertyValue `json:"value"`
 	ExpectedStateVersion *uint64              `json:"expectedStateVersion,omitempty"`
+	AIExecution          *AIExecutionMetadata `json:"aiExecution,omitempty"`
+}
+
+// AIExecutionMetadata is supplied only by the private local Agent when it
+// executes a previously prepared action. It gives Core enough context to
+// enforce the stricter unattended policy and make the audit trail useful
+// without exposing any model credentials or prompts.
+type AIExecutionMetadata struct {
+	RunID          string `json:"runId,omitempty"`
+	Source         string `json:"source,omitempty"`
+	AutomationID   string `json:"automationId,omitempty"`
+	AutomationName string `json:"automationName,omitempty"`
+	AutoApproved   bool   `json:"autoApproved,omitempty"`
 }
 
 type PropertyWriteResult struct {
@@ -212,6 +225,23 @@ func (s *Server) executeProperty(ctx context.Context, input PropertyWriteRequest
 		if result.Command != nil {
 			event.Details = []domainaudit.Detail{{Label: "command", Value: "accepted"}}
 		}
+		if input.AIExecution != nil {
+			if input.AIExecution.RunID != "" {
+				event.Details = append(event.Details, domainaudit.Detail{Label: "agent_run", Value: input.AIExecution.RunID})
+			}
+			if input.AIExecution.AutomationID != "" {
+				event.Details = append(event.Details, domainaudit.Detail{Label: "automation", Value: input.AIExecution.AutomationID})
+			}
+			if input.AIExecution.AutomationName != "" {
+				event.Details = append(event.Details, domainaudit.Detail{Label: "automation_name", Value: input.AIExecution.AutomationName})
+			}
+			if input.AIExecution.Source != "" {
+				event.Details = append(event.Details, domainaudit.Detail{Label: "source", Value: input.AIExecution.Source})
+			}
+			if input.AIExecution.AutoApproved {
+				event.Details = append(event.Details, domainaudit.Detail{Label: "approval", Value: "unattended"})
+			}
+		}
 		_, _ = s.audit.Record(ctx, event)
 	}()
 	if err := input.PropertyPath.Validate(); err != nil {
@@ -222,6 +252,9 @@ func (s *Server) executeProperty(ctx context.Context, input PropertyWriteRequest
 		return PropertyWriteResult{}, err
 	}
 	if effective.EffectiveAccess != domainmcp.AccessConfirm {
+		return PropertyWriteResult{}, ErrGatewayAccessDenied
+	}
+	if input.AIExecution != nil && input.AIExecution.AutoApproved && !effective.UnattendedAIAllowed {
 		return PropertyWriteResult{}, ErrGatewayAccessDenied
 	}
 	if input.ExpectedStateVersion != nil && !stateVersionMatches(s.devices.States(input.DeviceID), input.PropertyPath, *input.ExpectedStateVersion) {

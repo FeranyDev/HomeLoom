@@ -46,10 +46,13 @@ type MediaConfig struct {
 }
 
 // MCPConfig controls Core's private Unix-domain-socket gateway and its
-// locally managed MCP/AI child process. The child owns the AI-facing HTTP
-// surface and credentials, while Core remains the device-policy authority.
+// locally managed AI child process. The child owns AI-facing credentials,
+// while Core remains the device-policy authority. HTTPEnabled controls only
+// the optional external MCP JSON-RPC route; it does not disable the local
+// Agent APIs that power the authenticated web AI page.
 type MCPConfig struct {
 	Enabled         bool   `yaml:"enabled"`
+	HTTPEnabled     bool   `yaml:"http_enabled"`
 	SocketPath      string `yaml:"socket_path"`
 	AgentBinary     string `yaml:"agent_binary"`
 	RuntimeDir      string `yaml:"runtime_dir"`
@@ -245,6 +248,13 @@ func applyEnvironment(config *Config) error {
 			return errors.New("HOMELOOM_MCP_ENABLED must be a boolean")
 		}
 		config.MCP.Enabled = enabled
+	}
+	if value, present := os.LookupEnv("HOMELOOM_MCP_HTTP_ENABLED"); present {
+		enabled, err := strconv.ParseBool(value)
+		if err != nil {
+			return errors.New("HOMELOOM_MCP_HTTP_ENABLED must be a boolean")
+		}
+		config.MCP.HTTPEnabled = enabled
 	}
 	if value := os.Getenv("HOMELOOM_MCP_SOCKET"); value != "" {
 		config.MCP.SocketPath = strings.TrimSpace(value)

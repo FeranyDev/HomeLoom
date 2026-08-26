@@ -52,9 +52,9 @@ func TestPrepareMCPAgentRuntimeRejectsPublicDirectory(t *testing.T) {
 }
 
 func TestMCPAgentCommandPassesOnlyPrivateFileReferences(t *testing.T) {
-	command := mcpAgentCommand(context.Background(), "/bin/agent", "/data/mcp/core.sock", "127.0.0.1:8091", "/data/mcp/agent.token", "/data/mcp/ai-config.json")
+	command := mcpAgentCommand(context.Background(), "/bin/agent", "/data/mcp/core.sock", "127.0.0.1:8091", "/data/mcp/agent.token", "/data/mcp/ai-config.json", false)
 	got := strings.Join(command.Args, " ")
-	for _, expected := range []string{"--core-socket /data/mcp/core.sock", "--listen 127.0.0.1:8091", "--auth-token-file /data/mcp/agent.token", "--ai-config-file /data/mcp/ai-config.json"} {
+	for _, expected := range []string{"--core-socket /data/mcp/core.sock", "--listen 127.0.0.1:8091", "--auth-token-file /data/mcp/agent.token", "--ai-config-file /data/mcp/ai-config.json", "--mcp-http-enabled=false"} {
 		if !strings.Contains(got, expected) {
 			t.Fatalf("command %q does not contain %q", got, expected)
 		}

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -19,6 +20,12 @@ import (
 func main() {
 	coreSocket := flag.String("core-socket", env("HOMELOOM_MCP_SOCKET", "./data/mcp/core.sock"), "private HomeLoom Core Unix socket")
 	listenAddress := flag.String("listen", env("HOMELOOM_MCP_AGENT_LISTEN", "127.0.0.1:8091"), "MCP Agent HTTP listen address")
+	defaultMCPHTTPEnabled, err := boolEnv("HOMELOOM_MCP_HTTP_ENABLED", false)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "mcp-agent configuration failed:", err)
+		os.Exit(2)
+	}
+	mcpHTTPEnabled := flag.Bool("mcp-http-enabled", defaultMCPHTTPEnabled, "enable the optional external MCP JSON-RPC endpoint")
 	defaultTokenFile := env("HOMELOOM_MCP_AGENT_TOKEN_FILE", "")
 	tokenFile := flag.String("auth-token-file", defaultTokenFile, "file containing the MCP Agent bearer token")
 	modelName := flag.String("ai-model", envWithLegacy("HOMELOOM_AI_MODEL", "HOMELOOM_OPENAI_MODEL", ""), "AI model used for Agent runs; leave empty for MCP read-only mode")
@@ -43,6 +50,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "mcp-agent configuration failed:", err)
 		os.Exit(2)
 	}
+	runtime.SetMCPHTTPEnabled(*mcpHTTPEnabled)
 	store, err := mcpagent.NewFileAIConfigStore(*aiConfigFile)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "mcp-agent AI configuration failed:", err)
@@ -83,6 +91,18 @@ func env(key, fallback string) string {
 		return strings.TrimSpace(value)
 	}
 	return fallback
+}
+
+func boolEnv(key string, fallback bool) (bool, error) {
+	value, exists := os.LookupEnv(key)
+	if !exists || strings.TrimSpace(value) == "" {
+		return fallback, nil
+	}
+	enabled, err := strconv.ParseBool(strings.TrimSpace(value))
+	if err != nil {
+		return false, fmt.Errorf("%s must be a boolean", key)
+	}
+	return enabled, nil
 }
 
 func readToken(path string) (string, error) {

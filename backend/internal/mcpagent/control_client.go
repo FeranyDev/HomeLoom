@@ -1,6 +1,7 @@
 package mcpagent
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -83,13 +84,90 @@ func (c *AgentControlClient) ListAIModels(ctx context.Context) ([]AIModel, error
 // behind Core's authenticated administrator API. The loopback Agent token is
 // never exposed to a browser.
 func (c *AgentControlClient) StartAIRun(ctx context.Context, message string) (Run, error) {
+	return c.StartAIRunWithContext(ctx, RunRequest{Message: message, Context: RunContext{Source: RunSourceInteractive}})
+}
+
+// StartAIRunWithContext is reserved for Core-owned automation executions.
+// The Agent itself generates the clock data and ignores unrecognized sources.
+func (c *AgentControlClient) StartAIRunWithContext(ctx context.Context, input RunRequest) (Run, error) {
 	var response struct {
 		Data Run `json:"data"`
 	}
-	if err := c.doWithTimeout(ctx, AIRunControlTimeout, http.MethodPost, "/api/v1/agent/runs", map[string]string{"message": message}, &response); err != nil {
+	if err := c.doWithTimeout(ctx, AIRunControlTimeout, http.MethodPost, "/api/v1/agent/runs", input, &response); err != nil {
 		return Run{}, err
 	}
 	return response.Data, nil
+}
+
+// StreamAIRun proxies the Agent's private SSE response to Core. The callback
+// receives only display-safe model deltas and the final typed Run; credentials
+// and provider protocol details never leave the Agent process.
+func (c *AgentControlClient) StreamAIRun(ctx context.Context, input RunRequest, onEvent func(StreamEvent) error) error {
+	token, err := readPrivateToken(c.tokenFile)
+	if err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		return err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/v1/agent/runs/stream", bytes.NewReader(encoded))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "text/event-stream")
+	response, err := c.clientWithTimeout(AIRunControlTimeout).Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return &AgentControlError{Status: response.StatusCode}
+	}
+	var event string
+	var data strings.Builder
+	handle := func() error {
+		payload := strings.TrimSpace(data.String())
+		defer data.Reset()
+		if payload == "" {
+			return nil
+		}
+		var value StreamEvent
+		if err := json.Unmarshal([]byte(payload), &value); err != nil {
+			return err
+		}
+		if value.Type == "" {
+			value.Type = event
+		}
+		if onEvent != nil {
+			return onEvent(value)
+		}
+		return nil
+	}
+	scanner := bufio.NewScanner(io.LimitReader(response.Body, 4<<20))
+	scanner.Buffer(make([]byte, 32<<10), 1<<20)
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case strings.HasPrefix(line, "event:"):
+			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		case strings.HasPrefix(line, "data:"):
+			if data.Len() > 0 {
+				data.WriteByte('\n')
+			}
+			data.WriteString(strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		case line == "":
+			if err := handle(); err != nil {
+				return err
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	return handle()
 }
 
 func (c *AgentControlClient) AIRun(ctx context.Context, id string) (Run, error) {
@@ -103,10 +181,21 @@ func (c *AgentControlClient) AIRun(ctx context.Context, id string) (Run, error) 
 }
 
 func (c *AgentControlClient) ApproveAIRun(ctx context.Context, id string) (Run, error) {
+	return c.approveAIRun(ctx, id, "manual")
+}
+
+// ApproveUnattendedAIRun is called exclusively after Core has checked the
+// durable automation policy. The Agent includes the source in its private
+// gateway request so Core can enforce property-level unattended permission.
+func (c *AgentControlClient) ApproveUnattendedAIRun(ctx context.Context, id string) (Run, error) {
+	return c.approveAIRun(ctx, id, "unattended")
+}
+
+func (c *AgentControlClient) approveAIRun(ctx context.Context, id, mode string) (Run, error) {
 	var response struct {
 		Data Run `json:"data"`
 	}
-	if err := c.do(ctx, http.MethodPost, "/api/v1/agent/runs/"+url.PathEscape(id)+"/approve", nil, &response); err != nil {
+	if err := c.do(ctx, http.MethodPost, "/api/v1/agent/runs/"+url.PathEscape(id)+"/approve", map[string]string{"mode": mode}, &response); err != nil {
 		return Run{}, err
 	}
 	return response.Data, nil

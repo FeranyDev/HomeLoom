@@ -428,6 +428,24 @@ describe('ProviderForm', () => {
 			expect(await screen.findByText(/小米短信验证成功，Provider 会话已更新/)).toBeInTheDocument()
 		})
 
+		it('explains how to restart a missing Provider SMS challenge', async () => {
+			const challenged: Provider = {
+				id: 'xiaomi-cloud-missing', type: 'xiaomi-miot-cloud', name: '小米云', enabled: true, status: 'auth_required', retryCount: 1,
+				capabilities: { discovery: true, propertyRead: true, propertyWrite: true, events: false },
+				config: { region: 'cn', username: 'owner@example.com', password: '********', userId: '********', ssecurity: '********', serviceToken: '********', devices: [] },
+			}
+			xiaomiAPI.getXiaomiProviderAuthChallenge.mockResolvedValueOnce(null)
+			xiaomiAPI.startXiaomiCloudLogin.mockResolvedValueOnce({ status: 'verification_required', challengeId: 'replacement-challenge', verificationUrl: 'https://account.xiaomi.com/fe/service/identity/authStart' })
+			render(<ProviderForm provider={challenged} onCancel={() => {}} onSave={vi.fn()} />)
+			expect(await screen.findByRole('alert')).toHaveTextContent('此前的短信验证会话已经失效')
+			expect(screen.getByRole('alert')).toHaveTextContent('替换为真实密码')
+			await userEvent.clear(screen.getByLabelText('小米 MIoT 云密码'))
+			await userEvent.type(screen.getByLabelText('小米 MIoT 云密码'), 'account-password')
+			await userEvent.click(screen.getByRole('button', { name: '重新登录小米云账号' }))
+			await waitFor(() => expect(xiaomiAPI.startXiaomiCloudLogin).toHaveBeenCalledWith({ region: 'cn', username: 'owner@example.com', password: 'account-password', requestTimeoutSeconds: 15 }))
+			expect(await screen.findByLabelText('小米 MIoT 云验证码')).toBeInTheDocument()
+		})
+
 		it('shows an expired challenge state without allowing a stale code submission', async () => {
 			xiaomiAPI.startXiaomiCloudLogin.mockResolvedValue({ status: 'verification_required', challengeId: 'expired-challenge', verificationUrl: 'https://account.xiaomi.com/fe/service/identity/authStart', expiresAt: '2020-01-01T00:00:00Z' })
 			render(<ProviderForm provider={null} initialType="xiaomi-miot-cloud" onCancel={() => {}} onSave={vi.fn()} />)
