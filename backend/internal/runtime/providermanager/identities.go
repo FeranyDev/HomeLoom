@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
+	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 )
 
 // DeviceIdentityStore is the narrow persistence contract needed by the
@@ -28,13 +29,25 @@ func (m *Manager) SetDeviceIdentityStore(store DeviceIdentityStore) {
 func (m *Manager) persistDiscoveryIdentities(ctx context.Context, sources, logical []device.Device) error {
 	m.mu.RLock()
 	store := m.identityStore
+	resolvers := make(map[string]providersdk.DeviceIdentityResolver, len(m.providers))
+	for providerID, current := range m.providers {
+		if resolver, ok := current.provider.(providersdk.DeviceIdentityResolver); ok {
+			resolvers[providerID] = resolver
+		}
+	}
 	m.mu.RUnlock()
 	if store == nil {
 		return nil
 	}
 	for _, item := range sources {
-		if err := store.EnsureProviderDeviceIdentity(ctx, item.ProviderID, item.ID, item.ID); err != nil {
-			return fmt.Errorf("persist provider device identity %q/%q: %w", item.ProviderID, item.ID, err)
+		providerDeviceID := item.ID
+		if resolver := resolvers[item.ProviderID]; resolver != nil {
+			if resolved, ok := resolver.ProviderDeviceID(item.ID); ok {
+				providerDeviceID = resolved
+			}
+		}
+		if err := store.EnsureProviderDeviceIdentity(ctx, item.ProviderID, providerDeviceID, item.ID); err != nil {
+			return fmt.Errorf("persist provider device identity %q/%q: %w", item.ProviderID, providerDeviceID, err)
 		}
 		if err := store.EnsureDeviceTopologyIdentity(ctx, item); err != nil {
 			return fmt.Errorf("persist device topology identity %q: %w", item.ID, err)

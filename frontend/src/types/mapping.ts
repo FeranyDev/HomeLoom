@@ -48,6 +48,7 @@ export interface MappingBinding {
   deviceType?: DeviceType; consumerDeviceType?: DeviceType; modelEndpointId: string; modelCapabilityId: string; modelPropertyId: string
   consumerId?: string; consumerProperty?: string
 	targetId?: string; consumerDeviceId?: string
+  readbackEnabled?: boolean; readbackDelaysMs?: number[]
 }
 
 interface ModelPath { endpointId: string; capabilityId: string; propertyId: string }

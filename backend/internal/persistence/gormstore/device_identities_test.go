@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
+	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	"github.com/feranydev/homeloom/backend/internal/domain/target"
 )
 
@@ -44,6 +45,79 @@ func TestStableDeviceIdentityRowsPreserveNativeAndTopologyBindings(t *testing.T)
 	}
 	if len(rows) != 2 || rows[0].CapabilityID != "diagnostics" || rows[1].CapabilityID != "switch" {
 		t.Fatalf("topology identities = %#v", rows)
+	}
+}
+
+func TestProviderDeviceIdentityRebindsOnlyAfterPreviousProviderIsDeleted(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	oldProvider := providerconfig.Config{ID: "sonoff-old", Type: "sonoff", Name: "Old", Config: []byte(`{}`)}
+	newProvider := providerconfig.Config{ID: "sonoff-new", Type: "sonoff", Name: "New", Config: []byte(`{}`)}
+	if err := store.SaveProvider(ctx, oldProvider); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureProviderDeviceIdentity(ctx, oldProvider.ID, "1001f95735", "sonoff-1001f95735"); err != nil {
+		t.Fatal(err)
+	}
+	var original providerDeviceIdentityRow
+	if err := store.orm.WithContext(ctx).Where("device_id = ?", "sonoff-1001f95735").Take(&original).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveProvider(ctx, newProvider); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureProviderDeviceIdentity(ctx, newProvider.ID, "1001f95735", "sonoff-1001f95735"); !errors.Is(err, ErrProviderDeviceIdentityConflict) {
+		t.Fatalf("identity moved while previous provider still existed: %v", err)
+	}
+
+	if err := store.DeleteProvider(ctx, oldProvider.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureProviderDeviceIdentity(ctx, newProvider.ID, "1001f95735", "sonoff-1001f95735"); err != nil {
+		t.Fatalf("rebind orphaned identity: %v", err)
+	}
+	var rebound providerDeviceIdentityRow
+	if err := store.orm.WithContext(ctx).Where("device_id = ?", "sonoff-1001f95735").Take(&rebound).Error; err != nil {
+		t.Fatal(err)
+	}
+	if rebound.ProviderID != newProvider.ID || rebound.ProviderDeviceID != "1001f95735" || rebound.CreatedAt != original.CreatedAt || rebound.UpdatedAt < original.UpdatedAt {
+		t.Fatalf("rebound identity = %#v; original = %#v", rebound, original)
+	}
+	var count int64
+	if err := store.orm.WithContext(ctx).Model(&providerDeviceIdentityRow{}).Where("device_id = ?", "sonoff-1001f95735").Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("identity rows = %d, %v", count, err)
+	}
+}
+
+func TestProviderDeviceIdentityMigratesNativeKeyForSameProvider(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	configured := providerconfig.Config{ID: "tuya-main", Type: "tuya", Name: "Tuya", Config: []byte(`{}`)}
+	if err := store.SaveProvider(ctx, configured); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureProviderDeviceIdentity(ctx, configured.ID, "tuya-device-1", "tuya-device-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureProviderDeviceIdentity(ctx, configured.ID, "device-1", "tuya-device-1"); err != nil {
+		t.Fatalf("migrate native identity: %v", err)
+	}
+	var row providerDeviceIdentityRow
+	if err := store.orm.WithContext(ctx).Where("device_id = ?", "tuya-device-1").Take(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	if row.ProviderID != configured.ID || row.ProviderDeviceID != "device-1" {
+		t.Fatalf("migrated identity = %#v", row)
 	}
 }
 

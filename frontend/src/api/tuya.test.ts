@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { completeTuyaOAuth, parseTuyaOAuthCallback, pollTuyaSharingLogin, startTuyaOAuth, startTuyaSharingLogin, tuyaOAuthQRCodeURL, tuyaSharingQRCodeURL } from './tuya'
+import { completeTuyaOAuth, discoverTuyaDevices, parseTuyaOAuthCallback, pollTuyaSharingLogin, startTuyaOAuth, startTuyaSharingLogin, tuyaOAuthQRCodeURL, tuyaSharingQRCodeURL } from './tuya'
 
 describe('Tuya OAuth API', () => {
 	beforeEach(() => {
@@ -32,5 +32,12 @@ describe('Tuya OAuth API', () => {
 		expect(parseTuyaOAuthCallback({ type: 'other', code: 'code' })).toBeNull()
 		expect(parseTuyaOAuthCallback({ type: 'homeloom-tuya-oauth', code: 'code', state: 'state', error: '' })).toEqual({ type: 'homeloom-tuya-oauth', code: 'code', state: 'state', error: '' })
 		expect(parseTuyaOAuthCallback(null)).toBeNull()
+	})
+
+	it('loads the device directory from a running Tuya provider', async () => {
+		const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [{ id: 'tuya-device-1', deviceId: 'device-1', name: '开关', type: 'switch', online: true, configured: false }] }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+		vi.stubGlobal('fetch', fetchMock)
+		await expect(discoverTuyaDevices('tuya/main')).resolves.toEqual([expect.objectContaining({ deviceId: 'device-1' })])
+		expect(fetchMock).toHaveBeenCalledWith('/api/v1/tuya/providers/tuya%2Fmain/devices', expect.anything())
 	})
 })

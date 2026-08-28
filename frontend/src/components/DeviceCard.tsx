@@ -6,8 +6,8 @@ import { deviceLocationLabel } from '../deviceLocation'
 interface DeviceCardProps {
   device: Device
   pending: boolean
-  onPowerChange: (device: Device, value: boolean) => void
-  onDetails: (device: Device) => void
+	onPowerChange: (device: Device, value: boolean) => void
+	onDetails: (device: Device) => void
 	onMapping?: (device: Device) => void
 	onEnabledChange?: (device: Device, enabled: boolean) => void
 }
@@ -17,7 +17,8 @@ export function DeviceCard({ device, pending, onPowerChange, onDetails, onMappin
   const hasPower = device.type === 'switch' || device.type === 'lightbulb' || device.type === 'outlet' || networkDevice
   const kind = deviceTypeLabel(device.type)
   const power = deviceProperty(device, 'switch', 'power')?.bool ?? false
-	const networkWakeEnabled = device.endpoints.some((endpoint) => endpoint.capabilities.some((capability) => capability.id === 'switch' && capability.properties.some((property) => property.definition.id === 'power' && property.definition.writable)))
+	const wakePending = networkDevice && (deviceProperty(device, 'network', 'wake-pending')?.bool ?? false)
+	const networkWakeEnabled = (device.endpoints ?? []).some((endpoint) => (endpoint.capabilities ?? []).some((capability) => capability.id === 'switch' && (capability.properties ?? []).some((property) => property.definition.id === 'power' && property.definition.writable)))
   const temperature = deviceProperty(device, 'temperature', 'current-temperature')?.number
   const humidity = deviceProperty(device, 'humidity', 'current-humidity')?.number
 	const measurement = device.type === 'temperature-sensor' ? { value: temperature, unit: '°C' }
@@ -41,7 +42,7 @@ export function DeviceCard({ device, pending, onPowerChange, onDetails, onMappin
 	<article className={`device-card is-${device.type}${device.mappingError ? ' has-mapping-error' : ''}`} aria-labelledby={headingID}>
       <div className="device-card__topline">
         <span className={`status-dot is-${device.availability}`} />
-		<span>{device.removed ? '来源已删除' : device.disabled ? '已禁用' : networkDevice ? (power ? '已开启' : '已关闭') : availabilityLabel(device.availability)}</span>
+		<span>{device.removed ? '来源已删除' : device.disabled ? '已禁用' : networkDevice ? (power ? '已开启' : wakePending ? '启动中' : '已关闭') : availabilityLabel(device.availability)}</span>
 		{device.runtimeMode && <span className={`device-runtime-mode is-${device.runtimeMode}`}>{runtimeModeLabel(device.runtimeMode, device.stateTransport)}</span>}
 		<span className="provider">{device.providerId}</span>
       </div>
@@ -53,10 +54,10 @@ export function DeviceCard({ device, pending, onPowerChange, onDetails, onMappin
 	  <div className="device-card__value">{hasPower ? (
         <button
           className={`power-button ${power ? 'is-on' : ''}`}
-          disabled={pending || (networkDevice ? power || !networkWakeEnabled : !device.online)}
+		  disabled={pending || (networkDevice ? power || wakePending || !networkWakeEnabled : !device.online)}
           onClick={() => onPowerChange(device, networkDevice ? true : !power)}
         >
-		  <span>{pending ? (networkDevice ? '正在唤醒' : '同步中') : networkDevice ? (power ? '已开启' : networkWakeEnabled ? '已关闭 · 点击唤醒' : '已关闭 · 仅监测') : !device.online ? '不可用' : power ? '已开启' : '已关闭'}</span>
+		  <span>{pending ? (networkDevice ? '正在发送唤醒包' : '同步中') : networkDevice ? (power ? '已开启' : wakePending ? '正在启动 · 等待探测确认' : networkWakeEnabled ? '已关闭 · 点击唤醒' : '已关闭 · 仅监测') : !device.online ? '不可用' : power ? '已开启' : '已关闭'}</span>
           <span className="switch-track"><span /></span>
         </button>
       ) : measurement ? (

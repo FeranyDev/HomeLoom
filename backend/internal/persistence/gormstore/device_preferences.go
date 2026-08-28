@@ -36,6 +36,39 @@ func (s *Store) SetDeviceDisabled(ctx context.Context, deviceID string, disabled
 	return nil
 }
 
+func (s *Store) ListDeviceNamePreferences(ctx context.Context) ([]device.NamePreference, error) {
+	defer s.observe(time.Now())
+	var rows []deviceNamePreferenceRow
+	if err := s.orm.WithContext(ctx).Order("device_id").Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("list device name preferences: %w", err)
+	}
+	result := make([]device.NamePreference, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, device.NamePreference{DeviceID: row.DeviceID, Name: row.Name})
+	}
+	return result, nil
+}
+
+func (s *Store) SetDeviceNamePreference(ctx context.Context, preference device.NamePreference) error {
+	defer s.observe(time.Now())
+	now := time.Now().UTC().UnixMilli()
+	row := deviceNamePreferenceRow{DeviceID: preference.DeviceID, Name: preference.Name, CreatedAt: now, UpdatedAt: now}
+	if err := s.orm.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "device_id"}}, DoUpdates: clause.AssignmentColumns([]string{"name", "updated_at"}),
+	}).Create(&row).Error; err != nil {
+		return fmt.Errorf("set device name preference: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ClearDeviceNamePreference(ctx context.Context, deviceID string) error {
+	defer s.observe(time.Now())
+	if err := s.orm.WithContext(ctx).Where("device_id = ?", deviceID).Delete(&deviceNamePreferenceRow{}).Error; err != nil {
+		return fmt.Errorf("clear device name preference: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) ListDeviceLocationPreferences(ctx context.Context) ([]device.LocationPreference, error) {
 	defer s.observe(time.Now())
 	var rows []deviceLocationPreferenceRow

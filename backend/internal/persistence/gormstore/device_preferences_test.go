@@ -77,6 +77,38 @@ func TestDeviceLocationPreferencesPersistAndClear(t *testing.T) {
 	}
 }
 
+func TestDeviceNamePreferencesPersistUpdateAndClear(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	preference := device.NamePreference{DeviceID: "sonoff-1001f95735", Name: "门口微动开关"}
+	if err := store.SetDeviceNamePreference(ctx, preference); err != nil {
+		t.Fatal(err)
+	}
+	items, err := store.ListDeviceNamePreferences(ctx)
+	if err != nil || len(items) != 1 || items[0] != preference {
+		t.Fatalf("names = %#v, %v", items, err)
+	}
+	preference.Name = "玄关感应器"
+	if err := store.SetDeviceNamePreference(ctx, preference); err != nil {
+		t.Fatal(err)
+	}
+	items, _ = store.ListDeviceNamePreferences(ctx)
+	if len(items) != 1 || items[0] != preference {
+		t.Fatalf("updated names = %#v", items)
+	}
+	if err := store.ClearDeviceNamePreference(ctx, preference.DeviceID); err != nil {
+		t.Fatal(err)
+	}
+	items, _ = store.ListDeviceNamePreferences(ctx)
+	if len(items) != 0 {
+		t.Fatalf("cleared names = %#v", items)
+	}
+}
+
 func TestDeviceLocationCatalogCRUDAndAssignmentProtection(t *testing.T) {
 	ctx := context.Background()
 	store, err := openTestStore(t, ctx)

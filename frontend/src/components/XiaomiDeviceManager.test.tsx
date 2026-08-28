@@ -31,10 +31,35 @@ describe('XiaomiDeviceManager', () => {
 		expect(screen.getByText('官方云实时')).toHaveClass('is-ready')
 		expect(screen.getByLabelText('客厅灯 统一模型')).toHaveValue('lightbulb')
 		expect(screen.getByLabelText('客厅灯 连接策略')).toHaveValue('auto')
-		await userEvent.click(screen.getByRole('button', { name: '加入映射' }))
+		await userEvent.click(screen.getByRole('button', { name: '加入草稿' }))
 		expect(screen.getByText('已映射 1 台设备')).toBeInTheDocument()
-		await userEvent.click(screen.getByRole('button', { name: '保存子设备映射' }))
+		await userEvent.click(screen.getByRole('button', { name: '保存设备并应用' }))
 		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ id: 'xiaomi-main', config: expect.objectContaining({ devices: [expect.objectContaining({ did: '123.456', type: 'lightbulb', connectionMode: 'auto', homeId: 'home-main', home: '我的家', roomId: 'room-living', room: '客厅' })] }) }), true))
+	})
+
+	it('keeps Xiaomi drafts editable and removable without reading the hub again', async () => {
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		const mapped = { ...provider, config: { ...provider.config, devices: [{ did: '123.456', id: 'xiaomi-123.456', name: '来源名称', type: 'lightbulb', connectionMode: 'auto', properties: [], actions: [] }] } }
+		render(<XiaomiDeviceManager provider={mapped} onClose={() => {}} onSave={onSave} />)
+		const name = screen.getByLabelText('草稿设备 123.456 名称')
+		await userEvent.clear(name)
+		await userEvent.type(name, '客厅主灯')
+		await userEvent.click(screen.getByRole('button', { name: '移出草稿' }))
+		await userEvent.click(screen.getByRole('button', { name: '保存设备并应用' }))
+		expect(api.discoverXiaomiDevices).not.toHaveBeenCalled()
+		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ devices: [] }) }), true))
+	})
+
+	it('lets the user set a Xiaomi name in the unsaved draft before publishing', async () => {
+		const onSave = vi.fn().mockResolvedValue(undefined)
+		render(<XiaomiDeviceManager provider={provider} onClose={() => {}} onSave={onSave} />)
+		await userEvent.click(screen.getByRole('button', { name: '从中枢读取子设备' }))
+		await userEvent.click(screen.getByRole('button', { name: '加入草稿' }))
+		const name = screen.getByLabelText('草稿设备 123.456 名称')
+		await userEvent.clear(name)
+		await userEvent.type(name, '客厅主灯')
+		await userEvent.click(screen.getByRole('button', { name: '保存设备并应用' }))
+		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ devices: [expect.objectContaining({ did: '123.456', name: '客厅主灯' })] }) }), true))
 	})
 
 	it('generates unsaved drafts by DID without merging same-name mappings', async () => {
@@ -47,10 +72,10 @@ describe('XiaomiDeviceManager', () => {
 		render(<XiaomiDeviceManager provider={mapped} onClose={() => {}} onSave={onSave} />)
 		await userEvent.click(screen.getByRole('button', { name: '从中枢读取子设备' }))
 		await screen.findAllByText('客厅灯')
-		await userEvent.click(screen.getByRole('button', { name: '为未映射设备生成草稿' }))
+		await userEvent.click(screen.getByRole('button', { name: '将未添加设备加入草稿' }))
 		expect(screen.getByText('已映射 2 台设备')).toBeInTheDocument()
 		expect(onSave).not.toHaveBeenCalled()
-		await userEvent.click(screen.getByRole('button', { name: '保存子设备映射' }))
+		await userEvent.click(screen.getByRole('button', { name: '保存设备并应用' }))
 		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ devices: expect.arrayContaining([
 			expect.objectContaining({ did: 'already-mapped', id: 'xiaomi-already-mapped' }),
 			expect.objectContaining({ did: 'same-name-new-device', id: 'xiaomi-same-name-new-device' }),
@@ -65,7 +90,7 @@ describe('XiaomiDeviceManager', () => {
 		const route = await screen.findByLabelText('客厅灯 连接策略')
 		await userEvent.selectOptions(route, 'cloud')
 		expect(route).toHaveValue('cloud')
-		await userEvent.click(screen.getByRole('button', { name: '保存子设备映射' }))
+		await userEvent.click(screen.getByRole('button', { name: '保存设备并应用' }))
 		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ devices: [expect.objectContaining({ did: '123.456', connectionMode: 'cloud' })] }) }), true))
 	})
 
@@ -80,8 +105,8 @@ describe('XiaomiDeviceManager', () => {
 		await userEvent.selectOptions(locationMode, 'custom')
 		await userEvent.selectOptions(screen.getByLabelText('客厅灯 HomeLoom 家庭'), 'home-parents')
 		await userEvent.selectOptions(screen.getByLabelText('客厅灯 HomeLoom 房间'), 'room-bedroom')
-		await userEvent.click(screen.getByRole('button', { name: '加入映射' }))
-		await userEvent.click(screen.getByRole('button', { name: '保存子设备映射' }))
+		await userEvent.click(screen.getByRole('button', { name: '加入草稿' }))
+		await userEvent.click(screen.getByRole('button', { name: '保存设备并应用' }))
 		await waitFor(() => expect(api.setDeviceLocation).toHaveBeenCalledWith('xiaomi-123.456', { mode: 'custom', homeId: 'home-parents', roomId: 'room-bedroom' }))
 	})
 
@@ -89,7 +114,7 @@ describe('XiaomiDeviceManager', () => {
 		const onMapping = vi.fn()
 		const mapped = { ...provider, config: { ...provider.config, devices: [{ did: '123.456', id: 'xiaomi-123.456', name: '客厅灯', type: 'lightbulb', connectionMode: 'auto', properties: [], actions: [] }] } }
 		render(<XiaomiDeviceManager provider={mapped} onClose={() => {}} onSave={vi.fn()} onMapping={onMapping} />)
-		await userEvent.click(screen.getByRole('button', { name: '配置 客厅灯 属性映射' }))
+		await userEvent.click(screen.getByRole('button', { name: '配置草稿 客厅灯 属性映射' }))
 		expect(onMapping).toHaveBeenCalledWith(expect.objectContaining({ id: 'xiaomi-123.456', providerId: 'xiaomi-main', name: '客厅灯', type: 'lightbulb', endpoints: [] }))
 	})
 
@@ -97,7 +122,7 @@ describe('XiaomiDeviceManager', () => {
 		render(<XiaomiDeviceManager provider={{ ...provider, status: 'failed' }} onClose={() => {}} onSave={vi.fn()} />)
 		expect(screen.getByText(/状态变为 running 后才能读取设备目录/)).toBeInTheDocument()
 		expect(screen.getByRole('button', { name: '从中枢读取子设备' })).toBeDisabled()
-		expect(screen.getByRole('button', { name: '保存子设备映射' })).toBeDisabled()
+		expect(screen.getByRole('button', { name: '保存设备并应用' })).toBeDisabled()
 	})
 
 	it('uses an isolated MIoT cloud directory and cloud-prefixed device ids', async () => {
@@ -108,8 +133,8 @@ describe('XiaomiDeviceManager', () => {
 		await waitFor(() => expect(api.discoverXiaomiDevices).toHaveBeenCalledWith('xiaomi-miot-cloud-main', 'xiaomi-miot-cloud'))
 		expect(screen.getByText(/局域网 MIoT 可用/)).toBeInTheDocument()
 		expect(screen.getByLabelText('客厅灯 连接策略')).toHaveValue('auto')
-		await userEvent.click(await screen.findByRole('button', { name: '加入映射' }))
-		await userEvent.click(screen.getByRole('button', { name: '保存子设备映射' }))
+		await userEvent.click(await screen.findByRole('button', { name: '加入草稿' }))
+		await userEvent.click(screen.getByRole('button', { name: '保存设备并应用' }))
 		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ type: 'xiaomi-miot-cloud', config: expect.objectContaining({ devices: [expect.objectContaining({ id: 'xiaomi-miot-123.456', connectionMode: 'auto' })] }) }), true))
 	})
 
@@ -133,8 +158,8 @@ describe('XiaomiDeviceManager', () => {
 		render(<XiaomiDeviceManager provider={cloud} onClose={() => {}} onSave={onSave} />)
 		await userEvent.click(screen.getByRole('button', { name: '从 MIoT 云读取设备' }))
 		expect(await screen.findByLabelText('客厅摄像头 统一模型')).toHaveValue('camera')
-		await userEvent.click(screen.getByRole('button', { name: '加入映射' }))
-		await userEvent.click(screen.getByRole('button', { name: '保存子设备映射' }))
+		await userEvent.click(screen.getByRole('button', { name: '加入草稿' }))
+		await userEvent.click(screen.getByRole('button', { name: '保存设备并应用' }))
 		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
 			config: expect.objectContaining({
 				passToken: '********',
@@ -178,8 +203,8 @@ describe('XiaomiDeviceManager', () => {
 		expect(model).toHaveValue('camera')
 		expect(screen.getByRole('option', { name: '摄像头（camera）' })).toBeInTheDocument()
 		expect(screen.getByText(/只提供中枢\/云端控制能力/)).toBeInTheDocument()
-		await userEvent.click(screen.getByRole('button', { name: '加入映射' }))
-		await userEvent.click(screen.getByRole('button', { name: '保存子设备映射' }))
+		await userEvent.click(screen.getByRole('button', { name: '加入草稿' }))
+		await userEvent.click(screen.getByRole('button', { name: '保存设备并应用' }))
 
 		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
 			type: 'xiaomi',
@@ -215,7 +240,7 @@ describe('XiaomiDeviceManager', () => {
 			},
 		}
 		render(<XiaomiDeviceManager provider={conflicting} onClose={() => {}} onSave={onSave} />)
-		await userEvent.click(screen.getByRole('button', { name: '保存子设备映射' }))
+		await userEvent.click(screen.getByRole('button', { name: '保存设备并应用' }))
 
 		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
 			config: expect.objectContaining({

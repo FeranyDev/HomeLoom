@@ -198,9 +198,17 @@ func (p *Provider) Reconfigure(ctx context.Context, replacement providersdk.Prov
 	}
 	nextRoutes := deviceRoutes(next.config.Devices)
 	removed := make([]device.Device, 0)
+	updated := make([]device.Device, 0)
 	p.mu.Lock()
 	for id, item := range p.devices {
-		if _, exists := nextRoutes[id]; exists {
+		route, exists := nextRoutes[id]
+		if exists {
+			if route.Name != "" && item.Name != route.Name {
+				p.nextSequence++
+				item.Name, item.Sequence, item.LastUpdateAt = route.Name, p.nextSequence, time.Now().UTC()
+				p.devices[id] = item.Clone()
+				updated = append(updated, item)
+			}
 			continue
 		}
 		delete(p.devices, id)
@@ -214,6 +222,9 @@ func (p *Provider) Reconfigure(ctx context.Context, replacement providersdk.Prov
 	p.name = next.name
 	p.mu.Unlock()
 	for _, item := range removed {
+		p.broadcast(item)
+	}
+	for _, item := range updated {
 		p.broadcast(item)
 	}
 	return true, nil
@@ -382,7 +393,7 @@ func (p *Provider) handleMessage(message inboundMessage) error {
 	for _, route := range routes {
 		switch message.topic {
 		case route.Topics.Discovery:
-			return p.handleDiscovery(route.ID, message)
+			return p.handleDiscovery(route, message)
 		case route.Topics.Availability:
 			return p.handleAvailability(route.ID, message)
 		}
@@ -393,7 +404,8 @@ func (p *Provider) handleMessage(message inboundMessage) error {
 	return fmt.Errorf("mqtt topic %q is not assigned to a configured device", message.topic)
 }
 
-func (p *Provider) handleDiscovery(deviceID string, message inboundMessage) error {
+func (p *Provider) handleDiscovery(route DeviceConfig, message inboundMessage) error {
+	deviceID := route.ID
 	if !device.ValidStableID(deviceID) {
 		return fmt.Errorf("discovery topic has invalid device id %q", deviceID)
 	}
@@ -419,6 +431,9 @@ func (p *Provider) handleDiscovery(deviceID string, message inboundMessage) erro
 	}
 	if item.ID != deviceID {
 		return fmt.Errorf("discovery topic device %q does not match payload device %q", deviceID, item.ID)
+	}
+	if route.Name != "" {
+		item.Name = route.Name
 	}
 	item.ProviderID, item.Disabled, item.Removed = p.id, false, false
 	item.NormalizeAvailability()

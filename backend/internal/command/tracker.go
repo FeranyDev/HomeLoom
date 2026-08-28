@@ -239,9 +239,11 @@ func parameterMapsEqual(left, right map[string]device.PropertyValue) bool {
 	return true
 }
 
-func (t *Tracker) Sent(id string)      { t.transition(id, domaincommand.StatusSent, "") }
-func (t *Tracker) Accepted(id string)  { t.transition(id, domaincommand.StatusAccepted, "") }
-func (t *Tracker) Confirmed(id string) { t.transition(id, domaincommand.StatusConfirmed, "") }
+func (t *Tracker) Sent(id string)     { t.transition(id, domaincommand.StatusSent, "") }
+func (t *Tracker) Accepted(id string) { t.transition(id, domaincommand.StatusAccepted, "") }
+func (t *Tracker) Confirmed(id string) bool {
+	return t.transition(id, domaincommand.StatusConfirmed, "")
+}
 func (t *Tracker) Rejected(id string, err error) {
 	t.transition(id, domaincommand.StatusRejected, err.Error())
 }
@@ -291,12 +293,12 @@ func (t *Tracker) List() []domaincommand.Command {
 	return result
 }
 
-func (t *Tracker) transition(id string, status domaincommand.Status, message string) {
+func (t *Tracker) transition(id string, status domaincommand.Status, message string) bool {
 	t.mu.Lock()
 	command, ok := t.commands[id]
 	if !ok || terminal(command.Status) {
 		t.mu.Unlock()
-		return
+		return false
 	}
 	command.Status, command.Error, command.UpdatedAt = status, message, time.Now().UTC()
 	command.Outcome = outcomeForStatus(status)
@@ -308,6 +310,7 @@ func (t *Tracker) transition(id string, status domaincommand.Status, message str
 	}
 	t.mu.Unlock()
 	t.notify(command)
+	return true
 }
 
 func (t *Tracker) Expire(now time.Time) []domaincommand.Command {

@@ -53,7 +53,7 @@ describe('unified event stream', () => {
 		FakeEventSource.instances[0].emit('runtime-log-gap', { after: 7, before: 14 })
 		expect(onConnection).toHaveBeenCalledWith(true)
 		expect(onReady).toHaveBeenCalledOnce()
-		expect(onDevice).toHaveBeenCalledWith({ id: 'light-1' })
+		expect(onDevice).toHaveBeenCalledWith({ id: 'light-1', endpoints: [] })
 		expect(onRuntime).toHaveBeenCalledWith({ diagnostics: { eventsProcessed: 3 } })
 		expect(onRuntimeLog).toHaveBeenCalledWith({ sequence: 7, process: 'backend', instance: 'main', message: 'ready' })
 		expect(onRuntimeLogGap).toHaveBeenCalledWith({ after: 7, before: 14 })
@@ -62,6 +62,14 @@ describe('unified event stream', () => {
 		expect(FakeEventSource.instances[0].closed).toBe(false)
 		unsubscribeRuntime()
 		expect(FakeEventSource.instances[0].closed).toBe(true)
+	})
+
+	it('normalizes null device collections before dispatching provider updates', () => {
+		const handler = vi.fn()
+		const unsubscribe = subscribeEvents({ onDevice: handler })
+		FakeEventSource.instances[0].emit('device', { id: 'sonoff-1', endpoints: null })
+		expect(handler).toHaveBeenCalledWith({ id: 'sonoff-1', endpoints: [] })
+		unsubscribe()
 	})
 
 	it('filters unified state changes for the requested device', () => {

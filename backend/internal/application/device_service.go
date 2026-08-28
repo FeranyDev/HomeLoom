@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	commandtracker "github.com/feranydev/homeloom/backend/internal/command"
@@ -63,16 +64,28 @@ type DeviceService struct {
 	metrics                           deviceMetrics
 	storageMetrics                    DatabaseMetricsProvider
 	preferences                       DevicePreferenceStore
+	namePreferences                   DeviceNamePreferenceStore
 	locationPreferences               DeviceLocationPreferenceStore
 	locationCatalog                   DeviceLocationCatalogStore
 	disabledMu                        sync.RWMutex
 	disabled                          map[string]struct{}
+	nameMu                            sync.RWMutex
+	names                             map[string]string
 	locationMu                        sync.RWMutex
 	locations                         map[string]device.LocationPreference
 	locationCatalogMu                 sync.RWMutex
 	locationHomes                     []device.LocationHome
 	propertyMu                        sync.Mutex
 	propertyOps                       map[domainstate.Key]*propertyOperation
+	readbackCtx                       context.Context
+	readbackStop                      context.CancelFunc
+	readbackMu                        sync.Mutex
+	readbacks                         map[domainstate.Key]scheduledReadback
+	readbackNext                      uint64
+	readbackClosed                    bool
+	readbackWG                        sync.WaitGroup
+	readbackDelays                    []time.Duration
+	readbackGlobal                    bool
 	propertyMapper                    PropertyMapper
 	checkpoint                        stateCheckpoint
 }
@@ -88,6 +101,11 @@ type propertyOperation struct {
 	coalesced uint64
 }
 
+type scheduledReadback struct {
+	id     uint64
+	cancel context.CancelFunc
+}
+
 type DatabaseMetricsProvider interface {
 	DatabaseOperationMetrics() (operations uint64, average time.Duration, maximum time.Duration)
 }
@@ -99,6 +117,12 @@ type DatabaseHealthProvider interface {
 type DevicePreferenceStore interface {
 	ListDisabledDeviceIDs(context.Context) ([]string, error)
 	SetDeviceDisabled(context.Context, string, bool) error
+}
+
+type DeviceNamePreferenceStore interface {
+	ListDeviceNamePreferences(context.Context) ([]device.NamePreference, error)
+	SetDeviceNamePreference(context.Context, device.NamePreference) error
+	ClearDeviceNamePreference(context.Context, string) error
 }
 
 type DeviceLocationPreferenceStore interface {
@@ -128,6 +152,10 @@ type PropertyMapper interface {
 
 type PropertyPathMapper interface {
 	ResolvePropertyPath(providerID, deviceID, endpointID, capabilityID, propertyID string, direction mapping.Direction) (device.ParameterPath, string, bool, error)
+}
+
+type PropertyReadbackPolicyResolver interface {
+	PropertyReadbackDelays(providerID, deviceID string, path device.ParameterPath) ([]time.Duration, bool)
 }
 
 type ProviderPropertyProjection struct {
@@ -215,7 +243,10 @@ type snapshotTimeOrigin uint8
 const (
 	snapshotTimeOriginProviderEvent snapshotTimeOrigin = iota
 	snapshotTimeOriginRefresh
+	snapshotTimeOriginPropertyRead
 )
+
+var defaultPropertyReadbackDelays = []time.Duration{500 * time.Millisecond, 2 * time.Second, 5 * time.Second, 10 * time.Second}
 
 type DeviceMetrics struct {
 	EventsReceived            uint64  `json:"eventsReceived"`
@@ -304,14 +335,18 @@ func NewDeviceService(provider providersdk.Provider, dependencies ...any) *Devic
 		provider: provider, discoverer: discoverer, cataloger: cataloger, reader: reader, writer: writer, executor: executor,
 		registry: registry.NewDeviceRegistry(nil),
 		states:   statestore.NewStore(statestore.Options{PriorityResolver: options.StatePriority}), commands: commandtracker.NewTracker(5 * time.Second), commandQueue: newCommandCoordinator(),
-		listeners: make(map[uint64]*subscription[device.Device]), stateListeners: make(map[uint64]*subscription[domainstate.StateValue]), deviceEventListeners: make(map[uint64]*subscription[providersdk.DeviceEvent]), snapshotSeq: make(map[string]uint64), disabled: make(map[string]struct{}), locations: make(map[string]device.LocationPreference), propertyOps: make(map[domainstate.Key]*propertyOperation),
+		listeners: make(map[uint64]*subscription[device.Device]), stateListeners: make(map[uint64]*subscription[domainstate.StateValue]), deviceEventListeners: make(map[uint64]*subscription[providersdk.DeviceEvent]), snapshotSeq: make(map[string]uint64), disabled: make(map[string]struct{}), names: make(map[string]string), locations: make(map[string]device.LocationPreference), propertyOps: make(map[domainstate.Key]*propertyOperation), readbacks: make(map[domainstate.Key]scheduledReadback), readbackDelays: normalizePropertyReadbackDelays(options.PropertyReadbackDelays), readbackGlobal: options.PropertyReadbackDelays != nil,
 	}
+	service.readbackCtx, service.readbackStop = context.WithCancel(context.Background())
 	for _, dependency := range dependencies {
 		if metrics, ok := dependency.(DatabaseMetricsProvider); ok && service.storageMetrics == nil {
 			service.storageMetrics = metrics
 		}
 		if preferences, ok := dependency.(DevicePreferenceStore); ok && service.preferences == nil {
 			service.preferences = preferences
+		}
+		if preferences, ok := dependency.(DeviceNamePreferenceStore); ok && service.namePreferences == nil {
+			service.namePreferences = preferences
 		}
 		if preferences, ok := dependency.(DeviceLocationPreferenceStore); ok && service.locationPreferences == nil {
 			service.locationPreferences = preferences
@@ -414,6 +449,20 @@ func NewDeviceService(provider providersdk.Provider, dependencies ...any) *Devic
 	return service
 }
 
+func normalizePropertyReadbackDelays(configured []time.Duration) []time.Duration {
+	if configured == nil {
+		configured = defaultPropertyReadbackDelays
+	}
+	result := make([]time.Duration, 0, len(configured))
+	for _, delay := range configured {
+		if delay > 0 {
+			result = append(result, delay)
+		}
+	}
+	slices.Sort(result)
+	return slices.Compact(result)
+}
+
 func (s *DeviceService) LoadDevicePreferences(ctx context.Context) error {
 	if s.preferences != nil {
 		ids, err := s.preferences.ListDisabledDeviceIDs(ctx)
@@ -440,12 +489,92 @@ func (s *DeviceService) LoadDevicePreferences(ctx context.Context) error {
 			return err
 		}
 	}
+	if s.namePreferences != nil {
+		if err := s.reloadDeviceNamePreferences(ctx, false); err != nil {
+			return err
+		}
+	}
 	if s.locationCatalog != nil {
 		if err := s.reloadDeviceLocationCatalog(ctx, false); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (s *DeviceService) reloadDeviceNamePreferences(ctx context.Context, publish bool) error {
+	if s.namePreferences == nil {
+		return nil
+	}
+	preferences, err := s.namePreferences.ListDeviceNamePreferences(ctx)
+	if err != nil {
+		return err
+	}
+	names := make(map[string]string, len(preferences))
+	for _, preference := range preferences {
+		if name := strings.TrimSpace(preference.Name); name != "" {
+			names[preference.DeviceID] = name
+		}
+	}
+	s.nameMu.Lock()
+	s.names = names
+	s.nameMu.Unlock()
+	for _, item := range s.registry.List() {
+		updated := s.applyDeviceName(item)
+		s.registry.Upsert(updated)
+		if publish && (updated.Name != item.Name || updated.NameOverridden != item.NameOverridden) {
+			s.publishDevice(updated)
+		}
+	}
+	return nil
+}
+
+// SetDeviceName persists a HomeLoom-wide device name. Providers continue to
+// own SourceName, while the unified name remains stable through rediscovery.
+func (s *DeviceService) SetDeviceName(ctx context.Context, id, name string) (device.Device, error) {
+	item, ok := s.registry.Get(id)
+	if !ok {
+		return device.Device{}, ErrDeviceNotFound
+	}
+	if s.namePreferences == nil {
+		return device.Device{}, errors.New("device name preferences are unavailable")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" || !validDeviceName(name) {
+		return device.Device{}, NewValidationError("invalid device name", map[string]string{"name": "must be 1 to 128 characters and contain no control characters"})
+	}
+	if err := s.namePreferences.SetDeviceNamePreference(ctx, device.NamePreference{DeviceID: id, Name: name}); err != nil {
+		return device.Device{}, err
+	}
+	s.nameMu.Lock()
+	s.names[id] = name
+	s.nameMu.Unlock()
+	item = s.applyDeviceName(item)
+	s.registry.Upsert(item)
+	s.publishDevice(item)
+	return item, nil
+}
+
+// ResetDeviceName removes the HomeLoom override and restores the latest
+// Provider-reported source name.
+func (s *DeviceService) ResetDeviceName(ctx context.Context, id string) (device.Device, error) {
+	item, ok := s.registry.Get(id)
+	if !ok {
+		return device.Device{}, ErrDeviceNotFound
+	}
+	if s.namePreferences == nil {
+		return device.Device{}, errors.New("device name preferences are unavailable")
+	}
+	if err := s.namePreferences.ClearDeviceNamePreference(ctx, id); err != nil {
+		return device.Device{}, err
+	}
+	s.nameMu.Lock()
+	delete(s.names, id)
+	s.nameMu.Unlock()
+	item = s.applyDeviceName(item)
+	s.registry.Upsert(item)
+	s.publishDevice(item)
+	return item, nil
 }
 
 func (s *DeviceService) reloadDeviceLocationPreferences(ctx context.Context, publish bool) error {
@@ -730,6 +859,23 @@ func (s *DeviceService) applyDeviceLocation(item device.Device) device.Device {
 	return item
 }
 
+func (s *DeviceService) applyDeviceName(item device.Device) device.Device {
+	sourceName := item.Name
+	if item.SourceName != "" {
+		sourceName = item.SourceName
+	}
+	item.SourceName = sourceName
+	item.Name = sourceName
+	item.NameOverridden = false
+	s.nameMu.RLock()
+	name, overridden := s.names[item.ID]
+	s.nameMu.RUnlock()
+	if overridden {
+		item.Name, item.NameOverridden = name, true
+	}
+	return item
+}
+
 func (s *DeviceService) canonicalSourceHome(sourceID, sourceName string) (device.LocationHome, bool) {
 	s.locationCatalogMu.RLock()
 	defer s.locationCatalogMu.RUnlock()
@@ -773,6 +919,10 @@ func cloneLocationHomes(homes []device.LocationHome) []device.LocationHome {
 
 func validLocationName(value string) bool {
 	return utf8.RuneCountInString(value) <= 80 && !strings.ContainsAny(value, "\x00\r\n")
+}
+
+func validDeviceName(value string) bool {
+	return utf8.RuneCountInString(value) <= 128 && !strings.ContainsFunc(value, unicode.IsControl)
 }
 
 func customLocationID(kind string, values ...string) string {
@@ -1180,7 +1330,44 @@ func (s *DeviceService) ReadProperty(ctx context.Context, deviceID, endpointID, 
 			property.Value = alignEnumValue(property.Value, definition.Enum)
 		}
 	}
+	s.reconcileReadProperty(deviceID, endpointID, capabilityID, propertyID, property, CorrelationID(ctx))
 	return property, nil
+}
+
+// reconcileReadProperty makes an explicit Provider read authoritative for the
+// public registry and state stream. Reads use sequence zero so a fresh poll can
+// supersede the last event snapshot without corrupting Provider sequence
+// tracking; the next sequenced Provider event still remains authoritative.
+func (s *DeviceService) reconcileReadProperty(deviceID, endpointID, capabilityID, propertyID string, property device.Property, traceID string) {
+	item, exists := s.registry.Get(deviceID)
+	if !exists || item.Disabled || item.Removed {
+		return
+	}
+	previous, exists := item.Property(endpointID, capabilityID, propertyID)
+	if !exists {
+		return
+	}
+	if s.commands.Confirm(deviceID, endpointID, capabilityID, propertyID, property.Value) {
+		s.metrics.commandsConfirmed.Add(1)
+	}
+	changed := !previous.Value.Equal(property.Value)
+	if changed {
+		item.SetProperty(endpointID, capabilityID, propertyID, property.Value)
+		item.LastUpdateAt = time.Now().UTC()
+		s.registry.Upsert(item)
+	}
+	observed := previous
+	observed.Value = property.Value
+	observed.StateTransport = property.StateTransport
+	partial := device.Device{
+		SchemaVersion: item.SchemaVersion, ID: item.ID, ProviderID: item.ProviderID, Name: item.Name, Type: item.Type,
+		Availability: item.Availability, Online: item.Online, StateTransport: item.StateTransport, LastUpdateAt: time.Now().UTC(),
+		Endpoints: []device.Endpoint{{ID: endpointID, Name: endpointID, Type: endpointID, Capabilities: []device.Capability{{ID: capabilityID, Type: capabilityID, Properties: []device.Property{observed}}}}},
+	}
+	s.applySnapshot(partial, traceID, snapshotTimeOriginPropertyRead)
+	if changed {
+		s.publishDevice(item)
+	}
 }
 
 func (s *DeviceService) ExecutePower(ctx context.Context, id string, power bool) (device.Device, domaincommand.Command, error) {
@@ -1374,8 +1561,101 @@ func (s *DeviceService) ExecuteProperty(ctx context.Context, deviceID, endpointI
 	if mapped, mapErr := s.projectLatestSnapshot(operation.ctx, item); mapErr == nil {
 		item = mapped
 	}
+	if acknowledger, ok := s.writer.(providersdk.PropertyWriteAcknowledger); ok && acknowledger.AcknowledgesPropertyWrite(providersdk.PropertyWriteRequest{
+		DeviceID: deviceID, EndpointID: endpointID, CapabilityID: capabilityID, PropertyID: propertyID, Value: value,
+	}) {
+		// Acknowledged writes (currently Wake-on-LAN) succeed when the control
+		// message is accepted for delivery, not when a later state probe observes
+		// the requested value. Apply the returned snapshot so its pending-start
+		// state is visible immediately, then close the control command without
+		// turning that eventual observation into a command timeout.
+		s.handleDeviceSnapshot(item, command.CorrelationID, snapshotTimeOriginProviderEvent)
+		if s.commands.Confirmed(command.ID) {
+			s.metrics.commandsConfirmed.Add(1)
+		}
+	} else {
+		s.schedulePropertyReadbacks(key, registered.ProviderID, providerPath, command.CorrelationID)
+	}
 	current, _ := s.commands.Get(command.ID)
 	return item, current, nil
+}
+
+func (s *DeviceService) schedulePropertyReadbacks(key domainstate.Key, providerID string, providerPath device.ParameterPath, traceID string) {
+	if s.reader == nil {
+		return
+	}
+	configuredDelays := []time.Duration(nil)
+	enabled := s.readbackGlobal
+	if resolver, ok := s.propertyMapper.(PropertyReadbackPolicyResolver); ok {
+		if policyDelays, configured := resolver.PropertyReadbackDelays(providerID, key.DeviceID, providerPath); configured {
+			enabled = true
+			configuredDelays = policyDelays
+		}
+	}
+	if !enabled {
+		return
+	}
+	item, exists := s.registry.Get(key.DeviceID)
+	if !exists || item.Disabled || item.Removed {
+		return
+	}
+	property, exists := item.Property(key.EndpointID, key.CapabilityID, key.PropertyID)
+	if !exists || !property.Definition.Readable {
+		return
+	}
+	s.readbackMu.Lock()
+	if s.readbackClosed {
+		s.readbackMu.Unlock()
+		return
+	}
+	delays := append([]time.Duration(nil), configuredDelays...)
+	if len(delays) == 0 {
+		delays = append(delays, s.readbackDelays...)
+	}
+	if len(delays) == 0 {
+		s.readbackMu.Unlock()
+		return
+	}
+	if previous, exists := s.readbacks[key]; exists {
+		previous.cancel()
+	}
+	s.readbackNext++
+	id := s.readbackNext
+	ctx, cancel := context.WithCancel(s.readbackCtx)
+	s.readbacks[key] = scheduledReadback{id: id, cancel: cancel}
+	s.readbackWG.Add(1)
+	s.readbackMu.Unlock()
+	if traceID == "" {
+		traceID = "readback-" + key.DeviceID + "-" + key.PropertyID
+	}
+	go s.runPropertyReadbacks(ctx, key, traceID, id, delays)
+}
+
+func (s *DeviceService) runPropertyReadbacks(ctx context.Context, key domainstate.Key, traceID string, id uint64, delays []time.Duration) {
+	defer s.readbackWG.Done()
+	defer func() {
+		s.readbackMu.Lock()
+		if current, exists := s.readbacks[key]; exists && current.id == id {
+			delete(s.readbacks, key)
+		}
+		s.readbackMu.Unlock()
+	}()
+	previousDelay := time.Duration(0)
+	for _, delay := range delays {
+		wait := delay - previousDelay
+		previousDelay = delay
+		timer := time.NewTimer(wait)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		}
+		readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		readCtx = WithCorrelationID(readCtx, traceID)
+		_, _ = s.ReadProperty(readCtx, key.DeviceID, key.EndpointID, key.CapabilityID, key.PropertyID)
+		cancel()
+	}
 }
 
 func (s *DeviceService) rejectPropertyWrite(command domaincommand.Command, previous domainstate.StateValue, hadPrevious bool, err error) (device.Device, domaincommand.Command, error) {
@@ -1514,8 +1794,9 @@ func (s *DeviceService) ExecuteCommand(ctx context.Context, request providersdk.
 		item = mapped
 	}
 	s.registry.Upsert(item)
-	s.commands.Confirmed(command.ID)
-	s.metrics.commandsConfirmed.Add(1)
+	if s.commands.Confirmed(command.ID) {
+		s.metrics.commandsConfirmed.Add(1)
+	}
 	current, _ := s.commands.Get(command.ID)
 	return item, current, nil
 }
@@ -1665,6 +1946,11 @@ func subscribe[T any](s *DeviceService, nextID *uint64, listeners map[uint64]*su
 }
 
 func (s *DeviceService) Close() error {
+	s.readbackMu.Lock()
+	s.readbackClosed = true
+	s.readbackStop()
+	s.readbackMu.Unlock()
+	s.readbackWG.Wait()
 	s.unsubscribe()
 	s.unsubscribeSnapshotRefreshes()
 	s.unsubscribeDeviceEvents()
@@ -1810,7 +2096,7 @@ func (s *DeviceService) handleCapabilityAvailability(
 
 func (s *DeviceService) mapSnapshot(item device.Device) (device.Device, error) {
 	if s.propertyMapper == nil {
-		return s.applyDeviceLocation(item), nil
+		return s.applyDeviceName(s.applyDeviceLocation(item)), nil
 	}
 	result := item
 	result.Endpoints = nil
@@ -1896,7 +2182,7 @@ func (s *DeviceService) mapSnapshot(item device.Device) (device.Device, error) {
 	if err := result.NormalizeModelParameters(); err != nil {
 		return device.Device{}, fmt.Errorf("normalize mapped device %q: %w", item.ID, err)
 	}
-	return s.applyDeviceLocation(result), nil
+	return s.applyDeviceName(s.applyDeviceLocation(result)), nil
 }
 
 func mappingErrorText(cause error) string {
@@ -2185,7 +2471,7 @@ func (s *DeviceService) applySnapshot(item device.Device, traceID string, origin
 				if transport == "" {
 					transport = item.StateTransport
 				}
-				if transport == device.StateTransportCloudHTTP {
+				if origin == snapshotTimeOriginPropertyRead || transport == device.StateTransportCloudHTTP {
 					source, quality = domainstate.SourcePolled, domainstate.QualityPolled
 				}
 				value := domainstate.StateValue{

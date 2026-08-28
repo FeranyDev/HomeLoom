@@ -37,15 +37,35 @@ type runtimeDevice struct {
 	params map[string]any
 }
 
+// DirectoryDevice is the non-sensitive device metadata exposed to the
+// management UI. DeviceKey and raw Params deliberately stay inside the
+// Provider process.
+type DirectoryDevice struct {
+	ID         string `json:"id"`
+	DeviceID   string `json:"deviceId"`
+	Name       string `json:"name"`
+	Model      string `json:"model,omitempty"`
+	UIID       int    `json:"uiid"`
+	Type       string `json:"type,omitempty"`
+	HomeID     string `json:"homeId,omitempty"`
+	HomeName   string `json:"homeName,omitempty"`
+	RoomID     string `json:"roomId,omitempty"`
+	RoomName   string `json:"roomName,omitempty"`
+	Channels   int    `json:"channels"`
+	Online     bool   `json:"online"`
+	Configured bool   `json:"configured"`
+}
+
 type Provider struct {
 	id     string
 	name   string
 	config Config
 
-	lan         lanTransport
-	cloud       cloudTransport
-	discoverLAN lanDiscovery
-	realtime    cloud.RealtimeSubscriber
+	lan          lanTransport
+	cloud        cloudTransport
+	discoverLAN  lanDiscovery
+	realtime     cloud.RealtimeSubscriber
+	pollInterval time.Duration
 
 	mu             sync.RWMutex
 	running        bool
@@ -54,10 +74,26 @@ type Provider struct {
 	next           uint64
 	realtimeCancel context.CancelFunc
 	realtimeDone   chan struct{}
+	pollDone       chan struct{}
 	requests       atomic.Uint64
 	errors         atomic.Uint64
 	writes         atomic.Uint64
+	polls          atomic.Uint64
 	realtimeEvents atomic.Uint64
+}
+
+var _ providersdk.DeviceIdentityResolver = (*Provider)(nil)
+
+// ProviderDeviceID resolves the stable HomeLoom device ID to the Sonoff cloud
+// identity retained in the configured device catalog.
+func (p *Provider) ProviderDeviceID(deviceID string) (string, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	current, ok := p.devices[deviceID]
+	if !ok || strings.TrimSpace(current.config.DeviceID) == "" {
+		return "", false
+	}
+	return current.config.DeviceID, true
 }
 
 func NewProviderFromConfig(item providerconfig.Config) (*Provider, error) {
@@ -128,6 +164,7 @@ func newProvider(id, name string, config Config, local lanTransport, remote clou
 			return lan.DiscoverServices(ctx, timeout, nil)
 		},
 		devices: make(map[string]runtimeDevice), listeners: make(map[uint64]func(device.Device)),
+		pollInterval: time.Duration(config.RefreshIntervalSec) * time.Second,
 	}
 }
 
@@ -149,17 +186,20 @@ func (p *Provider) Initialize(ctx context.Context) error {
 		return nil
 	}
 	p.running = true
-	var lifecycle context.Context
-	var source cloud.RealtimeSubscriber
-	var done chan struct{}
-	if p.realtime != nil {
-		lifecycle, p.realtimeCancel = context.WithCancel(context.WithoutCancel(ctx))
-		source, done = p.realtime, make(chan struct{})
-		p.realtimeDone = done
-	}
-	p.mu.Unlock()
+	lifecycle, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	p.realtimeCancel = cancel
+	p.pollDone = make(chan struct{})
+	source := p.realtime
+	var realtimeDone chan struct{}
 	if source != nil {
-		go p.consumeRealtime(lifecycle, source, done)
+		realtimeDone = make(chan struct{})
+		p.realtimeDone = realtimeDone
+	}
+	pollDone := p.pollDone
+	p.mu.Unlock()
+	go p.pollLoop(lifecycle, pollDone)
+	if source != nil {
+		go p.consumeRealtime(lifecycle, source, realtimeDone)
 	}
 	return nil
 }
@@ -170,13 +210,16 @@ func (p *Provider) Close(ctx context.Context) error {
 	}
 	p.mu.Lock()
 	p.running = false
-	cancel, done := p.realtimeCancel, p.realtimeDone
-	p.realtimeCancel, p.realtimeDone = nil, nil
+	cancel, realtimeDone, pollDone := p.realtimeCancel, p.realtimeDone, p.pollDone
+	p.realtimeCancel, p.realtimeDone, p.pollDone = nil, nil, nil
 	p.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
-	if done != nil {
+	for _, done := range []chan struct{}{realtimeDone, pollDone} {
+		if done == nil {
+			continue
+		}
 		select {
 		case <-done:
 		case <-ctx.Done():
@@ -184,6 +227,58 @@ func (p *Provider) Close(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (p *Provider) pollLoop(ctx context.Context, done chan struct{}) {
+	defer close(done)
+	ticker := time.NewTicker(p.pollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			p.polls.Add(1)
+			items, err := p.pollDevices(ctx)
+			if err != nil {
+				p.errors.Add(1)
+			}
+			for _, item := range items {
+				p.notify(item)
+			}
+		}
+	}
+}
+
+// pollDevices refreshes the complete configured catalog. Cloud state is read
+// first and a reachable LAN device then wins with its fresher local snapshot.
+func (p *Provider) pollDevices(ctx context.Context) ([]device.Device, error) {
+	if err := p.seedConfiguredDevices(); err != nil {
+		return nil, err
+	}
+	var refreshErr error
+	if p.cloud != nil && p.config.Mode != ModeLocal {
+		if refreshErr = p.refreshCloud(ctx); refreshErr != nil {
+			p.markConfiguredOffline()
+		}
+	}
+	p.mu.RLock()
+	configured := make([]runtimeDevice, 0, len(p.devices))
+	for _, current := range p.devices {
+		configured = append(configured, current)
+	}
+	p.mu.RUnlock()
+	for _, current := range configured {
+		if p.lan == nil || current.config.Host == "" || p.config.Mode == ModeCloud {
+			continue
+		}
+		state, err := p.lan.GetState(ctx, p.lanRequest(current.config))
+		if err != nil {
+			continue
+		}
+		p.applyStateSnapshot(current.item.ID, state)
+	}
+	return p.snapshotDevices(), refreshErr
 }
 
 func (p *Provider) consumeRealtime(ctx context.Context, source cloud.RealtimeSubscriber, done chan struct{}) {
@@ -210,30 +305,58 @@ func (p *Provider) consumeRealtime(ctx context.Context, source cloud.RealtimeSub
 
 func (p *Provider) DiscoverDevices(ctx context.Context) ([]device.Device, error) {
 	p.requests.Add(1)
+	if err := p.seedConfiguredDevices(); err != nil {
+		p.errors.Add(1)
+		return nil, err
+	}
 	if p.cloud != nil && p.config.Mode != ModeLocal {
-		if err := p.refreshCloud(ctx); err != nil && p.config.Mode == ModeCloud {
+		if err := p.refreshCloud(ctx); err != nil {
 			p.errors.Add(1)
-			return nil, err
+			if len(p.config.Devices) == 0 && p.config.Mode == ModeCloud {
+				return nil, err
+			}
+			p.markConfiguredOffline()
 		}
 	}
+	return p.snapshotDevices(), nil
+}
+
+func (p *Provider) seedConfiguredDevices() error {
 	p.mu.Lock()
+	defer p.mu.Unlock()
 	for _, configured := range p.config.Devices {
 		if _, exists := p.devices[configured.ID]; exists {
 			continue
 		}
 		if err := p.commitConfigLocked(configured, nil, nil); err != nil {
-			p.mu.Unlock()
-			p.errors.Add(1)
-			return nil, err
+			return err
 		}
 	}
+	return nil
+}
+
+func (p *Provider) snapshotDevices() []device.Device {
+	p.mu.RLock()
 	result := make([]device.Device, 0, len(p.devices))
 	for _, current := range p.devices {
 		result = append(result, current.item)
 	}
-	p.mu.Unlock()
+	p.mu.RUnlock()
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
-	return result, nil
+	return result
+}
+
+func (p *Provider) markConfiguredOffline() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, configured := range p.config.Devices {
+		current, exists := p.devices[configured.ID]
+		if exists {
+			_ = p.commitConfigLocked(current.config, current.params, boolPointer(false))
+			continue
+		}
+		_ = p.commitConfigLocked(configured, nil, boolPointer(false))
+	}
 }
 
 // Scan discovers transient eWeLink LAN endpoints through mDNS. Scan never
@@ -305,7 +428,10 @@ func (p *Provider) refreshCloud(ctx context.Context) error {
 		if deviceID == "" {
 			continue
 		}
-		configured := p.configForRemoteLocked(deviceID, remote)
+		configured, explicitlyConfigured := p.configForRemoteLocked(deviceID, remote)
+		if p.config.ManagedDevices && !explicitlyConfigured {
+			continue
+		}
 		if err := p.commitConfigLocked(configured, remote.Params, boolPointer(remote.Online)); err != nil {
 			return err
 		}
@@ -313,7 +439,7 @@ func (p *Provider) refreshCloud(ctx context.Context) error {
 	return nil
 }
 
-func (p *Provider) configForRemoteLocked(deviceID string, remote cloud.Device) DeviceConfig {
+func (p *Provider) configForRemoteLocked(deviceID string, remote cloud.Device) (DeviceConfig, bool) {
 	for _, configured := range p.config.Devices {
 		if configured.DeviceID == deviceID || configured.ID == remote.ID {
 			configured.DeviceID = deviceID
@@ -344,11 +470,73 @@ func (p *Provider) configForRemoteLocked(deviceID string, remote cloud.Device) D
 			if configured.DeviceKey == "" {
 				configured.DeviceKey = remote.DeviceKey
 			}
-			return configured
+			return configured, true
 		}
 	}
 	id := "sonoff-" + stableID(deviceID)
-	return DeviceConfig{ID: id, DeviceID: deviceID, Name: nonEmpty(remote.Name, deviceID), Model: remote.Model, UIID: remote.UIID, HomeID: remote.HomeID, HomeName: remote.HomeName, RoomID: remote.RoomID, RoomName: remote.RoomName, DeviceKey: remote.DeviceKey, Host: "", Port: defaultLANPort, Channels: 1}
+	return DeviceConfig{ID: id, DeviceID: deviceID, Name: nonEmpty(remote.Name, deviceID), Model: remote.Model, UIID: remote.UIID, HomeID: remote.HomeID, HomeName: remote.HomeName, RoomID: remote.RoomID, RoomName: remote.RoomName, DeviceKey: remote.DeviceKey, Host: "", Port: defaultLANPort, Channels: channelsFromParams(remote.Params)}, false
+}
+
+// DiscoverCloudDevices reads the complete account directory without changing
+// the managed/public device set. It is used by the explicit device manager in
+// the same way Xiaomi keeps discovery separate from saved mappings.
+func (p *Provider) DiscoverCloudDevices(ctx context.Context) ([]DirectoryDevice, error) {
+	if p.cloud == nil || p.config.Mode == ModeLocal {
+		return nil, fmt.Errorf("Sonoff cloud directory is unavailable")
+	}
+	p.requests.Add(1)
+	items, err := p.cloud.ListDevices(ctx)
+	if err != nil {
+		p.errors.Add(1)
+		return nil, err
+	}
+	p.mu.RLock()
+	configured := make(map[string]DeviceConfig, len(p.config.Devices))
+	for _, item := range p.config.Devices {
+		configured[item.DeviceID] = item
+	}
+	p.mu.RUnlock()
+	result := make([]DirectoryDevice, 0, len(items))
+	for _, remote := range items {
+		deviceID := strings.TrimSpace(remote.DeviceID)
+		if deviceID == "" {
+			deviceID = strings.TrimSpace(remote.ID)
+		}
+		if deviceID == "" {
+			continue
+		}
+		entry, exists := configured[deviceID]
+		id := "sonoff-" + stableID(deviceID)
+		name, model, typeValue := nonEmpty(remote.Name, deviceID), remote.Model, remote.Type
+		homeID, homeName, roomID, roomName := remote.HomeID, remote.HomeName, remote.RoomID, remote.RoomName
+		channels := channelsFromParams(remote.Params)
+		if exists {
+			if entry.ID != "" {
+				id = entry.ID
+			}
+			name, model, typeValue = nonEmpty(entry.Name, name), nonEmpty(entry.Model, model), nonEmpty(entry.Type, typeValue)
+			homeID, homeName = nonEmpty(entry.HomeID, homeID), nonEmpty(entry.HomeName, homeName)
+			roomID, roomName = nonEmpty(entry.RoomID, roomID), nonEmpty(entry.RoomName, roomName)
+			if entry.Channels > channels {
+				channels = entry.Channels
+			}
+		}
+		result = append(result, DirectoryDevice{
+			ID: id, DeviceID: deviceID, Name: name, Model: model,
+			UIID: remote.UIID, Type: typeValue, HomeID: homeID, HomeName: homeName,
+			RoomID: roomID, RoomName: roomName, Channels: channels,
+			Online: remote.Online, Configured: exists,
+		})
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].DeviceID < result[j].DeviceID })
+	return result, nil
+}
+
+func channelsFromParams(params map[string]any) int {
+	if switches, ok := params["switches"].([]any); ok && len(switches) > 0 {
+		return len(switches)
+	}
+	return 1
 }
 
 func (p *Provider) commitConfigLocked(configured DeviceConfig, remoteParams map[string]any, online *bool) error {
@@ -498,13 +686,13 @@ func (p *Provider) ProviderMetrics() map[string]uint64 {
 		}
 	}
 	p.mu.RUnlock()
-	return map[string]uint64{"requests": p.requests.Load(), "writes": p.writes.Load(), "errors": p.errors.Load(), "realtimeEvents": p.realtimeEvents.Load(), "devices": count, "onlineDevices": online}
+	return map[string]uint64{"requests": p.requests.Load(), "writes": p.writes.Load(), "polls": p.polls.Load(), "errors": p.errors.Load(), "realtimeEvents": p.realtimeEvents.Load(), "devices": count, "onlineDevices": online}
 }
 
 func (p *Provider) ProviderDiagnostics() map[string]string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return map[string]string{"mode": p.config.Mode, "region": p.config.Region, "lan": strconv.FormatBool(p.lan != nil), "cloud": strconv.FormatBool(p.cloud != nil), "realtime": strconv.FormatBool(p.realtime != nil), "devices": strconv.Itoa(len(p.devices))}
+	return map[string]string{"mode": p.config.Mode, "region": p.config.Region, "lan": strconv.FormatBool(p.lan != nil), "cloud": strconv.FormatBool(p.cloud != nil), "realtime": strconv.FormatBool(p.realtime != nil), "refreshIntervalSeconds": strconv.Itoa(p.config.RefreshIntervalSec), "devices": strconv.Itoa(len(p.devices))}
 }
 
 func (p *Provider) current(id string) (runtimeDevice, bool) {
@@ -515,6 +703,13 @@ func (p *Provider) current(id string) (runtimeDevice, bool) {
 }
 
 func (p *Provider) applyState(id string, state map[string]any) {
+	latest, exists := p.applyStateSnapshot(id, state)
+	if exists {
+		p.notify(latest)
+	}
+}
+
+func (p *Provider) applyStateSnapshot(id string, state map[string]any) (device.Device, bool) {
 	params := extractState(state)
 	p.mu.Lock()
 	current, ok := p.devices[id]
@@ -526,9 +721,7 @@ func (p *Provider) applyState(id string, state map[string]any) {
 	}
 	latest, exists := p.devices[id]
 	p.mu.Unlock()
-	if exists {
-		p.notify(latest.item)
-	}
+	return latest.item, exists
 }
 
 func (p *Provider) applyRealtimeEvent(event cloud.RealtimeEvent) {

@@ -46,12 +46,35 @@ export interface TuyaSharingLoginPollResult {
 	expiresAt?: string
 }
 
+export interface TuyaDirectoryDevice {
+	id: string
+	deviceId: string
+	name: string
+	type: string
+	category?: string
+	productId?: string
+	productName?: string
+	model?: string
+	homeId?: string
+	homeName?: string
+	roomId?: string
+	roomName?: string
+	online: boolean
+	configured: boolean
+	specification?: Record<string, unknown>
+	status?: Array<Record<string, unknown>>
+}
+
 export function startTuyaSharingLogin(userCode: string): Promise<TuyaSharingLoginStartResult> {
 	return requestData<TuyaSharingLoginStartResult>('/api/v1/tuya/login/start', { method: 'POST', body: JSON.stringify({ userCode }) })
 }
 
 export function pollTuyaSharingLogin(state: string): Promise<TuyaSharingLoginPollResult> {
 	return requestData<TuyaSharingLoginPollResult>('/api/v1/tuya/login/poll', { method: 'POST', body: JSON.stringify({ state }) })
+}
+
+export function discoverTuyaDevices(providerId: string): Promise<TuyaDirectoryDevice[]> {
+	return requestData<TuyaDirectoryDevice[]>(`/api/v1/tuya/providers/${encodeURIComponent(providerId)}/devices`)
 }
 
 export function tuyaSharingQRCodeURL(state: string): string {

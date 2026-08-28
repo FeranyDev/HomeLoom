@@ -14,7 +14,7 @@ func TestProviderMappingSourceFansOutWhileModelTargetRemainsUnique(t *testing.T)
 		t.Fatal(err)
 	}
 	defer store.Close()
-	item := mapping.Binding{ID: "binding-one", ProfileID: "builtin-active-low", ProviderID: "virtual-main", DeviceID: "virtual-switch-1", EndpointID: "main", CapabilityID: "vendor", PropertyID: "raw-power", ModelEndpointID: "main", ModelCapabilityID: "switch", ModelPropertyID: "power", Enabled: true}
+	item := mapping.Binding{ID: "binding-one", ProfileID: "builtin-active-low", ProviderID: "virtual-main", DeviceID: "virtual-switch-1", EndpointID: "main", CapabilityID: "vendor", PropertyID: "raw-power", ModelEndpointID: "main", ModelCapabilityID: "switch", ModelPropertyID: "power", Enabled: true, ReadbackEnabled: true, ReadbackDelaysMS: []int{250, 1000, 3000}}
 	if err := store.SaveMappingBinding(ctx, item); err != nil {
 		t.Fatal(err)
 	}
@@ -31,6 +31,9 @@ func TestProviderMappingSourceFansOutWhileModelTargetRemainsUnique(t *testing.T)
 	items, err := store.ListMappingBindings(ctx)
 	if err != nil || len(items) != 2 {
 		t.Fatalf("bindings = %#v, error = %v", items, err)
+	}
+	if !items[0].ReadbackEnabled || len(items[0].ReadbackDelaysMS) != 3 || items[0].ReadbackDelaysMS[0] != 250 {
+		t.Fatalf("readback policy was not persisted: %#v", items[0])
 	}
 	item.Enabled = false
 	if err := store.SaveMappingBinding(ctx, item); err != nil {

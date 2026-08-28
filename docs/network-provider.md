@@ -11,6 +11,7 @@
 	"probeMethod": "tcp",
 	"probeIntervalSeconds": 30,
   "probeTimeoutSeconds": 3,
+  "wakeGraceSeconds": 300,
   "onlineThreshold": 1,
   "offlineThreshold": 2,
   "wolBroadcastAddress": "255.255.255.255",
@@ -36,6 +37,7 @@
 | `probeMethod` | 全局探测方式：`tcp` 或 `icmp`；每台设备可单独覆盖 | `tcp` |
 | `probeIntervalSeconds` | 全局探测周期（1–3600 秒） | `30` |
 | `probeTimeoutSeconds` | 单次 TCP 建连或 ICMP 回显超时（1–120 秒） | `3` |
+| `wakeGraceSeconds` | WOL 发出后显示“启动中”的最长时间（5–3600 秒）；不是控制超时 | `300` |
 | `onlineThreshold` | 连续探测成功多少次后转为已开启（1–100） | `1` |
 | `offlineThreshold` | 连续探测失败多少次后转为已关闭（1–100） | `1` |
 | `wolBroadcastAddress` | WOL UDP 广播地址 | `255.255.255.255` |
@@ -47,7 +49,8 @@
 ## 状态与唤醒行为
 
 - 新配置的设备初始显示为已关闭但仍可管理；达到开启或关闭阈值后才改变电源状态，避免 Wi-Fi 短暂波动造成抖动。
-- 对有 MAC 的设备，将 `switch/power` 设为 `true` 会发送魔术包，不会乐观地将设备设为已开启；下一次 TCP 或 ICMP 探测成功后才会更新为已开启。
+- 对有 MAC 的设备，将 `switch/power` 设为 `true` 会发送魔术包。魔术包成功发出即确认控制成功，不会因为主机的长启动时间被判为控制超时；设备会在 `main/network/wake-pending=true` 时显示“启动中”，下一次 TCP 或 ICMP 探测成功后才会更新为已开启。
+- 启动期间最多每 10 秒探测一次；超过 `wakeGraceSeconds` 仍未可达时，`wake-pending` 会恢复为 `false`，而电源状态保持已关闭。
 - 设备必须在 BIOS/UEFI、操作系统及网卡中启用 WOL；深度休眠、无线网卡和不同 VLAN 的广播策略常会影响实际可唤醒性。
 - 容器部署建议使用 host network，确保 UDP 广播可到达家庭局域网；仍应以实际网络环境测试唤醒。
 

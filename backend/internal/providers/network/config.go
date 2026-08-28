@@ -17,6 +17,7 @@ const (
 
 	defaultProbeInterval = 30 * time.Second
 	defaultProbeTimeout  = 3 * time.Second
+	defaultWakeGrace     = 5 * time.Minute
 	defaultWOLAddress    = "255.255.255.255"
 	defaultWOLPort       = 9
 )
@@ -36,6 +37,7 @@ type Config struct {
 	ProbeMethod          ProbeMethod    `json:"probeMethod,omitempty"`
 	ProbeIntervalSeconds int            `json:"probeIntervalSeconds,omitempty"`
 	ProbeTimeoutSeconds  int            `json:"probeTimeoutSeconds,omitempty"`
+	WakeGraceSeconds     int            `json:"wakeGraceSeconds,omitempty"`
 	OnlineThreshold      int            `json:"onlineThreshold,omitempty"`
 	OfflineThreshold     int            `json:"offlineThreshold,omitempty"`
 	WOLBroadcastAddress  string         `json:"wolBroadcastAddress,omitempty"`
@@ -54,6 +56,7 @@ type DeviceConfig struct {
 	MAC                  string      `json:"mac,omitempty"`
 	ProbeIntervalSeconds int         `json:"probeIntervalSeconds,omitempty"`
 	ProbeTimeoutSeconds  int         `json:"probeTimeoutSeconds,omitempty"`
+	WakeGraceSeconds     int         `json:"wakeGraceSeconds,omitempty"`
 	OnlineThreshold      int         `json:"onlineThreshold,omitempty"`
 	OfflineThreshold     int         `json:"offlineThreshold,omitempty"`
 	WOLBroadcastAddress  string      `json:"wolBroadcastAddress,omitempty"`
@@ -67,6 +70,7 @@ type monitoredDevice struct {
 	mac              net.HardwareAddr
 	probeInterval    time.Duration
 	probeTimeout     time.Duration
+	wakeGrace        time.Duration
 	onlineThreshold  int
 	offlineThreshold int
 	wolAddress       string
@@ -97,9 +101,9 @@ func normalizeConfig(item providerconfig.Config, config *Config) error {
 	if config == nil {
 		return errors.New("network provider config is required")
 	}
-	if len(config.Devices) == 0 {
-		return errors.New("network provider requires at least one device")
-	}
+	// An empty catalog is valid while a Provider is first created. Devices are
+	// added from the shared device-management flow afterwards, just like the
+	// other Provider types. A running empty catalog simply discovers nothing.
 	probeMethod, err := resolveProbeMethod(config.ProbeMethod, ProbeMethodTCP)
 	if err != nil {
 		return fmt.Errorf("probeMethod: %w", err)
@@ -109,6 +113,9 @@ func normalizeConfig(item providerconfig.Config, config *Config) error {
 		return err
 	}
 	if err := validateSeconds("probeTimeoutSeconds", config.ProbeTimeoutSeconds, 1, 120); err != nil {
+		return err
+	}
+	if err := validateSeconds("wakeGraceSeconds", config.WakeGraceSeconds, 5, 3600); err != nil {
 		return err
 	}
 	if err := validateThreshold("onlineThreshold", config.OnlineThreshold); err != nil {
@@ -153,6 +160,9 @@ func normalizeConfig(item providerconfig.Config, config *Config) error {
 			return err
 		}
 		if err := validateSeconds("network device "+configured.ID+" probeTimeoutSeconds", configured.ProbeTimeoutSeconds, 1, 120); err != nil {
+			return err
+		}
+		if err := validateSeconds("network device "+configured.ID+" wakeGraceSeconds", configured.WakeGraceSeconds, 5, 3600); err != nil {
 			return err
 		}
 		if err := validateThreshold("network device "+configured.ID+" onlineThreshold", configured.OnlineThreshold); err != nil {
@@ -212,6 +222,7 @@ func validateWOL(address string, port int) error {
 func materializeDevices(config Config) ([]monitoredDevice, error) {
 	interval := secondsOrDefault(config.ProbeIntervalSeconds, defaultProbeInterval)
 	timeout := secondsOrDefault(config.ProbeTimeoutSeconds, defaultProbeTimeout)
+	wakeGrace := secondsOrDefault(config.WakeGraceSeconds, defaultWakeGrace)
 	onlineThreshold := thresholdOrDefault(config.OnlineThreshold)
 	offlineThreshold := thresholdOrDefault(config.OfflineThreshold)
 	wolAddress := stringOrDefault(config.WOLBroadcastAddress, defaultWOLAddress)
@@ -224,6 +235,7 @@ func materializeDevices(config Config) ([]monitoredDevice, error) {
 			probeMethod:      probeMethod,
 			probeInterval:    secondsOrDefault(item.ProbeIntervalSeconds, interval),
 			probeTimeout:     secondsOrDefault(item.ProbeTimeoutSeconds, timeout),
+			wakeGrace:        secondsOrDefault(item.WakeGraceSeconds, wakeGrace),
 			onlineThreshold:  thresholdOrDefaultWith(item.OnlineThreshold, onlineThreshold),
 			offlineThreshold: thresholdOrDefaultWith(item.OfflineThreshold, offlineThreshold),
 			wolAddress:       stringOrDefault(item.WOLBroadcastAddress, wolAddress),

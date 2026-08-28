@@ -32,9 +32,30 @@ interface Capability { id: string; type: string; properties: Property[]; command
 interface Endpoint { id: string; name: string; type: string; capabilities: Capability[] }
 export interface Device {
   schemaVersion: number; id: string; providerId: string; name: string; type: DeviceType; availability: DeviceAvailability; online: boolean
+	sourceName?: string; nameOverridden?: boolean
   homeId?: string; homeName?: string; roomId?: string; roomName?: string
   locationMode?: DeviceLocationMode; sourceHomeId?: string; sourceHomeName?: string; sourceRoomId?: string; sourceRoomName?: string
 	sequence?: number; disabled?: boolean; removed?: boolean; runtimeMode?: DeviceRuntimeMode; stateTransport?: DeviceStateTransport; mappingError?: string; endpoints: Endpoint[]; lastUpdateAt: string
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+// Provider payloads are external data even after TypeScript has assigned them a
+// Device type. Keep malformed or legacy collection fields from reaching UI code.
+export function normalizeDevice(value: unknown): Device {
+	const device = isRecord(value) ? value : {}
+	const endpoints = Array.isArray(device.endpoints) ? device.endpoints.filter(isRecord).map((endpoint) => ({
+		...endpoint,
+		capabilities: Array.isArray(endpoint.capabilities) ? endpoint.capabilities.filter(isRecord).map((capability) => ({
+			...capability,
+			properties: Array.isArray(capability.properties)
+				? capability.properties.filter((property) => isRecord(property) && isRecord(property.definition))
+				: [],
+		})) : [],
+	})) : []
+	return { ...device, endpoints } as unknown as Device
 }
 
 export function availabilityLabel(value: DeviceAvailability): string { return value === 'online' ? '在线' : value === 'offline' ? '离线' : '未知' }

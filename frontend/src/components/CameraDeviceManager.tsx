@@ -3,6 +3,7 @@ import { discoverXiaomiDevices, type XiaomiHubDevice } from '../api/xiaomi'
 import type { Device } from '../types/device'
 import type { Provider, ProviderInput } from '../types/provider'
 import { inferXiaomiDeviceType, stableXiaomiControlID, stableXiaomiID } from '../xiaomiMappings'
+import { ProviderDeviceAddFlow } from './ProviderDeviceAddFlow'
 
 type CameraEntry = Record<string, unknown>
 type CameraScanResult = XiaomiHubDevice & {
@@ -304,6 +305,7 @@ export function CameraDeviceManager({ provider, providers = [], devices = [], on
 	return <section className="xiaomi-device-manager camera-device-manager">
 		<header><div><p className="eyebrow">CAMERA PROVIDER · CHILD DEVICES</p><h3>{provider.name} · 摄像头子设备</h3><p>Provider 只负责媒体运行时边界；每台摄像头在这里独立添加、编辑或移除。</p></div><button onClick={onClose}>返回 Provider</button></header>
 		<div className="xiaomi-device-manager__status"><span className={`status-dot ${connected ? 'is-online' : ''}`} /><div><strong>{connected ? 'Camera Provider 运行中 · Camera Kernel 已启用' : 'Camera Provider 未运行 · Camera Kernel 未启用'}</strong><small>{provider.id} · {entries.length} 台摄像头子设备</small></div><button type="button" disabled={!connected || showEditor || scanning} onClick={() => void scanCameras()}>{scanning ? '扫描中…' : '扫描摄像头'}</button><button type="button" disabled={!connected || showEditor || scanning} onClick={beginAdd}>手动添加</button></div>
+		<ProviderDeviceAddFlow source="扫描已授权的小米摄像头目录，或手动填写 RTSP、ONVIF、Xiaomi MISS 来源。" model="摄像头模型固定为 camera；选择视频驱动、流配置与可选控制来源。" configuration="摄像头先加入草稿，最后统一点击“保存设备并应用”。" />
 		{!connected && <p className="inline-error" role="alert">请先启用 Camera Provider；Provider 进入 running 后才能添加并实时应用摄像头。</p>}
 		{error && <p className="inline-error" role="alert">{error}</p>}{result && <p className="test-success">{result}</p>}
 		{scanResults.length > 0 && <div className="xiaomi-device-binding"><div className="xiaomi-device-binding__heading"><div><strong>扫描到的摄像头</strong><small>来自账号 Provider 的只读设备目录；加入后由当前 Camera Provider 独立管理和发布。</small></div><span>{scanResults.length} 台</span></div><div className="xiaomi-hub-device-list">{scanResults.map((item) => {
@@ -312,7 +314,7 @@ export function CameraDeviceManager({ provider, providers = [], devices = [], on
 			const canLink = Boolean(existing && !linked && item.sourceProviderType === 'xiaomi-miot-cloud')
 			return <article key={`${item.sourceProviderId}:${item.did}`}><div><strong>{item.name || item.did}</strong><small>{item.homeName || '未知家庭'} / {item.roomName || '未分配房间'} · {item.model || '型号未知'}</small><small>{item.localIp ? `局域网 IP：${item.localIp}` : '未取得局域网 IP，需要手动填写'}</small><code>{item.did}</code><small>目录来源：{item.sourceProviderName}</small></div><button type="button" disabled={Boolean(existing && !canLink) || showEditor} onClick={() => canLink ? linkScannedCredential(existing!, item) : configureScannedCamera(item)}>{linked ? '已关联账号' : canLink ? '关联账号认证' : existing ? '已添加' : '配置并加入'}</button></article>
 		})}</div></div>}
-		{showEditor && <div className="xiaomi-device-binding"><div className="xiaomi-device-binding__heading"><div><strong>{editingID ? '编辑摄像头' : '添加摄像头'}</strong><small>子设备归属于 {provider.id}，不会自动发布到 HomeKit 或 Matter。</small></div></div>
+		{showEditor && <div className="xiaomi-device-binding"><div className="xiaomi-device-binding__heading"><div><strong>{editingID ? '编辑摄像头草稿' : '添加摄像头草稿'}</strong><small>子设备归属于 {provider.id}，不会自动发布到 HomeKit 或 Matter。</small></div></div>
 			<div className="form-grid">
 				<label>摄像头 ID<input aria-label="摄像头 ID" disabled={Boolean(editingID)} value={String(draft.id ?? '')} onChange={(event) => updateDraft('id', event.target.value)} placeholder="front-door-camera" /></label>
 				<label>名称<input aria-label="摄像头名称" value={String(draft.name ?? '')} onChange={(event) => updateDraft('name', event.target.value)} placeholder="门口摄像头" /></label>
@@ -369,7 +371,7 @@ export function CameraDeviceManager({ provider, providers = [], devices = [], on
 					</>}
 				</>}
 			</div>
-			<div className="form-actions"><button type="button" onClick={() => setShowEditor(false)}>取消</button><button type="button" className="primary" onClick={applyDraft}>{editingID ? '更新子设备' : '加入子设备'}</button></div>
+			<div className="form-actions"><button type="button" onClick={() => setShowEditor(false)}>取消</button><button type="button" className="primary" onClick={applyDraft}>{editingID ? '更新草稿' : '加入草稿'}</button></div>
 		</div>}
 		<div className="provider-device-list"><div className="command-heading"><h3>已配置摄像头</h3><span>{entries.length} 台</span></div>{entries.length === 0 ? <p>尚未添加摄像头。先保持 Provider 运行，再点击“添加摄像头”。</p> : entries.map((entry) => {
 			const binding = objectValue(entry.control)
@@ -377,6 +379,6 @@ export function CameraDeviceManager({ provider, providers = [], devices = [], on
 			return <div key={String(entry.id)}><span className={`status-dot ${entry.enabled === false ? '' : 'is-online'}`} /><strong>{String(entry.name || entry.id)}</strong><code>{String(entry.id)}</code><small>{String(entry.driver)} · {entry.connectionMode === 'always_on' ? '长连接' : entry.connectionMode === 'preload' ? '自动预连接' : '按需连接'} · {entry.enabled === false ? '已停用' : '已启用'}</small><small>{binding.providerRef && binding.deviceId ? `控制：${controlSource ? `${controlSource.providerName} / ${controlSource.deviceName}` : `${String(binding.providerRef)} / ${String(binding.deviceId)}（暂不可用）`}` : '控制：未绑定（仅视频）'}</small><button type="button" onClick={() => beginEdit(entry)}>编辑</button><button type="button" className="is-danger" onClick={() => replaceEntries(entries.filter((item) => String(item.id) !== String(entry.id)))}>移除</button></div>
 		})}</div>
 		<details><summary>摄像头子设备高级 JSON</summary><textarea aria-label="摄像头子设备 JSON" rows={14} value={entriesJSON} onChange={(event) => setEntriesJSON(event.target.value)} spellCheck={false} /><small>用于多码流及 RTSP、ONVIF、Xiaomi MISS 的高级字段。保存时以后端严格校验结果为准。</small></details>
-		<div className="form-actions"><button type="button" onClick={onClose}>取消</button><button type="button" className="primary" disabled={!connected || saving} onClick={() => void save()}>{saving ? '应用中…' : '保存子设备并应用'}</button></div>
+		<div className="form-actions"><button type="button" onClick={onClose}>取消</button><button type="button" className="primary" disabled={!connected || saving} onClick={() => void save()}>{saving ? '应用中…' : '保存设备并应用'}</button></div>
 	</section>
 }

@@ -1196,6 +1196,39 @@ func (m *Manager) WriteProperty(ctx context.Context, request providersdk.Propert
 	return item, nil
 }
 
+// AcknowledgesPropertyWrite preserves a Provider's asynchronous-control
+// acknowledgement through the runtime router. It is queried only after the
+// corresponding WriteProperty call has returned successfully.
+func (m *Manager) AcknowledgesPropertyWrite(request providersdk.PropertyWriteRequest) bool {
+	m.mu.RLock()
+	_, logical := m.logicalDevices[request.DeviceID]
+	if logical {
+		m.mu.RUnlock()
+		return false
+	}
+	id, ok := m.routes[request.DeviceID]
+	delegate, delegated := m.capabilityRoutes[capabilityRoute{request.DeviceID, request.EndpointID, request.CapabilityID}]
+	if delegated {
+		id = delegate.sourceProviderID
+	}
+	current := m.providers[id]
+	running := current != nil && current.status == "running"
+	m.mu.RUnlock()
+	if !ok || !running || (delegated && !delegate.available) {
+		return false
+	}
+	acknowledger, ok := current.provider.(providersdk.PropertyWriteAcknowledger)
+	if !ok {
+		return false
+	}
+	if delegated {
+		request.DeviceID = delegate.sourceDeviceID
+		request.EndpointID = delegate.sourceEndpointID
+		request.CapabilityID = delegate.sourceCapabilityID
+	}
+	return acknowledger.AcknowledgesPropertyWrite(request)
+}
+
 func (m *Manager) ReadProperty(ctx context.Context, request providersdk.PropertyReadRequest) (device.Property, error) {
 	m.mu.RLock()
 	_, logical := m.logicalDevices[request.DeviceID]

@@ -44,6 +44,7 @@ type DeviceTopics struct {
 
 type DeviceConfig struct {
 	ID          string       `json:"id"`
+	Name        string       `json:"name,omitempty"`
 	TopicPrefix string       `json:"topicPrefix"`
 	Protocol    string       `json:"protocol,omitempty"`
 	QoS         *byte        `json:"qos,omitempty"`
@@ -121,6 +122,10 @@ func (c *Config) applyDefaults(providerID string) {
 	for index := range c.Devices {
 		item := &c.Devices[index]
 		item.ID = strings.TrimSpace(item.ID)
+		item.Name = strings.TrimSpace(item.Name)
+		if item.Name == "" {
+			item.Name = item.ID
+		}
 		item.TopicPrefix = strings.Trim(strings.TrimSpace(item.TopicPrefix), "/")
 		item.Protocol = strings.TrimSpace(item.Protocol)
 		if item.Protocol == "" {

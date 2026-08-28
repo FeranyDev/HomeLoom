@@ -6,7 +6,7 @@ import type { MatterTarget, Target, TargetInput } from './types/target'
 
 const api = vi.hoisted(() => ({
   getAuthStatus: vi.fn(), login: vi.fn(), logout: vi.fn(), setupAdministrator: vi.fn(),
-  listDevices: vi.fn(), listDeviceLocations: vi.fn(), createDeviceLocationHome: vi.fn(), updateDeviceLocationHome: vi.fn(), deleteDeviceLocationHome: vi.fn(), createDeviceLocationRoom: vi.fn(), updateDeviceLocationRoom: vi.fn(), deleteDeviceLocationRoom: vi.fn(), setDeviceEnabled: vi.fn(), setDeviceLocation: vi.fn(), setDevicePower: vi.fn(), setDeviceProperty: vi.fn(), simulateDevice: vi.fn(), executeDeviceCommand: vi.fn(),
+  listDevices: vi.fn(), listDeviceLocations: vi.fn(), createDeviceLocationHome: vi.fn(), updateDeviceLocationHome: vi.fn(), deleteDeviceLocationHome: vi.fn(), createDeviceLocationRoom: vi.fn(), updateDeviceLocationRoom: vi.fn(), deleteDeviceLocationRoom: vi.fn(), setDeviceEnabled: vi.fn(), setDeviceLocation: vi.fn(), setDeviceName: vi.fn(), resetDeviceName: vi.fn(), setDevicePower: vi.fn(), setDeviceProperty: vi.fn(), simulateDevice: vi.fn(), executeDeviceCommand: vi.fn(),
   listTargets: vi.fn(), saveTarget: vi.fn(), deleteTarget: vi.fn(), regenerateTargetPairing: vi.fn(), clearTargetPairingIdentity: vi.fn(), openMatterCommissioningWindow: vi.fn(), closeMatterCommissioningWindow: vi.fn(), deleteMatterFabric: vi.fn(), factoryResetMatterTarget: vi.fn(), confirmMatterEndpointDeviceType: vi.fn(),
   listProviders: vi.fn(), saveProvider: vi.fn(), deleteProvider: vi.fn(), restartProvider: vi.fn(), revokeProviderCredentials: vi.fn(), testProviderConnection: vi.fn(),
   getDiagnostics: vi.fn(), getRuntimeSettings: vi.fn(), listAuditEvents: vi.fn(), listCommands: vi.fn(), saveRuntimeSettings: vi.fn(),
@@ -19,7 +19,7 @@ const runtimeDiagnostics = { eventsReceived: 0, eventsProcessed: 0, eventsDroppe
 
 vi.mock('./api/auth', () => ({ getAuthStatus: api.getAuthStatus, login: api.login, logout: api.logout, setupAdministrator: api.setupAdministrator }))
 vi.mock('./api/devices', () => ({
-  listDevices: api.listDevices, listDeviceLocations: api.listDeviceLocations, createDeviceLocationHome: api.createDeviceLocationHome, updateDeviceLocationHome: api.updateDeviceLocationHome, deleteDeviceLocationHome: api.deleteDeviceLocationHome, createDeviceLocationRoom: api.createDeviceLocationRoom, updateDeviceLocationRoom: api.updateDeviceLocationRoom, deleteDeviceLocationRoom: api.deleteDeviceLocationRoom, setDeviceEnabled: api.setDeviceEnabled, setDeviceLocation: api.setDeviceLocation, setDevicePower: api.setDevicePower, setDeviceProperty: api.setDeviceProperty, simulateDevice: api.simulateDevice, executeDeviceCommand: api.executeDeviceCommand,
+  listDevices: api.listDevices, listDeviceLocations: api.listDeviceLocations, createDeviceLocationHome: api.createDeviceLocationHome, updateDeviceLocationHome: api.updateDeviceLocationHome, deleteDeviceLocationHome: api.deleteDeviceLocationHome, createDeviceLocationRoom: api.createDeviceLocationRoom, updateDeviceLocationRoom: api.updateDeviceLocationRoom, deleteDeviceLocationRoom: api.deleteDeviceLocationRoom, setDeviceEnabled: api.setDeviceEnabled, setDeviceLocation: api.setDeviceLocation, setDeviceName: api.setDeviceName, resetDeviceName: api.resetDeviceName, setDevicePower: api.setDevicePower, setDeviceProperty: api.setDeviceProperty, simulateDevice: api.simulateDevice, executeDeviceCommand: api.executeDeviceCommand,
   subscribeDevices: (_handler: unknown, onStatus: (live: boolean) => void) => { onStatus(true); return () => {} },
 }))
 vi.mock('./api/targets', () => ({
@@ -59,6 +59,8 @@ beforeEach(() => {
 	api.deleteMatterFabric.mockResolvedValue(undefined)
 	api.factoryResetMatterTarget.mockResolvedValue(undefined)
 	api.confirmMatterEndpointDeviceType.mockResolvedValue(undefined)
+	api.setDeviceName.mockImplementation(async (id: string, name: string) => ({ schemaVersion: 1, id, providerId: 'virtual-main', name, sourceName: 'Virtual Switch', nameOverridden: true, type: 'switch', availability: 'online', online: true, endpoints: [], lastUpdateAt: '2026-08-28T00:00:00Z' }))
+	api.resetDeviceName.mockImplementation(async (id: string) => ({ schemaVersion: 1, id, providerId: 'virtual-main', name: 'Virtual Switch', sourceName: 'Virtual Switch', type: 'switch', availability: 'online', online: true, endpoints: [], lastUpdateAt: '2026-08-28T00:00:00Z' }))
 })
 
 describe('App integration', () => {
@@ -90,6 +92,15 @@ describe('App integration', () => {
 
 		await waitFor(() => expect(screen.queryByRole('heading', { name: '客厅灯' })).not.toBeInTheDocument())
 		expect(screen.getByRole('status')).toHaveTextContent('0 / 0')
+	})
+
+	it('does not expose a rename action in the device center', async () => {
+		const item = { schemaVersion: 1, id: 'sonoff-1001f95735', providerId: 'sonoff-main', name: 'eWeLink_1001f95735', type: 'contact-sensor', availability: 'online', online: true, endpoints: [], lastUpdateAt: '2026-08-28T00:00:00Z' }
+		api.listDevices.mockResolvedValue([item])
+		api.getAuthStatus.mockResolvedValue({ initialized: true, authenticated: true, username: 'admin' })
+		render(<App />)
+		expect(await screen.findByRole('heading', { name: 'eWeLink_1001f95735' })).toBeInTheDocument()
+		expect(screen.queryByRole('button', { name: '改名' })).not.toBeInTheDocument()
 	})
 
 	it('removes a Matter bridge when the target stream publishes its deletion tombstone', async () => {

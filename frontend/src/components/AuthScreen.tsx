@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { ApiError } from '../api/client'
+import { BrandMark } from './BrandMark'
 
 interface Props {
 	initialized: boolean
@@ -36,6 +37,7 @@ export function AuthScreen({ initialized, onSubmit }: Props) {
 
 	return <main className="auth-shell">
 		<section className="auth-card" aria-labelledby="auth-title">
+			<div className="auth-brand"><BrandMark /></div>
 			<p className="eyebrow">HOMELOOM · ADMIN</p>
 			<h1 id="auth-title">{initialized ? '欢迎回来。' : '先系好第一根线。'}</h1>
 			<p>{initialized ? '登录后管理设备、Provider 与桥接配置。' : '创建本机唯一的管理员账户。配置和登录会话将保存在 PostgreSQL 中。'}</p>

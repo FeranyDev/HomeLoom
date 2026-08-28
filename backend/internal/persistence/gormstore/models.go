@@ -256,6 +256,15 @@ type devicePreferenceRow struct {
 
 func (devicePreferenceRow) TableName() string { return "device_preferences" }
 
+type deviceNamePreferenceRow struct {
+	DeviceID  string `gorm:"column:device_id;primaryKey"`
+	Name      string `gorm:"column:name;not null"`
+	CreatedAt int64  `gorm:"column:created_at;not null"`
+	UpdatedAt int64  `gorm:"column:updated_at;not null"`
+}
+
+func (deviceNamePreferenceRow) TableName() string { return "device_name_preferences" }
+
 // MCP configuration is intentionally separate from Provider snapshots. A
 // Provider can rediscover a device without overwriting the administrator's AI
 // exposure policy or operational notes.
@@ -442,6 +451,8 @@ type mappingBindingRow struct {
 	ConsumerDeviceID   string `gorm:"column:consumer_device_id;not null;default:'';uniqueIndex:mapping_consumer_target_unique,where:stage = 'consumer',priority:5"`
 	ConsumerProperty   string `gorm:"column:consumer_property;not null;default:'';uniqueIndex:mapping_consumer_target_unique,where:stage = 'consumer',priority:7"`
 	Enabled            bool   `gorm:"column:enabled;not null"`
+	ReadbackEnabled    bool   `gorm:"column:readback_enabled;not null;default:false"`
+	ReadbackDelaysJSON string `gorm:"column:readback_delays_json;not null;default:'[]'"`
 	CreatedAt          int64  `gorm:"column:created_at;not null"`
 	UpdatedAt          int64  `gorm:"column:updated_at;not null"`
 }
@@ -523,7 +534,7 @@ func currentModels() []any {
 		&mediaAuthLeaseRow{}, &mediaAuthAuditRow{}, &mediaConfigStateRow{},
 		&matterRuntimeKVRow{}, &matterEndpointIdentityRow{},
 		&homeKitAccessoryIDRow{}, &homeKitIIDRow{}, &homeKitAccessoryUUIDRow{}, &systemSettingRow{},
-		&devicePreferenceRow{}, &mcpDeviceConfigRow{}, &mcpPropertyConfigRow{}, &aiAutomationRow{}, &logicalDeviceRow{}, &providerDeviceIdentityRow{}, &logicalDeviceIdentityRow{}, &deviceCapabilityIdentityRow{}, &deviceLocationHomeRow{}, &deviceLocationRoomRow{}, &deviceLocationPreferenceRow{}, &auditEventRow{}, &mappingProfileRow{},
+		&devicePreferenceRow{}, &deviceNamePreferenceRow{}, &mcpDeviceConfigRow{}, &mcpPropertyConfigRow{}, &aiAutomationRow{}, &logicalDeviceRow{}, &providerDeviceIdentityRow{}, &logicalDeviceIdentityRow{}, &deviceCapabilityIdentityRow{}, &deviceLocationHomeRow{}, &deviceLocationRoomRow{}, &deviceLocationPreferenceRow{}, &auditEventRow{}, &mappingProfileRow{},
 		&mappingBindingRow{}, &customModelPropertyRow{}, &modelEnumOverrideRow{}, &adminUserRow{},
 		&adminSessionRow{}, &miotSpecCacheRow{}, &customUnifiedModelRow{},
 	}

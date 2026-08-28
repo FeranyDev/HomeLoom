@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -105,6 +106,28 @@ func TestLoginUsesSonoffLANSignatureAndReturnsRegionalEndpoint(t *testing.T) {
 	}
 	if result.AccessToken != "access-token" || result.Region != "cn" || result.Endpoint != server.URL {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestLoginBuildsE164PhoneNumberFromCountryCode(t *testing.T) {
+	var phoneNumbers []string
+	server := newTestServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var payload map[string]string
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		phoneNumbers = append(phoneNumbers, payload["phoneNumber"])
+		_, _ = io.WriteString(response, `{"error":0,"data":{"at":"access-token","region":"cn"}}`)
+	}))
+	defer server.Close()
+
+	for _, username := range []string{"13800138000", "+8613800138000", "8613800138000"} {
+		if _, err := Login(context.Background(), server.Client(), LoginCredentials{Username: username, Password: "password", CountryCode: "+86", Endpoint: server.URL}, time.Second); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if want := []string{"+8613800138000", "+8613800138000", "+8613800138000"}; !slices.Equal(phoneNumbers, want) {
+		t.Fatalf("phone numbers = %#v, want %#v", phoneNumbers, want)
 	}
 }
 

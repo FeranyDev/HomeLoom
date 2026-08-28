@@ -46,7 +46,7 @@ func TestBuildDevicePropagatesStateTransportToProperties(t *testing.T) {
 }
 
 func TestBuildDeviceMapsTemperatureHumidityAndMultichannel(t *testing.T) {
-	item, err := BuildDevice(DeviceInput{ID: "dual", ProviderID: "sonoff-main", Name: "双路", UIID: 7, Channels: 2, Online: true, Params: map[string]any{"switches": []any{map[string]any{"switch": "on"}, map[string]any{"switch": "off"}}}})
+	item, err := BuildDevice(DeviceInput{ID: "dual", ProviderID: "sonoff-main", Name: "双路", UIID: 7, Channels: 1, Online: true, Params: map[string]any{"switch": "off", "switches": []any{map[string]any{"switch": "on"}, map[string]any{"switch": "off"}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,6 +55,9 @@ func TestBuildDeviceMapsTemperatureHumidityAndMultichannel(t *testing.T) {
 	}
 	if property, ok := item.Property("channel-1", "switch", "power-1"); !ok || property.Value.Bool == nil || *property.Value.Bool {
 		t.Fatalf("second channel = %#v", property)
+	}
+	if property, ok := item.Property("channel-0", "switch", "power-0"); !ok || property.Value.Bool == nil || !*property.Value.Bool {
+		t.Fatalf("first channel did not use per-outlet state = %#v", property)
 	}
 	climate, err := BuildDevice(DeviceInput{ID: "th", ProviderID: "sonoff-main", Name: "温湿度", UIID: 15, Online: true, Params: map[string]any{"temperature": 23.4, "humidity": 56.0}})
 	if err != nil {

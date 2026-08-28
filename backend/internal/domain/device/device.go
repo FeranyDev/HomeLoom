@@ -233,10 +233,15 @@ type Endpoint struct {
 }
 
 type Device struct {
-	SchemaVersion  int          `json:"schemaVersion"`
-	ID             string       `json:"id"`
-	ProviderID     string       `json:"providerId"`
-	Name           string       `json:"name"`
+	SchemaVersion int    `json:"schemaVersion"`
+	ID            string `json:"id"`
+	ProviderID    string `json:"providerId"`
+	Name          string `json:"name"`
+	// SourceName is the Provider-reported name. Name can be replaced by a
+	// HomeLoom-owned preference without losing the name that should be restored
+	// when that preference is removed.
+	SourceName     string       `json:"sourceName,omitempty"`
+	NameOverridden bool         `json:"nameOverridden,omitempty"`
 	Type           Type         `json:"type"`
 	HomeID         string       `json:"homeId,omitempty"`
 	HomeName       string       `json:"homeName,omitempty"`

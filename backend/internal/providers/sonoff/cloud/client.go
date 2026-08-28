@@ -84,12 +84,9 @@ func Login(ctx context.Context, httpClient *http.Client, credentials LoginCreden
 	}
 	credentials.Username = strings.TrimSpace(credentials.Username)
 	credentials.Password = strings.TrimSpace(credentials.Password)
-	credentials.CountryCode = strings.TrimSpace(credentials.CountryCode)
+	credentials.CountryCode = normalizeCountryCode(credentials.CountryCode)
 	if credentials.Username == "" || credentials.Password == "" {
 		return LoginResult{}, errors.New("sonoff username and password are required")
-	}
-	if credentials.CountryCode == "" {
-		credentials.CountryCode = "+86"
 	}
 	region := strings.ToLower(strings.TrimSpace(credentials.Region))
 	if region == "" || region == "auto" {
@@ -120,10 +117,8 @@ func Login(ctx context.Context, httpClient *http.Client, credentials LoginCreden
 	payload := map[string]string{"password": credentials.Password, "countryCode": credentials.CountryCode}
 	if strings.Contains(credentials.Username, "@") {
 		payload["email"] = credentials.Username
-	} else if strings.HasPrefix(credentials.Username, "+") {
-		payload["phoneNumber"] = credentials.Username
 	} else {
-		payload["phoneNumber"] = "+" + credentials.Username
+		payload["phoneNumber"] = phoneNumberForLogin(credentials.Username, credentials.CountryCode)
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -152,6 +147,39 @@ func Login(ctx context.Context, httpClient *http.Client, credentials LoginCreden
 		return result, nil
 	}
 	return LoginResult{}, errors.New("sonoff login region discovery failed")
+}
+
+// normalizeCountryCode ensures the separately entered calling code has the
+// format required by eWeLink. The UI supplies this field independently from a
+// local phone number, so it must be usable when composing phoneNumber below.
+func normalizeCountryCode(countryCode string) string {
+	countryCode = strings.TrimSpace(countryCode)
+	if countryCode == "" {
+		return "+86"
+	}
+	if strings.HasPrefix(countryCode, "+") {
+		return countryCode
+	}
+	return "+" + countryCode
+}
+
+// phoneNumberForLogin converts a phone-number field plus its separate country
+// code into the E.164 value required by eWeLink. It also accepts a complete
+// number, with either a leading + or the selected calling code already present,
+// so existing Provider configurations keep working.
+func phoneNumberForLogin(number, countryCode string) string {
+	number = strings.TrimSpace(number)
+	if strings.HasPrefix(number, "+") {
+		return number
+	}
+	if strings.HasPrefix(number, "00") {
+		return "+" + strings.TrimPrefix(number, "00")
+	}
+	callingCode := strings.TrimPrefix(normalizeCountryCode(countryCode), "+")
+	if strings.HasPrefix(number, callingCode) {
+		return "+" + number
+	}
+	return "+" + callingCode + number
 }
 
 func loginRequest(ctx context.Context, httpClient *http.Client, endpoint, appID, appSecret string, body []byte) (LoginResult, string, int, error) {

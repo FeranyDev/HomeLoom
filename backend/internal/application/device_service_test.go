@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,11 +15,57 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
 	domainstate "github.com/feranydev/homeloom/backend/internal/domain/state"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
+	"github.com/feranydev/homeloom/backend/internal/providers/network"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
 	"github.com/feranydev/homeloom/backend/internal/runtime/providermanager"
 )
 
 type silentProvider struct{ inner *virtual.Provider }
+
+type pulseReadbackProvider struct {
+	inner      *virtual.Provider
+	mu         sync.Mutex
+	reads      int
+	resetAfter int
+}
+
+func newPulseReadbackProvider(resetAfter int) *pulseReadbackProvider {
+	return &pulseReadbackProvider{inner: virtual.NewProvider(), resetAfter: resetAfter}
+}
+
+func (p *pulseReadbackProvider) Manifest() providersdk.Manifest { return p.inner.Manifest() }
+func (p *pulseReadbackProvider) Capabilities() providersdk.Capabilities {
+	return p.inner.Capabilities()
+}
+func (p *pulseReadbackProvider) Initialize(ctx context.Context) error { return p.inner.Initialize(ctx) }
+func (p *pulseReadbackProvider) Close(ctx context.Context) error      { return p.inner.Close(ctx) }
+func (p *pulseReadbackProvider) DiscoverDevices(ctx context.Context) ([]device.Device, error) {
+	return p.inner.DiscoverDevices(ctx)
+}
+func (p *pulseReadbackProvider) WriteProperty(ctx context.Context, request providersdk.PropertyWriteRequest) (device.Device, error) {
+	return p.inner.WriteProperty(ctx, request)
+}
+func (p *pulseReadbackProvider) ReadProperty(ctx context.Context, request providersdk.PropertyReadRequest) (device.Property, error) {
+	p.mu.Lock()
+	p.reads++
+	reset := p.resetAfter > 0 && p.reads >= p.resetAfter
+	p.mu.Unlock()
+	if reset {
+		if _, err := p.inner.SetPower(ctx, request.DeviceID, false); err != nil {
+			return device.Property{}, err
+		}
+	}
+	return p.inner.ReadProperty(ctx, request)
+}
+func (p *pulseReadbackProvider) readCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.reads
+}
+
+type immediateWaker struct{}
+
+func (immediateWaker) Wake(context.Context, network.WakeRequest) error { return nil }
 
 type removalEventProvider struct {
 	inner   *virtual.Provider
@@ -115,6 +162,35 @@ type skewedEventProvider struct {
 type devicePreferenceMetrics struct {
 	mu       sync.Mutex
 	disabled map[string]bool
+}
+
+type deviceNamePreferences struct {
+	mu    sync.Mutex
+	names map[string]string
+}
+
+func (p *deviceNamePreferences) ListDeviceNamePreferences(context.Context) ([]device.NamePreference, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	result := make([]device.NamePreference, 0, len(p.names))
+	for id, name := range p.names {
+		result = append(result, device.NamePreference{DeviceID: id, Name: name})
+	}
+	return result, nil
+}
+
+func (p *deviceNamePreferences) SetDeviceNamePreference(_ context.Context, preference device.NamePreference) error {
+	p.mu.Lock()
+	p.names[preference.DeviceID] = preference.Name
+	p.mu.Unlock()
+	return nil
+}
+
+func (p *deviceNamePreferences) ClearDeviceNamePreference(_ context.Context, id string) error {
+	p.mu.Lock()
+	delete(p.names, id)
+	p.mu.Unlock()
+	return nil
 }
 
 type deviceLocationPreferences struct {
@@ -663,6 +739,47 @@ func TestDeviceLocationPreferencesReloadAcrossServiceRestart(t *testing.T) {
 	}
 }
 
+func TestDeviceNameOverridePersistsAcrossProviderRefreshAndCanBeReset(t *testing.T) {
+	item := device.Device{SchemaVersion: device.SchemaVersion, ID: "source-light", ProviderID: "source", Name: "eWeLink_1001f95735", Type: device.TypeSwitch, LastUpdateAt: time.Now().UTC()}
+	item.SetOnline(true)
+	provider := &locatedProvider{item: item}
+	preferences := &deviceNamePreferences{names: make(map[string]string)}
+	service := application.NewDeviceService(provider, preferences)
+	defer service.Close()
+	if err := service.LoadDevicePreferences(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	overridden, err := service.SetDeviceName(context.Background(), item.ID, "门口微动开关")
+	if err != nil || overridden.Name != "门口微动开关" || overridden.SourceName != "eWeLink_1001f95735" || !overridden.NameOverridden || preferences.names[item.ID] != "门口微动开关" {
+		t.Fatalf("override = %#v, preferences = %#v, err = %v", overridden, preferences.names, err)
+	}
+	provider.item.Name = "eWeLink_已更新名称"
+	if err := service.RefreshDevices(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	items, _ := service.List(context.Background())
+	if len(items) != 1 || items[0].Name != "门口微动开关" || items[0].SourceName != "eWeLink_已更新名称" || !items[0].NameOverridden {
+		t.Fatalf("provider refresh replaced override: %#v", items)
+	}
+	reset, err := service.ResetDeviceName(context.Background(), item.ID)
+	if err != nil || reset.Name != "eWeLink_已更新名称" || reset.NameOverridden || reset.SourceName != "eWeLink_已更新名称" || len(preferences.names) != 0 {
+		t.Fatalf("reset = %#v, preferences = %#v, err = %v", reset, preferences.names, err)
+	}
+}
+
+func TestDeviceNameValidation(t *testing.T) {
+	item := device.Device{SchemaVersion: device.SchemaVersion, ID: "source-light", ProviderID: "source", Name: "来源灯", Type: device.TypeSwitch, LastUpdateAt: time.Now().UTC()}
+	item.SetOnline(true)
+	service := application.NewDeviceService(&locatedProvider{item: item}, &deviceNamePreferences{names: make(map[string]string)})
+	defer service.Close()
+	if _, err := service.SetDeviceName(context.Background(), item.ID, "\t"); err == nil {
+		t.Fatal("control-only name was accepted")
+	}
+	if _, err := service.SetDeviceName(context.Background(), item.ID, strings.Repeat("名", 129)); err == nil {
+		t.Fatal("overlong name was accepted")
+	}
+}
+
 func TestProviderLocationUsesHomeLoomCanonicalIdentityWhenNamesMatch(t *testing.T) {
 	item := device.Device{
 		SchemaVersion: device.SchemaVersion, ID: "source-light", ProviderID: "source", Name: "来源灯", Type: device.TypeLightbulb,
@@ -1135,6 +1252,76 @@ func TestDeviceServiceReadsProviderProperty(t *testing.T) {
 	}
 }
 
+func TestProviderPropertyReadUpdatesRegistryAndStateStream(t *testing.T) {
+	provider := newPulseReadbackProvider(1)
+	if _, err := provider.inner.SetPower(context.Background(), "virtual-switch-1", true); err != nil {
+		t.Fatal(err)
+	}
+	service := application.NewDeviceService(provider, application.DeviceServiceOptions{PropertyReadbackDelays: []time.Duration{}})
+	defer service.Close()
+	devices := make(chan device.Device, 1)
+	unsubscribe := service.Subscribe(func(item device.Device) { devices <- item })
+	defer unsubscribe()
+
+	property, err := service.ReadProperty(context.Background(), "virtual-switch-1", "main", "switch", "power")
+	if err != nil || property.Value.Bool == nil || *property.Value.Bool {
+		t.Fatalf("ReadProperty() = %#v, %v", property, err)
+	}
+	items, _ := service.List(context.Background())
+	current, _ := items[0].Property("main", "switch", "power")
+	states := service.States("virtual-switch-1")
+	if current.Value.Bool == nil || *current.Value.Bool || len(states) != 1 || states[0].Value.Bool == nil || *states[0].Value.Bool || states[0].Source != domainstate.SourcePolled || states[0].Quality != domainstate.QualityPolled {
+		t.Fatalf("registry = %#v, states = %#v", current, states)
+	}
+	select {
+	case updated := <-devices:
+		value, _ := updated.Property("main", "switch", "power")
+		if value.Value.Bool == nil || *value.Value.Bool {
+			t.Fatalf("published device = %#v", updated)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("provider read did not publish the changed device")
+	}
+}
+
+func TestPropertyWriteSchedulesReadbacksForDelayedDeviceReset(t *testing.T) {
+	provider := newPulseReadbackProvider(2)
+	service := application.NewDeviceService(provider, application.DeviceServiceOptions{PropertyReadbackDelays: []time.Duration{time.Millisecond, 5 * time.Millisecond}})
+	defer service.Close()
+	_, command, err := service.ExecutePower(context.Background(), "virtual-switch-1", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		items, _ := service.List(context.Background())
+		current, _ := items[0].Property("main", "switch", "power")
+		if provider.readCount() >= 2 && current.Value.Bool != nil && !*current.Value.Bool {
+			states := service.States("virtual-switch-1")
+			tracked, _ := service.Command(command.ID)
+			if len(states) != 1 || states[0].Value.Bool == nil || *states[0].Value.Bool || states[0].Source != domainstate.SourcePolled || tracked.Status != domaincommand.StatusConfirmed {
+				t.Fatalf("states = %#v, command = %#v", states, tracked)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("delayed reset was not reconciled; reads=%d", provider.readCount())
+}
+
+func TestPropertyWriteDoesNotReadBackWithoutAnExplicitPropertyPolicy(t *testing.T) {
+	provider := newPulseReadbackProvider(1)
+	service := application.NewDeviceService(provider)
+	defer service.Close()
+	if _, _, err := service.ExecutePower(context.Background(), "virtual-switch-1", true); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if provider.readCount() != 0 {
+		t.Fatalf("unconfigured property was read back %d times", provider.readCount())
+	}
+}
+
 func TestDeviceServiceExecutesActionCommand(t *testing.T) {
 	service := application.NewDeviceService(virtual.NewProvider())
 	defer service.Close()
@@ -1242,6 +1429,43 @@ func TestDeviceServiceCommandIsConfirmedByProviderEvent(t *testing.T) {
 	}
 	current, _ := service.Command(command.ID)
 	t.Fatalf("command status = %s", current.Status)
+}
+
+func TestDeviceServiceConfirmsWakeOnLANBeforeTheHostFinishesStarting(t *testing.T) {
+	provider, err := network.NewProviderWithDependencies(providerconfig.Config{
+		ID: "network-main", Type: network.ProviderType, Name: "LAN", Enabled: true,
+		Config: []byte(`{"wakeGraceSeconds":300,"devices":[{"id":"nas","name":"NAS","host":"192.0.2.10","probePort":443,"mac":"aa:bb:cc:dd:ee:ff"}]}`),
+	}, &testNetworkProber{}, immediateWaker{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := application.NewDeviceService(provider)
+	defer service.Close()
+	service.SetCommandTimeout(5 * time.Millisecond)
+
+	updated, command, err := service.ExecutePower(context.Background(), "nas", true)
+	if err != nil {
+		t.Fatalf("Wake-on-LAN write: %v", err)
+	}
+	if command.Status != domaincommand.StatusConfirmed {
+		t.Fatalf("WOL command must be confirmed when its packet is sent, got %#v", command)
+	}
+	power, _ := updated.Property("main", "switch", "power")
+	pending, _ := updated.Property("main", "network", "wake-pending")
+	if power.Value.Bool == nil || *power.Value.Bool || pending.Value.Bool == nil || !*pending.Value.Bool {
+		t.Fatalf("WOL result must remain off while startup is pending: %#v", updated)
+	}
+	time.Sleep(10 * time.Millisecond)
+	current, ok := service.Command(command.ID)
+	if !ok || current.Status != domaincommand.StatusConfirmed {
+		t.Fatalf("long host startup must not expire a confirmed WOL control command: %#v", current)
+	}
+}
+
+type testNetworkProber struct{}
+
+func (testNetworkProber) Probe(context.Context, network.ProbeRequest) error {
+	return errors.New("host is still booting")
 }
 
 func TestDeviceOfflineImmediatelyMarksStateStaleAndOnlineRestoresIt(t *testing.T) {

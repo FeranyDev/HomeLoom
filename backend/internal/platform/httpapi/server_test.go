@@ -22,6 +22,7 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/persistence/gormstore"
 	"github.com/feranydev/homeloom/backend/internal/platform/subprocesslog"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
+	sonoffcloud "github.com/feranydev/homeloom/backend/internal/providers/sonoff/cloud"
 	"github.com/feranydev/homeloom/backend/internal/providers/virtual"
 	"github.com/feranydev/homeloom/backend/internal/providers/xiaomi"
 	"github.com/feranydev/homeloom/backend/internal/runtime/providermanager"
@@ -30,6 +31,27 @@ import (
 
 type apiProviderStore struct {
 	items map[string]providerconfig.Config
+}
+
+func TestSonoffLoginHTTPErrorKeepsOnlySafeFailureDetails(t *testing.T) {
+	tests := []struct {
+		name       string
+		source     error
+		statusCode int
+		message    string
+	}{
+		{name: "response code", source: &sonoffcloud.ResponseCodeError{Code: 10003}, statusCode: http.StatusBadRequest, message: "Sonoff/eWeLink 登录被拒绝（错误码 10003）"},
+		{name: "cloud HTTP status", source: &sonoffcloud.HTTPStatusError{StatusCode: http.StatusForbidden}, statusCode: http.StatusBadGateway, message: "Sonoff/eWeLink 服务响应异常（HTTP 403）"},
+		{name: "timeout", source: context.DeadlineExceeded, statusCode: http.StatusGatewayTimeout, message: "Sonoff/eWeLink 登录超时，请检查 HomeLoom 主机的网络后重试"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := sonoffLoginHTTPError(test.source)
+			if err.Code != test.statusCode || err.Message != test.message || err.Internal != test.source {
+				t.Fatalf("error = %#v", err)
+			}
+		})
+	}
 }
 
 type unavailableDatabase struct{}
@@ -852,6 +874,45 @@ func TestDeviceEnabledAPIIsPersisted(t *testing.T) {
 	}
 }
 
+func TestDeviceNameAPIOverridesAndRestoresSourceName(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	service := application.NewDeviceService(virtual.NewProvider(), store)
+	defer service.Close()
+	if err := service.LoadDevicePreferences(ctx); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(":0", service, application.NewTargetService(nil, nil), zap.NewNop())
+	update := httptest.NewRequest(http.MethodPut, "/api/v1/devices/virtual-switch-1/name", bytes.NewBufferString(`{"name":"玄关主开关"}`))
+	update.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, update)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"name":"玄关主开关"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"nameOverridden":true`)) {
+		t.Fatalf("name update = %d %s", response.Code, response.Body.String())
+	}
+	preferences, err := store.ListDeviceNamePreferences(ctx)
+	if err != nil || len(preferences) != 1 || preferences[0].Name != "玄关主开关" {
+		t.Fatalf("stored names = %#v, %v", preferences, err)
+	}
+	reset := httptest.NewRequest(http.MethodDelete, "/api/v1/devices/virtual-switch-1/name", nil)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, reset)
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"name":"客厅开关"`)) || bytes.Contains(response.Body.Bytes(), []byte(`"nameOverridden":true`)) {
+		t.Fatalf("name reset = %d %s", response.Code, response.Body.String())
+	}
+	invalid := httptest.NewRequest(http.MethodPut, "/api/v1/devices/virtual-switch-1/name", bytes.NewBufferString(`{"name":""}`))
+	invalid.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, invalid)
+	if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte(`"name"`)) {
+		t.Fatalf("invalid name = %d %s", response.Code, response.Body.String())
+	}
+}
+
 func TestDeviceLocationAPIOverridesAndRestoresProviderLocation(t *testing.T) {
 	ctx := context.Background()
 	store, err := openTestStore(t, ctx)
@@ -1240,6 +1301,42 @@ func TestXiaomiMIoTCloudDirectoryIsNotAliasedToCentralHub(t *testing.T) {
 	}
 }
 
+func TestSonoffDirectoryRequiresRunningSonoffProvider(t *testing.T) {
+	server := newProviderManagementTestServer(t)
+
+	missing := httptest.NewRequest(http.MethodGet, "/api/v1/sonoff/providers/missing/devices", nil)
+	missingResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(missingResponse, missing)
+	if missingResponse.Code != http.StatusConflict || !strings.Contains(missingResponse.Body.String(), "enabled and connected") {
+		t.Fatalf("missing provider response = %d %s", missingResponse.Code, missingResponse.Body.String())
+	}
+
+	wrongType := httptest.NewRequest(http.MethodGet, "/api/v1/sonoff/providers/virtual-main/devices", nil)
+	wrongTypeResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(wrongTypeResponse, wrongType)
+	if wrongTypeResponse.Code != http.StatusBadRequest || !strings.Contains(wrongTypeResponse.Body.String(), "not a Sonoff") {
+		t.Fatalf("wrong provider response = %d %s", wrongTypeResponse.Code, wrongTypeResponse.Body.String())
+	}
+}
+
+func TestTuyaDirectoryRequiresRunningTuyaProvider(t *testing.T) {
+	server := newProviderManagementTestServer(t)
+
+	missing := httptest.NewRequest(http.MethodGet, "/api/v1/tuya/providers/missing/devices", nil)
+	missingResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(missingResponse, missing)
+	if missingResponse.Code != http.StatusConflict || !strings.Contains(missingResponse.Body.String(), "enabled and connected") {
+		t.Fatalf("missing provider response = %d %s", missingResponse.Code, missingResponse.Body.String())
+	}
+
+	wrongType := httptest.NewRequest(http.MethodGet, "/api/v1/tuya/providers/virtual-main/devices", nil)
+	wrongTypeResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(wrongTypeResponse, wrongType)
+	if wrongTypeResponse.Code != http.StatusBadRequest || !strings.Contains(wrongTypeResponse.Body.String(), "not a Tuya") {
+		t.Fatalf("wrong provider response = %d %s", wrongTypeResponse.Code, wrongTypeResponse.Body.String())
+	}
+}
+
 func TestXiaomiMIoTCloudLoginAPIValidatesTwoStepRequests(t *testing.T) {
 	server := newTestServer()
 	start := httptest.NewRequest(http.MethodPost, "/api/v1/xiaomi-miot-cloud/login/start", bytes.NewBufferString(`{"region":"cn"}`))
@@ -1578,11 +1675,11 @@ func TestMappingProfileCRUDHotReloadAndExport(t *testing.T) {
 		t.Fatalf("preview = %d %s", response.Code, response.Body.String())
 	}
 
-	createBinding := httptest.NewRequest(http.MethodPost, "/api/v1/mapping/bindings", bytes.NewBufferString(`{"profileId":"custom-invert","providerId":"virtual-main","deviceId":"virtual-switch-1","endpointId":"main","capabilityId":"switch","propertyId":"power","enabled":true}`))
+	createBinding := httptest.NewRequest(http.MethodPost, "/api/v1/mapping/bindings", bytes.NewBufferString(`{"profileId":"custom-invert","providerId":"virtual-main","deviceId":"virtual-switch-1","endpointId":"main","capabilityId":"switch","propertyId":"power","enabled":true,"readbackEnabled":true,"readbackDelaysMs":[250,1000,3000]}`))
 	createBinding.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	response = httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, createBinding)
-	if response.Code != http.StatusCreated || !bytes.Contains(response.Body.Bytes(), []byte(`"profileId":"custom-invert"`)) {
+	if response.Code != http.StatusCreated || !bytes.Contains(response.Body.Bytes(), []byte(`"profileId":"custom-invert"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"readbackEnabled":true`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"readbackDelaysMs":[250,1000,3000]`)) {
 		t.Fatalf("create binding = %d %s", response.Code, response.Body.String())
 	}
 	var bindingResponse struct {

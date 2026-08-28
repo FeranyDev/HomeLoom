@@ -15,12 +15,20 @@ import (
 type logicalTestProvider struct {
 	id          string
 	item        device.Device
+	nativeID    string
 	writeErr    error
 	commandErr  error
 	writes      int
 	commands    int
 	lastWrite   providersdk.PropertyWriteRequest
 	lastCommand providersdk.CommandRequest
+}
+
+func (p *logicalTestProvider) ProviderDeviceID(deviceID string) (string, bool) {
+	if p.nativeID == "" || deviceID != p.item.ID {
+		return "", false
+	}
+	return p.nativeID, true
 }
 
 type identityStoreStub struct {
@@ -197,7 +205,7 @@ func TestLogicalCandidatesRequireLocationAsWellAsName(t *testing.T) {
 }
 
 func TestLogicalDiscoveryPersistsConcreteAndLogicalStableIdentities(t *testing.T) {
-	local := &logicalTestProvider{id: "local", item: logicalSwitch("local-switch", "local", true, true)}
+	local := &logicalTestProvider{id: "local", item: logicalSwitch("local-switch", "local", true, true), nativeID: "native-local-1"}
 	cloud := &logicalTestProvider{id: "cloud", item: logicalSwitch("cloud-switch", "cloud", true, true)}
 	manager, err := providermanager.New(local, cloud)
 	if err != nil {
@@ -219,7 +227,7 @@ func TestLogicalDiscoveryPersistsConcreteAndLogicalStableIdentities(t *testing.T
 	if len(identities.providerBindings) != 2 {
 		t.Fatalf("provider identity bindings = %#v", identities.providerBindings)
 	}
-	if identities.providerBindings[0] != [3]string{"local", "local-switch", "local-switch"} || identities.providerBindings[1] != [3]string{"cloud", "cloud-switch", "cloud-switch"} {
+	if identities.providerBindings[0] != [3]string{"local", "native-local-1", "local-switch"} || identities.providerBindings[1] != [3]string{"cloud", "cloud-switch", "cloud-switch"} {
 		t.Fatalf("provider identity bindings = %#v", identities.providerBindings)
 	}
 	if len(identities.topologies) != 3 {

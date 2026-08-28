@@ -31,6 +31,7 @@ const (
 type Config struct {
 	Mode                  string         `json:"mode,omitempty"`
 	Region                string         `json:"region,omitempty"`
+	ManagedDevices        bool           `json:"managedDevices,omitempty"`
 	RequestTimeoutSeconds int            `json:"requestTimeoutSeconds,omitempty"`
 	RefreshIntervalSec    int            `json:"refreshIntervalSeconds,omitempty"`
 	DiscoveryTimeoutSec   int            `json:"discoveryTimeoutSeconds,omitempty"`

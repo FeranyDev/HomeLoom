@@ -8,7 +8,7 @@ import (
 )
 
 func TestConfigDefaultsAndMQTTSNormalization(t *testing.T) {
-	config, broker, tlsConfig, err := decodeConfig(providerconfig.Config{ID: "mqtt-lab", Config: json.RawMessage(`{"brokerUrl":"mqtts://broker.example:8883","devices":[{"id":"desk-lamp","topicPrefix":"home/desk"}]}`)})
+	config, broker, tlsConfig, err := decodeConfig(providerconfig.Config{ID: "mqtt-lab", Config: json.RawMessage(`{"brokerUrl":"mqtts://broker.example:8883","devices":[{"id":"desk-lamp","name":"  书房灯  ","topicPrefix":"home/desk"}]}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -16,7 +16,7 @@ func TestConfigDefaultsAndMQTTSNormalization(t *testing.T) {
 		t.Fatalf("config = %#v, broker = %#v, tls = %#v", config, broker, tlsConfig)
 	}
 	item := config.Devices[0]
-	if item.effectiveQoS() != 1 || item.Protocol != "homeloom-v1" || item.Topics.Discovery != "home/desk/discovery/desk-lamp" || item.Topics.State != "home/desk/state/desk-lamp/{endpointId}/{capabilityId}/{propertyId}" {
+	if item.Name != "书房灯" || item.effectiveQoS() != 1 || item.Protocol != "homeloom-v1" || item.Topics.Discovery != "home/desk/discovery/desk-lamp" || item.Topics.State != "home/desk/state/desk-lamp/{endpointId}/{capabilityId}/{propertyId}" {
 		t.Fatalf("device config = %#v", item)
 	}
 }

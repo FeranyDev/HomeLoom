@@ -24,9 +24,9 @@ describe('CameraDeviceManager', () => {
 		await userEvent.type(screen.getByLabelText('RTSP Host'), '192.168.1.20')
 		await userEvent.type(screen.getByLabelText('RTSP Path'), '/live/main')
 		expect(screen.getByText(/还没有可用的控制来源/)).toBeInTheDocument()
-		await userEvent.click(screen.getByRole('button', { name: '加入子设备' }))
+		await userEvent.click(screen.getByRole('button', { name: '加入草稿' }))
 		expect(screen.getByText('门口摄像头')).toBeInTheDocument()
-		await userEvent.click(screen.getByRole('button', { name: '保存子设备并应用' }))
+		await userEvent.click(screen.getByRole('button', { name: '保存设备并应用' }))
 		expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
 			id: 'camera-main',
 			config: expect.objectContaining({ cameras: [expect.objectContaining({ id: 'front-door', driver: 'rtsp', connectionMode: 'on_demand' })] }),
@@ -42,9 +42,9 @@ describe('CameraDeviceManager', () => {
 		await userEvent.selectOptions(screen.getByLabelText('摄像头连接模式'), 'always_on')
 		await userEvent.type(screen.getByLabelText('RTSP Host'), '192.168.1.22')
 		await userEvent.type(screen.getByLabelText('RTSP Path'), '/live')
-		await userEvent.click(screen.getByRole('button', { name: '加入子设备' }))
+		await userEvent.click(screen.getByRole('button', { name: '加入草稿' }))
 		expect(screen.getByText(/rtsp · 长连接 · 已启用/)).toBeInTheDocument()
-		await userEvent.click(screen.getByRole('button', { name: '保存子设备并应用' }))
+		await userEvent.click(screen.getByRole('button', { name: '保存设备并应用' }))
 		expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
 			config: expect.objectContaining({
 				cameras: [expect.objectContaining({ id: 'fast-camera', connectionMode: 'always_on' })],
@@ -62,8 +62,8 @@ describe('CameraDeviceManager', () => {
 		await userEvent.type(screen.getByLabelText('ONVIF Host'), '192.168.1.21')
 		await userEvent.type(screen.getByLabelText('ONVIF 用户名'), 'viewer')
 		await userEvent.type(screen.getByLabelText('ONVIF 密码'), 'secret')
-		await userEvent.click(screen.getByRole('button', { name: '加入子设备' }))
-		await userEvent.click(screen.getByRole('button', { name: '保存子设备并应用' }))
+		await userEvent.click(screen.getByRole('button', { name: '加入草稿' }))
+		await userEvent.click(screen.getByRole('button', { name: '保存设备并应用' }))
 		expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
 			config: expect.objectContaining({
 				cameras: [expect.objectContaining({
@@ -86,8 +86,8 @@ describe('CameraDeviceManager', () => {
 		await userEvent.type(screen.getByLabelText('小米摄像头 DID'), 'did-front')
 		await userEvent.type(screen.getByLabelText('小米摄像头型号'), 'chuangmi.camera.079ac1')
 		await userEvent.type(screen.getByLabelText('小米摄像头局域网 IP'), '192.168.1.30')
-		await userEvent.click(screen.getByRole('button', { name: '加入子设备' }))
-		await userEvent.click(screen.getByRole('button', { name: '保存子设备并应用' }))
+		await userEvent.click(screen.getByRole('button', { name: '加入草稿' }))
+		await userEvent.click(screen.getByRole('button', { name: '保存设备并应用' }))
 		expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
 			config: expect.objectContaining({ cameras: [expect.objectContaining({
 				xiaomi: expect.objectContaining({ subtype: 'sd' }),
@@ -99,7 +99,7 @@ describe('CameraDeviceManager', () => {
 		render(<CameraDeviceManager provider={{ ...provider, status: 'disabled', enabled: false }} onClose={() => {}} onSave={vi.fn()} />)
 		expect(screen.getByRole('button', { name: '扫描摄像头' })).toBeDisabled()
 		expect(screen.getByRole('button', { name: '手动添加' })).toBeDisabled()
-		expect(screen.getByRole('button', { name: '保存子设备并应用' })).toBeDisabled()
+		expect(screen.getByRole('button', { name: '保存设备并应用' })).toBeDisabled()
 		expect(screen.getByRole('alert')).toHaveTextContent('请先启用 Camera Provider')
 	})
 
@@ -129,8 +129,8 @@ describe('CameraDeviceManager', () => {
 		expect(screen.getByLabelText('小米摄像头账号认证')).toHaveValue('xiaomi-cloud')
 		expect(screen.queryByLabelText('小米摄像头 Pass Token')).not.toBeInTheDocument()
 
-		await userEvent.click(screen.getByRole('button', { name: '加入子设备' }))
-		await userEvent.click(screen.getByRole('button', { name: '保存子设备并应用' }))
+		await userEvent.click(screen.getByRole('button', { name: '加入草稿' }))
+		await userEvent.click(screen.getByRole('button', { name: '保存设备并应用' }))
 		expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
 			config: expect.objectContaining({
 				cameras: [expect.objectContaining({
@@ -167,9 +167,9 @@ describe('CameraDeviceManager', () => {
 		expect(screen.getByRole('option', { name: /客厅摄像头控制/ })).toBeInTheDocument()
 		expect(screen.queryByRole('option', { name: /客厅灯/ })).not.toBeInTheDocument()
 		await userEvent.selectOptions(screen.getByLabelText('摄像头控制来源'), 'xiaomi-hub\u0000xiaomi-camera-control')
-		await userEvent.click(screen.getByRole('button', { name: '加入子设备' }))
+		await userEvent.click(screen.getByRole('button', { name: '加入草稿' }))
 		expect(screen.getByText(/控制：客厅中枢 \/ 客厅摄像头控制/)).toBeInTheDocument()
-		await userEvent.click(screen.getByRole('button', { name: '保存子设备并应用' }))
+		await userEvent.click(screen.getByRole('button', { name: '保存设备并应用' }))
 
 		expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
 			config: expect.objectContaining({
@@ -222,8 +222,8 @@ describe('CameraDeviceManager', () => {
 		expect(screen.getByLabelText('摄像头控制来源')).toHaveValue('xiaomi-offline\u0000camera-control')
 		expect(screen.getByText(/原控制设备当前未出现在目录中/)).toBeInTheDocument()
 		await userEvent.selectOptions(screen.getByLabelText('摄像头控制来源'), '')
-		await userEvent.click(screen.getByRole('button', { name: '更新子设备' }))
-		await userEvent.click(screen.getByRole('button', { name: '保存子设备并应用' }))
+		await userEvent.click(screen.getByRole('button', { name: '更新草稿' }))
+		await userEvent.click(screen.getByRole('button', { name: '保存设备并应用' }))
 		expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
 			config: expect.objectContaining({ cameras: [expect.not.objectContaining({ control: expect.anything() })] }),
 		}), true)

@@ -28,7 +28,7 @@ func TestRestoreValidatesSecretsAndPreservesPreviousDatabase(t *testing.T) {
 	if err := store.SaveMappingProfile(ctx, mapping.Profile{SchemaVersion: 1, ID: "restored-profile", Version: 1, Kind: mapping.KindProvider, InputType: device.ValueTypeBool, OutputType: device.ValueTypeBool, Transforms: []mapping.Transform{{Type: mapping.TransformInvert}}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SaveMappingBinding(ctx, mapping.Binding{ID: "restored-binding", ProfileID: "restored-profile", ProviderID: "virtual-main", DeviceID: "virtual-switch-1", EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Enabled: true}); err != nil {
+	if err := store.SaveMappingBinding(ctx, mapping.Binding{ID: "restored-binding", ProfileID: "restored-profile", ProviderID: "virtual-main", DeviceID: "virtual-switch-1", EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Enabled: true, ReadbackEnabled: true, ReadbackDelaysMS: []int{500, 2000}}); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
@@ -72,7 +72,7 @@ func TestRestoreValidatesSecretsAndPreservesPreviousDatabase(t *testing.T) {
 		t.Fatalf("profiles = %#v, error = %v", profiles, err)
 	}
 	bindings, err := restored.ListMappingBindings(ctx)
-	if err != nil || len(bindings) != 1 || bindings[0].ID != "restored-binding" {
+	if err != nil || len(bindings) != 1 || bindings[0].ID != "restored-binding" || !bindings[0].ReadbackEnabled || len(bindings[0].ReadbackDelaysMS) != 2 {
 		t.Fatalf("bindings = %#v, error = %v", bindings, err)
 	}
 	if _, _, _, found, err := restored.AdminSession(ctx, "old-session-hash", now); err != nil || found {

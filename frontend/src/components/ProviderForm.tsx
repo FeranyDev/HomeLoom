@@ -4,7 +4,6 @@ import { ApiError } from '../api/client'
 import { completeTuyaOAuth, parseTuyaOAuthCallback, pollTuyaSharingLogin, startTuyaOAuth, startTuyaSharingLogin, tuyaOAuthQRCodeURL, tuyaSharingQRCodeURL, type TuyaOAuthCallbackMessage, type TuyaOAuthStartResult, type TuyaSharingLoginPollResult, type TuyaSharingLoginStartResult } from '../api/tuya'
 import { completeXiaomiOAuth, discoverXiaomiGateways, getXiaomiProviderAuthChallenge, startXiaomiCloudLogin, startXiaomiOAuth, verifyXiaomiCloudLogin, verifyXiaomiProviderAuthChallenge, type XiaomiCloudLoginResult, type XiaomiGateway } from '../api/xiaomi'
 import { loginSonoff } from '../api/sonoff'
-import { scanProviderNetwork, type ProviderDiscoveryCandidate } from '../api/providers'
 
 const xiaomiOAuthRedirectURL = 'http://homeassistant.local:8123'
 const tuyaOAuthDefaultRedirectURL = typeof window === 'undefined' ? 'http://homeassistant.local:8123/api/v1/tuya/oauth/callback' : `${window.location.origin}/api/v1/tuya/oauth/callback`
@@ -40,20 +39,17 @@ function createNetworkExample() {
 		probeMethod: 'tcp',
 		probeIntervalSeconds: 30,
 		probeTimeoutSeconds: 3,
+		wakeGraceSeconds: 300,
 		onlineThreshold: 1,
 		offlineThreshold: 2,
 		wolBroadcastAddress: '255.255.255.255',
 		wolPort: 9,
-		devices: [{ id: 'living-room-pc', name: '客厅电脑', host: '192.168.1.100', mac: 'AA:BB:CC:DD:EE:FF', probePort: 445 }],
+		devices: [],
 	}
 }
 
-function numericOverride(value: string): number | undefined {
-	return value === '' ? undefined : Number(value)
-}
-
 function createTuyaExample() {
-	return { authType: 'sharing', region: 'cn', userCode: '', uid: '', endpoint: '', terminalId: '', accessToken: '', refreshToken: '', requestTimeoutSeconds: 15, pollIntervalSeconds: 21600, mqtt: { enabled: false }, quirks: [] }
+	return { authType: 'sharing', region: 'cn', userCode: '', uid: '', endpoint: '', terminalId: '', accessToken: '', refreshToken: '', requestTimeoutSeconds: 15, pollIntervalSeconds: 60, mqtt: { enabled: false }, quirks: [] }
 }
 
 function createSonoffExample() {
@@ -189,8 +185,6 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 	const [tuyaSharingSession, setTuyaSharingSession] = useState<TuyaSharingLoginStartResult | null>(null)
 	const [tuyaSharingBusy, setTuyaSharingBusy] = useState(false)
 	const [sonoffAuthenticating, setSonoffAuthenticating] = useState(false)
-	const [sonoffScanning, setSonoffScanning] = useState(false)
-	const [sonoffCandidates, setSonoffCandidates] = useState<ProviderDiscoveryCandidate[]>([])
 	const hasRedactedSecrets = Boolean(provider && JSON.stringify(provider.config).includes('********'))
   const example = { latencyMs: 0, rejectWrites: false, devices: [{ id: 'demo-switch', name: '客厅开关', type: 'switch', online: true, power: false }, { id: 'demo-light', name: '客厅灯', type: 'lightbulb', online: true, power: true, brightness: 80, colorTemperature: 250, hue: 35, saturation: 45 }, { id: 'demo-outlet', name: '书房插座', type: 'outlet', online: true, power: false, inUse: false, currentPower: 0, energy: 1.25 }, { id: 'demo-temperature', name: '客厅温度', type: 'temperature-sensor', online: true, temperature: 23.6, batteryLevel: 91, lowBattery: false }, { id: 'demo-humidity', name: '客厅湿度', type: 'humidity-sensor', online: true, humidity: 56.2, batteryLevel: 90, lowBattery: false }, { id: 'demo-climate', name: '客厅温湿度', type: 'temperature-humidity-sensor', online: true, temperature: 23.6, humidity: 56.2, batteryLevel: 87, lowBattery: false }, { id: 'demo-contact', name: '入户门', type: 'contact-sensor', online: true, contact: false, batteryLevel: 88, lowBattery: false, tampered: false }, { id: 'demo-motion', name: '走廊活动', type: 'motion-sensor', online: true, motion: false, batteryLevel: 84, lowBattery: false, tampered: false }, { id: 'demo-fan', name: '卧室风扇', type: 'fan', online: true, active: false, speed: 35, mode: 'manual', swingMode: true, direction: 'clockwise', controlLock: false }, { id: 'demo-air', name: '客厅净化器', type: 'air-purifier', online: true, active: true, speed: 60, mode: 'auto', swingMode: false, controlLock: false, airQuality: 'good', pm25: 12, voc: 80, filterLife: 82, filterChange: false }, { id: 'demo-shade', name: '南窗帘', type: 'window-covering', online: true, position: 50, obstruction: false }, ...expandedVirtualExamples] }
 	const xiaomiExample = initialXiaomiConfig
@@ -204,7 +198,6 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 		} catch { /* validation is shown on submit */ }
 		return {}
 	}, [config])
-	const networkDevices = Array.isArray(configObject.devices) ? configObject.devices.map(objectRecord).filter((item) => Object.keys(item).length > 0) : []
 	const tlsConfig = configObject.tls && !Array.isArray(configObject.tls) && typeof configObject.tls === 'object' ? configObject.tls as Record<string, unknown> : {}
 	const xiaomiOAuth = configObject.oauth && !Array.isArray(configObject.oauth) && typeof configObject.oauth === 'object' ? configObject.oauth as Record<string, unknown> : {}
 	const mqttSelected = type === 'mqtt-client' || type === 'mqtt-server'
@@ -225,24 +218,6 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 		else nextConfig[key] = value
 		setConfig(JSON.stringify(nextConfig, null, 2))
 	}
-	const updateNetworkDevices = (devices: Record<string, unknown>[]) => setConfig(JSON.stringify({ ...configObject, devices }, null, 2))
-	const updateNetworkDevice = (index: number, key: string, value: unknown) => {
-		const devices = networkDevices.map((device, currentIndex) => {
-			if (currentIndex !== index) return device
-			const next = { ...device }
-			if (value === undefined) delete next[key]
-			else next[key] = value
-			return next
-		})
-		updateNetworkDevices(devices)
-	}
-	const addNetworkDevice = () => {
-		const existingIDs = new Set(networkDevices.map((device) => String(device.id ?? '')))
-		let suffix = networkDevices.length + 1
-		while (existingIDs.has(`network-device-${suffix}`)) suffix += 1
-		updateNetworkDevices([...networkDevices, { id: `network-device-${suffix}`, name: '', host: '', probeMethod: 'tcp', probePort: 80, mac: '' }])
-	}
-	const removeNetworkDevice = (index: number) => updateNetworkDevices(networkDevices.filter((_, currentIndex) => currentIndex !== index))
 	const updateTuya = (key: string, value: unknown) => {
 		const nextConfig: Record<string, unknown> = { ...configObject }
 		if (value === undefined) delete nextConfig[key]
@@ -296,17 +271,6 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 			setConfig(JSON.stringify({ ...configObject, region: result.region, cloud: { ...sonoffCloud, accessToken: result.accessToken, endpoint: result.endpoint } }, null, 2))
 			setTestResult('eWeLink 登录成功，云端设备目录和局域网 devicekey 已就绪。请保存 Provider。')
 		} catch (cause) { setError(cause instanceof Error ? cause.message : 'eWeLink 登录失败') } finally { setSonoffAuthenticating(false) }
-	}
-	async function scanSonoffLAN() {
-		setSonoffScanning(true); setError(null); setTestResult(null); setSonoffCandidates([])
-		try {
-			const candidates = await scanProviderNetwork({
-				id: id || 'sonoff-network-scan', name: name || 'Sonoff LAN scan', type: 'sonoff', enabled: false,
-				config: { ...configObject, devices: Array.isArray(configObject.devices) ? configObject.devices : [] },
-			})
-			setSonoffCandidates(candidates)
-			setTestResult(candidates.length ? `发现 ${candidates.length} 台 Sonoff 局域网设备；结果仅是候选，不会写入配置。` : '未发现 Sonoff 局域网设备。')
-		} catch (cause) { setError(cause instanceof Error ? cause.message : 'Sonoff 局域网扫描失败') } finally { setSonoffScanning(false) }
 	}
 	useEffect(() => {
 		if (!tuyaSharingSession) return
@@ -566,19 +530,17 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 			<section className="xiaomi-connection-step"><div className="xiaomi-connection-step__heading"><span>01</span><div><strong>eWeLink 账号登录</strong><small>参考 SonoffLAN：登录后读取云端设备目录和 devicekey，局域网优先时不需要手工复制 Access Token。</small></div></div><div className="mqtt-config-grid">
 				<label>运行模式<select aria-label="Sonoff 运行模式" value={String(configObject.mode ?? 'auto')} onChange={(event) => setConfig(JSON.stringify({ ...configObject, mode: event.target.value }, null, 2))}><option value="auto">Auto（局域网优先，云端回退）</option><option value="local">Local（仅局域网）</option><option value="cloud">Cloud（仅云端）</option></select></label>
 				<label>账号国家区号<input aria-label="eWeLink 国家区号" value={String(sonoffCloud.countryCode ?? '+86')} onChange={(event) => updateSonoffCloud('countryCode', event.target.value)} placeholder="+86" /></label>
-				<label>eWeLink 邮箱 / 手机号<input aria-label="eWeLink 账号" value={String(sonoffCloud.username ?? '')} onChange={(event) => updateSonoffCloud('username', event.target.value)} autoComplete="username" placeholder="邮箱或手机号" /></label>
+				<label>eWeLink 邮箱 / 手机号<input aria-label="eWeLink 账号" value={String(sonoffCloud.username ?? '')} onChange={(event) => updateSonoffCloud('username', event.target.value)} autoComplete="username" placeholder="邮箱或手机号" />{!String(sonoffCloud.username ?? '').includes('@') && <small>手机号不必重复填写国家区号；选择 +86 后输入 13800138000。</small>}</label>
 				<label>eWeLink 密码<input aria-label="eWeLink 密码" type="password" value={String(sonoffCloud.password ?? '')} onChange={(event) => updateSonoffCloud('password', event.target.value)} autoComplete="current-password" />{hasRedactedSecrets && <small>保持 ******** 可沿用数据库中的加密密码。</small>}</label>
 				<button type="button" className="example-button" disabled={sonoffAuthenticating || saving} onClick={() => void beginSonoffLogin()}>{sonoffAuthenticating ? '正在登录 eWeLink…' : String(sonoffCloud.accessToken ?? '').trim() ? '重新登录并刷新设备密钥' : '登录 eWeLink 账号'}</button>
 				{String(sonoffCloud.accessToken ?? '').trim() && <small className="test-success">eWeLink 会话已就绪。保存后 Provider 会复用 Token；密码用于 Token 失效时自动重新登录。</small>}
 				<label>请求超时（秒）<input aria-label="Sonoff 请求超时" type="number" min="1" max="120" value={Number(configObject.requestTimeoutSeconds ?? 10)} onChange={(event) => setConfig(JSON.stringify({ ...configObject, requestTimeoutSeconds: Number(event.target.value) }, null, 2))} /></label>
 				<label>刷新间隔（秒）<input aria-label="Sonoff 刷新间隔" type="number" min="15" max="86400" value={Number(configObject.refreshIntervalSeconds ?? 60)} onChange={(event) => setConfig(JSON.stringify({ ...configObject, refreshIntervalSeconds: Number(event.target.value) }, null, 2))} /></label>
 				<label>局域网扫描时长（秒）<input aria-label="Sonoff 局域网扫描时长" type="number" min="1" max="30" value={Number(configObject.discoveryTimeoutSeconds ?? 5)} onChange={(event) => setConfig(JSON.stringify({ ...configObject, discoveryTimeoutSeconds: Number(event.target.value) }, null, 2))} /></label>
-				<button type="button" className="example-button" disabled={sonoffScanning || saving} onClick={() => void scanSonoffLAN()}>{sonoffScanning ? '正在扫描 Sonoff 局域网…' : '扫描 Sonoff 局域网'}</button>
 			</div></section>
-			<div className="xiaomi-next-step"><strong>02 · 确认候选并保存</strong><p>mDNS 扫描只返回临时 endpoint，绝不自动添加配置；加密设备仍需通过 eWeLink 云目录取得 devicekey。登录成功后点击“保存并应用”，Provider 会自动读取云端设备；有 host/devicekey 的设备优先走局域网，其他设备回退云端。</p></div>
-			{sonoffCandidates.length > 0 && <div className="xiaomi-device-binding"><div className="xiaomi-device-binding__heading"><div><strong>Sonoff 局域网候选</strong><small>候选没有携带 devicekey 或 TXT data；请先通过云端目录确认设备密钥。</small></div><span>{sonoffCandidates.length} 台</span></div><div className="xiaomi-hub-device-list">{sonoffCandidates.map((candidate) => <article key={`${candidate.id ?? candidate.metadata?.deviceId ?? candidate.host}-${candidate.host}`}><div><strong>{candidate.name || 'Sonoff 设备'}</strong><small>{candidate.host}:{candidate.port} · {candidate.metadata?.type || '型号待确认'}</small><code>{candidate.metadata?.deviceId || candidate.id || '未知 ID'}</code></div><small>{candidate.metadata?.configured === 'true' ? '已在当前配置中' : '候选，尚未保存'}</small></article>)}</div></div>}
+			<div className="xiaomi-next-step"><strong>02 · 管理易微联设备</strong><p>保存并启用 Provider 后，从 Provider 卡片进入“管理设备”；在那里合并 eWeLink 云目录、局域网扫描和已保存清单。只有加入受管清单并保存的设备才会稳定保留在发布者下面。</p></div>
 			<details><summary>云端端点与已有 Token（高级）</summary><div className="mqtt-tls-grid"><label>云端区域<select aria-label="Sonoff 云端区域" value={String(configObject.region ?? 'auto')} onChange={(event) => setConfig(JSON.stringify({ ...configObject, region: event.target.value }, null, 2))}><option value="auto">自动</option><option value="cn">中国（cn）</option><option value="as">亚洲（as）</option><option value="us">美国（us）</option><option value="eu">欧洲（eu）</option></select></label><label>Endpoint<input aria-label="Sonoff 云端 Endpoint" value={String(sonoffCloud.endpoint ?? '')} onChange={(event) => updateSonoffCloud('endpoint', event.target.value)} placeholder="留空按区域选择" /></label><label>Access Token<input aria-label="Sonoff Access Token" type="password" value={String(sonoffCloud.accessToken ?? '')} onChange={(event) => updateSonoffCloud('accessToken', event.target.value)} /></label><label>WebSocket Endpoint（可选）<input aria-label="Sonoff WebSocket Endpoint" value={String(sonoffCloud.websocketEndpoint ?? '')} onChange={(event) => updateSonoffCloud('websocketEndpoint', event.target.value)} placeholder="wss://…" /><small>仅填写已获授权且已验证的服务端点；Provider 使用当前会话 Bearer 认证接收状态帧。</small></label><label>自有 App ID（可选）<input aria-label="Sonoff App ID" value={String(sonoffCloud.appId ?? '')} onChange={(event) => updateSonoffCloud('appId', event.target.value)} /></label><label>自有 App Secret（可选）<input aria-label="Sonoff App Secret" type="password" value={String(sonoffCloud.appSecret ?? '')} onChange={(event) => updateSonoffCloud('appSecret', event.target.value)} /></label><small>通常不需要手工填写 Token 或 App 凭据；仅在使用自有 eWeLink 应用时覆盖默认兼容签名。</small></div></details>
-			<details><summary>设备映射与完整 JSON（高级）</summary><label className="wide config-editor"><span>Sonoff Provider 配置 JSON</span><textarea aria-label="Sonoff Provider 高级配置" rows={9} value={config} onChange={(event) => setConfig(event.target.value)} spellCheck={false} />{fieldErrors.config && <small className="field-error">{fieldErrors.config}</small>}<small>登录成功后请保存；devices 可留空，首次发现会从 eWeLink 云端读取。</small></label></details>
+			<details><summary>设备映射与完整 JSON（高级）</summary><label className="wide config-editor"><span>Sonoff Provider 配置 JSON</span><textarea aria-label="Sonoff Provider 高级配置" rows={9} value={config} onChange={(event) => setConfig(event.target.value)} spellCheck={false} />{fieldErrors.config && <small className="field-error">{fieldErrors.config}</small>}<small>账号连接在这里配置；日常设备选择请使用保存后的“管理设备”页面。</small></label></details>
 			{testResult && <small className="test-success">{testResult}</small>}{error && <small className="inline-error">{error}</small>}
 		</div>
 		const tuyaConfiguration = <div className="wide xiaomi-connection-flow">
@@ -590,7 +552,7 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 					<label>Access ID<input aria-label="Tuya Access ID" required value={String(configObject.accessId ?? '')} onChange={(event) => updateTuya('accessId', event.target.value)} autoComplete="username" /></label>
 					<label>Access Secret<input aria-label="Tuya Access Secret" required type="password" value={String(configObject.accessSecret ?? '')} onChange={(event) => updateTuya('accessSecret', event.target.value)} autoComplete="new-password" />{hasRedactedSecrets && <small>保持 ******** 可沿用数据库中的 Secret。</small>}</label>
 				</>}
-				<label>轮询间隔（秒）<input aria-label="Tuya 轮询间隔" type="number" min="30" max="86400" value={Number(configObject.pollIntervalSeconds ?? 21600)} onChange={(event) => updateTuya('pollIntervalSeconds', Number(event.target.value))} /><small>默认 21600 秒；状态消息可通过高级 MQTT 配置补充。</small></label>
+				<label>轮询间隔（秒）<input aria-label="Tuya 轮询间隔" type="number" min="30" max="86400" value={Number(configObject.pollIntervalSeconds ?? 60)} onChange={(event) => updateTuya('pollIntervalSeconds', Number(event.target.value))} /><small>默认 60 秒；设备规格会缓存，每轮只读取轻量状态。</small></label>
 				<label>请求超时（秒）<input aria-label="Tuya 请求超时" type="number" min="1" max="120" value={Number(configObject.requestTimeoutSeconds ?? 15)} onChange={(event) => updateTuya('requestTimeoutSeconds', Number(event.target.value))} /></label>
 				{tuyaAuthType === 'openapi' && <><label className="wide">自定义 API 地址（可选）<input aria-label="Tuya API 地址" value={String(configObject.baseUrl ?? '')} onChange={(event) => updateTuya('baseUrl', event.target.value)} placeholder="留空按区域自动选择 https://openapi.tuya..." /></label><label className="wide">OAuth H5 授权页 URL<input aria-label="Tuya OAuth 授权页 URL" value={String(configObject.authorizationUrl ?? '')} onChange={(event) => updateTuya('authorizationUrl', event.target.value)} placeholder="从 Tuya IoT Platform 获取 H5 授权页 URL" /><small>可选的 OAuth H5 兼容流程；Home Assistant 扫码方式不需要此项。</small></label><label className="wide">OAuth 回调地址<input aria-label="Tuya OAuth 回调地址" value={String(configObject.redirectUrl ?? tuyaOAuthDefaultRedirectURL)} onChange={(event) => updateTuya('redirectUrl', event.target.value)} /><small>默认回调：{tuyaOAuthDefaultRedirectURL}。</small></label></>}
 			</div></section>
@@ -608,23 +570,21 @@ export function ProviderForm({ provider, initialType, onCancel, onSave, onTest }
 			{fieldErrors.config && <small className="field-error">{fieldErrors.config}</small>}{hasRedactedSecrets && <small>敏感字段已显示为 ********；保持占位符即可沿用数据库中的原值。</small>}{testResult && <small className="test-success">{testResult}</small>}
 		</div>
 		const networkConfiguration = <div className="wide xiaomi-connection-flow">
-			<section className="xiaomi-connection-step"><div className="xiaomi-connection-step__heading"><span>01</span><div><strong>配置局域网设备监测</strong><small>可通过 TCP 端口或 ICMP 回显确认设备电源状态；探测失败会显示为已关闭。配置 MAC 后，开启操作会发送 Wake-on-LAN 魔术包，实际开机仍由后续探测确认。</small></div></div><div className="mqtt-config-grid">
+			<section className="xiaomi-connection-step"><div className="xiaomi-connection-step__heading"><span>01</span><div><strong>配置局域网设备监测</strong><small>可通过 TCP 端口或 ICMP 回显确认设备电源状态；探测失败会显示为已关闭。配置 MAC 后，开启操作会发送 Wake-on-LAN 魔术包，控制会立即确认，实际开机仍由后续探测确认。</small></div></div><div className="mqtt-config-grid">
 				<label>默认探测方式（probeMethod）<select aria-label="网络设备默认探测方式" value={String(configObject.probeMethod ?? 'tcp')} onChange={(event) => updateNetworkRuntime('probeMethod', event.target.value)}><option value="tcp">TCP 端口</option><option value="icmp">ICMP Ping</option></select><small>TCP 适合确认指定服务；ICMP 不需要端口，适合只判断主机是否可达。</small></label>
 				<label>探测间隔（probeIntervalSeconds）<input aria-label="网络设备探测间隔" type="number" min="1" max="3600" value={Number(configObject.probeIntervalSeconds ?? 30)} onChange={(event) => updateNetworkRuntime('probeIntervalSeconds', Number(event.target.value))} /><small>所有未单独覆盖的设备按此间隔探测，默认 30 秒。</small></label>
 				<label>探测超时（probeTimeoutSeconds）<input aria-label="网络设备探测超时" type="number" min="1" max="120" value={Number(configObject.probeTimeoutSeconds ?? 3)} onChange={(event) => updateNetworkRuntime('probeTimeoutSeconds', Number(event.target.value))} /><small>TCP 建连或 ICMP 回显最长等待时间，默认 3 秒。</small></label>
+				<label>唤醒确认宽限（wakeGraceSeconds）<input aria-label="网络设备唤醒确认宽限" type="number" min="5" max="3600" value={Number(configObject.wakeGraceSeconds ?? 300)} onChange={(event) => updateNetworkRuntime('wakeGraceSeconds', Number(event.target.value))} /><small>魔术包发出后显示“启动中”的最长时间，默认 300 秒；这不属于控制超时。</small></label>
 				<label>开启阈值（onlineThreshold）<input aria-label="网络设备在线阈值" type="number" min="1" max="100" value={Number(configObject.onlineThreshold ?? 1)} onChange={(event) => updateNetworkRuntime('onlineThreshold', Number(event.target.value))} /><small>连续成功达到阈值后才显示已开启。</small></label>
 				<label>关闭阈值（offlineThreshold）<input aria-label="网络设备离线阈值" type="number" min="1" max="100" value={Number(configObject.offlineThreshold ?? 2)} onChange={(event) => updateNetworkRuntime('offlineThreshold', Number(event.target.value))} /><small>连续失败达到阈值后才显示已关闭。</small></label>
 				<label>WOL 广播地址（wolBroadcastAddress）<input aria-label="网络设备 WOL 广播地址" value={String(configObject.wolBroadcastAddress ?? '255.255.255.255')} onChange={(event) => updateNetworkRuntime('wolBroadcastAddress', event.target.value)} placeholder="255.255.255.255" /></label>
 				<label>WOL 端口（wolPort）<input aria-label="网络设备 WOL 端口" type="number" min="1" max="65535" value={Number(configObject.wolPort ?? 9)} onChange={(event) => updateNetworkRuntime('wolPort', Number(event.target.value))} /></label>
 				<label className="wide">WOL 网络接口（wolInterface，可选）<input aria-label="网络设备 WOL 网络接口" value={String(configObject.wolInterface ?? '')} onChange={(event) => updateNetworkRuntime('wolInterface', event.target.value)} placeholder="例如 eth0；留空由系统选择" /></label>
 			</div></section>
-			<section className="xiaomi-connection-step"><div className="xiaomi-connection-step__heading"><span>02</span><div><strong>监测设备</strong><small>每台设备需要稳定 ID、名称和 Host；TCP 方式还需要探测端口，ICMP 不需要。MAC 留空时为仅监测设备，填写后可使用 Wake-on-LAN。</small></div></div>
-				<div className="provider-device-list"><div className="command-heading"><h3>网络设备</h3><span>{networkDevices.length} 台</span></div>{networkDevices.length === 0 ? <p>还没有监测设备。添加至少一台设备后才能保存 Provider。</p> : networkDevices.map((device, index) => <section className="xiaomi-device-binding" key={index} aria-label={`网络设备 ${index + 1}`}><div className="xiaomi-device-binding__heading"><div><strong>{String(device.name || `网络设备 ${index + 1}`)}</strong><small>{String(device.host || '尚未设置 Host')} · {String(device.probeMethod ?? configObject.probeMethod ?? 'tcp').toUpperCase()}{String(device.probeMethod ?? configObject.probeMethod ?? 'tcp') === 'tcp' ? `:${Number(device.probePort ?? 0) || '未设置端口'}` : ''}{device.mac ? ' · 可由开启操作唤醒' : ' · 仅监测'}</small></div><button type="button" className="is-danger" aria-label={`移除网络设备 ${index + 1}`} onClick={() => removeNetworkDevice(index)}>移除</button></div><div className="mqtt-config-grid"><label>ID<input aria-label={`网络设备 ${index + 1} ID`} value={String(device.id ?? '')} onChange={(event) => updateNetworkDevice(index, 'id', event.target.value)} placeholder="living-room-pc" /></label><label>名称<input aria-label={`网络设备 ${index + 1} 名称`} value={String(device.name ?? '')} onChange={(event) => updateNetworkDevice(index, 'name', event.target.value)} placeholder="客厅电脑" /></label><label>Host<input aria-label={`网络设备 ${index + 1} Host`} value={String(device.host ?? '')} onChange={(event) => updateNetworkDevice(index, 'host', event.target.value)} placeholder="192.168.1.100" /></label><label>TCP 探测端口<input aria-label={`网络设备 ${index + 1} 探测端口`} type="number" min="1" max="65535" disabled={String(device.probeMethod ?? configObject.probeMethod ?? 'tcp') === 'icmp'} value={device.probePort === undefined ? '' : Number(device.probePort)} onChange={(event) => updateNetworkDevice(index, 'probePort', numericOverride(event.target.value))} placeholder="ICMP 不需要端口" /></label><label className="wide">MAC（用于 Wake-on-LAN，可选）<input aria-label={`网络设备 ${index + 1} MAC`} value={String(device.mac ?? '')} onChange={(event) => updateNetworkDevice(index, 'mac', event.target.value)} placeholder="AA:BB:CC:DD:EE:FF" /><small>开启操作会发送魔术包；状态仍由后续探测确认。</small></label></div><details><summary>单项高级覆盖（可选）</summary><div className="mqtt-tls-grid"><label>探测方式<select aria-label={`网络设备 ${index + 1} 探测方式覆盖`} value={String(device.probeMethod ?? '')} onChange={(event) => updateNetworkDevice(index, 'probeMethod', event.target.value || undefined)}><option value="">继承全局设置</option><option value="tcp">TCP 端口</option><option value="icmp">ICMP Ping</option></select></label><label>探测间隔（秒）<input aria-label={`网络设备 ${index + 1} 探测间隔覆盖`} type="number" min="1" max="3600" value={device.probeIntervalSeconds === undefined ? '' : Number(device.probeIntervalSeconds)} onChange={(event) => updateNetworkDevice(index, 'probeIntervalSeconds', numericOverride(event.target.value))} placeholder="继承全局设置" /></label><label>探测超时（秒）<input aria-label={`网络设备 ${index + 1} 探测超时覆盖`} type="number" min="1" max="120" value={device.probeTimeoutSeconds === undefined ? '' : Number(device.probeTimeoutSeconds)} onChange={(event) => updateNetworkDevice(index, 'probeTimeoutSeconds', numericOverride(event.target.value))} placeholder="继承全局设置" /></label><label>开启阈值<input aria-label={`网络设备 ${index + 1} 在线阈值覆盖`} type="number" min="1" max="100" value={device.onlineThreshold === undefined ? '' : Number(device.onlineThreshold)} onChange={(event) => updateNetworkDevice(index, 'onlineThreshold', numericOverride(event.target.value))} placeholder="继承全局设置" /></label><label>关闭阈值<input aria-label={`网络设备 ${index + 1} 离线阈值覆盖`} type="number" min="1" max="100" value={device.offlineThreshold === undefined ? '' : Number(device.offlineThreshold)} onChange={(event) => updateNetworkDevice(index, 'offlineThreshold', numericOverride(event.target.value))} placeholder="继承全局设置" /></label><label>WOL 广播地址<input aria-label={`网络设备 ${index + 1} WOL 广播地址覆盖`} value={String(device.wolBroadcastAddress ?? '')} onChange={(event) => updateNetworkDevice(index, 'wolBroadcastAddress', event.target.value || undefined)} placeholder="继承全局设置" /></label><label>WOL 端口<input aria-label={`网络设备 ${index + 1} WOL 端口覆盖`} type="number" min="1" max="65535" value={device.wolPort === undefined ? '' : Number(device.wolPort)} onChange={(event) => updateNetworkDevice(index, 'wolPort', numericOverride(event.target.value))} placeholder="继承全局设置" /></label><label className="wide">WOL 网络接口<input aria-label={`网络设备 ${index + 1} WOL 网络接口覆盖`} value={String(device.wolInterface ?? '')} onChange={(event) => updateNetworkDevice(index, 'wolInterface', event.target.value || undefined)} placeholder="继承全局设置" /></label></div></details></section>)}</div>
-				<button type="button" className="example-button" onClick={addNetworkDevice}>添加网络设备</button>
-			</section>
-			<div className="config-note"><span>设备状态与唤醒</span><strong>TCP 或 ICMP 可达即已开启；开启操作不会乐观改写状态</strong><p>探测失败显示为已关闭；可在每台设备的高级区域覆盖探测方式、探测阈值和 WOL 设置，未填写的项目继承本页的全局配置。</p></div>
-			<details><summary>高级 JSON 导入 / 导出</summary><label className="wide config-editor"><span>网络设备配置 JSON</span><textarea aria-label="网络设备配置 JSON" aria-invalid={Boolean(fieldErrors.config)} rows={14} value={config} onChange={(event) => setConfig(event.target.value)} spellCheck={false} />{fieldErrors.config && <small className="field-error">{fieldErrors.config}</small>}<small>JSON 与上方可视化列表同步。可在此导入完整配置或编辑未在列表中展示的字段。</small><button type="button" className="example-button" onClick={() => setConfig(JSON.stringify(networkExample, null, 2))}>载入网络设备示例</button></label></details>
-			{onTest && <button type="button" className="example-button" disabled={testing || saving} onClick={() => void testConnection()}>{testing ? '正在探测…' : '测试网络设备连接'}</button>}{testResult && <small className="wide test-success">{testResult}</small>}
+			<div className="xiaomi-next-step"><strong>02 · 从统一设备管理入口添加</strong><p>Provider 可以先以空设备目录保存并运行。随后从 Provider 卡片进入“管理网络设备”，逐台填写稳定 ID、Host、MAC 和可选覆盖项，加入草稿后统一保存设备并实时应用。</p></div>
+			<div className="config-note"><span>状态与唤醒规则</span><strong>魔术包发出后等待 TCP 或 ICMP 确认可达</strong><p>启动期间显示“启动中”，并以最多每 10 秒一次的探测确认；超过唤醒确认宽限仍未可达时恢复为已关闭。设备级覆盖在“管理网络设备”页中设置。</p></div>
+			<details><summary>网络 Provider 高级 JSON（迁移/批量导入）</summary><label className="wide config-editor"><span>网络 Provider 配置 JSON</span><textarea aria-label="网络 Provider 配置 JSON" aria-invalid={Boolean(fieldErrors.config)} rows={14} value={config} onChange={(event) => setConfig(event.target.value)} spellCheck={false} />{fieldErrors.config && <small className="field-error">{fieldErrors.config}</small>}<small>日常添加、编辑或删除设备请使用 Provider 卡片的“管理网络设备”；此入口只用于迁移历史配置或批量导入。</small><button type="button" className="example-button" onClick={() => setConfig(JSON.stringify(networkExample, null, 2))}>载入网络 Provider 示例</button></label></details>
+			{onTest && <button type="button" className="example-button" disabled={testing || saving || !Array.isArray(configObject.devices) || configObject.devices.length === 0} onClick={() => void testConnection()}>{testing ? '正在探测…' : '测试已添加的网络设备'}</button>}{testResult && <small className="wide test-success">{testResult}</small>}
 		</div>
 		return <div className="modal-backdrop"><form className="target-form" role="dialog" aria-modal="true" aria-labelledby="provider-form-title" onSubmit={(event) => void submit(event)}>
 		<div className="form-heading"><div><p className="eyebrow">PROVIDER</p><h2 id="provider-form-title">{provider ? '编辑 Provider' : '新建 Provider'}</h2></div><button type="button" onClick={onCancel}>关闭</button></div>

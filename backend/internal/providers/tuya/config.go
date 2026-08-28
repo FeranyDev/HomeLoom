@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/feranydev/homeloom/backend/internal/domain/device"
 )
 
 const (
@@ -14,7 +16,7 @@ const (
 
 	defaultBaseURL        = "https://openapi.tuyaus.com"
 	defaultRequestTimeout = 15 * time.Second
-	defaultPollInterval   = 6 * time.Hour
+	defaultPollInterval   = time.Minute
 	minimumPollInterval   = 30 * time.Second
 	maximumPollInterval   = 24 * time.Hour
 	maximumRequestTimeout = 120 * time.Second
@@ -32,23 +34,47 @@ const (
 // device directory and each device's dynamic specification belong to the
 // account provider and are reconciled in place.
 type Config struct {
-	AuthType          string        `json:"authType,omitempty"`
-	BaseURL           string        `json:"baseUrl,omitempty"`
-	Endpoint          string        `json:"endpoint,omitempty"`
-	Region            string        `json:"region,omitempty"`
-	AccessID          string        `json:"accessId"`
-	AccessSecret      string        `json:"accessSecret"`
-	UID               string        `json:"uid"`
-	UserCode          string        `json:"userCode,omitempty"`
-	ClientID          string        `json:"clientId,omitempty"`
-	TerminalID        string        `json:"terminalId,omitempty"`
-	AccessToken       string        `json:"accessToken,omitempty"`
-	RefreshToken      string        `json:"refreshToken,omitempty"`
-	TokenExpiresAt    time.Time     `json:"tokenExpiresAt,omitempty"`
-	RequestTimeoutSec int           `json:"requestTimeoutSeconds,omitempty"`
-	PollIntervalSec   int           `json:"pollIntervalSeconds,omitempty"`
-	MQTT              *MQTTConfig   `json:"mqtt,omitempty"`
-	Quirks            []QuirkConfig `json:"quirks,omitempty"`
+	AuthType          string         `json:"authType,omitempty"`
+	BaseURL           string         `json:"baseUrl,omitempty"`
+	Endpoint          string         `json:"endpoint,omitempty"`
+	Region            string         `json:"region,omitempty"`
+	AccessID          string         `json:"accessId"`
+	AccessSecret      string         `json:"accessSecret"`
+	UID               string         `json:"uid"`
+	UserCode          string         `json:"userCode,omitempty"`
+	ClientID          string         `json:"clientId,omitempty"`
+	TerminalID        string         `json:"terminalId,omitempty"`
+	AccessToken       string         `json:"accessToken,omitempty"`
+	RefreshToken      string         `json:"refreshToken,omitempty"`
+	TokenExpiresAt    time.Time      `json:"tokenExpiresAt,omitempty"`
+	RequestTimeoutSec int            `json:"requestTimeoutSeconds,omitempty"`
+	PollIntervalSec   int            `json:"pollIntervalSeconds,omitempty"`
+	ManagedDevices    bool           `json:"managedDevices,omitempty"`
+	Devices           []DeviceConfig `json:"devices,omitempty"`
+	MQTT              *MQTTConfig    `json:"mqtt,omitempty"`
+	Quirks            []QuirkConfig  `json:"quirks,omitempty"`
+}
+
+// DeviceConfig is the durable, operator-selected Tuya child-device record.
+// DeviceID is the untouched Tuya cloud identity; ID is HomeLoom's stable
+// public identity. Specification and Status retain enough non-secret catalog
+// information to keep the device visible while the cloud directory is
+// temporarily incomplete.
+type DeviceConfig struct {
+	ID            string            `json:"id"`
+	DeviceID      string            `json:"deviceId"`
+	Name          string            `json:"name"`
+	Type          string            `json:"type,omitempty"`
+	Category      string            `json:"category,omitempty"`
+	ProductID     string            `json:"productId,omitempty"`
+	ProductName   string            `json:"productName,omitempty"`
+	Model         string            `json:"model,omitempty"`
+	HomeID        string            `json:"homeId,omitempty"`
+	HomeName      string            `json:"homeName,omitempty"`
+	RoomID        string            `json:"roomId,omitempty"`
+	RoomName      string            `json:"roomName,omitempty"`
+	Specification TuyaSpecification `json:"specification,omitempty"`
+	Status        []TuyaStatus      `json:"status,omitempty"`
 }
 
 // MQTTConfig is an optional already-authorized Tuya message channel. Tuya's
@@ -107,6 +133,27 @@ func (c *Config) applyDefaults() {
 	c.UserCode = strings.TrimSpace(c.UserCode)
 	c.ClientID = strings.TrimSpace(c.ClientID)
 	c.TerminalID = strings.TrimSpace(c.TerminalID)
+	for index := range c.Devices {
+		item := &c.Devices[index]
+		item.ID = strings.TrimSpace(item.ID)
+		item.DeviceID = strings.TrimSpace(item.DeviceID)
+		item.Name = strings.TrimSpace(item.Name)
+		item.Type = strings.TrimSpace(item.Type)
+		item.Category = strings.TrimSpace(item.Category)
+		item.ProductID = strings.TrimSpace(item.ProductID)
+		item.ProductName = strings.TrimSpace(item.ProductName)
+		item.Model = strings.TrimSpace(item.Model)
+		item.HomeID = strings.TrimSpace(item.HomeID)
+		item.HomeName = strings.TrimSpace(item.HomeName)
+		item.RoomID = strings.TrimSpace(item.RoomID)
+		item.RoomName = strings.TrimSpace(item.RoomName)
+		if item.ID == "" && item.DeviceID != "" {
+			item.ID = stableDeviceID(item.DeviceID)
+		}
+		if item.Name == "" {
+			item.Name = item.DeviceID
+		}
+	}
 	if c.MQTT != nil {
 		c.MQTT.URL = strings.TrimSpace(c.MQTT.URL)
 		c.MQTT.Username = strings.TrimSpace(c.MQTT.Username)
@@ -168,6 +215,27 @@ func (c Config) validate(providerID string) error {
 	}
 	if c.PollIntervalSec < int(minimumPollInterval/time.Second) || time.Duration(c.PollIntervalSec)*time.Second > maximumPollInterval {
 		return fmt.Errorf("tuya pollIntervalSeconds must be between %d and %d", int(minimumPollInterval/time.Second), int(maximumPollInterval/time.Second))
+	}
+	seenIDs := make(map[string]struct{}, len(c.Devices))
+	seenRemoteIDs := make(map[string]struct{}, len(c.Devices))
+	for index, item := range c.Devices {
+		if item.DeviceID == "" {
+			return fmt.Errorf("tuya devices[%d].deviceId is required", index)
+		}
+		if !device.ValidStableID(item.ID) {
+			return fmt.Errorf("tuya devices[%d].id must be a stable id", index)
+		}
+		if _, exists := seenIDs[item.ID]; exists {
+			return fmt.Errorf("duplicate Tuya internal device id %q", item.ID)
+		}
+		if _, exists := seenRemoteIDs[item.DeviceID]; exists {
+			return fmt.Errorf("duplicate Tuya cloud device id %q", item.DeviceID)
+		}
+		seenIDs[item.ID] = struct{}{}
+		seenRemoteIDs[item.DeviceID] = struct{}{}
+		if item.Type != "" && !device.ValidStableID(item.Type) {
+			return fmt.Errorf("tuya devices[%d].type must be a stable device type", index)
+		}
 	}
 	if c.MQTT != nil && c.MQTT.Enabled {
 		if c.MQTT.URL == "" || c.MQTT.Username == "" || c.MQTT.Password == "" || c.MQTT.ClientID == "" || c.MQTT.SourceTopic == "" {

@@ -45,6 +45,8 @@ type Binding struct {
 	ConsumerDeviceID   string       `json:"consumerDeviceId,omitempty"`
 	ConsumerProperty   string       `json:"consumerProperty,omitempty"`
 	Enabled            bool         `json:"enabled"`
+	ReadbackEnabled    bool         `json:"readbackEnabled,omitempty"`
+	ReadbackDelaysMS   []int        `json:"readbackDelaysMs,omitempty"`
 }
 
 func (b Binding) EffectiveConsumerDeviceType() device.Type {
@@ -127,7 +129,23 @@ func ValidateBinding(b Binding) error {
 				fields["binding.deviceType"] = "must be a stable lowercase identifier"
 			}
 		}
+		if b.ReadbackEnabled {
+			if len(b.ReadbackDelaysMS) == 0 || len(b.ReadbackDelaysMS) > 8 {
+				fields["binding.readbackDelaysMs"] = "must contain between 1 and 8 delays"
+			}
+			previous := 0
+			for _, delay := range b.ReadbackDelaysMS {
+				if delay < 100 || delay > 300_000 || delay <= previous {
+					fields["binding.readbackDelaysMs"] = "must be strictly increasing values between 100 and 300000 milliseconds"
+					break
+				}
+				previous = delay
+			}
+		}
 	} else if stage == StageConsumer {
+		if b.ReadbackEnabled || len(b.ReadbackDelaysMS) > 0 {
+			fields["binding.readbackEnabled"] = "is supported only for provider bindings"
+		}
 		if !device.ValidStableID(b.ProviderID) {
 			fields["binding.providerId"] = "must be a stable lowercase identifier"
 		}

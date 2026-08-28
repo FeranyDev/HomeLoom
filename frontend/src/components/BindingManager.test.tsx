@@ -100,6 +100,26 @@ describe('BindingManager', () => {
     expect(getComputedStyle(sourceProperty).userSelect).toBe('text')
   })
 
+	it('separates semantic properties from raw Tuya DPs in the mapping editor', async () => {
+		const tuyaDevice: Device = {
+			...device, id: 'tuya-device-1', providerId: 'tuya-main', name: '涂鸦开关',
+			endpoints: [{ id: 'main', name: 'Main', type: 'main', capabilities: [
+				{ id: 'switch', type: 'switch', properties: [{ definition: { id: 'power', name: '电源', type: 'bool', readable: true, writable: true, notifiable: true }, value: { type: 'bool', bool: false } }] },
+				{ id: 'tuya-dp', type: 'tuya-dp', properties: [{ definition: { id: 'switch_1', name: 'switch_1', type: 'bool', readable: true, writable: true, notifiable: true }, value: { type: 'bool', bool: false } }] },
+			] }],
+		}
+		const baseCatalog = await catalog()
+		const api = {
+			listBindings: vi.fn(async () => []), listProfiles: vi.fn(async () => []), create: vi.fn(), update: vi.fn(), remove: vi.fn(),
+			catalog: vi.fn(async () => ({ ...baseCatalog, providers: [{ ...tuyaDevice, catalog: { complete: true, source: 'tuya-device-specification', specType: 'tuya-dp' } }] })),
+		}
+		render(<BindingManager device={tuyaDevice} api={api} providerOnly />)
+		expect(await screen.findByRole('region', { name: 'Tuya 标准语义属性' })).toBeInTheDocument()
+		expect(screen.getByText('标准语义属性')).toBeInTheDocument()
+		expect(screen.getByText('原始 Tuya DP（1）')).toBeInTheDocument()
+		expect(screen.getByRole('button', { name: /涂鸦开关.*电源/ })).toBeInTheDocument()
+	})
+
   it('shows an effective identity default and saves a device-specific override', async () => {
     const create = vi.fn(async (input) => ({ ...input, id: 'default-override' }))
     const api = {
@@ -116,6 +136,9 @@ describe('BindingManager', () => {
     await userEvent.click(screen.getByRole('button', { name: '编辑默认映射 power' }))
     expect(screen.getByText(/正在修改默认映射/)).toBeInTheDocument()
     await userEvent.selectOptions(screen.getByLabelText('映射转换 Profile'), 'builtin-active-low')
+    await userEvent.click(screen.getByLabelText('为当前属性启用写后回读'))
+    const delays = screen.getByLabelText('当前属性写后回读时点')
+    await userEvent.clear(delays); await userEvent.type(delays, '0.25, 1, 3')
     await userEvent.click(screen.getByRole('button', { name: '保存默认映射覆盖' }))
 
     await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
@@ -123,6 +146,7 @@ describe('BindingManager', () => {
       endpointId: 'main', capabilityId: 'switch', propertyId: 'power',
       modelEndpointId: 'main', modelCapabilityId: 'switch', modelPropertyId: 'power',
       profileId: 'builtin-active-low', enabled: true,
+      readbackEnabled: true, readbackDelaysMs: [250, 1000, 3000],
     })))
   })
 

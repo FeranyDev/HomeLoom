@@ -220,6 +220,7 @@ var modelContracts = map[Type]ModelContract{
 		// it does not make the local monitoring Provider unavailable. Writing true
 		// is the explicit "turn on" operation and may send Wake-on-LAN.
 		required("switch", "power", "电源状态", ValueTypeBool, true),
+		optional("network", "wake-pending", "唤醒启动中", ValueTypeBool, "", false),
 	}},
 	TypeContactSensor: {DeviceType: TypeContactSensor, Name: "接触传感器", Version: 2, Parameters: append([]ModelParameter{
 		required("contact", "contact-detected", "接触状态", ValueTypeBool, false),

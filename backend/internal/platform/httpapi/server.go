@@ -33,6 +33,7 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/mcpagent"
 	"github.com/feranydev/homeloom/backend/internal/platform/subprocesslog"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
+	"github.com/feranydev/homeloom/backend/internal/providers/sonoff"
 	sonoffcloud "github.com/feranydev/homeloom/backend/internal/providers/sonoff/cloud"
 	"github.com/feranydev/homeloom/backend/internal/providers/tuya"
 	"github.com/feranydev/homeloom/backend/internal/providers/xiaomi"
@@ -279,6 +280,10 @@ type deviceEnabledRequest struct {
 	Enabled *bool `json:"enabled"`
 }
 
+type deviceNameRequest struct {
+	Name string `json:"name"`
+}
+
 type deviceLocationRequest struct {
 	Mode   device.LocationMode `json:"mode"`
 	HomeID string              `json:"homeId"`
@@ -396,6 +401,25 @@ func (r targetRequest) domain(id string) domaintarget.Config {
 		Pin: r.Pin, SetupID: r.SetupID, StorePath: r.StorePath, MatterConfig: r.MatterConfig,
 		DeviceIDs: r.DeviceIDs, Devices: r.Devices,
 	}
+}
+
+// sonoffLoginHTTPError exposes only stable, non-sensitive failure details.
+// eWeLink's response text may echo account input, so it must never be returned
+// to the browser. The numeric response code and HTTP status are safe enough to
+// distinguish rejected credentials/configuration from a cloud-side failure.
+func sonoffLoginHTTPError(err error) *echo.HTTPError {
+	var responseCode *sonoffcloud.ResponseCodeError
+	if errors.As(err, &responseCode) {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Sonoff/eWeLink 登录被拒绝（错误码 %d）", responseCode.Code)).SetInternal(err)
+	}
+	var status *sonoffcloud.HTTPStatusError
+	if errors.As(err, &status) {
+		return echo.NewHTTPError(http.StatusBadGateway, fmt.Sprintf("Sonoff/eWeLink 服务响应异常（HTTP %d）", status.StatusCode)).SetInternal(err)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return echo.NewHTTPError(http.StatusGatewayTimeout, "Sonoff/eWeLink 登录超时，请检查 HomeLoom 主机的网络后重试").SetInternal(err)
+	}
+	return echo.NewHTTPError(http.StatusBadRequest, "Sonoff/eWeLink 登录失败，请确认账号、密码和国家区号").SetInternal(err)
 }
 
 func NewServer(address string, devices *application.DeviceService, targets *application.TargetService, logger *zap.Logger, providerServices ...*application.ProviderService) *Server {
@@ -1511,6 +1535,34 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		}
 		return c.JSON(http.StatusOK, map[string]any{"data": item})
 	})
+	e.PUT("/api/v1/devices/:id/name", func(c echo.Context) error {
+		var input deviceNameRequest
+		if err := c.Bind(&input); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid device name")
+		}
+		item, err := devices.SetDeviceName(c.Request().Context(), c.Param("id"), input.Name)
+		if errors.Is(err, application.ErrDeviceNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "device not found")
+		}
+		var validationError *application.ValidationError
+		if errors.As(err, &validationError) {
+			return validationError
+		}
+		if err != nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "device name preferences are unavailable").SetInternal(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": item})
+	})
+	e.DELETE("/api/v1/devices/:id/name", func(c echo.Context) error {
+		item, err := devices.ResetDeviceName(c.Request().Context(), c.Param("id"))
+		if errors.Is(err, application.ErrDeviceNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "device not found")
+		}
+		if err != nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "device name preferences are unavailable").SetInternal(err)
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": item})
+	})
 	e.GET("/api/v1/devices/:id/mcp-config", func(c echo.Context) error {
 		if server.mcpConfigs == nil {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "MCP configuration is unavailable")
@@ -2005,7 +2057,7 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 			Region: request.Region, Endpoint: request.Endpoint, AppID: request.AppID, AppSecret: request.AppSecret,
 		}, 30*time.Second)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusBadRequest, "Sonoff/eWeLink 登录失败").SetInternal(err)
+			return sonoffLoginHTTPError(err)
 		}
 		c.Response().Header().Set(echo.HeaderCacheControl, "no-store")
 		return c.JSON(http.StatusOK, map[string]any{"data": result})
@@ -2090,6 +2142,46 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		live, ok := instance.(*xiaomi.CloudProvider)
 		if !ok {
 			return echo.NewHTTPError(http.StatusBadRequest, "provider is not a Xiaomi MIoT third-party cloud provider")
+		}
+		ctx, cancel := context.WithTimeout(c.Request().Context(), 30*time.Second)
+		defer cancel()
+		items, err := live.DiscoverCloudDevices(ctx)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": items})
+	})
+	e.GET("/api/v1/sonoff/providers/:id/devices", func(c echo.Context) error {
+		if providers == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "provider management is unavailable")
+		}
+		instance, ok := providers.RuntimeProvider(c.Param("id"))
+		if !ok {
+			return echo.NewHTTPError(http.StatusConflict, "Sonoff provider must be enabled and connected before discovering devices")
+		}
+		live, ok := instance.(*sonoff.Provider)
+		if !ok {
+			return echo.NewHTTPError(http.StatusBadRequest, "provider is not a Sonoff/eWeLink provider")
+		}
+		ctx, cancel := context.WithTimeout(c.Request().Context(), 30*time.Second)
+		defer cancel()
+		items, err := live.DiscoverCloudDevices(ctx)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
+		return c.JSON(http.StatusOK, map[string]any{"data": items})
+	})
+	e.GET("/api/v1/tuya/providers/:id/devices", func(c echo.Context) error {
+		if providers == nil {
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "provider management is unavailable")
+		}
+		instance, ok := providers.RuntimeProvider(c.Param("id"))
+		if !ok {
+			return echo.NewHTTPError(http.StatusConflict, "Tuya provider must be enabled and connected before discovering devices")
+		}
+		live, ok := instance.(*tuya.Provider)
+		if !ok {
+			return echo.NewHTTPError(http.StatusBadRequest, "provider is not a Tuya provider")
 		}
 		ctx, cancel := context.WithTimeout(c.Request().Context(), 30*time.Second)
 		defer cancel()

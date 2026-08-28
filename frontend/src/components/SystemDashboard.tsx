@@ -89,9 +89,21 @@ function RuntimeSettingsCard({ settings, onSave }: { settings: RuntimeSettings |
   const [historyLimit, setHistoryLimit] = useState(settings?.commandHistoryLimit ?? 1000)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  useEffect(() => { if (settings) { setSeconds(settings.commandTimeoutSeconds); setHistoryLimit(settings.commandHistoryLimit) } }, [settings])
-  const save = async () => { if (seconds < 1 || seconds > 300) { setError('超时请输入 1–300 秒'); return }; if (historyLimit < 100 || historyLimit > 10000) { setError('历史上限请输入 100–10000'); return }; setSaving(true); setError(null); try { await onSave({ commandTimeoutSeconds: seconds, commandHistoryLimit: historyLimit }) } catch (cause) { setError(cause instanceof Error ? cause.message : '保存失败') } finally { setSaving(false) } }
-  return <div className="queue-card settings-card"><div><span>命令运行时设置</span><strong>{settings?.commandTimeoutSeconds ?? seconds}s / {settings?.commandHistoryLimit ?? historyLimit} 条</strong></div><label>确认超时秒数<input aria-label="命令确认超时秒数" type="number" min="1" max="300" value={seconds} onChange={(event) => setSeconds(Number(event.target.value))} /></label><label>历史保留上限<input aria-label="命令历史保留上限" type="number" min="100" max="10000" value={historyLimit} onChange={(event) => setHistoryLimit(Number(event.target.value))} /></label><button className="primary" disabled={saving || !settings} onClick={() => void save()}>{saving ? '保存中…' : '保存并实时应用'}</button>{error && <small className="field-error" role="alert">{error}</small>}<small>存储于数据库。超时仅影响之后创建的命令；降低历史上限会立即清理最旧的终态记录，不删除执行中的命令。</small></div>
+  useEffect(() => {
+    if (settings) {
+      setSeconds(settings.commandTimeoutSeconds)
+      setHistoryLimit(settings.commandHistoryLimit)
+    }
+  }, [settings])
+  const save = async () => {
+    if (seconds < 1 || seconds > 300) { setError('超时请输入 1–300 秒'); return }
+    if (historyLimit < 100 || historyLimit > 10000) { setError('历史上限请输入 100–10000'); return }
+    setSaving(true); setError(null)
+    try { await onSave({ commandTimeoutSeconds: seconds, commandHistoryLimit: historyLimit }) }
+    catch (cause) { setError(cause instanceof Error ? cause.message : '保存失败') }
+    finally { setSaving(false) }
+  }
+  return <div className="queue-card settings-card"><div><span>命令运行时设置</span><strong>{settings?.commandTimeoutSeconds ?? seconds}s / {settings?.commandHistoryLimit ?? historyLimit} 条</strong></div><label>确认超时秒数<input aria-label="命令确认超时秒数" type="number" min="1" max="300" value={seconds} onChange={(event) => setSeconds(Number(event.target.value))} /></label><label>历史保留上限<input aria-label="命令历史保留上限" type="number" min="100" max="10000" value={historyLimit} onChange={(event) => setHistoryLimit(Number(event.target.value))} /></label><button className="primary" disabled={saving || !settings} onClick={() => void save()}>{saving ? '保存中…' : '保存并实时应用'}</button>{error && <small className="field-error" role="alert">{error}</small>}<small>写后回读改为在设备的单属性映射中独立启用；这里仅配置命令超时与历史记录。</small></div>
 }
 
 function DatabaseMaintenanceCard() {

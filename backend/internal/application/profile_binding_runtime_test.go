@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
@@ -82,6 +83,75 @@ func TestPropertyBindingHotReloadsAndMapsBothDirections(t *testing.T) {
 	if err != nil || len(reloaded.ListBindings()) != 0 {
 		t.Fatalf("reloaded bindings = %#v, error = %v", reloaded.ListBindings(), err)
 	}
+}
+
+func TestProviderBindingResolvesPerPropertyReadbackPolicy(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, err := application.NewProfileService(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := profiles.CreateBinding(ctx, mapping.Binding{
+		ProviderID: "virtual-main", DeviceID: "virtual-switch-1", DeviceType: device.TypeSwitch,
+		EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Enabled: true,
+		ReadbackEnabled: true, ReadbackDelaysMS: []int{250, 1000, 3000},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	delays, configured := profiles.PropertyReadbackDelays("virtual-main", "virtual-switch-1", device.ParameterPath{EndpointID: "main", CapabilityID: "switch", PropertyID: "power"})
+	if !configured || len(delays) != 3 || delays[0] != 250*time.Millisecond || delays[2] != 3*time.Second {
+		t.Fatalf("policy = %#v, configured=%v", delays, configured)
+	}
+	binding.ReadbackEnabled = false
+	binding.ReadbackDelaysMS = nil
+	if _, err := profiles.UpdateBinding(ctx, binding.ID, binding); err != nil {
+		t.Fatal(err)
+	}
+	if _, configured := profiles.PropertyReadbackDelays("virtual-main", "virtual-switch-1", device.ParameterPath{EndpointID: "main", CapabilityID: "switch", PropertyID: "power"}); configured {
+		t.Fatal("disabled property readback policy remained active")
+	}
+}
+
+func TestProviderBindingEnablesReadbackOnlyForItsSourceProperty(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, err := application.NewProfileService(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := profiles.CreateBinding(ctx, mapping.Binding{
+		ProviderID: "virtual-main", DeviceID: "virtual-switch-1", DeviceType: device.TypeSwitch,
+		EndpointID: "main", CapabilityID: "switch", PropertyID: "power", Enabled: true,
+		ReadbackEnabled: true, ReadbackDelaysMS: []int{100, 200},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	provider := newPulseReadbackProvider(2)
+	service := application.NewDeviceService(provider, profiles)
+	defer service.Close()
+	if _, _, err := service.ExecutePower(ctx, "virtual-switch-1", true); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		items, _ := service.List(ctx)
+		power, _ := items[0].Property("main", "switch", "power")
+		if provider.readCount() >= 2 && power.Value.Bool != nil && !*power.Value.Bool {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("configured property did not read back; reads=%d", provider.readCount())
 }
 
 func TestMappedSnapshotsRetainIdentityCommands(t *testing.T) {

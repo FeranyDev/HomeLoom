@@ -83,6 +83,7 @@ type deviceRuntime struct {
 	successes  int
 	failures   int
 	nextProbe  time.Time
+	wakeUntil  time.Time
 	lastError  string
 }
 
@@ -94,6 +95,7 @@ type Provider struct {
 	mu        sync.RWMutex
 	devices   map[string]*deviceRuntime
 	listeners map[uint64]func(device.Device)
+	probeNow  chan struct{}
 	next      uint64
 	running   bool
 	cancel    context.CancelFunc
@@ -105,14 +107,17 @@ type Provider struct {
 	errors atomic.Uint64
 }
 
+const wakeProbeInterval = 10 * time.Second
+
 var (
-	_ providersdk.Provider            = (*Provider)(nil)
-	_ providersdk.ConnectionTester    = (*Provider)(nil)
-	_ providersdk.Discoverer          = (*Provider)(nil)
-	_ providersdk.EventSubscriber     = (*Provider)(nil)
-	_ providersdk.PropertyWriter      = (*Provider)(nil)
-	_ providersdk.MetricsReporter     = (*Provider)(nil)
-	_ providersdk.DiagnosticsReporter = (*Provider)(nil)
+	_ providersdk.Provider                  = (*Provider)(nil)
+	_ providersdk.ConnectionTester          = (*Provider)(nil)
+	_ providersdk.Discoverer                = (*Provider)(nil)
+	_ providersdk.EventSubscriber           = (*Provider)(nil)
+	_ providersdk.PropertyWriter            = (*Provider)(nil)
+	_ providersdk.PropertyWriteAcknowledger = (*Provider)(nil)
+	_ providersdk.MetricsReporter           = (*Provider)(nil)
+	_ providersdk.DiagnosticsReporter       = (*Provider)(nil)
 )
 
 func NewProviderFromConfig(item providerconfig.Config) (*Provider, error) {
@@ -139,7 +144,7 @@ func newProvider(item providerconfig.Config, prober Prober, waker Waker) (*Provi
 	}
 	provider := &Provider{
 		id: item.ID, name: item.Name, prober: prober, waker: waker,
-		devices: make(map[string]*deviceRuntime, len(configured)), listeners: make(map[uint64]func(device.Device)),
+		devices: make(map[string]*deviceRuntime, len(configured)), listeners: make(map[uint64]func(device.Device)), probeNow: make(chan struct{}, 1),
 	}
 	for _, entry := range configured {
 		provider.devices[entry.ID] = &deviceRuntime{configured: entry, snapshot: buildDevice(item.ID, entry), nextProbe: time.Now().UTC()}
@@ -249,9 +254,9 @@ func (p *Provider) Subscribe(handler func(device.Device)) func() {
 	}
 }
 
-// WriteProperty binds Wake-on-LAN to the normal power-on operation. A probe is
-// still the authority for the reported power state, so a successful packet is
-// not treated as proof that the device has already started.
+// WriteProperty binds Wake-on-LAN to the normal power-on operation. Sending a
+// Magic Packet is deliberately fast: boot observation continues in pollLoop
+// and must never consume the caller's control timeout.
 func (p *Provider) WriteProperty(ctx context.Context, request providersdk.PropertyWriteRequest) (device.Device, error) {
 	if request.EndpointID != "main" || request.CapabilityID != "switch" || request.PropertyID != "power" {
 		return device.Device{}, providersdk.ErrPropertyUnsupported
@@ -281,9 +286,34 @@ func (p *Provider) WriteProperty(ctx context.Context, request providersdk.Proper
 		return device.Device{}, fmt.Errorf("%w: %v", providersdk.ErrProviderUnavailable, err)
 	}
 	p.wakes.Add(1)
-	// Magic Packets have no acknowledgement. Return the existing state and let
-	// the next reachability probe become the sole authority for the power state.
+
+	// Magic Packets have no host-level acknowledgement. Record a bounded
+	// starting state, request an immediate probe, and keep power=false until
+	// enough probes prove that the host is actually running.
+	now := time.Now().UTC()
+	p.mu.Lock()
+	runtime = p.devices[request.DeviceID]
+	running := p.running
+	if runtime != nil {
+		runtime.successes = 0
+		runtime.wakeUntil = now.Add(runtime.configured.wakeGrace)
+		runtime.nextProbe = now
+		runtime.snapshot = updateNetworkPowerState(runtime.snapshot, false, true)
+		snapshot = runtime.snapshot.Clone()
+	}
+	p.mu.Unlock()
+	if running {
+		p.requestProbe()
+	}
 	return snapshot, nil
+}
+
+// AcknowledgesPropertyWrite tells the DeviceService that a successful WOL
+// write confirms delivery of the Magic Packet. The device's power property is
+// intentionally still confirmed only by later reachability probes.
+func (*Provider) AcknowledgesPropertyWrite(request providersdk.PropertyWriteRequest) bool {
+	return request.EndpointID == "main" && request.CapabilityID == "switch" && request.PropertyID == "power" &&
+		request.Value.Type == device.ValueTypeBool && request.Value.Bool != nil && *request.Value.Bool
 }
 
 func (p *Provider) ProviderMetrics() map[string]uint64 {
@@ -335,7 +365,22 @@ func (p *Provider) pollLoop(ctx context.Context, done chan struct{}) {
 			return
 		case <-timer.C:
 			p.probeDue(ctx, false)
+		case <-p.probeNow:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			p.probeDue(ctx, false)
 		}
+	}
+}
+
+func (p *Provider) requestProbe() {
+	select {
+	case p.probeNow <- struct{}{}:
+	default:
 	}
 }
 
@@ -360,7 +405,7 @@ func (p *Provider) probeDue(parent context.Context, all bool) {
 	entries := make([]monitoredDevice, 0, len(p.devices))
 	for _, runtime := range p.devices {
 		if all || !runtime.nextProbe.After(now) {
-			runtime.nextProbe = now.Add(runtime.configured.probeInterval)
+			runtime.nextProbe = runtime.nextProbeAt(now)
 			entries = append(entries, runtime.configured)
 		}
 	}
@@ -398,7 +443,8 @@ func (p *Provider) recordProbe(id string, probeErr error) {
 		runtime.failures = 0
 		runtime.lastError = ""
 		if runtime.successes >= runtime.configured.onlineThreshold {
-			runtime.snapshot = updatePowerState(runtime.snapshot, true)
+			runtime.wakeUntil = time.Time{}
+			runtime.snapshot = updateNetworkPowerState(runtime.snapshot, true, false)
 		}
 	} else {
 		p.errors.Add(1)
@@ -406,8 +452,12 @@ func (p *Provider) recordProbe(id string, probeErr error) {
 		runtime.successes = 0
 		runtime.lastError = probeErr.Error()
 		if runtime.failures >= runtime.configured.offlineThreshold {
-			runtime.snapshot = updatePowerState(runtime.snapshot, false)
+			runtime.snapshot = updateNetworkPowerState(runtime.snapshot, false, runtime.wakingAt(time.Now().UTC()))
 		}
+	}
+	if !runtime.wakingAt(time.Now().UTC()) && !runtime.wakeUntil.IsZero() {
+		runtime.wakeUntil = time.Time{}
+		runtime.snapshot = updateNetworkPowerState(runtime.snapshot, false, false)
 	}
 	current := runtime.snapshot.Clone()
 	changed := previous.Sequence != current.Sequence
@@ -450,18 +500,46 @@ func buildDevice(providerID string, configured monitoredDevice) device.Device {
 		Availability: device.AvailabilityOnline, Online: true, Sequence: 1, LastUpdateAt: time.Now().UTC(),
 		Endpoints: []device.Endpoint{{ID: "main", Name: "网络设备", Type: "network", Capabilities: []device.Capability{
 			power,
+			{ID: "network", Type: "network", Properties: []device.Property{{
+				Definition: device.PropertyDefinition{ID: "wake-pending", Name: "唤醒启动中", Type: device.ValueTypeBool, Readable: true, Writable: false, Notifiable: true},
+				Value:      device.BoolValue(false),
+			}}},
 		}}},
 	}
 	return result
 }
 
-func updatePowerState(item device.Device, power bool) device.Device {
-	property, found := item.Property("main", "switch", "power")
-	if found && property.Value.Bool != nil && *property.Value.Bool == power {
-		return item
+func (runtime *deviceRuntime) wakingAt(now time.Time) bool {
+	return !runtime.wakeUntil.IsZero() && now.Before(runtime.wakeUntil)
+}
+
+func (runtime *deviceRuntime) nextProbeAt(now time.Time) time.Time {
+	interval := runtime.configured.probeInterval
+	if runtime.wakingAt(now) {
+		if interval > wakeProbeInterval {
+			interval = wakeProbeInterval
+		}
+		remaining := runtime.wakeUntil.Sub(now)
+		if remaining < interval {
+			interval = remaining
+		}
 	}
-	item.SetProperty("main", "switch", "power", device.BoolValue(power))
-	item.Sequence++
-	item.LastUpdateAt = time.Now().UTC()
+	return now.Add(interval)
+}
+
+func updateNetworkPowerState(item device.Device, power, wakePending bool) device.Device {
+	changed := false
+	if property, found := item.Property("main", "switch", "power"); found && (property.Value.Bool == nil || *property.Value.Bool != power) {
+		item.SetProperty("main", "switch", "power", device.BoolValue(power))
+		changed = true
+	}
+	if property, found := item.Property("main", "network", "wake-pending"); found && (property.Value.Bool == nil || *property.Value.Bool != wakePending) {
+		item.SetProperty("main", "network", "wake-pending", device.BoolValue(wakePending))
+		changed = true
+	}
+	if changed {
+		item.Sequence++
+		item.LastUpdateAt = time.Now().UTC()
+	}
 	return item
 }

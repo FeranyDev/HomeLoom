@@ -2,7 +2,10 @@ package sonoff
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,6 +37,25 @@ type fakeCloud struct {
 	devices []cloud.Device
 	states  []map[string]any
 	err     error
+}
+
+type pollingCloud struct {
+	mu      sync.Mutex
+	devices []cloud.Device
+}
+
+func (f *pollingCloud) ListDevices(context.Context) ([]cloud.Device, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]cloud.Device(nil), f.devices...), nil
+}
+
+func (f *pollingCloud) SetDeviceState(context.Context, string, map[string]any) error { return nil }
+
+func (f *pollingCloud) setSwitch(state string) {
+	f.mu.Lock()
+	f.devices[0].Params = map[string]any{"switch": state}
+	f.mu.Unlock()
 }
 
 type fakeRealtime struct {
@@ -110,6 +132,86 @@ func TestProviderAutoFallsBackToCloud(t *testing.T) {
 	}
 }
 
+func TestProviderRefreshIntervalPollsCloudAndPublishesState(t *testing.T) {
+	remote := &pollingCloud{devices: []cloud.Device{{DeviceID: "pulse", Name: "微动开关", UIID: 1, Online: true, Params: map[string]any{"switch": "on"}}}}
+	provider, err := NewProviderWithTransports(providerconfig.Config{ID: "sonoff-main", Config: []byte(`{"mode":"cloud","managedDevices":true,"refreshIntervalSeconds":15,"cloud":{"accessToken":"token"},"devices":[{"id":"sonoff-pulse","deviceId":"pulse","name":"微动开关","uiid":1}]}`)}, nil, remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.pollInterval = 5 * time.Millisecond
+	if _, err := provider.DiscoverDevices(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	updates := make(chan device.Device, 2)
+	unsubscribe := provider.Subscribe(func(item device.Device) { updates <- item })
+	defer unsubscribe()
+	remote.setSwitch("off")
+	if err := provider.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close(context.Background())
+	select {
+	case updated := <-updates:
+		power, _ := updated.Property("main", "switch", "power")
+		if power.Value.Bool == nil || *power.Value.Bool {
+			t.Fatalf("polled property = %#v", power)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("configured refresh interval did not publish cloud state")
+	}
+	if provider.ProviderMetrics()["polls"] == 0 || provider.ProviderDiagnostics()["refreshIntervalSeconds"] != "15" {
+		t.Fatalf("metrics = %#v, diagnostics = %#v", provider.ProviderMetrics(), provider.ProviderDiagnostics())
+	}
+}
+
+func TestManagedProviderPublishesOnlySavedDevicesAndRetainsThemWhenCloudFails(t *testing.T) {
+	remote := &fakeCloud{devices: []cloud.Device{
+		{DeviceID: "saved", Name: "eWeLink_saved", UIID: 1, Online: true, DeviceKey: "saved-secret", Params: map[string]any{"switch": "on"}},
+		{DeviceID: "transient", Name: "未选择开关", UIID: 1, Online: true, DeviceKey: "other-secret", Params: map[string]any{"switch": "off"}},
+	}}
+	provider, err := NewProviderWithTransports(providerconfig.Config{ID: "sonoff-main", Config: []byte(`{"mode":"auto","managedDevices":true,"cloud":{"accessToken":"token"},"devices":[{"id":"sonoff-saved","deviceId":"saved","name":"门口微动开关","uiid":1}]}`)}, &fakeLAN{}, remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := provider.DiscoverDevices(context.Background())
+	if err != nil || len(items) != 1 || items[0].ID != "sonoff-saved" || items[0].Name != "门口微动开关" || !items[0].IsOnline() {
+		t.Fatalf("managed discovery = %#v, %v", items, err)
+	}
+
+	remote.err = errors.New("temporary eWeLink outage")
+	items, err = provider.DiscoverDevices(context.Background())
+	if err != nil || len(items) != 1 || items[0].ID != "sonoff-saved" || items[0].IsOnline() {
+		t.Fatalf("retained offline discovery = %#v, %v", items, err)
+	}
+}
+
+func TestCloudDirectoryIsCompleteAndDoesNotExposeDeviceKeys(t *testing.T) {
+	remote := &fakeCloud{devices: []cloud.Device{{
+		DeviceID: "1001f95735", Name: "双路开关", Model: "DUALR3", UIID: 7, Online: true,
+		DeviceKey: "must-not-leak", HomeID: "home-1", HomeName: "我的家", RoomID: "room-1", RoomName: "客厅",
+		Params: map[string]any{"switches": []any{map[string]any{"outlet": 0}, map[string]any{"outlet": 1}}},
+	}}}
+	provider, err := NewProviderWithTransports(providerconfig.Config{ID: "sonoff-main", Config: []byte(`{"mode":"auto","cloud":{"accessToken":"token"},"devices":[{"id":"sonoff-1001f95735","deviceId":"1001f95735","name":"旧名称","uiid":7}]}`)}, &fakeLAN{}, remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory, err := provider.DiscoverCloudDevices(context.Background())
+	if err != nil || len(directory) != 1 {
+		t.Fatalf("cloud directory = %#v, %v", directory, err)
+	}
+	item := directory[0]
+	if item.ID != "sonoff-1001f95735" || item.DeviceID != "1001f95735" || item.Name != "旧名称" || item.Channels != 2 || !item.Configured || !item.Online || item.HomeName != "我的家" || item.RoomName != "客厅" {
+		t.Fatalf("directory item = %#v", item)
+	}
+	encoded, err := json.Marshal(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "must-not-leak") || strings.Contains(strings.ToLower(string(encoded)), "devicekey") || strings.Contains(string(encoded), `"params"`) {
+		t.Fatalf("directory leaked private cloud material: %s", encoded)
+	}
+}
+
 func TestProviderRejectsOutOfRangePropertyWrite(t *testing.T) {
 	local := &fakeLAN{}
 	provider, err := NewProviderWithTransports(providerconfig.Config{ID: "sonoff-main", Config: []byte(`{"mode":"local","devices":[{"id":"light","deviceId":"1000abc","name":"灯","uiid":36,"deviceKey":"key","host":"127.0.0.1"}]}`)}, local, nil)
@@ -143,6 +245,41 @@ func TestProviderBuildsCloudCatalogAndPreservesUnknownParams(t *testing.T) {
 	}
 	if _, ok := items[0].Property("main", "sonoff-raw", "vendorfuture"); !ok {
 		t.Fatal("unknown cloud parameter was not retained")
+	}
+}
+
+func TestProviderInfersCloudMultiChannelProtocolAndWritesOutlet(t *testing.T) {
+	remote := &fakeCloud{devices: []cloud.Device{{
+		DeviceID: "1000dual", Name: "云端双路开关", UIID: 7, Online: true,
+		Params: map[string]any{"switch": "off", "switches": []any{
+			map[string]any{"outlet": 0, "switch": "on"},
+			map[string]any{"outlet": 1, "switch": "off"},
+		}},
+	}}}
+	provider, err := NewProviderWithTransports(providerconfig.Config{ID: "sonoff-main", Config: []byte(`{"mode":"cloud","cloud":{"endpoint":"https://cloud.example","accessToken":"token"},"devices":[]}`)}, nil, remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := provider.DiscoverDevices(context.Background())
+	if err != nil || len(items) != 1 || len(items[0].Endpoints) != 2 {
+		t.Fatalf("items=%#v err=%v", items, err)
+	}
+	property, ok := items[0].Property("channel-0", "switch", "power-0")
+	if !ok || property.Value.Bool == nil || !*property.Value.Bool {
+		t.Fatalf("first channel = %#v", property)
+	}
+	_, err = provider.WriteProperty(context.Background(), providersdk.PropertyWriteRequest{
+		DeviceID: items[0].ID, EndpointID: "channel-1", CapabilityID: "switch", PropertyID: "power-1", Value: device.BoolValue(true),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remote.states) != 1 {
+		t.Fatalf("cloud states = %#v", remote.states)
+	}
+	switches, ok := remote.states[0]["switches"].([]map[string]any)
+	if !ok || len(switches) != 1 || switches[0]["outlet"] != 1 || switches[0]["switch"] != "on" {
+		t.Fatalf("cloud multi-channel command = %#v", remote.states[0])
 	}
 }
 

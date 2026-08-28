@@ -1,17 +1,26 @@
-import type { Device, DeviceAvailability, DeviceLocationHome, DeviceLocationMode, DeviceLocationRoom, MCPDeviceConfig, MCPPropertyConfig, Property, PropertyValue, StateValue } from '../types/device'
+import { normalizeDevice, type Device, type DeviceAvailability, type DeviceLocationHome, type DeviceLocationMode, type DeviceLocationRoom, type MCPDeviceConfig, type MCPPropertyConfig, type Property, type PropertyValue, type StateValue } from '../types/device'
 import { requestData, requestJSON } from './client'
 import { subscribeEvents } from './events'
 
 export async function listDevices(signal?: AbortSignal): Promise<Device[]> {
-  return requestData<Device[]>('/api/v1/devices', { signal })
+	const devices = await requestData<unknown>('/api/v1/devices', { signal })
+	return Array.isArray(devices) ? devices.map(normalizeDevice) : []
 }
 
 export async function setDeviceEnabled(id: string, enabled: boolean): Promise<Device> {
-	return requestData<Device>(`/api/v1/devices/${encodeURIComponent(id)}/enabled`, { method: 'PUT', body: JSON.stringify({ enabled }) })
+	return normalizeDevice(await requestData<unknown>(`/api/v1/devices/${encodeURIComponent(id)}/enabled`, { method: 'PUT', body: JSON.stringify({ enabled }) }))
+}
+
+export async function setDeviceName(id: string, name: string): Promise<Device> {
+	return normalizeDevice(await requestData<unknown>(`/api/v1/devices/${encodeURIComponent(id)}/name`, { method: 'PUT', body: JSON.stringify({ name }) }))
+}
+
+export async function resetDeviceName(id: string): Promise<Device> {
+	return normalizeDevice(await requestData<unknown>(`/api/v1/devices/${encodeURIComponent(id)}/name`, { method: 'DELETE' }))
 }
 
 export async function setDeviceLocation(id: string, input: { mode: DeviceLocationMode; homeId?: string; roomId?: string }): Promise<Device> {
-	return requestData<Device>(`/api/v1/devices/${encodeURIComponent(id)}/location`, { method: 'PUT', body: JSON.stringify(input) })
+	return normalizeDevice(await requestData<unknown>(`/api/v1/devices/${encodeURIComponent(id)}/location`, { method: 'PUT', body: JSON.stringify(input) }))
 }
 
 export async function listDeviceLocations(signal?: AbortSignal): Promise<DeviceLocationHome[]> {
@@ -75,23 +84,23 @@ export function subscribeDeviceStates(id: string, onState: (state: StateValue) =
 }
 
 export async function setDevicePower(id: string, value: boolean): Promise<Device> {
-  return requestData<Device>(`/api/v1/devices/${encodeURIComponent(id)}/properties/power`, {
+	return normalizeDevice(await requestData<unknown>(`/api/v1/devices/${encodeURIComponent(id)}/properties/power`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ value }),
-  })
+	}))
 }
 
 export async function setDeviceProperty(id: string, endpointId: string, capabilityId: string, propertyId: string, value: PropertyValue): Promise<Device> {
-  return requestData<Device>(`/api/v1/devices/${encodeURIComponent(id)}/endpoints/${encodeURIComponent(endpointId)}/capabilities/${encodeURIComponent(capabilityId)}/properties/${encodeURIComponent(propertyId)}`, { method: 'PUT', body: JSON.stringify(value) })
+	return normalizeDevice(await requestData<unknown>(`/api/v1/devices/${encodeURIComponent(id)}/endpoints/${encodeURIComponent(endpointId)}/capabilities/${encodeURIComponent(capabilityId)}/properties/${encodeURIComponent(propertyId)}`, { method: 'PUT', body: JSON.stringify(value) }))
 }
 
 export async function executeDeviceCommand(id: string, endpointId: string, capabilityId: string, commandId: string, parameters: Record<string, PropertyValue>, idempotencyKey: string): Promise<Device> {
-	return requestData<Device>(`/api/v1/devices/${encodeURIComponent(id)}/endpoints/${encodeURIComponent(endpointId)}/capabilities/${encodeURIComponent(capabilityId)}/commands/${encodeURIComponent(commandId)}`, { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ parameters }) })
+	return normalizeDevice(await requestData<unknown>(`/api/v1/devices/${encodeURIComponent(id)}/endpoints/${encodeURIComponent(endpointId)}/capabilities/${encodeURIComponent(capabilityId)}/commands/${encodeURIComponent(commandId)}`, { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ parameters }) }))
 }
 
 export async function simulateDevice(id: string, values: { availability?: DeviceAvailability; online?: boolean; power?: boolean; value?: number; temperature?: number; humidity?: number; contact?: boolean; motion?: boolean; active?: boolean; speed?: number; mode?: string; filterLife?: number; filterChange?: boolean; position?: number; sequence?: number; repeat?: number }): Promise<Device> {
-  return requestData<Device>(`/api/v1/devices/${encodeURIComponent(id)}/simulation`, {
+	return normalizeDevice(await requestData<unknown>(`/api/v1/devices/${encodeURIComponent(id)}/simulation`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values),
-  })
+	}))
 }

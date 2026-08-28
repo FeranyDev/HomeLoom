@@ -36,9 +36,12 @@ func BuildDevice(input DeviceInput) (device.Device, error) {
 	}
 	if input.Channels < 1 {
 		input.Channels = 1
-		if switches, ok := input.Params["switches"].([]any); ok && len(switches) > 0 {
-			input.Channels = len(switches)
-		}
+	}
+	// The eWeLink directory is authoritative for the device protocol. Provider
+	// configurations historically defaulted channels to 1, so a multi-channel
+	// device must still expand when its live state exposes a switches array.
+	if switches, ok := input.Params["switches"].([]any); ok && len(switches) > input.Channels {
+		input.Channels = len(switches)
 	}
 	dtypeValue := inferType(input)
 	mode := device.RuntimeMode(input.RuntimeMode)
@@ -232,8 +235,17 @@ func propertyInt(id, name, unit string, writable bool, bounds ...float64) device
 
 func paramForProperty(params map[string]any, propertyID string, endpoint int) (any, bool) {
 	baseID := propertyID
-	if strings.HasPrefix(baseID, "power-") {
+	multiChannelPower := strings.HasPrefix(baseID, "power-")
+	if multiChannelPower {
 		baseID = "power"
+	}
+	// Multi-channel snapshots can contain both a legacy top-level switch and
+	// the per-outlet switches array. The per-outlet value is the only accurate
+	// source for channel endpoints and must win over the legacy field.
+	if multiChannelPower {
+		if raw, ok := switchParamAt(params, endpoint); ok {
+			return raw, true
+		}
 	}
 	keys := map[string][]string{
 		"power": {"switch", "power"}, "brightness": {"bright", "brightness", "bright_value"},
@@ -250,13 +262,23 @@ func paramForProperty(params map[string]any, propertyID string, endpoint int) (a
 			return raw, true
 		}
 	}
-	if raw, ok := params["switches"].([]any); ok && endpoint < len(raw) {
-		if object, ok := raw[endpoint].(map[string]any); ok {
-			value, exists := object["switch"]
-			return value, exists
-		}
+	if raw, ok := switchParamAt(params, endpoint); ok {
+		return raw, true
 	}
 	return nil, false
+}
+
+func switchParamAt(params map[string]any, endpoint int) (any, bool) {
+	switches, ok := params["switches"].([]any)
+	if !ok || endpoint < 0 || endpoint >= len(switches) {
+		return nil, false
+	}
+	object, ok := switches[endpoint].(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	value, exists := object["switch"]
+	return value, exists
 }
 
 func valueForDefinition(definition device.PropertyDefinition, raw any) (device.PropertyValue, bool) {

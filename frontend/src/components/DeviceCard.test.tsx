@@ -39,6 +39,12 @@ describe('DeviceCard device types', () => {
 		expect(onMapping).toHaveBeenCalledWith(device)
 	})
 
+	it('does not expose a global rename action from the device center card', () => {
+		const device = sensorDevice('temperature-sensor', 'temperature', 'current-temperature', { type: 'number', number: 20 }, 'celsius')
+		render(<DeviceCard device={device} pending={false} onPowerChange={() => {}} onDetails={() => {}} />)
+		expect(screen.queryByRole('button', { name: '改名' })).not.toBeInTheDocument()
+	})
+
 	it('shows the assigned location without exposing a device-page location editor', () => {
 		const device = { ...sensorDevice('temperature-sensor', 'temperature', 'current-temperature', { type: 'number', number: 20 }), locationMode: 'custom' as const, homeName: '我的家', roomName: '书房' }
 		render(<DeviceCard device={device} pending={false} onPowerChange={() => {}} onDetails={() => {}} />)
@@ -102,6 +108,22 @@ describe('DeviceCard device types', () => {
 		render(<DeviceCard device={device} pending={false} onPowerChange={() => {}} onDetails={() => {}} />)
 		expect(screen.getByText('已关闭')).toBeInTheDocument()
 		expect(screen.getByRole('button', { name: '已关闭 · 点击唤醒' })).toBeEnabled()
+	})
+
+	it('renders a provider device whose endpoints are null without crashing the page', () => {
+		const device = { ...sensorDevice('network-device', 'switch', 'power', { type: 'bool', bool: false }), endpoints: null } as unknown as Device
+		render(<DeviceCard device={device} pending={false} onPowerChange={() => {}} onDetails={() => {}} />)
+		expect(screen.getByRole('article', { name: 'network-device' })).toBeInTheDocument()
+		expect(screen.getByRole('button', { name: '已关闭 · 仅监测' })).toBeDisabled()
+	})
+
+	it('shows a network device as starting after Wake-on-LAN until a probe confirms power', () => {
+		const device = sensorDevice('network-device', 'switch', 'power', { type: 'bool', bool: false })
+		device.endpoints[0].capabilities.push({ id: 'network', type: 'network', properties: [{ definition: { id: 'wake-pending', name: '唤醒启动中', type: 'bool', readable: true, writable: false, notifiable: true }, value: { type: 'bool', bool: true } }] })
+		device.endpoints[0].capabilities[0].properties[0].definition.writable = true
+		render(<DeviceCard device={device} pending={false} onPowerChange={() => {}} onDetails={() => {}} />)
+		expect(screen.getByText('启动中')).toBeInTheDocument()
+		expect(screen.getByRole('button', { name: '正在启动 · 等待探测确认' })).toBeDisabled()
 	})
 
 	it('renders both measurements for a temperature/humidity sensor', () => {

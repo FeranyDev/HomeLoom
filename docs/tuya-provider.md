@@ -38,7 +38,7 @@ Provider 加密配置中。Token 过期时，HomeLoom 使用同一设备共享�
   "accessToken": "REPLACE_WITH_ACCESS_TOKEN",
   "refreshToken": "REPLACE_WITH_REFRESH_TOKEN",
   "requestTimeoutSeconds": 15,
-  "pollIntervalSeconds": 21600
+  "pollIntervalSeconds": 60
 }
 ```
 
@@ -62,7 +62,7 @@ Provider 输入。示例中的值都是占位符，提交前只在受保护的�
     "accessToken": "REPLACE_WITH_TUYA_ACCESS_TOKEN",
     "refreshToken": "REPLACE_WITH_TUYA_REFRESH_TOKEN",
     "requestTimeoutSeconds": 15,
-    "pollIntervalSeconds": 21600
+    "pollIntervalSeconds": 60
   }
 }
 ```
@@ -109,6 +109,10 @@ HomeLoom 的协议、域名和端口，并在 Tuya 项目中登记完全一致�
 
 - Provider 会根据 Tuya 返回的设备规格生成设备原生目录和属性定义，不要求在配置
   中手工复制每台设备的规格。
+- Provider 页面提供独立的 Tuya 设备管理入口。第一次保存受管清单后，只发布被选择
+  的账号设备；原始 Tuya Device ID、稳定 HomeLoom ID、规格快照和设备类型会随配置
+  持久化。云目录临时漏报时设备只标记离线，不会从发布者中消失。旧配置没有
+  `managedDevices` 时仍保持自动发布全部账号设备，便于平滑升级。
 - 对常用设备会同时发布统一语义能力：灯具、开关/插座、电能计量、风扇、窗帘、
   空调、空气净化器、热水器、温湿度、门磁、人体、照度、漏水、烟雾和空气质量。
   例如 `bright_value` 会以 `main/light/brightness` 暴露，同时保留原始的
@@ -117,15 +121,15 @@ HomeLoom 的协议、域名和端口，并在 Tuya 项目中登记完全一致�
   或 Quirk 继续接入。
 - 默认使用 HTTP 进行初始化、控制和状态对账；未配置 `mqtt` 时仍可工作。MQTT
   只是可选的实时消息通道，断线或消息不可用时仍以 HTTP 对账为恢复路径。
-- `requestTimeoutSeconds` 默认是 15 秒，`pollIntervalSeconds` 默认是 21600 秒
-  （6 小时）。省略这两个字段即可使用默认值。
+- `requestTimeoutSeconds` 默认是 15 秒，`pollIntervalSeconds` 默认是 60 秒。设备规格
+  只在首次发现时读取并缓存，后续轮询只调用轻量状态接口；映射属性执行读取或写后
+  回读时也会实时读取云状态，适合几秒后自动复位的微动开关。
 
-当前版本的 Tuya Provider 不会自行完成 `device.openHubConfig` 的临时凭据申请和
-MQTT 拨号；它提供 `DecodeMQTTMessage` 与 `HandleMQTTMessage`，供宿主集成在拿到
-临时凭据并订阅 `sourceTopic` 后注入实时消息。若使用该外部消息通道，必须额外提供
-已授权且仍有效的 `url`、`username`、`password`、`clientId` 和 `sourceTopic`；这些
-连接材料同样不得进入版本库。没有外部 MQTT 消费者时，省略 `mqtt` 即可，HTTP
-轮询仍然完整支持发现、读取、控制和状态恢复。
+当前版本不会自行调用 App 私有的 `device.openHubConfig` 申请临时凭据；拿到已授权且
+仍有效的 `url`、`username`、`password`、`clientId` 和 `sourceTopic` 后，可以在
+`mqtt` 中启用。Provider 会自行建立 TLS 会话、订阅、自动重连并把 DP 消息提交到同一
+状态缓存，诊断中会显示连接与错误状态。连接材料不得进入版本库。凭据过期或未配置
+MQTT 时，HTTP 轮询仍完整支持发现、读取、控制和状态恢复。
 
 ## 接入检查
 

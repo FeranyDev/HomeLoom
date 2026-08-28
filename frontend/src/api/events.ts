@@ -1,5 +1,5 @@
 import type { AuditEvent, DeviceCommand, Diagnostics, SubprocessLogEntry } from '../types/diagnostics'
-import type { Device, StateValue } from '../types/device'
+import { normalizeDevice, type Device, type StateValue } from '../types/device'
 import type { Provider } from '../types/provider'
 import type { Target } from '../types/target'
 import { normalizeTarget } from './targets'
@@ -50,7 +50,7 @@ function ensureSource() {
 		dispatch('onConnection', true)
 		for (const handlers of subscriptions) handlers.onReady?.()
 	})
-	source.addEventListener('device', (event) => { const value = parse<Device>(event); if (value) dispatch('onDevice', value) })
+	source.addEventListener('device', (event) => { const value = parse<unknown>(event); if (value) dispatch('onDevice', normalizeDevice(value)) })
 	source.addEventListener('state', (event) => { const value = parse<StateValue>(event); if (value) dispatch('onState', value) })
 	source.addEventListener('command', (event) => { const value = parse<DeviceCommand>(event); if (value) dispatch('onCommand', value) })
 	source.addEventListener('audit', (event) => { const value = parse<AuditEvent>(event); if (value) dispatch('onAudit', value) })

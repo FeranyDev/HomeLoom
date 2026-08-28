@@ -9,6 +9,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	"github.com/feranydev/homeloom/backend/internal/mapping"
@@ -133,7 +134,41 @@ func canonicalBinding(item mapping.Binding) mapping.Binding {
 	item.Stage = item.EffectiveStage()
 	model := item.ModelPath()
 	item.ModelEndpointID, item.ModelCapabilityID, item.ModelPropertyID = model.EndpointID, model.CapabilityID, model.PropertyID
+	if item.EffectiveStage() != mapping.StageProvider {
+		item.ReadbackEnabled = false
+		item.ReadbackDelaysMS = nil
+	}
 	return item
+}
+
+// PropertyReadbackDelays resolves the source-property policy colocated with
+// Provider mapping bindings. A Provider property may fan out to several model
+// properties, so enabled schedules are merged and de-duplicated.
+func (s *ProfileService) PropertyReadbackDelays(providerID, deviceID string, path device.ParameterPath) ([]time.Duration, bool) {
+	key := (mapping.Binding{Stage: mapping.StageProvider, ProviderID: providerID, DeviceID: deviceID, EndpointID: path.EndpointID, CapabilityID: path.CapabilityID, PropertyID: path.PropertyID}).Key()
+	s.mu.RLock()
+	milliseconds := make(map[int]struct{})
+	configured := false
+	for _, id := range s.bindingsByKey[key] {
+		binding := s.bindings[id]
+		if !binding.Enabled || !binding.ReadbackEnabled {
+			continue
+		}
+		configured = true
+		for _, delay := range binding.ReadbackDelaysMS {
+			milliseconds[delay] = struct{}{}
+		}
+	}
+	s.mu.RUnlock()
+	if !configured {
+		return nil, false
+	}
+	result := make([]time.Duration, 0, len(milliseconds))
+	for delay := range milliseconds {
+		result = append(result, time.Duration(delay)*time.Millisecond)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	return result, true
 }
 
 func (s *ProfileService) DeleteBinding(ctx context.Context, id string) error {

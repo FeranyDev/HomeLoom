@@ -22,47 +22,81 @@ import (
 )
 
 type Provider struct {
-	id     string
-	name   string
-	config Config
-	client tuyaapi.API
+	id                  string
+	name                string
+	config              Config
+	client              tuyaapi.API
+	configDocument      json.RawMessage
+	configChangeHandler func(previous, replacement json.RawMessage)
+	pendingConfigChange *runtimeConfigChange
 
-	mu        sync.RWMutex
-	refreshMu sync.Mutex
-	devices   map[string]device.Device
-	sources   map[string]device.Device
-	remote    map[string]TuyaDevice
-	specs     map[string]map[string]DPSpec
-	statuses  map[string]map[string]TuyaStatus
-	tuyaIDs   map[string]string
-	listeners map[uint64]func(device.Device)
-	next      uint64
-	interests map[string]struct{}
-	lastError string
-	running   bool
-	cancel    context.CancelFunc
-	done      chan struct{}
+	mu            sync.RWMutex
+	refreshMu     sync.Mutex
+	devices       map[string]device.Device
+	sources       map[string]device.Device
+	remote        map[string]TuyaDevice
+	specs         map[string]map[string]DPSpec
+	statuses      map[string]map[string]TuyaStatus
+	tuyaIDs       map[string]string
+	listeners     map[uint64]func(device.Device)
+	next          uint64
+	interests     map[string]struct{}
+	lastError     string
+	running       bool
+	cancel        context.CancelFunc
+	done          chan struct{}
+	mqttDone      chan struct{}
+	mqttConnected bool
+	mqttLastError string
 
-	requests   atomic.Uint64
-	events     atomic.Uint64
-	errors     atomic.Uint64
-	writes     atomic.Uint64
-	refreshes  atomic.Uint64
-	mqttEvents atomic.Uint64
+	requests        atomic.Uint64
+	events          atomic.Uint64
+	errors          atomic.Uint64
+	writes          atomic.Uint64
+	refreshes       atomic.Uint64
+	mqttEvents      atomic.Uint64
+	mqttConnections atomic.Uint64
+	mqttDisconnects atomic.Uint64
+}
+
+type runtimeConfigChange struct {
+	previous    json.RawMessage
+	replacement json.RawMessage
+}
+
+type DirectoryDevice struct {
+	ID            string            `json:"id"`
+	DeviceID      string            `json:"deviceId"`
+	Name          string            `json:"name"`
+	Type          string            `json:"type"`
+	Category      string            `json:"category,omitempty"`
+	ProductID     string            `json:"productId,omitempty"`
+	ProductName   string            `json:"productName,omitempty"`
+	Model         string            `json:"model,omitempty"`
+	HomeID        string            `json:"homeId,omitempty"`
+	HomeName      string            `json:"homeName,omitempty"`
+	RoomID        string            `json:"roomId,omitempty"`
+	RoomName      string            `json:"roomName,omitempty"`
+	Online        bool              `json:"online"`
+	Configured    bool              `json:"configured"`
+	Specification TuyaSpecification `json:"specification,omitempty"`
+	Status        []TuyaStatus      `json:"status,omitempty"`
 }
 
 var (
-	_ providersdk.Provider               = (*Provider)(nil)
-	_ providersdk.ConnectionTester       = (*Provider)(nil)
-	_ providersdk.Discoverer             = (*Provider)(nil)
-	_ providersdk.PropertyReader         = (*Provider)(nil)
-	_ providersdk.PropertyWriter         = (*Provider)(nil)
-	_ providersdk.CommandExecutor        = (*Provider)(nil)
-	_ providersdk.EventSubscriber        = (*Provider)(nil)
-	_ providersdk.SourceCataloger        = (*Provider)(nil)
-	_ providersdk.PropertyInterestSetter = (*Provider)(nil)
-	_ providersdk.DiagnosticsReporter    = (*Provider)(nil)
-	_ providersdk.MetricsReporter        = (*Provider)(nil)
+	_ providersdk.Provider                      = (*Provider)(nil)
+	_ providersdk.DeviceIdentityResolver        = (*Provider)(nil)
+	_ providersdk.ConnectionTester              = (*Provider)(nil)
+	_ providersdk.Discoverer                    = (*Provider)(nil)
+	_ providersdk.PropertyReader                = (*Provider)(nil)
+	_ providersdk.PropertyWriter                = (*Provider)(nil)
+	_ providersdk.CommandExecutor               = (*Provider)(nil)
+	_ providersdk.EventSubscriber               = (*Provider)(nil)
+	_ providersdk.SourceCataloger               = (*Provider)(nil)
+	_ providersdk.PropertyInterestSetter        = (*Provider)(nil)
+	_ providersdk.RuntimeConfigChangeSubscriber = (*Provider)(nil)
+	_ providersdk.DiagnosticsReporter           = (*Provider)(nil)
+	_ providersdk.MetricsReporter               = (*Provider)(nil)
 )
 
 func NewProviderFromConfig(item providerconfig.Config) (*Provider, error) {
@@ -84,7 +118,7 @@ func NewProviderFromConfig(item providerconfig.Config) (*Provider, error) {
 		return nil, err
 	}
 	client.SetAccessToken(config.AccessToken)
-	return newProvider(item.ID, item.Name, config, client)
+	return newProvider(item.ID, item.Name, config, item.Config, client)
 }
 
 // NewProviderWithAPI is intended for tests and embedders that already own an
@@ -98,20 +132,22 @@ func NewProviderWithAPI(item providerconfig.Config, client tuyaapi.API) (*Provid
 	if err != nil {
 		return nil, err
 	}
-	return newProvider(item.ID, item.Name, config, client)
+	return newProvider(item.ID, item.Name, config, item.Config, client)
 }
 
-func newProvider(id, name string, config Config, client tuyaapi.API) (*Provider, error) {
+func newProvider(id, name string, config Config, document json.RawMessage, client tuyaapi.API) (*Provider, error) {
 	if !device.ValidStableID(id) {
 		return nil, errors.New("tuya provider id must be a stable lowercase id")
 	}
 	if strings.TrimSpace(name) == "" {
 		name = id
 	}
-	return &Provider{id: id, name: strings.TrimSpace(name), config: config, client: client,
+	p := &Provider{id: id, name: strings.TrimSpace(name), config: config, client: client, configDocument: append(json.RawMessage(nil), document...),
 		devices: make(map[string]device.Device), sources: make(map[string]device.Device), remote: make(map[string]TuyaDevice),
 		specs: make(map[string]map[string]DPSpec), statuses: make(map[string]map[string]TuyaStatus), tuyaIDs: make(map[string]string),
-		listeners: make(map[uint64]func(device.Device)), interests: make(map[string]struct{})}, nil
+		listeners: make(map[uint64]func(device.Device)), interests: make(map[string]struct{})}
+	p.seedManagedDevices()
+	return p, nil
 }
 
 func (p *Provider) Manifest() providersdk.Manifest {
@@ -123,6 +159,52 @@ func (p *Provider) Manifest() providersdk.Manifest {
 
 func (p *Provider) Capabilities() providersdk.Capabilities {
 	return providersdk.Capabilities{Discovery: true, PropertyRead: true, PropertyWrite: true, Commands: true, Events: true}
+}
+
+func (p *Provider) seedManagedDevices() {
+	if !p.config.ManagedDevices {
+		return
+	}
+	for _, configured := range p.config.Devices {
+		remote := configuredRemote(configured)
+		specs := mergedSpecs(configured.Specification)
+		status := statusMap(configured.Status)
+		item := buildSourceDevice(p.id, configured.ID, remote, specs, status, false)
+		if configured.Type != "" {
+			item.Type = device.Type(configured.Type)
+		}
+		item.SetOnline(false)
+		item.LastUpdateAt = time.Now().UTC()
+		p.tuyaIDs[configured.DeviceID] = configured.ID
+		p.remote[configured.DeviceID] = remote
+		p.specs[configured.DeviceID] = specs
+		p.statuses[configured.DeviceID] = status
+		p.devices[configured.ID], p.sources[configured.ID] = item, item.Clone()
+	}
+}
+
+// SetRuntimeConfigChangeHandler persists rotated Tuya access/refresh tokens
+// through ProviderService. A refresh can happen during Initialize before the
+// service attaches the callback, so one pending change is retained.
+func (p *Provider) SetRuntimeConfigChangeHandler(handler func(previous, replacement json.RawMessage)) {
+	p.mu.Lock()
+	p.configChangeHandler = handler
+	pending := p.pendingConfigChange
+	if handler != nil {
+		p.pendingConfigChange = nil
+	}
+	p.mu.Unlock()
+	if handler != nil && pending != nil {
+		go handler(pending.previous, pending.replacement)
+	}
+}
+
+func configuredRemote(item DeviceConfig) TuyaDevice {
+	return TuyaDevice{
+		ID: item.DeviceID, Name: item.Name, Category: item.Category, ProductID: item.ProductID,
+		ProductName: item.ProductName, Model: item.Model, HomeID: item.HomeID, HomeName: item.HomeName,
+		RoomID: item.RoomID, RoomName: item.RoomName,
+	}
 }
 
 // TestConnection performs the minimal live account check used by the
@@ -156,6 +238,15 @@ func (p *Provider) Initialize(ctx context.Context) error {
 	done := p.done
 	p.mu.Unlock()
 	if err := p.Refresh(ctx); err != nil {
+		p.mu.RLock()
+		hasManagedFallback := p.config.ManagedDevices && len(p.devices) > 0
+		p.mu.RUnlock()
+		if hasManagedFallback {
+			p.recordError(err)
+			go p.pollLoop(lifecycle, done)
+			p.startMQTT(lifecycle)
+			return nil
+		}
 		cancel()
 		p.mu.Lock()
 		p.running, p.cancel, p.done = false, nil, nil
@@ -163,6 +254,7 @@ func (p *Provider) Initialize(ctx context.Context) error {
 		return err
 	}
 	go p.pollLoop(lifecycle, done)
+	p.startMQTT(lifecycle)
 	return nil
 }
 
@@ -171,21 +263,26 @@ func (p *Provider) Close(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	p.mu.Lock()
-	cancel, done := p.cancel, p.done
-	p.cancel, p.done, p.running = nil, nil, false
+	cancel, done, mqttDone := p.cancel, p.done, p.mqttDone
+	p.cancel, p.done, p.mqttDone, p.running, p.mqttConnected = nil, nil, nil, false, false
 	p.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
-	if done == nil {
+	if done == nil && mqttDone == nil {
 		return nil
 	}
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+	for _, complete := range []chan struct{}{done, mqttDone} {
+		if complete == nil {
+			continue
+		}
+		select {
+		case <-complete:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
+	return nil
 }
 
 func (p *Provider) pollLoop(ctx context.Context, done chan struct{}) {
@@ -232,6 +329,15 @@ func (p *Provider) Refresh(ctx context.Context) error {
 		if strings.TrimSpace(item.ID) == "" {
 			continue
 		}
+		configured, managed := p.configuredDevice(item.ID)
+		if p.config.ManagedDevices && !managed {
+			continue
+		}
+		if managed {
+			p.mu.Lock()
+			p.tuyaIDs[item.ID] = configured.ID
+			p.mu.Unlock()
+		}
 		seen[item.ID] = struct{}{}
 		if err := p.refreshDevice(ctx, item); err != nil {
 			// A single unsupported or temporarily unavailable device must not
@@ -250,10 +356,10 @@ func (p *Provider) Refresh(ctx context.Context) error {
 		}
 		localID := p.tuyaIDs[remoteID]
 		item, exists := p.devices[localID]
-		if !exists || item.Removed {
+		if !exists {
 			continue
 		}
-		item.Removed = true
+		item.Removed = !p.config.ManagedDevices
 		item.SetOnline(false)
 		item.Sequence++
 		item.LastUpdateAt = time.Now().UTC()
@@ -274,29 +380,46 @@ func (p *Provider) Refresh(ctx context.Context) error {
 }
 
 func (p *Provider) refreshDevice(ctx context.Context, item TuyaDevice) error {
-	spec, err := p.client.GetSpecification(ctx, item.ID)
-	if err != nil {
-		return fmt.Errorf("get Tuya device %q specification: %w", item.ID, err)
-	}
-	if strings.TrimSpace(item.Category) == "" {
-		item.Category = spec.Category
-	}
-	applyQuirks(&spec, item.ProductID, p.config.Quirks)
-	status := item.Status
-	if len(status) == 0 {
-		p.requests.Add(1)
-		status, err = p.client.GetStatus(ctx, item.ID)
+	p.mu.RLock()
+	specs := cloneSpecs(p.specs[item.ID])
+	p.mu.RUnlock()
+	if len(specs) == 0 {
+		spec, err := p.client.GetSpecification(ctx, item.ID)
 		if err != nil {
-			return fmt.Errorf("get Tuya device %q status: %w", item.ID, err)
+			return fmt.Errorf("get Tuya device %q specification: %w", item.ID, err)
+		}
+		if strings.TrimSpace(item.Category) == "" {
+			item.Category = spec.Category
+		}
+		applyQuirks(&spec, item.ProductID, p.config.Quirks)
+		specs = mergedSpecs(spec)
+	}
+	p.requests.Add(1)
+	status, err := p.client.GetStatus(ctx, item.ID)
+	if err != nil {
+		return fmt.Errorf("get Tuya device %q status: %w", item.ID, err)
+	}
+	if len(status) == 0 && len(item.Status) > 0 {
+		status = item.Status
+	}
+	p.commitRemoteSpecs(item, specs, status, nil)
+	return nil
+}
+
+func (p *Provider) configuredDevice(remoteID string) (DeviceConfig, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for _, item := range p.config.Devices {
+		if item.DeviceID == remoteID {
+			return item, true
 		}
 	}
-	p.commitRemote(item, spec, status, nil)
-	return nil
+	return DeviceConfig{}, false
 }
 
 func (p *Provider) ensureToken(ctx context.Context) error {
 	p.mu.RLock()
-	token, refresh, expiry := p.config.AccessToken, p.config.RefreshToken, p.config.TokenExpiresAt
+	token, refresh, expiry, uid := p.config.AccessToken, p.config.RefreshToken, p.config.TokenExpiresAt, p.config.UID
 	p.mu.RUnlock()
 	if token != "" && (expiry.IsZero() || time.Until(expiry) > 2*time.Minute) {
 		p.client.SetAccessToken(token)
@@ -312,8 +435,14 @@ func (p *Provider) ensureToken(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("Tuya authentication failed: %w", err)
 	}
-	if next.UID != "" && next.UID != p.config.UID {
+	if next.UID != "" && next.UID != uid {
 		return errors.New("Tuya token belongs to a different uid")
+	}
+	if strings.TrimSpace(next.AccessToken) == "" {
+		return errors.New("Tuya authentication returned an empty access token")
+	}
+	if next.RefreshToken == "" {
+		next.RefreshToken = refresh
 	}
 	expires := time.Time{}
 	if next.ExpiresIn > 0 {
@@ -321,9 +450,43 @@ func (p *Provider) ensureToken(ctx context.Context) error {
 	}
 	p.mu.Lock()
 	p.config.AccessToken, p.config.RefreshToken, p.config.TokenExpiresAt = next.AccessToken, next.RefreshToken, expires
+	handler, change := p.recordTokenConfigChangeLocked(next, expires)
 	p.mu.Unlock()
 	p.client.SetAccessToken(next.AccessToken)
+	if handler != nil && change != nil {
+		go handler(change.previous, change.replacement)
+	}
 	return nil
+}
+
+func (p *Provider) recordTokenConfigChangeLocked(next Token, expires time.Time) (func(previous, replacement json.RawMessage), *runtimeConfigChange) {
+	previous := append(json.RawMessage(nil), p.configDocument...)
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(previous, &document); err != nil || document == nil {
+		return nil, nil
+	}
+	updates := map[string]any{"accessToken": next.AccessToken, "refreshToken": next.RefreshToken, "tokenExpiresAt": expires}
+	if next.UID != "" {
+		updates["uid"] = next.UID
+	}
+	for key, value := range updates {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil, nil
+		}
+		document[key] = encoded
+	}
+	replacement, err := json.Marshal(document)
+	if err != nil {
+		return nil, nil
+	}
+	p.configDocument = replacement
+	change := &runtimeConfigChange{previous: previous, replacement: replacement}
+	handler := p.configChangeHandler
+	if handler == nil {
+		p.pendingConfigChange = change
+	}
+	return handler, change
 }
 
 func (p *Provider) DiscoverDevices(context.Context) ([]device.Device, error) {
@@ -335,6 +498,19 @@ func (p *Provider) DiscoverDevices(context.Context) ([]device.Device, error) {
 	p.mu.RUnlock()
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result, nil
+}
+
+// ProviderDeviceID resolves HomeLoom's stable public ID back to the untouched
+// Tuya cloud device ID used by status, command and MQTT APIs.
+func (p *Provider) ProviderDeviceID(deviceID string) (string, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for remoteID, localID := range p.tuyaIDs {
+		if localID == deviceID {
+			return remoteID, true
+		}
+	}
+	return "", false
 }
 
 func (p *Provider) SourceCatalog(context.Context) ([]providersdk.SourceCatalogDevice, error) {
@@ -357,9 +533,88 @@ func (p *Provider) SourceCatalog(context.Context) ([]providersdk.SourceCatalogDe
 	return result, nil
 }
 
+// DiscoverCloudDevices returns the account directory for the device manager.
+// It includes only non-secret device metadata, DP specifications and current
+// values so a selected child can be retained across cloud-directory outages.
+func (p *Provider) DiscoverCloudDevices(ctx context.Context) ([]DirectoryDevice, error) {
+	if err := p.ensureToken(ctx); err != nil {
+		return nil, err
+	}
+	configured := make(map[string]DeviceConfig)
+	p.mu.RLock()
+	for _, item := range p.config.Devices {
+		configured[item.DeviceID] = item
+	}
+	p.mu.RUnlock()
+	remote := make([]TuyaDevice, 0)
+	for page := 1; page <= 100; page++ {
+		p.requests.Add(1)
+		items, err := p.client.ListUserDevices(ctx, p.config.UID, page, maximumPageSize)
+		if err != nil {
+			return nil, fmt.Errorf("list Tuya cloud devices page %d: %w", page, err)
+		}
+		remote = append(remote, items...)
+		if len(items) < maximumPageSize {
+			break
+		}
+	}
+	result := make([]DirectoryDevice, 0, len(remote)+len(configured))
+	seen := make(map[string]struct{}, len(remote))
+	for _, item := range remote {
+		if strings.TrimSpace(item.ID) == "" {
+			continue
+		}
+		seen[item.ID] = struct{}{}
+		spec, specErr := p.client.GetSpecification(ctx, item.ID)
+		if specErr != nil {
+			if saved, ok := configured[item.ID]; ok {
+				spec = saved.Specification
+			} else {
+				return nil, fmt.Errorf("get Tuya device %q specification: %w", item.ID, specErr)
+			}
+		}
+		if item.Category == "" {
+			item.Category = spec.Category
+		}
+		applyQuirks(&spec, item.ProductID, p.config.Quirks)
+		status, statusErr := p.client.GetStatus(ctx, item.ID)
+		if statusErr != nil {
+			status = item.Status
+		}
+		saved, isConfigured := configured[item.ID]
+		id := stableDeviceID(item.ID)
+		name := item.Name
+		typeValue := string(inferDeviceType(item.Category, mergedSpecs(spec)))
+		if isConfigured {
+			id = saved.ID
+			if saved.Name != "" {
+				name = saved.Name
+			}
+			if saved.Type != "" {
+				typeValue = saved.Type
+			}
+		}
+		result = append(result, DirectoryDevice{ID: id, DeviceID: item.ID, Name: name, Type: typeValue, Category: item.Category, ProductID: item.ProductID, ProductName: item.ProductName, Model: item.Model, HomeID: item.HomeID, HomeName: item.HomeName, RoomID: item.RoomID, RoomName: item.RoomName, Online: item.Online, Configured: isConfigured, Specification: spec, Status: append([]TuyaStatus(nil), status...)})
+	}
+	for remoteID, saved := range configured {
+		if _, exists := seen[remoteID]; exists {
+			continue
+		}
+		result = append(result, DirectoryDevice{ID: saved.ID, DeviceID: saved.DeviceID, Name: saved.Name, Type: saved.Type, Category: saved.Category, ProductID: saved.ProductID, ProductName: saved.ProductName, Model: saved.Model, HomeID: saved.HomeID, HomeName: saved.HomeName, RoomID: saved.RoomID, RoomName: saved.RoomName, Configured: true, Specification: saved.Specification, Status: append([]TuyaStatus(nil), saved.Status...)})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Name == result[j].Name {
+			return result[i].DeviceID < result[j].DeviceID
+		}
+		return result[i].Name < result[j].Name
+	})
+	return result, nil
+}
+
 func (p *Provider) ReadProperty(ctx context.Context, request providersdk.PropertyReadRequest) (device.Property, error) {
 	p.mu.RLock()
 	item, exists := p.devices[request.DeviceID]
+	remoteID := p.remoteIDForLocalLocked(request.DeviceID)
 	p.mu.RUnlock()
 	if !exists {
 		return device.Property{}, providersdk.ErrDeviceNotFound
@@ -368,8 +623,29 @@ func (p *Provider) ReadProperty(ctx context.Context, request providersdk.Propert
 	if !exists || !property.Definition.Readable {
 		return device.Property{}, providersdk.ErrPropertyUnsupported
 	}
-	if !item.IsOnline() {
+	if remoteID == "" {
+		return device.Property{}, providersdk.ErrDeviceNotFound
+	}
+	if err := p.ensureToken(ctx); err != nil {
+		p.errors.Add(1)
+		p.recordError(err)
 		return device.Property{}, providersdk.ErrProviderUnavailable
+	}
+	p.requests.Add(1)
+	status, err := p.client.GetStatus(ctx, remoteID)
+	if err != nil {
+		p.errors.Add(1)
+		p.recordError(err)
+		return device.Property{}, fmt.Errorf("%w: get Tuya device status: %v", providersdk.ErrProviderUnavailable, err)
+	}
+	online := true
+	p.commitStatus(remoteID, status, &online, "")
+	p.mu.RLock()
+	updated := p.devices[request.DeviceID]
+	p.mu.RUnlock()
+	property, exists = updated.Property(request.EndpointID, request.CapabilityID, request.PropertyID)
+	if !exists {
+		return device.Property{}, providersdk.ErrPropertyUnsupported
 	}
 	return property, nil
 }
@@ -505,9 +781,9 @@ func (p *Provider) HandleMQTTMessage(payload []byte) error {
 		return err
 	}
 	if event.Online != nil {
-		p.commitStatus(event.DeviceID, event.Status, event.Online, event.Name)
+		p.commitStatusWithTransport(event.DeviceID, event.Status, event.Online, event.Name, device.StateTransportCloudMQTT)
 	} else {
-		p.commitStatus(event.DeviceID, event.Status, nil, event.Name)
+		p.commitStatusWithTransport(event.DeviceID, event.Status, nil, event.Name, device.StateTransportCloudMQTT)
 	}
 	p.mqttEvents.Add(1)
 	return nil
@@ -522,7 +798,7 @@ func (p *Provider) ProviderMetrics() map[string]uint64 {
 		}
 	}
 	p.mu.RUnlock()
-	return map[string]uint64{"requests": p.requests.Load(), "events": p.events.Load(), "errors": p.errors.Load(), "writes": p.writes.Load(), "refreshes": p.refreshes.Load(), "mqttEvents": p.mqttEvents.Load(), "devices": devices, "onlineDevices": online}
+	return map[string]uint64{"requests": p.requests.Load(), "events": p.events.Load(), "errors": p.errors.Load(), "writes": p.writes.Load(), "refreshes": p.refreshes.Load(), "mqttEvents": p.mqttEvents.Load(), "mqttConnections": p.mqttConnections.Load(), "mqttDisconnects": p.mqttDisconnects.Load(), "devices": devices, "onlineDevices": online}
 }
 
 func (p *Provider) ProviderDiagnostics() map[string]string {
@@ -532,9 +808,16 @@ func (p *Provider) ProviderDiagnostics() map[string]string {
 	if p.running {
 		state = "running"
 	}
-	result := map[string]string{"state": state, "devices": strconv.Itoa(len(p.devices)), "transport": "cloud-http"}
+	result := map[string]string{"state": state, "devices": strconv.Itoa(len(p.devices)), "transport": "cloud-http", "pollIntervalSeconds": strconv.Itoa(p.config.PollIntervalSec), "managedDevices": strconv.FormatBool(p.config.ManagedDevices)}
 	if p.config.MQTT != nil && p.config.MQTT.Enabled {
-		result["mqtt"] = "external-feed"
+		if p.mqttConnected {
+			result["mqtt"] = "connected"
+		} else {
+			result["mqtt"] = "reconnecting"
+		}
+		if p.mqttLastError != "" {
+			result["mqttLastError"] = p.mqttLastError
+		}
 	}
 	if p.lastError != "" {
 		result["lastError"] = p.lastError
@@ -545,21 +828,51 @@ func (p *Provider) ProviderDiagnostics() map[string]string {
 func (p *Provider) recordError(err error) { p.mu.Lock(); p.lastError = err.Error(); p.mu.Unlock() }
 
 func (p *Provider) commitRemote(item TuyaDevice, specification TuyaSpecification, status []TuyaStatus, online *bool) {
+	p.commitRemoteSpecs(item, mergedSpecs(specification), status, online)
+}
+
+func (p *Provider) commitRemoteSpecs(item TuyaDevice, specs map[string]DPSpec, status []TuyaStatus, online *bool) {
 	p.mu.Lock()
 	if online == nil {
 		value := item.Online
 		online = &value
 	}
+	var configured DeviceConfig
+	configuredFound := false
+	for _, candidate := range p.config.Devices {
+		if candidate.DeviceID == item.ID {
+			configured, configuredFound = candidate, true
+			break
+		}
+	}
+	if configuredFound {
+		if configured.Name != "" {
+			item.Name = configured.Name
+		}
+		if configured.HomeID != "" || configured.HomeName != "" {
+			item.HomeID, item.HomeName = configured.HomeID, configured.HomeName
+		}
+		if configured.RoomID != "" || configured.RoomName != "" {
+			item.RoomID, item.RoomName = configured.RoomID, configured.RoomName
+		}
+	}
 	localID := p.tuyaIDs[item.ID]
 	if localID == "" {
-		localID = stableDeviceID(item.ID)
+		if configuredFound && configured.ID != "" {
+			localID = configured.ID
+		} else {
+			localID = stableDeviceID(item.ID)
+		}
 		p.tuyaIDs[item.ID] = localID
 	}
 	previous := p.devices[localID]
 	p.remote[item.ID] = item
-	p.specs[item.ID] = mergedSpecs(specification)
+	p.specs[item.ID] = cloneSpecs(specs)
 	p.statuses[item.ID] = statusMap(status)
 	current := buildSourceDevice(p.id, localID, item, p.specs[item.ID], p.statuses[item.ID], *online)
+	if configuredFound && configured.Type != "" {
+		current.Type = device.Type(configured.Type)
+	}
 	current.Sequence, current.LastUpdateAt = previous.Sequence, previous.LastUpdateAt
 	if !sameDevice(previous, current) {
 		current.Sequence++
@@ -574,6 +887,10 @@ func (p *Provider) commitRemote(item TuyaDevice, specification TuyaSpecification
 }
 
 func (p *Provider) commitStatus(remoteID string, status []TuyaStatus, online *bool, name string) {
+	p.commitStatusWithTransport(remoteID, status, online, name, device.StateTransportCloudHTTP)
+}
+
+func (p *Provider) commitStatusWithTransport(remoteID string, status []TuyaStatus, online *bool, name string, transport device.StateTransport) {
 	p.mu.Lock()
 	item, exists := p.remote[remoteID]
 	if !exists {
@@ -598,6 +915,22 @@ func (p *Provider) commitStatus(remoteID string, status []TuyaStatus, online *bo
 	localID := p.tuyaIDs[remoteID]
 	previous := p.devices[localID]
 	current := buildSourceDevice(p.id, localID, item, specs, merged, item.Online)
+	for _, configured := range p.config.Devices {
+		if configured.DeviceID == remoteID && configured.Type != "" {
+			current.Type = device.Type(configured.Type)
+			break
+		}
+	}
+	if transport != "" {
+		current.StateTransport = transport
+		for endpointIndex := range current.Endpoints {
+			for capabilityIndex := range current.Endpoints[endpointIndex].Capabilities {
+				for propertyIndex := range current.Endpoints[endpointIndex].Capabilities[capabilityIndex].Properties {
+					current.Endpoints[endpointIndex].Capabilities[capabilityIndex].Properties[propertyIndex].StateTransport = transport
+				}
+			}
+		}
+	}
 	current.Sequence, current.LastUpdateAt = previous.Sequence, previous.LastUpdateAt
 	if !sameDevice(previous, current) {
 		current.Sequence++

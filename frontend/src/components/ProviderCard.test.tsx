@@ -93,13 +93,14 @@ describe('ProviderCard simulation', () => {
 			schemaVersion: 1, id: 'living-room-pc', providerId: network.id, name: '客厅电脑', type: 'network-device', availability: 'online', online: true, sequence: 3, lastUpdateAt: '',
 			endpoints: [{ id: 'main', name: '主端点', type: 'network-device', capabilities: [{ id: 'switch', type: 'switch', properties: [{ definition: { id: 'power', name: '电源状态', type: 'bool', readable: true, writable: true, notifiable: true }, value: { type: 'bool', bool: true } }] }] }],
 		}]
-		render(<ProviderCard provider={network} devices={devices} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} />)
+		render(<ProviderCard provider={network} devices={devices} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} onManageDevices={vi.fn()} />)
 		expect(screen.getByText('局域网设备监测 / Wake-on-LAN · network-main')).toBeInTheDocument()
 		expect(screen.getByText('1 台待监测')).toHaveClass('is-ready')
 		expect(screen.getByText('1 台设备 · TCP 电源状态探测 · Wake-on-LAN 已配置')).toBeInTheDocument()
 		expect(screen.getByText('TCP 探测 45 秒 · 超时 5 秒 · 连续失败 2 次后关闭')).toBeInTheDocument()
 		expect(screen.getByText('网络设备监测配置')).toBeInTheDocument()
 		expect(screen.getByRole('button', { name: '监测与唤醒配置' })).toBeInTheDocument()
+		expect(screen.getByRole('button', { name: '管理网络设备' })).toBeInTheDocument()
 		expect(screen.getByText('网络设备 · 电源状态 · seq 3')).toBeInTheDocument()
 		expect(screen.queryByText('contact-sensor · seq 3')).not.toBeInTheDocument()
 	})
@@ -114,12 +115,28 @@ describe('ProviderCard simulation', () => {
 		expect(onDeviceLocation).toHaveBeenCalledWith(item)
 	})
 
+	it('keeps device names managed by the source configuration instead of a published-device action', () => {
+		const item: Device = { schemaVersion: 1, id: 'tuya-switch', providerId: provider.id, name: '涂鸦开关', type: 'switch', availability: 'online', online: true, endpoints: [], lastUpdateAt: '' }
+		render(<ProviderCard provider={provider} devices={[item]} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} />)
+		expect(screen.queryByRole('button', { name: '改名' })).not.toBeInTheDocument()
+	})
+
 	it('recognizes Home Assistant compatible Tuya sharing credentials as ready', () => {
 		const tuya: Provider = { ...provider, id: 'tuya-sharing', type: 'tuya', name: '涂鸦扫码云', config: { authType: 'sharing', uid: 'uid-1', endpoint: 'https://openapi.tuyaus.com', terminalId: 'terminal-1', accessToken: 'access-token', refreshToken: 'refresh-token', pollIntervalSeconds: 21600 } }
 		render(<ProviderCard provider={tuya} devices={[]} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} />)
 		expect(screen.getByText('0 台已发现')).toHaveClass('is-ready')
 		expect(screen.getByText(/轮询 21600 秒 · Home Assistant 兼容扫码/)).toBeInTheDocument()
 		expect(screen.getByRole('button', { name: 'Tuya 账号配置' })).toBeInTheDocument()
+	})
+
+	it('opens persistent device management for a running Sonoff provider', async () => {
+		const onManageDevices = vi.fn()
+		const sonoff: Provider = { ...provider, id: 'sonoff-main', type: 'sonoff', name: '易微联', config: { mode: 'auto', cloud: { accessToken: '********' }, managedDevices: true, devices: [{ id: 'sonoff-1001f95735', deviceId: '1001f95735', name: '双路开关', uiid: 7 }] } }
+		render(<ProviderCard provider={sonoff} devices={[]} onEdit={() => {}} onDelete={() => {}} onRestart={vi.fn()} onSimulate={vi.fn()} onManageDevices={onManageDevices} />)
+		expect(screen.getByText('1 台已管理')).toHaveClass('is-ready')
+		expect(screen.getByRole('button', { name: 'eWeLink 账号配置' })).toBeInTheDocument()
+		await userEvent.click(screen.getByRole('button', { name: '管理设备' }))
+		expect(onManageDevices).toHaveBeenCalledWith(sonoff)
 	})
 
 	it('shows Virtual Provider child-device action even before its first child exists', async () => {

@@ -3,6 +3,7 @@ import type { Device, DeviceType } from '../types/device'
 import { builtInDeviceTypes } from '../types/device'
 import type { Provider, ProviderInput } from '../types/provider'
 import { deviceTypeLabel } from '../presentationLabels'
+import { ProviderDeviceAddFlow } from './ProviderDeviceAddFlow'
 
 type VirtualDeviceEntry = Record<string, unknown>
 
@@ -181,17 +182,18 @@ export function VirtualDeviceManager({ provider, devices, onClose, onSave }: {
 	return <section className="xiaomi-device-manager virtual-device-manager">
 		<header><div><p className="eyebrow">VIRTUAL PROVIDER · CHILD DEVICES</p><h3>{provider.name} · 虚拟子设备</h3><p>Provider 只负责模拟运行时；每个虚拟设备在这里独立添加、编辑或移除。</p></div><button type="button" onClick={onClose}>返回 Provider</button></header>
 		<div className="xiaomi-device-manager__status"><span className={`status-dot ${connected ? 'is-online' : ''}`} /><div><strong>{connected ? 'Virtual Provider 运行中' : 'Virtual Provider 未运行'}</strong><small>{provider.id} · {entries.length} 台虚拟子设备</small></div><button type="button" disabled={!connected || showEditor} onClick={beginAdd}>添加虚拟设备</button></div>
+		<ProviderDeviceAddFlow source="手动创建模拟设备；无需外部账号或局域网扫描。" model="选择统一模型，并填写该模型的初始状态。" configuration="设备先加入草稿，最后统一点击“保存设备并应用”。" />
 		{!connected && <p className="inline-error" role="alert">请先启用 Virtual Provider；Provider 进入 running 后才能添加并实时应用虚拟子设备。</p>}
 		{error && <p className="inline-error" role="alert">{error}</p>}{result && <p className="test-success">{result}</p>}
-		{showEditor && <div className="xiaomi-device-binding virtual-device-binding"><div className="xiaomi-device-binding__heading"><div><strong>{editingID ? '编辑虚拟设备' : '添加虚拟设备'}</strong><small>子设备归属于 {provider.id}；保存后会通过 Provider live reconfigure 实时应用。</small></div></div><div className="form-grid">
+		{showEditor && <div className="xiaomi-device-binding virtual-device-binding"><div className="xiaomi-device-binding__heading"><div><strong>{editingID ? '编辑虚拟设备草稿' : '添加虚拟设备草稿'}</strong><small>子设备归属于 {provider.id}；保存后会通过 Provider live reconfigure 实时应用。</small></div></div><div className="form-grid">
 			<label>设备 ID<input aria-label="虚拟设备 ID" disabled={Boolean(editingID)} value={String(draft.id ?? '')} onChange={(event) => update('id', event.target.value)} placeholder="living-room-switch" /></label>
 			<label>名称<input aria-label="虚拟设备名称" value={String(draft.name ?? '')} onChange={(event) => update('name', event.target.value)} placeholder="客厅开关" /></label>
 			<label>统一模型<select aria-label="虚拟设备模型" disabled={Boolean(editingID)} value={String(draft.type ?? 'switch')} onChange={(event) => changeType(event.target.value)}>{virtualDeviceTypes.map((type) => <option value={type} key={type}>{deviceTypeLabel(type as DeviceType)}</option>)}</select></label>
 			<label>初始可用性<select aria-label="虚拟设备可用性" value={String(draft.availability ?? 'online')} onChange={(event) => changeAvailability(event.target.value)}><option value="online">在线</option><option value="offline">离线</option><option value="unknown">未知</option></select></label>
 			<div className="virtual-device-fields wide">{typeSpecificFields()}</div>
-		</div><div className="form-actions"><button type="button" onClick={resetEditor}>取消</button><button type="button" className="primary" onClick={applyDraft}>{editingID ? '更新虚拟设备' : '加入虚拟设备'}</button></div></div>}
+		</div><div className="form-actions"><button type="button" onClick={resetEditor}>取消</button><button type="button" className="primary" onClick={applyDraft}>{editingID ? '更新草稿' : '加入草稿'}</button></div></div>}
 		<div className="provider-device-list virtual-device-list"><div className="command-heading"><h3>已配置虚拟设备</h3><span>{entries.length} 台</span></div>{entries.length === 0 ? <p>尚未添加虚拟设备。先保持 Provider 运行，再点击“添加虚拟设备”。</p> : entries.map((entry) => { const current = published.get(String(entry.id)); return <div key={String(entry.id)}><span className={`status-dot ${current?.availability === 'online' ? 'is-online' : ''}`} /><strong>{String(current?.name || entry.name || entry.id)}</strong><code>{String(entry.id)}</code><small>{deviceTypeLabel(String(entry.type) as DeviceType)} · {String(entry.availability || (entry.online === false ? 'offline' : 'online'))}</small><button type="button" onClick={() => beginEdit(entry)}>编辑</button><button type="button" className="is-danger" onClick={() => replaceEntries(entries.filter((item) => String(item.id) !== String(entry.id)))}>移除</button></div> })}</div>
 		<details><summary>虚拟子设备高级 JSON</summary><textarea aria-label="虚拟子设备 JSON" rows={14} value={entriesJSON} onChange={(event) => setEntriesJSON(event.target.value)} spellCheck={false} /><small>用于导入历史配置或调整可视化表单未展示的字段；保存时以后端严格校验结果为准。</small></details>
-		<div className="form-actions"><button type="button" onClick={onClose}>取消</button><button type="button" className="primary" disabled={!connected || saving} onClick={() => void save()}>{saving ? '应用中…' : '保存子设备并应用'}</button></div>
+		<div className="form-actions"><button type="button" onClick={onClose}>取消</button><button type="button" className="primary" disabled={!connected || saving} onClick={() => void save()}>{saving ? '应用中…' : '保存设备并应用'}</button></div>
 	</section>
 }

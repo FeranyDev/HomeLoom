@@ -30,9 +30,10 @@ type StateCheckpointConfig struct {
 // DeviceServiceOptions carries optional runtime behavior while retaining the
 // established NewDeviceService(provider, dependencies...) constructor.
 type DeviceServiceOptions struct {
-	EventQueue      eventbus.Config
-	StatePriority   statestore.PriorityResolver
-	StateCheckpoint StateCheckpointConfig
+	EventQueue             eventbus.Config
+	StatePriority          statestore.PriorityResolver
+	StateCheckpoint        StateCheckpointConfig
+	PropertyReadbackDelays []time.Duration
 }
 
 func deviceServiceOptionsFrom(dependencies []any) DeviceServiceOptions {

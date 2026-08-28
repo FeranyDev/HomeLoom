@@ -19,8 +19,10 @@ var ErrProviderDeviceIdentityConflict = errors.New("provider device identity con
 
 // EnsureProviderDeviceIdentity records the Provider-native key that produced
 // a canonical Device.ID. The Device.ID remains the public routing key, so this
-// registry is intentionally observational: it prevents a future Provider
-// change from silently repointing an established identity.
+// registry is intentionally observational: it prevents a configured Provider
+// from silently repointing an established identity. When an operator deletes
+// that Provider and recreates it with a new ID, the orphaned binding may move
+// to the replacement while preserving the canonical Device.ID.
 func (s *Store) EnsureProviderDeviceIdentity(ctx context.Context, providerID, providerDeviceID, deviceID string) error {
 	defer s.observe(time.Now())
 	if !device.ValidStableID(providerID) || !device.ValidStableID(deviceID) {
@@ -45,6 +47,38 @@ func (s *Store) EnsureProviderDeviceIdentity(ctx context.Context, providerID, pr
 		var byDevice providerDeviceIdentityRow
 		err = tx.Where("device_id = ?", deviceID).Take(&byDevice).Error
 		if err == nil {
+			// Older HomeLoom releases stored the already-normalized Device.ID as
+			// ProviderDeviceID. Once a Provider exposes its true upstream ID,
+			// migrate that observational key in place when ownership is unchanged.
+			if byDevice.ProviderID == providerID {
+				result := tx.Model(&providerDeviceIdentityRow{}).
+					Where("provider_id = ? AND provider_device_id = ? AND device_id = ?", providerID, byDevice.ProviderDeviceID, deviceID).
+					Updates(map[string]any{"provider_device_id": providerDeviceID, "updated_at": now})
+				if result.Error != nil {
+					return fmt.Errorf("migrate provider device identity: %w", result.Error)
+				}
+				if result.RowsAffected != 1 {
+					return fmt.Errorf("%w: internal device %s binding changed while migrating provider identity", ErrProviderDeviceIdentityConflict, deviceID)
+				}
+				return nil
+			}
+			var previousProvider providerRow
+			err = tx.Select("id").Where("id = ?", byDevice.ProviderID).Take(&previousProvider).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				result := tx.Model(&providerDeviceIdentityRow{}).
+					Where("provider_id = ? AND provider_device_id = ? AND device_id = ?", byDevice.ProviderID, byDevice.ProviderDeviceID, deviceID).
+					Updates(map[string]any{"provider_id": providerID, "provider_device_id": providerDeviceID, "updated_at": now})
+				if result.Error != nil {
+					return fmt.Errorf("rebind orphaned provider device identity: %w", result.Error)
+				}
+				if result.RowsAffected != 1 {
+					return fmt.Errorf("%w: internal device %s binding changed while replacing provider", ErrProviderDeviceIdentityConflict, deviceID)
+				}
+				return nil
+			}
+			if err != nil {
+				return fmt.Errorf("read provider for internal device identity: %w", err)
+			}
 			return fmt.Errorf("%w: internal device %s is already bound to %s/%s", ErrProviderDeviceIdentityConflict, deviceID, byDevice.ProviderID, byDevice.ProviderDeviceID)
 		}
 		if !errors.Is(err, gorm.ErrRecordNotFound) {

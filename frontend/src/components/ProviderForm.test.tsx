@@ -130,65 +130,27 @@ describe('ProviderForm', () => {
 		}), false))
 	})
 
-	it('configures network power monitoring and Wake-on-LAN', async () => {
+	it('creates an empty network Provider and defers its device catalog to the shared manager', async () => {
 		const onSave = vi.fn().mockResolvedValue(undefined)
-		const onTest = vi.fn().mockResolvedValue(undefined)
-		render(<ProviderForm provider={null} initialType="network" onCancel={() => {}} onSave={onSave} onTest={onTest} />)
+		render(<ProviderForm provider={null} initialType="network" onCancel={() => {}} onSave={onSave} />)
 		expect(screen.getByRole('option', { name: '网络设备监测 / Wake-on-LAN' })).toBeInTheDocument()
 		expect(screen.getByText('配置局域网设备监测')).toBeInTheDocument()
-		expect(screen.getByLabelText('网络设备默认探测方式')).toHaveValue('tcp')
-		await userEvent.selectOptions(screen.getByLabelText('网络设备默认探测方式'), 'icmp')
-		expect(screen.getByLabelText('网络设备 1 探测端口')).toBeDisabled()
-		await userEvent.selectOptions(screen.getByLabelText('网络设备默认探测方式'), 'tcp')
-		expect(screen.getByLabelText('网络设备 1 ID')).toHaveValue('living-room-pc')
-		expect(screen.getByLabelText('网络设备 1 Host')).toHaveValue('192.168.1.100')
-		expect(screen.getByText('高级 JSON 导入 / 导出')).toBeInTheDocument()
+		expect(screen.getByText(/从统一设备管理入口添加/)).toBeInTheDocument()
+		expect(screen.queryByLabelText('网络设备 ID')).not.toBeInTheDocument()
 		await userEvent.clear(screen.getByLabelText('网络设备探测间隔'))
 		await userEvent.type(screen.getByLabelText('网络设备探测间隔'), '45')
-		await userEvent.clear(screen.getByLabelText('网络设备探测超时'))
-		await userEvent.type(screen.getByLabelText('网络设备探测超时'), '5')
-		await userEvent.click(screen.getByRole('button', { name: '添加网络设备' }))
-		await userEvent.clear(screen.getByLabelText('网络设备 2 ID'))
-		await userEvent.type(screen.getByLabelText('网络设备 2 ID'), 'bedroom-nas')
-		await userEvent.type(screen.getByLabelText('网络设备 2 名称'), '卧室 NAS')
-		await userEvent.type(screen.getByLabelText('网络设备 2 Host'), '192.168.1.20')
-		await userEvent.clear(screen.getByLabelText('网络设备 2 探测端口'))
-		await userEvent.type(screen.getByLabelText('网络设备 2 探测端口'), '443')
-		await userEvent.type(screen.getByLabelText('网络设备 2 MAC'), '11:22:33:44:55:66')
-		await userEvent.click(screen.getAllByText('单项高级覆盖（可选）')[1])
-		await userEvent.type(screen.getByLabelText('网络设备 2 离线阈值覆盖'), '3')
-		await userEvent.click(screen.getByRole('button', { name: '移除网络设备 1' }))
-		await userEvent.click(screen.getByRole('button', { name: '测试网络设备连接' }))
-		await waitFor(() => expect(onTest).toHaveBeenCalledWith(expect.objectContaining({
-			type: 'network',
-			config: expect.objectContaining({
-				probeIntervalSeconds: 45,
-				probeTimeoutSeconds: 5,
-				onlineThreshold: 1,
-				offlineThreshold: 2,
-				wolBroadcastAddress: '255.255.255.255',
-				wolPort: 9,
-				devices: [expect.objectContaining({ id: 'bedroom-nas', name: '卧室 NAS', host: '192.168.1.20', mac: '11:22:33:44:55:66', probePort: 443, offlineThreshold: 3 })],
-			}),
-		})))
-		expect(screen.getByText('网络设备探测测试成功，已验证当前配置的可达性。')).toBeInTheDocument()
 		await userEvent.click(screen.getByRole('button', { name: '保存并应用' }))
 		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
-			type: 'network',
-			config: expect.objectContaining({ probeIntervalSeconds: 45, probeTimeoutSeconds: 5 }),
+			type: 'network', config: expect.objectContaining({ probeIntervalSeconds: 45, devices: [] }),
 		}), false))
 	})
 
-	it('imports network device JSON into the visual device list', async () => {
+	it('keeps legacy network JSON import as an advanced migration path', async () => {
 		render(<ProviderForm provider={null} initialType="network" onCancel={() => {}} onSave={vi.fn()} />)
-		await userEvent.click(screen.getByText('高级 JSON 导入 / 导出'))
-		fireEvent.change(screen.getByLabelText('网络设备配置 JSON'), { target: { value: JSON.stringify({ probeIntervalSeconds: 60, devices: [{ id: 'office-pc', name: '书房电脑', host: '192.168.1.30', probePort: 3389, mac: 'AA:BB:CC:DD:EE:FF', wolPort: 7 }] }, null, 2) } })
-		expect(screen.getByLabelText('网络设备 1 ID')).toHaveValue('office-pc')
-		expect(screen.getByLabelText('网络设备 1 名称')).toHaveValue('书房电脑')
-		expect(screen.getByLabelText('网络设备 1 Host')).toHaveValue('192.168.1.30')
-		expect(screen.getByLabelText('网络设备 1 探测端口')).toHaveValue(3389)
-		await userEvent.click(screen.getByText('单项高级覆盖（可选）'))
-		expect(screen.getByLabelText('网络设备 1 WOL 端口覆盖')).toHaveValue(7)
+		await userEvent.click(screen.getByText('网络 Provider 高级 JSON（迁移/批量导入）'))
+		fireEvent.change(screen.getByLabelText('网络 Provider 配置 JSON'), { target: { value: JSON.stringify({ probeIntervalSeconds: 60, devices: [{ id: 'office-pc', name: '书房电脑', host: '192.168.1.30', probePort: 3389 }] }, null, 2) } })
+		expect((screen.getByLabelText('网络 Provider 配置 JSON') as HTMLTextAreaElement).value).toContain('office-pc')
+		expect(screen.getByText(/日常添加、编辑或删除设备请使用 Provider 卡片/)).toBeInTheDocument()
 	})
 
 	it('exposes and saves a Tuya cloud Provider configuration', async () => {
@@ -207,7 +169,7 @@ describe('ProviderForm', () => {
 		await waitFor(() => expect(onTest).toHaveBeenCalledWith(expect.objectContaining({ type: 'tuya', config: expect.objectContaining({ region: 'cn', accessId: 'access-id', accessSecret: 'access-secret', uid: 'uid-123' }) })))
 		expect(screen.getByText('Tuya 云账号连接测试成功，设备目录可用。')).toBeInTheDocument()
 		await userEvent.click(screen.getByRole('button', { name: '保存并应用' }))
-		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ type: 'tuya', config: expect.objectContaining({ accessId: 'access-id', accessSecret: 'access-secret', uid: 'uid-123', pollIntervalSeconds: 21600 }) }), false))
+		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ type: 'tuya', config: expect.objectContaining({ accessId: 'access-id', accessSecret: 'access-secret', uid: 'uid-123', pollIntervalSeconds: 60 }) }), false))
 	})
 
 	it('logs into eWeLink before saving a Sonoff Provider', async () => {
@@ -224,14 +186,11 @@ describe('ProviderForm', () => {
 		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ type: 'sonoff', config: expect.objectContaining({ mode: 'auto', region: 'cn', cloud: expect.objectContaining({ accessToken: 'sonoff-access', endpoint: 'https://cn-apia.coolkit.cn' }) }) }), false))
 	})
 
-	it('shows Sonoff mDNS candidates without adding them to the unsaved configuration', async () => {
-		providerAPI.scanProviderNetwork.mockResolvedValue([{ id: 'sonoff-new-device', providerType: 'sonoff', name: 'Sonoff Plug', host: '192.168.1.30', port: 8081, mac: '', metadata: { deviceId: 'new-device', encrypted: 'true' } }])
+	it('moves Sonoff discovery into the persistent device manager', () => {
 		render(<ProviderForm provider={null} initialType="sonoff" onCancel={() => {}} onSave={vi.fn()} />)
-		await userEvent.click(screen.getByRole('button', { name: '扫描 Sonoff 局域网' }))
-		await waitFor(() => expect(providerAPI.scanProviderNetwork).toHaveBeenCalledWith(expect.objectContaining({ type: 'sonoff', enabled: false, config: expect.objectContaining({ devices: [] }) })))
-		expect(screen.getByText('Sonoff Plug')).toBeInTheDocument()
-		expect(screen.getByText('候选，尚未保存')).toBeInTheDocument()
-		expect(screen.getByText(/不会写入配置/)).toBeInTheDocument()
+		expect(screen.getByText('02 · 管理易微联设备')).toBeInTheDocument()
+		expect(screen.getByText(/加入受管清单并保存/)).toBeInTheDocument()
+		expect(screen.queryByRole('button', { name: '扫描 Sonoff 局域网' })).not.toBeInTheDocument()
 	})
 
 	it('completes Tuya OAuth through the QR callback message and fills the UID/token', async () => {

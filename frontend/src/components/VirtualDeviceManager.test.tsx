@@ -23,10 +23,10 @@ describe('VirtualDeviceManager', () => {
 		await userEvent.selectOptions(screen.getByLabelText('虚拟设备模型'), 'lightbulb')
 		await userEvent.clear(screen.getByLabelText('初始亮度'))
 		await userEvent.type(screen.getByLabelText('初始亮度'), '72')
-		await userEvent.click(screen.getByRole('button', { name: '加入虚拟设备' }))
+		await userEvent.click(screen.getByRole('button', { name: '加入草稿' }))
 
 		expect(screen.getByText('客厅灯')).toBeInTheDocument()
-		await userEvent.click(screen.getByRole('button', { name: '保存子设备并应用' }))
+		await userEvent.click(screen.getByRole('button', { name: '保存设备并应用' }))
 		expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
 			id: 'virtual-lab', type: 'virtual', config: expect.objectContaining({
 				devices: [expect.objectContaining({ id: 'living-room-light', name: '客厅灯', type: 'lightbulb', brightness: 72, power: true })],
@@ -41,7 +41,7 @@ describe('VirtualDeviceManager', () => {
 		await userEvent.click(screen.getByRole('button', { name: '添加虚拟设备' }))
 		await userEvent.clear(screen.getByLabelText('虚拟设备 ID'))
 		await userEvent.type(screen.getByLabelText('虚拟设备 ID'), 'desk-switch')
-		await userEvent.click(screen.getByRole('button', { name: '加入虚拟设备' }))
+		await userEvent.click(screen.getByRole('button', { name: '加入草稿' }))
 
 		expect(screen.getByRole('alert')).toHaveTextContent('已经存在')
 		expect(screen.getAllByText('桌面开关')).toHaveLength(1)
@@ -56,9 +56,9 @@ describe('VirtualDeviceManager', () => {
 		expect(screen.getByLabelText('初始音量')).toBeInTheDocument()
 		await userEvent.clear(screen.getByLabelText('初始音量'))
 		await userEvent.type(screen.getByLabelText('初始音量'), '65')
-		await userEvent.click(screen.getByRole('button', { name: '加入虚拟设备' }))
+		await userEvent.click(screen.getByRole('button', { name: '加入草稿' }))
 
-		await userEvent.click(screen.getByRole('button', { name: '保存子设备并应用' }))
+		await userEvent.click(screen.getByRole('button', { name: '保存设备并应用' }))
 		expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ devices: [expect.objectContaining({ type: 'television', volume: 65 })] }) }), true)
 	})
 })

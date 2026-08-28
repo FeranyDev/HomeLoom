@@ -72,3 +72,17 @@ func TestNewProviderFromConfigUsesSharingClient(t *testing.T) {
 		t.Fatalf("client type = %T", provider.client)
 	}
 }
+
+func TestDecodeConfigDefaultsToLightweightOneMinutePolling(t *testing.T) {
+	raw, err := json.Marshal(Config{AccessID: "access", AccessSecret: "secret", UID: "user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := decodeConfig("tuya-main", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.PollIntervalSec != 60 {
+		t.Fatalf("poll interval = %d", config.PollIntervalSec)
+	}
+}

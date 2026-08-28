@@ -175,6 +175,55 @@ func TestProviderHotReconfiguresDeviceSubscriptionsWithoutReplacingBrokerSession
 	}
 }
 
+func TestProviderUsesTheConfiguredDeviceNameForDiscovery(t *testing.T) {
+	transport := &fakeTransport{}
+	provider, err := newProviderFromConfig(providerconfig.Config{ID: "mqtt-named", Name: "MQTT", Config: json.RawMessage(`{"brokerUrl":"mqtt://broker:1883","devices":[{"id":"desk-lamp","name":"书房灯","topicPrefix":"house"}]}`)}, func(_ Config, _ *url.URL, _ *tls.Config, handlers transportHandlers) mqttTransport {
+		transport.handlers = handlers
+		return transport
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = provider.Close(context.Background()) })
+	events := make(chan device.Device, 1)
+	unsubscribe := provider.Subscribe(func(item device.Device) { events <- item })
+	defer unsubscribe()
+	discovered := mqttSwitch("desk-lamp", true, true)
+	discovered.Name = "设备上报名称"
+	transport.emit(discoveryTopic("house", discovered.ID), discovered, false)
+	if received := waitDevice(t, events); received.Name != "书房灯" {
+		t.Fatalf("configured name was not applied: %#v", received)
+	}
+}
+
+func TestProviderHotReconfiguresTheConfiguredDeviceName(t *testing.T) {
+	current, transport := newTestProvider(t)
+	events := make(chan device.Device, 2)
+	unsubscribe := current.Subscribe(func(item device.Device) { events <- item })
+	defer unsubscribe()
+	discovered := mqttSwitch("kitchen-switch", true, false)
+	transport.emit(discoveryTopic("house", discovered.ID), discovered, false)
+	if item := waitDevice(t, events); item.Name != "kitchen-switch" {
+		t.Fatalf("initial device = %#v", item)
+	}
+	replacement, err := newProviderFromConfig(providerconfig.Config{ID: "mqtt-main", Name: "MQTT", Config: json.RawMessage(`{"brokerUrl":"mqtt://broker:1883","retainedStateMaxAgeSeconds":60,"devices":[{"id":"kitchen-switch","name":"厨房灯","topicPrefix":"house","qos":1},{"id":"desk-lamp","topicPrefix":"house","qos":1},{"id":"hall-switch","topicPrefix":"house","qos":1}]}`)}, func(_ Config, _ *url.URL, _ *tls.Config, handlers transportHandlers) mqttTransport {
+		return &fakeTransport{handlers: handlers}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handled, err := current.Reconfigure(context.Background(), replacement)
+	if err != nil || !handled {
+		t.Fatalf("Reconfigure() = %v, %v", handled, err)
+	}
+	if item := waitDevice(t, events); item.Name != "厨房灯" {
+		t.Fatalf("renamed device = %#v", item)
+	}
+}
+
 func TestProviderRequiresReplacementWhenBrokerConnectionChanges(t *testing.T) {
 	current, _ := newUninitializedTestProvider(t)
 	replacement, err := newProviderFromConfig(providerconfig.Config{ID: "mqtt-main", Name: "MQTT", Config: testProviderConfig("mqtt://other-broker:1883")}, func(_ Config, _ *url.URL, _ *tls.Config, handlers transportHandlers) mqttTransport {

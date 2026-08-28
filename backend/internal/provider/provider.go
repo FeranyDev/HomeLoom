@@ -117,6 +117,14 @@ type Discoverer interface {
 	DiscoverDevices(context.Context) ([]device.Device, error)
 }
 
+// DeviceIdentityResolver exposes the untouched Provider-side identifier for a
+// discovered public Device.ID. Providers whose public IDs are normalized or
+// prefixed should implement this so the durable identity registry records the
+// actual upstream key rather than an already-transformed HomeLoom ID.
+type DeviceIdentityResolver interface {
+	ProviderDeviceID(deviceID string) (string, bool)
+}
+
 // DiscoveryCandidate is a transient device identity returned by a Provider
 // network scan. It is intentionally separate from device.Device: a scan is
 // used while editing a Provider and must not publish or mutate the configured
@@ -293,6 +301,19 @@ type PropertyWriteRequest struct {
 
 type PropertyWriter interface {
 	WriteProperty(context.Context, PropertyWriteRequest) (device.Device, error)
+}
+
+// PropertyWriteAcknowledger is implemented by Providers whose successful
+// property write confirms delivery of a control message, while the requested
+// state is observed asynchronously. For example, Wake-on-LAN can confirm that
+// its Magic Packet was sent even though the sleeping host will not answer a
+// reachability probe until it has finished booting.
+//
+// The application records such a write as a successful control operation. It
+// must still use subsequent Device snapshots as the authority for the actual
+// property value.
+type PropertyWriteAcknowledger interface {
+	AcknowledgesPropertyWrite(PropertyWriteRequest) bool
 }
 
 type CommandRequest struct {

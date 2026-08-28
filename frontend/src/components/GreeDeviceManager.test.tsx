@@ -26,10 +26,10 @@ describe('GreeDeviceManager', () => {
 		render(<GreeDeviceManager provider={provider} devices={[]} onClose={() => {}} onSave={onSave} />)
 		await userEvent.click(screen.getByRole('button', { name: '扫描局域网设备' }))
 		await waitFor(() => expect(providerAPI.scanProviderNetwork).toHaveBeenCalledWith(expect.objectContaining({ type: 'gree', config: expect.objectContaining({ devices: [] }) })))
-		expect(screen.getAllByRole('button', { name: '加入设备' })).toHaveLength(2)
-		await userEvent.click(screen.getAllByRole('button', { name: '加入设备' })[0])
-		expect(screen.getByRole('button', { name: '已加入' })).toBeDisabled()
-		await userEvent.click(screen.getByRole('button', { name: '加入设备' }))
+		expect(screen.getAllByRole('button', { name: '加入草稿' })).toHaveLength(2)
+		await userEvent.click(screen.getAllByRole('button', { name: '加入草稿' })[0])
+		expect(screen.getByRole('button', { name: '已加入草稿' })).toBeDisabled()
+		await userEvent.click(screen.getByRole('button', { name: '加入草稿' }))
 		await userEvent.click(screen.getByRole('button', { name: '保存设备并应用' }))
 		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ type: 'gree', config: expect.objectContaining({ devices: [
 			expect.objectContaining({ host: '192.168.1.42', mac: 'aabbccddeeff' }),
@@ -48,7 +48,7 @@ describe('GreeDeviceManager', () => {
 		await userEvent.type(screen.getByLabelText('格力设备 MAC'), 'AA:BB:CC:DD:EE:FF')
 		await userEvent.type(screen.getByLabelText('格力加密密钥'), 'secret')
 		await userEvent.selectOptions(screen.getByLabelText('格力加密版本'), '2')
-		await userEvent.click(screen.getByRole('button', { name: '加入设备' }))
+		await userEvent.click(screen.getByRole('button', { name: '加入草稿' }))
 		expect(screen.getByText('已添加格力设备“客厅空调”。')).toBeInTheDocument()
 		await userEvent.click(screen.getByRole('button', { name: '保存设备并应用' }))
 		await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ devices: [expect.objectContaining({ id: 'living-room-gree', encryptionVersion: 2, encryptionKey: 'secret' })] }) }), true))
