@@ -8,7 +8,7 @@ RUN npm ci --offline
 COPY frontend/ ./
 RUN npm run build:embed
 
-FROM golang:1.26-alpine AS go-deps
+FROM golang:1.26.6-alpine AS go-deps
 ENV GOMODCACHE=/go/pkg/mod \
     GOPROXY=off
 COPY .cache/go-mod /go/pkg/mod

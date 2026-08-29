@@ -96,6 +96,14 @@ func runtimeChanges(previousProviders, previousDiagnostics []byte, providers, di
 const apiVersionHeader = "HomeLoom-API-Version"
 
 const (
+	httpReadHeaderTimeout = 10 * time.Second
+	httpReadTimeout       = 30 * time.Second
+	// Event and AI streaming clients reconnect when this deadline is reached.
+	httpWriteTimeout       = 5 * time.Minute
+	httpIdleTimeout        = 90 * time.Second
+	httpMaxHeaderBytes     = 1 << 20
+	requestBodyLimit       = "2M"
+	restoreBodyLimit       = (256 << 20) + (1 << 20)
 	runtimeLogReplayLimit  = 200
 	runtimeLogEventsPerSec = 100
 )
@@ -428,6 +436,11 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 	}
 	logger = logger.With(zap.String("module", "http-api"))
 	e := echo.New()
+	e.Server.ReadHeaderTimeout = httpReadHeaderTimeout
+	e.Server.ReadTimeout = httpReadTimeout
+	e.Server.WriteTimeout = httpWriteTimeout
+	e.Server.IdleTimeout = httpIdleTimeout
+	e.Server.MaxHeaderBytes = httpMaxHeaderBytes
 	server := &Server{address: address, echo: e, devices: devices, logins: newLoginLimiter(), cloudLogins: xiaomi.NewCloudLoginService(), tuyaOAuth: tuya.NewOAuthService(), tuyaSharingLogin: tuya.NewSharingLoginService()}
 	e.IPExtractor = server.clientIP
 	e.HideBanner = true
@@ -474,15 +487,27 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		}
 	})
 	e.Use(middleware.Recover())
+	// Most API payloads are compact JSON. Database restore is intentionally the
+	// only larger upload endpoint and applies its own hard limit below.
+	e.Use(middleware.BodyLimitWithConfig(middleware.BodyLimitConfig{
+		Limit: requestBodyLimit,
+		Skipper: func(c echo.Context) bool {
+			return c.Request().URL.Path == "/api/v1/system/restore"
+		},
+	}))
 	e.Use(middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
 		LogMethod:    true,
 		LogStatus:    true,
-		LogURI:       true,
+		LogURI:       false,
 		LogError:     true,
 		LogRequestID: true,
 		LogRemoteIP:  true,
-		LogValuesFunc: func(_ echo.Context, values middleware.RequestLoggerValues) error {
-			logger.Info("http request", zap.String("request_id", values.RequestID), zap.String("remote_ip", values.RemoteIP), zap.String("method", values.Method), zap.String("uri", values.URI), zap.Int("status", values.Status), zap.Error(values.Error))
+		LogValuesFunc: func(c echo.Context, values middleware.RequestLoggerValues) error {
+			path := c.Path()
+			if path == "" {
+				path = c.Request().URL.EscapedPath()
+			}
+			logger.Info("http request", zap.String("request_id", values.RequestID), zap.String("remote_ip", values.RemoteIP), zap.String("method", values.Method), zap.String("path", path), zap.Int("status", values.Status), zap.Error(values.Error))
 			return nil
 		},
 	}))
@@ -1250,7 +1275,7 @@ func NewServer(address string, devices *application.DeviceService, targets *appl
 		if server.maintenance == nil {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "database maintenance is unavailable")
 		}
-		c.Request().Body = http.MaxBytesReader(c.Response(), c.Request().Body, (256<<20)+(1<<20))
+		c.Request().Body = http.MaxBytesReader(c.Response(), c.Request().Body, restoreBodyLimit)
 		fileHeader, err := c.FormFile("file")
 		if err != nil {
 			var maxBytesError *http.MaxBytesError

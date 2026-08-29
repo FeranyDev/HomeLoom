@@ -1,12 +1,13 @@
 module github.com/feranydev/homeloom/backend
 
-go 1.26
+go 1.26.6
 
 require (
 	github.com/brutella/dnssd v1.2.14
 	github.com/brutella/hap v0.0.35
 	github.com/eclipse/paho.golang v0.23.0
-	github.com/jackc/pgx/v5 v5.6.0
+	github.com/gorilla/websocket v1.5.3
+	github.com/jackc/pgx/v5 v5.9.2
 	github.com/kradalby/homekit-qr v0.0.0-20251117145710-0ea350a04eaa
 	github.com/labstack/echo/v4 v4.13.4
 	github.com/mochi-mqtt/server/v2 v2.7.9
@@ -21,7 +22,6 @@ require (
 
 require (
 	github.com/go-chi/chi v1.5.4 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect

@@ -54,6 +54,22 @@ func TestSonoffLoginHTTPErrorKeepsOnlySafeFailureDetails(t *testing.T) {
 	}
 }
 
+func TestHTTPServerAppliesConnectionAndRequestLimits(t *testing.T) {
+	server := newTestServer()
+	httpServer := server.echo.Server
+	if httpServer.ReadHeaderTimeout != httpReadHeaderTimeout || httpServer.ReadTimeout != httpReadTimeout || httpServer.WriteTimeout != httpWriteTimeout || httpServer.IdleTimeout != httpIdleTimeout || httpServer.MaxHeaderBytes != httpMaxHeaderBytes {
+		t.Fatalf("HTTP server limits = %#v", httpServer)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/setup", strings.NewReader(strings.Repeat("x", (2<<20)+1)))
+	request.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized API request = %d %s", response.Code, response.Body.String())
+	}
+}
+
 type unavailableDatabase struct{}
 
 type apiSettingsStore struct{ values map[string]string }

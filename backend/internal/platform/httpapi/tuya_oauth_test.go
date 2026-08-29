@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/feranydev/homeloom/backend/internal/providers/tuya"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func TestTuyaOAuthRoutesStartGenerateQRCodeAndReturnCallback(t *testing.T) {
@@ -63,6 +65,27 @@ func TestTuyaOAuthCallbackIsPublicButManagementRoutesRequireAuthentication(t *te
 	}
 	if !requiresAuthentication(start) || !requiresAuthentication(qr) || !requiresAuthentication(sharingStart) || !requiresAuthentication(sharingPoll) || !requiresAuthentication(sharingQR) {
 		t.Fatal("Tuya OAuth management routes must require authentication")
+	}
+}
+
+func TestRequestLoggerDoesNotRecordTuyaOAuthCallbackValues(t *testing.T) {
+	var output bytes.Buffer
+	logger := zap.New(zapcore.NewCore(zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()), zapcore.AddSync(&output), zap.InfoLevel))
+	server := NewServer(":0", nil, nil, logger)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/tuya/oauth/callback?code=one-time-code&state=oauth-state", nil)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("callback response = %d %s", response.Code, response.Body.String())
+	}
+
+	logs := output.String()
+	if strings.Contains(logs, "one-time-code") || strings.Contains(logs, "oauth-state") || strings.Contains(logs, `"uri"`) {
+		t.Fatalf("request log contains OAuth callback data: %s", logs)
+	}
+	if !strings.Contains(logs, `"path":"/api/v1/tuya/oauth/callback"`) {
+		t.Fatalf("request log does not contain callback route path: %s", logs)
 	}
 }
 
