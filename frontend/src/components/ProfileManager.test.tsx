@@ -37,7 +37,7 @@ describe('ProfileManager', () => {
     await userEvent.click(screen.getByRole('button', { name: '＋ 新建转换配置' }))
     const manager = container.querySelector('.profile-manager')!
     const editor = screen.getByLabelText('新建 Profile')
-    const listHeading = screen.getByText('已保存配置').closest('.profile-list-heading')!
+    const listHeading = screen.getByText('已保存规则').closest('.profile-list-heading')!
     expect([...manager.children].indexOf(editor)).toBeLessThan([...manager.children].indexOf(listHeading))
   })
 
@@ -53,10 +53,10 @@ describe('ProfileManager', () => {
   it('imports profile documents as one batch', async () => {
     const api = { list: vi.fn().mockResolvedValue([]), create: vi.fn(), update: vi.fn(), remove: vi.fn(), importMany: vi.fn().mockResolvedValue([]) }
     render(<ProfileManager api={api} />)
-    await screen.findByText(/Profile.*管理/)
+    await screen.findByText('转换规则')
     await userEvent.click(screen.getByRole('button', { name: '导入 JSON' }))
     await userEvent.click(screen.getByRole('button', { name: '验证并导入' }))
-    expect(api.importMany).toHaveBeenCalledWith([expect.objectContaining({ id: 'custom-profile', version: 1 })])
+    expect(api.importMany).toHaveBeenCalledWith([expect.objectContaining({ id: '', identifier: 'custom-profile', version: 1 })])
   })
 
   it('opens the visual editor with both enum domains when arriving from a mapping mismatch tab', async () => {

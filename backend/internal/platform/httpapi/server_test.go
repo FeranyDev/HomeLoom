@@ -18,6 +18,7 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/aiautomation"
 	"github.com/feranydev/homeloom/backend/internal/domain/providerconfig"
+	"github.com/feranydev/homeloom/backend/internal/mapping"
 	"github.com/feranydev/homeloom/backend/internal/mcpagent"
 	"github.com/feranydev/homeloom/backend/internal/persistence/gormstore"
 	"github.com/feranydev/homeloom/backend/internal/platform/subprocesslog"
@@ -1675,15 +1676,22 @@ func TestMappingProfileCRUDHotReloadAndExport(t *testing.T) {
 	server := NewServer(":0", devices, application.NewTargetService(nil, nil), zap.NewNop())
 	server.SetProfileService(profiles)
 
-	create := httptest.NewRequest(http.MethodPost, "/api/v1/mapping/profiles", bytes.NewBufferString(`{"schemaVersion":1,"id":"custom-invert","version":1,"kind":"provider","inputType":"bool","outputType":"bool","transforms":[{"type":"invert"}]}`))
+	create := httptest.NewRequest(http.MethodPost, "/api/v1/mapping/profiles", bytes.NewBufferString(`{"schemaVersion":1,"identifier":"custom-invert","version":1,"kind":"provider","inputType":"bool","outputType":"bool","transforms":[{"type":"invert"}]}`))
 	create.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, create)
-	if response.Code != http.StatusCreated || !bytes.Contains(response.Body.Bytes(), []byte(`"id":"custom-invert"`)) {
+	var profileResponse struct {
+		Data struct {
+			ID         string `json:"id"`
+			Identifier string `json:"identifier"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &profileResponse); err != nil || response.Code != http.StatusCreated || !mapping.IsUUIDv7(profileResponse.Data.ID) || profileResponse.Data.Identifier != "custom-invert" {
 		t.Fatalf("create = %d %s", response.Code, response.Body.String())
 	}
+	profileID := profileResponse.Data.ID
 
-	preview := httptest.NewRequest(http.MethodPost, "/api/v1/mapping/preview", bytes.NewBufferString(`{"profileId":"custom-invert","direction":"forward","value":{"type":"bool","bool":true}}`))
+	preview := httptest.NewRequest(http.MethodPost, "/api/v1/mapping/preview", bytes.NewBufferString(fmt.Sprintf(`{"profileId":%q,"direction":"forward","value":{"type":"bool","bool":true}}`, profileID)))
 	preview.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	response = httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, preview)
@@ -1691,11 +1699,11 @@ func TestMappingProfileCRUDHotReloadAndExport(t *testing.T) {
 		t.Fatalf("preview = %d %s", response.Code, response.Body.String())
 	}
 
-	createBinding := httptest.NewRequest(http.MethodPost, "/api/v1/mapping/bindings", bytes.NewBufferString(`{"profileId":"custom-invert","providerId":"virtual-main","deviceId":"virtual-switch-1","endpointId":"main","capabilityId":"switch","propertyId":"power","enabled":true,"readbackEnabled":true,"readbackDelaysMs":[250,1000,3000]}`))
+	createBinding := httptest.NewRequest(http.MethodPost, "/api/v1/mapping/bindings", bytes.NewBufferString(fmt.Sprintf(`{"profileId":%q,"providerId":"virtual-main","deviceId":"virtual-switch-1","endpointId":"main","capabilityId":"switch","propertyId":"power","enabled":true,"readbackEnabled":true,"readbackDelaysMs":[250,1000,3000]}`, profileID)))
 	createBinding.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	response = httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, createBinding)
-	if response.Code != http.StatusCreated || !bytes.Contains(response.Body.Bytes(), []byte(`"profileId":"custom-invert"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"readbackEnabled":true`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"readbackDelaysMs":[250,1000,3000]`)) {
+	if response.Code != http.StatusCreated || !bytes.Contains(response.Body.Bytes(), []byte(`"profileId":"`+profileID+`"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"readbackEnabled":true`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"readbackDelaysMs":[250,1000,3000]`)) {
 		t.Fatalf("create binding = %d %s", response.Code, response.Body.String())
 	}
 	var bindingResponse struct {
@@ -1706,7 +1714,7 @@ func TestMappingProfileCRUDHotReloadAndExport(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &bindingResponse); err != nil || bindingResponse.Data.ID == "" {
 		t.Fatalf("decode binding = %#v, %v", bindingResponse, err)
 	}
-	removeInUse := httptest.NewRequest(http.MethodDelete, "/api/v1/mapping/profiles/custom-invert", nil)
+	removeInUse := httptest.NewRequest(http.MethodDelete, "/api/v1/mapping/profiles/"+profileID, nil)
 	response = httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, removeInUse)
 	if response.Code != http.StatusConflict {
@@ -1719,7 +1727,7 @@ func TestMappingProfileCRUDHotReloadAndExport(t *testing.T) {
 		t.Fatalf("delete binding = %d %s", response.Code, response.Body.String())
 	}
 
-	sameVersion := httptest.NewRequest(http.MethodPut, "/api/v1/mapping/profiles/custom-invert", bytes.NewBufferString(`{"schemaVersion":1,"version":1,"kind":"provider","inputType":"bool","outputType":"bool","transforms":[{"type":"invert"}]}`))
+	sameVersion := httptest.NewRequest(http.MethodPut, "/api/v1/mapping/profiles/"+profileID, bytes.NewBufferString(`{"schemaVersion":1,"identifier":"custom-invert","version":1,"kind":"provider","inputType":"bool","outputType":"bool","transforms":[{"type":"invert"}]}`))
 	sameVersion.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	response = httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, sameVersion)
@@ -1730,18 +1738,18 @@ func TestMappingProfileCRUDHotReloadAndExport(t *testing.T) {
 	export := httptest.NewRequest(http.MethodGet, "/api/v1/mapping/profiles/export", nil)
 	response = httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, export)
-	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" || !strings.Contains(response.Header().Get("Content-Disposition"), "attachment") || !bytes.Contains(response.Body.Bytes(), []byte(`"id":"custom-invert"`)) || bytes.Contains(response.Body.Bytes(), []byte(`builtin-active-low`)) {
+	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" || !strings.Contains(response.Header().Get("Content-Disposition"), "attachment") || !bytes.Contains(response.Body.Bytes(), []byte(`"id":"`+profileID+`"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`"identifier":"custom-invert"`)) || bytes.Contains(response.Body.Bytes(), []byte(`builtin-active-low`)) {
 		t.Fatalf("export = %d %v %s", response.Code, response.Header(), response.Body.String())
 	}
 	exported := append([]byte(nil), response.Body.Bytes()...)
 
-	remove := httptest.NewRequest(http.MethodDelete, "/api/v1/mapping/profiles/custom-invert", nil)
+	remove := httptest.NewRequest(http.MethodDelete, "/api/v1/mapping/profiles/"+profileID, nil)
 	response = httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, remove)
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("delete = %d %s", response.Code, response.Body.String())
 	}
-	preview = httptest.NewRequest(http.MethodPost, "/api/v1/mapping/preview", bytes.NewBufferString(`{"profileId":"custom-invert","direction":"forward","value":{"type":"bool","bool":true}}`))
+	preview = httptest.NewRequest(http.MethodPost, "/api/v1/mapping/preview", bytes.NewBufferString(fmt.Sprintf(`{"profileId":%q,"direction":"forward","value":{"type":"bool","bool":true}}`, profileID)))
 	preview.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	response = httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, preview)
@@ -1752,10 +1760,10 @@ func TestMappingProfileCRUDHotReloadAndExport(t *testing.T) {
 	importRequest.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	response = httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, importRequest)
-	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"id":"custom-invert"`)) {
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"id":"`+profileID+`"`)) {
 		t.Fatalf("import = %d %s", response.Code, response.Body.String())
 	}
-	preview = httptest.NewRequest(http.MethodPost, "/api/v1/mapping/preview", bytes.NewBufferString(`{"profileId":"custom-invert","direction":"forward","value":{"type":"bool","bool":true}}`))
+	preview = httptest.NewRequest(http.MethodPost, "/api/v1/mapping/preview", bytes.NewBufferString(fmt.Sprintf(`{"profileId":%q,"direction":"forward","value":{"type":"bool","bool":true}}`, profileID)))
 	preview.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	response = httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, preview)

@@ -34,6 +34,9 @@ func TestCommonSemanticProjectionAndReverseWrite(t *testing.T) {
 	if !ok || brightness.Value.Number == nil || *brightness.Value.Number != 65 {
 		t.Fatalf("brightness=%#v", brightness)
 	}
+	if brightness.Definition.Min == nil || *brightness.Definition.Min != 1 || brightness.Definition.Max == nil || *brightness.Definition.Max != 100 || brightness.Definition.Step == nil || *brightness.Definition.Step != 0.5 {
+		t.Fatalf("brightness range=%#v", brightness.Definition)
+	}
 
 	updated, err := provider.WriteProperty(context.Background(), providersdk.PropertyWriteRequest{
 		DeviceID: "tuya-semantic-light", EndpointID: "main", CapabilityID: "light", PropertyID: "brightness", Value: device.NumberValue(42.5),

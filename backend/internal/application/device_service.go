@@ -1752,6 +1752,9 @@ func (s *DeviceService) validatePropertyWrite(deviceID, endpointID, capabilityID
 		return ErrPropertyUnsupported
 	}
 	property.Value = value
+	// The unified snapshot may carry a per-mapping presentation step for a
+	// target UI. Physical write precision is validated by the Provider after
+	// this path has been resolved back to its source property.
 	if err := property.Validate(); err != nil {
 		return fmt.Errorf("%w: %v", providersdk.ErrPropertyInvalid, err)
 	}

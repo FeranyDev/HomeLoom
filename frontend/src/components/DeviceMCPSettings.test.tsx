@@ -23,17 +23,17 @@ describe('DeviceMCPSettings', () => {
 
     render(<DeviceMCPSettings device={device} />)
 
-    await screen.findByRole('button', { name: '保存设备授权' })
+    await screen.findByRole('button', { name: '保存设备' })
     await userEvent.click(screen.getByLabelText('启用该设备的 MCP'))
     await userEvent.selectOptions(screen.getByLabelText('设备默认 MCP 权限'), 'read')
     await userEvent.type(screen.getByLabelText('设备 MCP 使用备注'), '客厅照明')
-    await userEvent.click(screen.getByRole('button', { name: '保存设备授权' }))
+    await userEvent.click(screen.getByRole('button', { name: '保存设备' }))
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/devices/switch-1/mcp-config', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ enabled: true, usageNote: '客厅照明', defaultAccess: 'read' }) })))
 
     await userEvent.selectOptions(screen.getByLabelText('开关 MCP 权限'), 'confirm')
     await userEvent.click(screen.getByLabelText('开关 允许无人值守 AI 执行'))
     fireEvent.change(screen.getByLabelText('开关 MCP 使用备注'), { target: { value: '睡眠时不要打开' } })
-    await userEvent.click(screen.getByRole('button', { name: '保存属性配置' }))
+    await userEvent.click(screen.getByRole('button', { name: '保存属性' }))
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/devices/switch-1/mcp-properties/main/switch/power', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ usageNote: '睡眠时不要打开', access: 'confirm', allowUnattendedAi: true }) })))
   })
 })

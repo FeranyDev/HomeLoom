@@ -11,7 +11,7 @@ func TestAutoCapabilityProfileBuildsStableReversibleUnitRules(t *testing.T) {
 	if !ok {
 		t.Fatal("kelvin to mired profile was not generated")
 	}
-	if profile.ID != "builtin-capability-kelvin-to-mired-number-to-int" || profile.Kind != KindCapability {
+	if !IsUUIDv7(profile.ID) || profile.Identifier != "builtin-capability-kelvin-to-mired-number-to-int" || profile.Kind != KindCapability {
 		t.Fatalf("profile = %#v", profile)
 	}
 	if len(profile.Transforms) != 2 || profile.Transforms[0].Type != TransformUnit || profile.Transforms[1].Type != TransformRound {

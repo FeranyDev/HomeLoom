@@ -34,7 +34,7 @@ func buildAirConditionerDevice(providerID string, configured DeviceConfig, raw m
 	}
 
 	targetTemperature := rawNumber(raw, "SetTem", 24) + 0.5*float64(rawInt(raw, "TemRec", 0))
-	// StHt is the Gree 8°C anti-freeze mode. The unified Air Conditioner v3
+	// StHt is the Gree 8°C anti-freeze mode. The unified Air Conditioner v4
 	// contract intentionally starts at 16°C, so retain the valid model value
 	// while the raw option still records that auxiliary mode is active.
 	if rawInt(raw, "StHt", 0) != 0 && targetTemperature < 16 {
@@ -49,15 +49,10 @@ func buildAirConditionerDevice(providerID string, configured DeviceConfig, raw m
 	fanMode := greeFanMode(rawInt(raw, "WdSpd", 0), rawInt(raw, "Tur", 0), rawInt(raw, "Quiet", 0))
 	rotationSpeed := greeFanPercent(rawInt(raw, "WdSpd", 0), rawInt(raw, "Tur", 0))
 	fault := greeFault(raw)
-	minimumTemperature, maximumTemperature := 16.0, 32.0
-	temperatureStep := rawNumber(raw, "TargetTemperatureStep", 1)
-	if temperatureStep < 0.1 || temperatureStep > 5 {
-		temperatureStep = 1
-	}
+	minimumTemperature, maximumTemperature, targetTemperatureStep := 16.0, 32.0, 0.5
 	minimumCurrentTemperature, maximumCurrentTemperature, currentTemperatureStep := -100.0, 200.0, 0.1
 	minimumPercent, maximumPercent, percentStep := 0.0, 100.0, 1.0
 	minimumHumidity, maximumHumidity, humidityStep := 0.0, 100.0, 0.1
-	minimumStep, maximumStep, stepStep := 0.1, 5.0, 0.1
 	airProperties := []device.Property{
 		{Definition: device.PropertyDefinition{ID: "active", Name: "启用", Type: device.ValueTypeBool, Readable: true, Writable: true, Notifiable: true, StaleAfterSeconds: 120}, Value: device.BoolValue(active)},
 		{Definition: device.PropertyDefinition{ID: "current-state", Name: "当前工作状态", Type: device.ValueTypeEnum, Readable: true, Notifiable: true, Enum: []string{"off", "idle", "cooling", "heating", "drying", "fan-only"}, StaleAfterSeconds: 120}, Value: device.EnumValue(currentState)},
@@ -82,7 +77,6 @@ func buildAirConditionerDevice(providerID string, configured DeviceConfig, raw m
 		{Definition: device.PropertyDefinition{ID: "auto-x-fan", Name: "自动 X-Fan", Type: device.ValueTypeBool, Readable: true, Writable: true, Notifiable: true, StaleAfterSeconds: 120}, Value: device.BoolValue(rawBool(raw, "AutoXFan"))},
 		{Definition: device.PropertyDefinition{ID: "auto-light", Name: "自动面板灯", Type: device.ValueTypeBool, Readable: true, Writable: true, Notifiable: true, StaleAfterSeconds: 120}, Value: device.BoolValue(rawBool(raw, "AutoLight"))},
 		{Definition: device.PropertyDefinition{ID: "beeper", Name: "蜂鸣器", Type: device.ValueTypeBool, Readable: true, Writable: true, Notifiable: true, StaleAfterSeconds: 120}, Value: device.BoolValue(rawInt(raw, "BuzzerCtrl", 1) != 0)},
-		{Definition: device.PropertyDefinition{ID: "target-temperature-step", Name: "目标温度步长", Type: device.ValueTypeNumber, Unit: "celsius", Readable: true, Writable: true, Notifiable: true, Min: &minimumStep, Max: &maximumStep, Step: &stepStep, StaleAfterSeconds: 120}, Value: device.NumberValue(temperatureStep)},
 		{Definition: device.PropertyDefinition{ID: "fault", Name: "故障代码", Type: device.ValueTypeString, Readable: true, Notifiable: true, StaleAfterSeconds: 120}, Value: device.StringValue(fault)},
 	}
 	if rawHas(raw, "AntiDirectBlow") {
@@ -91,7 +85,7 @@ func buildAirConditionerDevice(providerID string, configured DeviceConfig, raw m
 	if rawHas(raw, "LigSen") {
 		airProperties = append(airProperties, device.Property{Definition: device.PropertyDefinition{ID: "light-sensor", Name: "光线传感器", Type: device.ValueTypeBool, Readable: true, Writable: true, Notifiable: true, StaleAfterSeconds: 120}, Value: device.BoolValue(rawInt(raw, "LigSen", 1) == 0)})
 	}
-	temperatureProperties := []device.Property{{Definition: device.PropertyDefinition{ID: "target-temperature", Name: "目标温度", Type: device.ValueTypeNumber, Unit: "celsius", Readable: true, Writable: true, Notifiable: true, Min: &minimumTemperature, Max: &maximumTemperature, Step: &temperatureStep, StaleAfterSeconds: 120}, Value: device.NumberValue(targetTemperature)}}
+	temperatureProperties := []device.Property{{Definition: device.PropertyDefinition{ID: "target-temperature", Name: "目标温度", Type: device.ValueTypeNumber, Unit: "celsius", Readable: true, Writable: true, Notifiable: true, Min: &minimumTemperature, Max: &maximumTemperature, Step: &targetTemperatureStep, StaleAfterSeconds: 120}, Value: device.NumberValue(targetTemperature)}}
 	if hasCurrentTemperature {
 		temperatureProperties = append(temperatureProperties, device.Property{Definition: device.PropertyDefinition{ID: "current-temperature", Name: "当前温度", Type: device.ValueTypeNumber, Unit: "celsius", Readable: true, Notifiable: true, Min: &minimumCurrentTemperature, Max: &maximumCurrentTemperature, Step: &currentTemperatureStep, StaleAfterSeconds: 120}, Value: device.NumberValue(currentTemperature)})
 	}
@@ -121,7 +115,7 @@ func buildAirConditionerDevice(providerID string, configured DeviceConfig, raw m
 	}
 	item.SetOnline(online)
 	if err := item.NormalizeModelParameters(); err != nil {
-		return device.Device{}, fmt.Errorf("normalize Air Conditioner v3 model: %w", err)
+		return device.Device{}, fmt.Errorf("normalize Air Conditioner v4 model: %w", err)
 	}
 	return item, nil
 }

@@ -12,6 +12,7 @@ import type {
   DeviceSnapshot,
   FabricChangedEvent,
   JsonValue,
+  NumericConstraint,
   ReachabilityUpdate,
   RuntimeReplayState,
 } from "../contract.js";
@@ -1951,6 +1952,13 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
     }
 
     if (deviceType === "light") {
+      const colorTemperatureBounds = matterIntegerBounds(
+        numericConstraint(device, "ColorControl.ColorTemperatureMireds"),
+        50,
+        1000,
+        1,
+        0xfffe,
+      );
       state.levelControl = {
         currentLevel: percentToMatterLevel(numberValue(device.attributes["LevelControl.CurrentLevel"], 100)),
         minLevel: 1,
@@ -1963,13 +1971,14 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
         ),
         currentX: 0,
         currentY: 0,
-        colorTemperatureMireds: integerValue(
-          device.attributes["ColorControl.ColorTemperatureMireds"],
-          370,
+        colorTemperatureMireds: clampInteger(
+          integerValue(device.attributes["ColorControl.ColorTemperatureMireds"], 370),
+          colorTemperatureBounds.min,
+          colorTemperatureBounds.max,
         ),
-        colorTempPhysicalMinMireds: 50,
-        colorTempPhysicalMaxMireds: 1000,
-        coupleColorTempToLevelMinMireds: 50,
+        colorTempPhysicalMinMireds: colorTemperatureBounds.min,
+        colorTempPhysicalMaxMireds: colorTemperatureBounds.max,
+        coupleColorTempToLevelMinMireds: colorTemperatureBounds.min,
         colorMode: 0,
         enhancedColorMode: 0,
       };
@@ -2064,20 +2073,44 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
     }
 
     if (deviceType === "thermostat") {
-      const heatingSetpoint = celsiusToMatterTemperature(
-        numberValue(device.attributes["Thermostat.OccupiedHeatingSetpoint"], 20),
+      const heatingBounds = matterTemperatureBounds(
+        device,
+        "Thermostat.OccupiedHeatingSetpoint",
+        5,
+        35,
       );
-      const coolingSetpoint = celsiusToMatterTemperature(
-        numberValue(
-          device.attributes["Thermostat.OccupiedCoolingSetpoint"],
-          Math.max(22.5, matterTemperatureToCelsius(heatingSetpoint) + 2.5),
+      const coolingBounds = matterTemperatureBounds(
+        device,
+        "Thermostat.OccupiedCoolingSetpoint",
+        5,
+        35,
+      );
+      const heatingSetpoint = clampInteger(
+        celsiusToMatterTemperature(
+          numberValue(device.attributes["Thermostat.OccupiedHeatingSetpoint"], 20),
         ),
+        heatingBounds.min,
+        heatingBounds.max,
+      );
+      const coolingSetpoint = clampInteger(
+        celsiusToMatterTemperature(
+          numberValue(
+            device.attributes["Thermostat.OccupiedCoolingSetpoint"],
+            Math.max(22.5, matterTemperatureToCelsius(heatingSetpoint) + 2.5),
+          ),
+        ),
+        coolingBounds.min,
+        coolingBounds.max,
       );
       const thermostat: Record<string, unknown> = {
         localTemperature: nullableCelsiusToMatterTemperature(
           device.attributes["Thermostat.LocalTemperature"] ?? 20,
         ),
         controlSequenceOfOperation: 4,
+        // HomeLoom exposes independently writable target temperatures. Do not
+        // invent Matter's default 2°C heat/cool separation, which would make
+        // an otherwise valid configured range unusable at either end.
+        minSetpointDeadBand: 0,
         systemMode: unifiedThermostatModeToMatter(
           device.attributes["Thermostat.SystemMode"] ?? "off",
         ),
@@ -2086,6 +2119,14 @@ export class MatterJsBridgeDriver implements MatterProtocolAdapter {
         ),
         occupiedHeatingSetpoint: heatingSetpoint,
         occupiedCoolingSetpoint: coolingSetpoint,
+        absMinHeatSetpointLimit: heatingBounds.min,
+        absMaxHeatSetpointLimit: heatingBounds.max,
+        absMinCoolSetpointLimit: coolingBounds.min,
+        absMaxCoolSetpointLimit: coolingBounds.max,
+        minHeatSetpointLimit: heatingBounds.min,
+        maxHeatSetpointLimit: heatingBounds.max,
+        minCoolSetpointLimit: coolingBounds.min,
+        maxCoolSetpointLimit: coolingBounds.max,
       };
       state.thermostat = thermostat;
       state.thermostatUserInterfaceConfiguration = {
@@ -3231,6 +3272,53 @@ function matterSaturationToPercent(saturation: number): number {
 
 function celsiusToMatterTemperature(celsius: number): number {
   return Math.max(-27_315, Math.min(32_767, Math.round(celsius * 100)));
+}
+
+function numericConstraint(device: DeviceSnapshot, path: string): NumericConstraint | undefined {
+  return device.constraints?.[path];
+}
+
+function matterIntegerBounds(
+  constraint: NumericConstraint | undefined,
+  fallbackMin: number,
+  fallbackMax: number,
+  absoluteMin: number,
+  absoluteMax: number,
+): { min: number; max: number } {
+  const min = clampInteger(
+    Math.ceil(constraint?.min ?? fallbackMin),
+    absoluteMin,
+    absoluteMax,
+  );
+  const max = clampInteger(
+    Math.floor(constraint?.max ?? fallbackMax),
+    absoluteMin,
+    absoluteMax,
+  );
+  return min <= max ? { min, max } : { min: fallbackMin, max: fallbackMax };
+}
+
+function matterTemperatureBounds(
+  device: DeviceSnapshot,
+  path: string,
+  fallbackMin: number,
+  fallbackMax: number,
+): { min: number; max: number } {
+  const constraint = numericConstraint(device, path);
+  return matterIntegerBounds(
+    {
+      min: celsiusToMatterTemperature(constraint?.min ?? fallbackMin),
+      max: celsiusToMatterTemperature(constraint?.max ?? fallbackMax),
+    },
+    celsiusToMatterTemperature(fallbackMin),
+    celsiusToMatterTemperature(fallbackMax),
+    -27_315,
+    32_767,
+  );
+}
+
+function clampInteger(value: number, minimum: number, maximum: number): number {
+  return Math.max(minimum, Math.min(maximum, Math.round(value)));
 }
 
 function matterTemperatureToCelsius(temperature: number): number {

@@ -27,7 +27,8 @@ describe('AIInteractionWorkspace', () => {
 
     await screen.findByText('尚未配置自动任务。')
     await userEvent.type(screen.getByLabelText('向 AI 发送消息'), '打开客厅灯')
-    expect(screen.getByText('复杂分析最多可能需要约 6 分钟；取消会中断本次模型请求，且不会自动执行设备操作。')).toBeInTheDocument()
+    await userEvent.hover(screen.getByRole('button', { name: 'AI 请求说明' }))
+    expect(screen.getByRole('tooltip')).toHaveTextContent('复杂分析最长约 6 分钟；取消会中断本次请求，且不会执行设备操作。')
     await userEvent.click(screen.getByRole('button', { name: '发送给 AI' }))
     expect(await screen.findByRole('button', { name: '批准设备操作' })).toBeInTheDocument()
     expect(screen.getByText('客厅灯')).toBeInTheDocument()

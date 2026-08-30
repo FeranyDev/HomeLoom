@@ -26,7 +26,7 @@ describe('AIServiceSettings', () => {
     await userEvent.selectOptions(screen.getByLabelText('家庭温度单位'), 'fahrenheit')
     await userEvent.clear(screen.getByLabelText('智能体提示词'))
     await userEvent.type(screen.getByLabelText('智能体提示词'), '自定义回复规则')
-    await userEvent.click(screen.getByRole('button', { name: '保存 AI 服务配置' }))
+    await userEvent.click(screen.getByRole('button', { name: '保存' }))
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/ai-service/config', expect.objectContaining({ method: 'PUT' })))
     const saveRequest = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/ai-service/config' && init?.method === 'PUT')?.[1] as RequestInit
     expect(saveRequest.body).toContain('secret-api-key')
@@ -35,11 +35,11 @@ describe('AIServiceSettings', () => {
     expect(saveRequest.body).toContain('"agentInstructions":"自定义回复规则"')
     expect(saveRequest.body).toContain('"homePreferences":{"timeZone":"America/New_York","regionLanguage":"en-US","temperatureUnit":"fahrenheit"}')
     expect(screen.queryByDisplayValue('secret-api-key')).not.toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: '恢复默认提示词' }))
+    await userEvent.click(screen.getByRole('button', { name: '恢复默认' }))
     expect(screen.getByLabelText('智能体提示词')).toHaveValue('默认安全提示词')
     expect(await screen.findByText('已恢复默认提示词；请保存后生效。')).toBeInTheDocument()
 
-    await userEvent.click(screen.getByRole('button', { name: '从接口获取模型' }))
+    await userEvent.click(screen.getByRole('button', { name: '获取模型' }))
     await screen.findByText('已从 API 获取 2 个模型。')
     expect(document.querySelector('#ai-service-models option[value="model-a"]')).toBeInTheDocument()
     await userEvent.type(screen.getByLabelText('AI 模型'), 'model-a')
@@ -48,10 +48,12 @@ describe('AIServiceSettings', () => {
     await userEvent.selectOptions(screen.getByLabelText('AI 服务预设'), 'deepseek')
     expect(screen.getByLabelText('AI API 地址')).toHaveValue('https://api.deepseek.com')
     expect(screen.getByLabelText('AI API 协议')).toHaveValue('chat-completions')
-    expect(screen.getByText('预设只会填入服务地址和协议，不会变更密钥或模型。')).toBeInTheDocument()
+    await userEvent.hover(screen.getByRole('button', { name: '预设说明' }))
+    expect(screen.getByRole('tooltip')).toHaveTextContent('预设只会填写服务地址和协议，不会改动密钥或模型。')
     await userEvent.selectOptions(screen.getByLabelText('AI 服务预设'), 'groq')
     expect(screen.getByLabelText('AI API 地址')).toHaveValue('https://api.groq.com/openai/v1')
-    expect(screen.getByText('Codex/ChatGPT 订阅登录不能代替 API Key；如需 OpenAI 模型，请使用单独开通的 OpenAI API Key。')).toBeInTheDocument()
+    await userEvent.hover(screen.getByRole('button', { name: 'OpenAI API 密钥说明' }))
+    expect(screen.getByText('Codex 或 ChatGPT 订阅不能代替 OpenAI API 密钥。')).toBeInTheDocument()
   })
 
   it('persists the global and per-item session-context injection switches', async () => {
@@ -69,7 +71,7 @@ describe('AIServiceSettings', () => {
     await userEvent.click(screen.getByLabelText('会话注入温度单位'))
     await userEvent.click(screen.getByLabelText('启用会话上下文注入'))
     expect(screen.getByLabelText('注入当前时间')).toBeDisabled()
-    await userEvent.click(screen.getByRole('button', { name: '保存 AI 服务配置' }))
+    await userEvent.click(screen.getByRole('button', { name: '保存' }))
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/ai-service/config', expect.objectContaining({ method: 'PUT' })))
     const saveRequest = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/ai-service/config' && init?.method === 'PUT')?.[1] as RequestInit
     expect(JSON.parse(String(saveRequest.body)).sessionContext).toEqual({ enabled: false, currentTime: true, timeZone: false, weekday: true, runSource: true, triggerState: true, regionLanguage: true, temperatureUnit: false })
@@ -87,7 +89,7 @@ describe('AIServiceSettings', () => {
     await screen.findByText('已启用')
     await userEvent.click(screen.getByLabelText('移除已保存的 AI API 密钥'))
     expect(screen.getByLabelText('AI API 密钥')).toBeDisabled()
-    await userEvent.click(screen.getByRole('button', { name: '保存 AI 服务配置' }))
+    await userEvent.click(screen.getByRole('button', { name: '保存' }))
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/ai-service/config', expect.objectContaining({ method: 'PUT' })))
     const saveRequest = fetchMock.mock.calls.find(([path, init]) => path === '/api/v1/ai-service/config' && init?.method === 'PUT')?.[1] as RequestInit
     expect(JSON.parse(String(saveRequest.body)).clearApiKey).toBe(true)

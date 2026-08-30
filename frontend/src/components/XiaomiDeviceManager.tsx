@@ -7,6 +7,7 @@ import { defaultXiaomiMedia, inferXiaomiDeviceType, requiredXiaomiProperties, st
 import { homeLocationOptions, matchesDeviceLocation, roomLocationOptions } from '../deviceLocation'
 import { NetworkDeviceManager } from './NetworkDeviceManager'
 import { ProviderDeviceAddFlow } from './ProviderDeviceAddFlow'
+import { HelpTooltip } from './HelpTooltip'
 
 function configuredMappings(provider: Provider): Array<Record<string, unknown>> {
 	return Array.isArray(provider.config.devices) ? provider.config.devices.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item))) : []
@@ -213,7 +214,7 @@ function XiaomiDeviceManagerContent({ provider, devices = [], locations = [], on
 	}
 
 	return <section className="xiaomi-device-manager">
-		<header><div><p className="eyebrow">XIAOMI · {central ? 'CENTRAL HUB' : 'MIOT CLOUD'}</p><h3>{provider.name} · {central ? '子设备' : '云端设备'}</h3><p>{central ? '目录合并中枢 MQTT 与当前 OAuth 账号云目录；每台设备可选择本地优先、仅本地或仅云端。' : '设备目录通过独立的第三方兼容 MIoT 云会话读取。'}映射保存后进入统一设备模型。</p></div><button onClick={onClose}>返回 Provider</button></header>
+		<header><div><p className="eyebrow">XIAOMI · {central ? 'CENTRAL HUB' : 'MIOT CLOUD'}</p><h3><HelpTooltip content={central ? '目录合并中枢 MQTT 与当前账号云目录；可选择本地优先、仅本地或仅云端。' : '设备目录通过独立的兼容 MIoT 云会话读取。保存映射后进入统一设备模型。'} label="小米设备说明">{provider.name} · {central ? '子设备' : '云端设备'}</HelpTooltip></h3></div><button onClick={onClose}>返回 Provider</button></header>
 		<div className="xiaomi-device-manager__status"><span className={`status-dot ${connected ? 'is-online' : ''}`} /><div><strong>{connected ? (central ? 'MQTT 已连接' : '云会话可用') : (central ? 'MQTT 尚未连接' : '云会话尚未连接')}</strong><small>{central ? `${provider.id} · ${String(provider.config.host || '未配置中枢')}:${Number(provider.config.port || 8883)}` : `${provider.id} · ${String(provider.config.region || 'cn').toUpperCase()} · 第三方兼容接口`}</small></div><button disabled={!connected || discovering} onClick={() => void discover()}>{discovering ? '正在读取…' : hubDevices.length ? '刷新设备目录' : central ? '从中枢读取子设备' : '从 MIoT 云读取设备'}</button></div>
 		<ProviderDeviceAddFlow source={central ? '从小米中枢 MQTT 与已授权云目录读取候选设备。' : '从 MIoT 云账号目录读取候选设备。'} model="选择统一模型与连接策略；加入草稿后可直接修改设备名称。" configuration="设备先加入草稿；可改名或移出，最后统一点击“保存设备并应用”。" />
 		{!connected && <p className="inline-error" role="alert">请先完成{central ? ' OAuth、证书和 MQTT' : '小米账号或会话凭据'}配置并启用 Provider；状态变为 running 后才能读取设备目录。</p>}
@@ -244,7 +245,7 @@ function XiaomiDeviceManagerContent({ provider, devices = [], locations = [], on
 					return <article key={did || subject.id}><div><strong>{name.trim() || did || '未命名设备'}</strong><small>{String(item.home || '未知家庭')} / {String(item.room || '未分配房间')} · {String(item.model || '型号未知')}</small><code>{subject.id}</code></div><label>设备名称<input aria-label={`草稿设备 ${did} 名称`} value={name} maxLength={128} onChange={(event) => updateDeviceName(did, event.target.value)} /></label><label>统一模型（deviceType）<select aria-label={`${name.trim() || did} 草稿统一模型`} value={type} onChange={(event) => updateMappedDevice(did, 'type', event.target.value)}>{xiaomiDeviceTypes.map(([value, label]) => <option value={value} key={value}>{label}（{value}）</option>)}</select></label><label>连接策略（connectionMode）<select aria-label={`${name.trim() || did} 草稿连接策略`} value={connectionMode} onChange={(event) => updateMappedDevice(did, 'connectionMode', event.target.value)}><option value="auto">自动：本地优先，云端回退（auto）</option><option value="local">仅局域网/中枢（local）</option><option value="cloud">仅云端（cloud）</option></select></label>{onMapping && <button type="button" aria-label={`配置草稿 ${subject.name} 属性映射`} onClick={() => onMapping(subject)}>属性映射</button>}<button type="button" className="is-danger" onClick={() => removeDevice(did)}>移出草稿</button></article>
 				})}
 			</div>
-			<div className="xiaomi-mapped-summary"><strong>已映射 {mappings.length} 台设备</strong><small>草稿必须点击保存才会写入 Provider 配置；名称、模型和连接策略均以这里的草稿为准。自动模板只覆盖统一模型必需参数，仍需按具体型号核对 SIID、PIID 和 AIID。</small></div>
+			<div className="xiaomi-mapped-summary"><strong><HelpTooltip content="草稿保存后才会写入 Provider；名称、模型和连接策略以此处为准。请按型号核对 SIID、PIID 和 AIID。" label="设备草稿说明">已映射 {mappings.length} 台设备</HelpTooltip></strong></div>
 		</div>
 		<details><summary>设备与 MIoT 映射（高级 JSON）</summary><label className="config-editor"><textarea aria-label="小米设备映射" rows={16} value={mappingJSON} onChange={(event) => { setMappingJSON(event.target.value); try { const parsed = JSON.parse(event.target.value) as unknown; if (Array.isArray(parsed)) setMappings(parsed.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item)))) } catch { /* save reports invalid JSON */ } }} spellCheck={false} /><small>属性使用 siid/piid，Action 使用 siid/aiid。连接与账号凭据不在本页面编辑。</small></label></details>
 		<div className="form-actions"><button onClick={onClose}>取消</button><button className="primary" disabled={saving || !connected} onClick={() => void save()}>{saving ? '正在应用…' : '保存设备并应用'}</button></div>

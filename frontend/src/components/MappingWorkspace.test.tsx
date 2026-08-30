@@ -19,7 +19,7 @@ describe('MappingWorkspace', () => {
     expect(screen.getByRole('banner', { name: '转换配置工作台' })).toBeInTheDocument()
     expect(screen.getByRole('list', { name: '转换配置使用流程' })).toHaveTextContent(/识别差异.*编排规则.*绑定设备/)
     expect(screen.getByRole('complementary', { name: '转换配置应用位置' })).toHaveTextContent(/设备中心.*桥接中心/)
-    expect(screen.getByRole('region', { name: '验证数据库中的 Profile' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: /^验证已保存规则/ })).toBeInTheDocument()
   })
 
   it('opens the profile workbench when deep-linked to /mapping/profiles', () => {

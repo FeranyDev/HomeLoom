@@ -121,7 +121,7 @@ func (p *Provider) WriteProperty(ctx context.Context, request providersdk.Proper
 		return device.Device{}, providersdk.ErrPropertyUnsupported
 	}
 	property.Value = request.Value
-	if err := property.Validate(); err != nil {
+	if err := property.ValidateWrite(); err != nil {
 		p.mu.Unlock()
 		return device.Device{}, providersdk.ErrPropertyInvalid
 	}

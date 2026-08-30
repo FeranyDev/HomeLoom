@@ -23,4 +23,5 @@ describe('device API normalization', () => {
 		await resetDeviceName('tuya-switch')
 		expect(fetch).toHaveBeenLastCalledWith('/api/v1/devices/tuya-switch/name', expect.objectContaining({ method: 'DELETE' }))
 	})
+
 })

@@ -67,6 +67,7 @@ func configureAccessoryNumericRanges(item *accessory.A, source device.Device, lo
 		if !propertyFound || (property.Definition.Type != device.ValueTypeInt && property.Definition.Type != device.ValueTypeNumber) {
 			continue
 		}
+		definition := property.Definition
 		for _, service := range item.Ss {
 			filtered := service.Cs[:0]
 			for _, current := range service.Cs {
@@ -74,7 +75,7 @@ func configureAccessoryNumericRanges(item *accessory.A, source device.Device, lo
 					filtered = append(filtered, current)
 					continue
 				}
-				if configureNumericCharacteristicRange(current, property.Definition) {
+				if configureNumericCharacteristicRange(current, definition) {
 					filtered = append(filtered, current)
 					continue
 				}

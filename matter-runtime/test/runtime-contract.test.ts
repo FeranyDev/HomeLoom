@@ -47,6 +47,8 @@ test("sidecar contract covers replay, deltas, reverse control, commissioning and
   const attributeWrites: string[] = [];
   const commands: string[] = [];
   const configuration = bridgeConfiguration("matter-a");
+  const lamp = switchDevice("lamp-a");
+  lamp.constraints = { "LevelControl.CurrentLevel": { min: 0, max: 100, step: 1 } };
   const client = new ReconnectingRuntimeClient({
     socketPath: temporary.socketPath,
     targetId: "matter-a",
@@ -54,7 +56,7 @@ test("sidecar contract covers replay, deltas, reverse control, commissioning and
     initialState: {
       revision: 7,
       bridge: configuration,
-      devices: [switchDevice("lamp-a")],
+      devices: [lamp],
     },
     host: {
       storage,
@@ -90,6 +92,7 @@ test("sidecar contract covers replay, deltas, reverse control, commissioning and
   assert.equal(adapter.lastReplayRevision, 7);
   assert.equal(adapter.configuration?.listenPort, 5_540);
   assert.deepEqual(adapter.devices.map((device) => device.id), ["lamp-a"]);
+  assert.deepEqual(adapter.devices[0]?.constraints, { "LevelControl.CurrentLevel": { min: 0, max: 100, step: 1 } });
 
   await client.updateAttributes([{
     deviceId: "lamp-a",

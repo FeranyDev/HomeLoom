@@ -26,7 +26,8 @@ describe('profileDraft', () => {
       type: 'enum',
       values: { Automatic: 'auto', Silent: 'low' },
     })
-    expect(draft.id).toContain('provider')
+    expect(draft.id).toBe('')
+    expect(draft.identifier).toContain('provider')
   })
 
   it('stores and consumes a one-shot draft for the profile workbench', () => {

@@ -22,6 +22,76 @@ describe('BindingManager', () => {
     consumers: [{ id: 'homekit', name: 'Apple Home / HomeKit', properties: [{ id: 'Switch.On', name: 'Switch.On', deviceType: 'switch' as const, defaultModelPath: { endpointId: 'main', capabilityId: 'switch', propertyId: 'power' }, level: 'required' as const, type: 'bool' as const, readable: true, writable: true, notifiable: true }] }],
   }))
 
+  it('only exposes a custom step for a source property that declares one', async () => {
+    const airConditioner: Device = {
+      ...device, id: 'ac-1', providerId: 'gree-main', name: '客厅空调', type: 'air-conditioner',
+      endpoints: [{ id: 'main', name: 'Main', type: 'air-conditioner', capabilities: [{ id: 'temperature', type: 'temperature', properties: [{
+        definition: { id: 'target-temperature', name: '目标温度', type: 'number', unit: 'celsius', readable: true, writable: true, notifiable: true, min: 16, max: 32, step: 0.5 }, value: { type: 'number', number: 24 },
+      }] }] }],
+    }
+    const create = vi.fn(async (input) => ({ ...input, id: 'ac-temperature-override' }))
+    const api = {
+      listBindings: vi.fn(async () => []), listProfiles: vi.fn(async () => []), create, update: vi.fn(), remove: vi.fn(),
+      catalog: vi.fn(async () => ({ providers: [{ ...airConditioner, catalog: { complete: true, source: 'device-snapshot' } }], models: [{ deviceType: 'air-conditioner' as const, version: 3, builtIn: true, custom: { publisher: { level: 'custom' as const, behavior: 'preserve' }, consumer: { level: 'custom' as const, behavior: 'explicit' } }, parameters: [{ path: { endpointId: 'main', capabilityId: 'temperature', propertyId: 'target-temperature' }, name: '目标温度', level: 'required' as const, type: 'number' as const, unit: 'celsius', min: 16, max: 32, step: 0.5, readable: true, writable: true, notifiable: true, publisher: { level: 'required' as const, behavior: 'must-publish' }, consumer: { level: 'required' as const, behavior: 'must-map' } }] }], consumers: [] })),
+    }
+    render(<BindingManager device={airConditioner} api={api} providerOnly />)
+
+    expect(await screen.findByText('默认映射')).toBeInTheDocument()
+    expect(await screen.findByLabelText('为当前属性启用自定义步长')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '编辑默认映射 target-temperature' }))
+    await userEvent.click(screen.getByLabelText('为当前属性启用自定义步长'))
+    const step = screen.getByLabelText('当前属性映射步长')
+    expect(step).toHaveAttribute('min', '0.5')
+    expect(step).toHaveAttribute('step', '0.5')
+    await userEvent.clear(step)
+    await userEvent.type(step, '0.75')
+    await userEvent.click(screen.getByRole('button', { name: '保存映射' }))
+    expect(await screen.findByText('自定义步长必须是不小于 0.5 且为来源步长 0.5 的整数倍。')).toBeInTheDocument()
+    expect(create).not.toHaveBeenCalled()
+    await userEvent.clear(step)
+    await userEvent.type(step, '1')
+    const numericRange = screen.getByText('数值范围').closest('.numeric-range-comparison') as HTMLElement | null
+    if (!numericRange) throw new Error('numeric range comparison is missing')
+    expect(within(numericRange).getByText('已应用当前映射步长 1')).toBeInTheDocument()
+    expect(within(numericRange).getAllByText('16 ～ 32，步长 1 celsius')).toHaveLength(3)
+    expect(within(numericRange).getAllByText('16 ～ 32，步长 0.5 celsius')).toHaveLength(1)
+    await userEvent.click(screen.getByRole('button', { name: '保存映射' }))
+
+    await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({ presentationStep: 1 })))
+  })
+
+  it('uses the configured provider step in bridge-center consumer range previews', async () => {
+    const airConditioner: Device = {
+      ...device, id: 'ac-bridge-source', providerId: 'gree-main', name: '客厅空调', type: 'air-conditioner',
+      endpoints: [{ id: 'main', name: 'Main', type: 'air-conditioner', capabilities: [{ id: 'temperature', type: 'temperature', properties: [{
+        definition: { id: 'target-temperature', name: '目标温度', type: 'number', unit: 'celsius', readable: true, writable: true, notifiable: true, min: 16, max: 32, step: 0.5 }, value: { type: 'number', number: 24 },
+      }] }] }],
+    }
+    const api = {
+      listBindings: vi.fn(async () => [{
+        id: 'ac-presentation-step', stage: 'provider' as const, enabled: true,
+        providerId: 'gree-main', deviceId: 'ac-bridge-source', endpointId: 'main', capabilityId: 'temperature', propertyId: 'target-temperature',
+        modelEndpointId: 'main', modelCapabilityId: 'temperature', modelPropertyId: 'target-temperature', presentationStep: 1,
+      }]),
+      listProfiles: vi.fn(async () => [{ schemaVersion: 1 as const, id: 'double-temperature', version: 1, kind: 'target' as const, inputType: 'number' as const, outputType: 'number' as const, transforms: [{ type: 'scale' as const, factor: 2 }], builtIn: false }]), create: vi.fn(), update: vi.fn(), remove: vi.fn(),
+      catalog: vi.fn(async () => ({ providers: [{ ...airConditioner, catalog: { complete: true, source: 'device-snapshot' } }], models: [{ deviceType: 'air-conditioner' as const, version: 3, builtIn: true, custom: { publisher: { level: 'custom' as const, behavior: 'preserve' }, consumer: { level: 'custom' as const, behavior: 'explicit' } }, parameters: [{ path: { endpointId: 'main', capabilityId: 'temperature', propertyId: 'target-temperature' }, name: '目标温度', level: 'required' as const, type: 'number' as const, unit: 'celsius', min: 16, max: 32, step: 0.5, readable: true, writable: true, notifiable: true, publisher: { level: 'required' as const, behavior: 'must-publish' }, consumer: { level: 'required' as const, behavior: 'must-map' } }] }], consumers: [{ id: 'homekit', name: 'Apple Home / HomeKit', properties: [{ id: 'HeaterCooler.TargetTemperature', name: '目标温度', deviceType: 'air-conditioner' as const, defaultModelPath: { endpointId: 'main', capabilityId: 'temperature', propertyId: 'target-temperature' }, level: 'required' as const, type: 'number' as const, unit: 'celsius', min: 16, max: 32, step: 0.5, readable: true, writable: true, notifiable: true }] }] })),
+    }
+    render(<BindingManager device={airConditioner} api={api} initialStage="consumer" consumerOnly consumerId="homekit" targetId="apple-main" consumerDeviceId="living-ac" />)
+
+    const numericRange = (await screen.findByText('数值范围')).closest('.numeric-range-comparison') as HTMLElement | null
+    if (!numericRange) throw new Error('numeric range comparison is missing')
+    expect(within(numericRange).getByText('已应用上游映射步长 1')).toBeInTheDocument()
+    expect(within(numericRange).getAllByText('16 ～ 32，步长 1 celsius')).toHaveLength(4)
+    expect(within(numericRange).queryByText('16 ～ 32，步长 0.5 celsius')).not.toBeInTheDocument()
+
+    await userEvent.selectOptions(screen.getByLabelText('映射转换 Profile'), 'double-temperature')
+    await waitFor(() => expect(screen.getByLabelText('映射转换 Profile')).toHaveValue('double-temperature'))
+    await waitFor(() => expect(within(numericRange).getByText('32 ～ 64，步长 2 celsius')).toBeInTheDocument())
+    expect(within(numericRange).getAllByText('16 ～ 32，步长 1 celsius')).toHaveLength(1)
+    expect(within(numericRange).getByText('16 ～ 32，步长 2 celsius')).toBeInTheDocument()
+    expect(within(numericRange).getByText('32 ～ 32，步长 2 celsius', { selector: '.is-effective code' })).toBeInTheDocument()
+  })
+
   it('shows source, transformed, consumer, and effective numeric ranges while configuring', async () => {
     const light: Device = {
       ...device, id: 'monitor-light', name: '显示器挂灯', type: 'lightbulb',
@@ -46,7 +116,7 @@ describe('BindingManager', () => {
       })),
     }
     render(<BindingManager device={light} api={api} initialStage="consumer" consumerOnly consumerId="homekit" />)
-    expect(await screen.findByText('数值范围（NUMERIC RANGE）')).toBeInTheDocument()
+    expect(await screen.findByText('数值范围')).toBeInTheDocument()
     expect(screen.getAllByText('50 ～ 1000，步长 1 mired')).toHaveLength(2)
     expect(screen.getAllByText('140 ～ 500，步长 1 mired')).toHaveLength(2)
     expect(screen.getByText('140 ～ 500，步长 1 mired', { selector: '.is-effective code' })).toBeInTheDocument()
@@ -74,10 +144,11 @@ describe('BindingManager', () => {
 			...device, id: 'temperature-1', name: 'Temperature', type: 'temperature-sensor',
 			endpoints: [{ id: 'main', name: 'Main', type: 'main', capabilities: [{ id: 'temperature', type: 'temperature', properties: [{ definition: { id: 'current-temperature', name: 'Temperature', type: 'number', unit: 'celsius', readable: true, writable: false, notifiable: true }, value: { type: 'number', number: 20 } }] }] }],
 		}
-		const automaticID = 'builtin-capability-celsius-to-fahrenheit-number-to-number'
+		const automaticID = '018cc251-f400-7000-8000-000000000001'
+		const automaticIdentifier = 'builtin-capability-celsius-to-fahrenheit-number-to-number'
 		const api = {
 			listBindings: vi.fn(async () => []),
-			listProfiles: vi.fn(async () => [{ schemaVersion: 1 as const, id: automaticID, version: 1, kind: 'capability' as const, inputType: 'number' as const, outputType: 'number' as const, transforms: [{ type: 'unit' as const, fromUnit: 'celsius', toUnit: 'fahrenheit' }], builtIn: true }]),
+			listProfiles: vi.fn(async () => [{ schemaVersion: 1 as const, id: automaticID, identifier: automaticIdentifier, version: 1, kind: 'capability' as const, inputType: 'number' as const, outputType: 'number' as const, transforms: [{ type: 'unit' as const, fromUnit: 'celsius', toUnit: 'fahrenheit' }], builtIn: true }]),
 			create: vi.fn(), update: vi.fn(), remove: vi.fn(),
 			catalog: vi.fn(async () => ({
 				providers: [{ ...sensor, catalog: { complete: true, source: 'device-snapshot' } }],
@@ -115,7 +186,7 @@ describe('BindingManager', () => {
 		}
 		render(<BindingManager device={tuyaDevice} api={api} providerOnly />)
 		expect(await screen.findByRole('region', { name: 'Tuya 标准语义属性' })).toBeInTheDocument()
-		expect(screen.getByText('标准语义属性')).toBeInTheDocument()
+		expect(screen.getByText('标准属性')).toBeInTheDocument()
 		expect(screen.getByText('原始 Tuya DP（1）')).toBeInTheDocument()
 		expect(screen.getByRole('button', { name: /涂鸦开关.*电源/ })).toBeInTheDocument()
 	})
@@ -130,16 +201,18 @@ describe('BindingManager', () => {
 
     render(<BindingManager device={device} api={api} providerOnly />)
 
-    expect(await screen.findByText('模型默认（DEFAULT）')).toBeInTheDocument()
+    expect(await screen.findByText('默认映射')).toBeInTheDocument()
     expect(screen.getByText('1 / 1 生效')).toBeInTheDocument()
-    expect(screen.getByText(/目标未被手工路由占用时生效/)).toBeInTheDocument()
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+    await userEvent.hover(screen.getByRole('button', { name: '映射优先级说明' }))
+    expect(screen.getByRole('tooltip')).toHaveTextContent('手动映射优先于同一目标的默认映射')
     await userEvent.click(screen.getByRole('button', { name: '编辑默认映射 power' }))
-    expect(screen.getByText(/正在修改默认映射/)).toBeInTheDocument()
+    expect(screen.getByText(/正在编辑默认映射/)).toBeInTheDocument()
     await userEvent.selectOptions(screen.getByLabelText('映射转换 Profile'), 'builtin-active-low')
     await userEvent.click(screen.getByLabelText('为当前属性启用写后回读'))
     const delays = screen.getByLabelText('当前属性写后回读时点')
     await userEvent.clear(delays); await userEvent.type(delays, '0.25, 1, 3')
-    await userEvent.click(screen.getByRole('button', { name: '保存默认映射覆盖' }))
+    await userEvent.click(screen.getByRole('button', { name: '保存映射' }))
 
     await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
       stage: 'provider', providerId: 'virtual-main', deviceId: 'virtual-switch-1',
@@ -173,14 +246,14 @@ describe('BindingManager', () => {
     }
 
     const { container } = render(<BindingManager device={device} api={api} providerOnly />)
-    await screen.findByText('Virtual Switch · 来源属性映射')
+    await screen.findByText('Virtual Switch · 属性映射')
     await waitFor(() => expect(container.querySelectorAll('.mapping-lane.is-model .mapping-node-list button')).toHaveLength(3))
 
     const lanes = container.querySelector<HTMLElement>('.mapping-lanes')!
     expect(lanes).toHaveClass('is-provider-stage')
     expect(lanes.querySelectorAll('.mapping-lane')).toHaveLength(2)
     expect(lanes.querySelectorAll('.mapping-arrow')).toHaveLength(1)
-    expect(screen.queryByText('消费端（CONSUMERS）')).not.toBeInTheDocument()
+    expect(screen.queryByText('目标属性')).not.toBeInTheDocument()
 
     expect([...container.querySelectorAll<HTMLElement>('.mapping-lane.is-model .mapping-node-list button')].map((item) => item.textContent)).toEqual([
       expect.stringContaining('power'),
@@ -201,9 +274,9 @@ describe('BindingManager', () => {
     render(<BindingManager device={device} api={api} providerOnly />)
 
     await userEvent.click(await screen.findByRole('button', { name: '编辑映射路由 current-route' }))
-    expect(screen.getByText(/正在编辑数据库路由 current-route/)).toBeInTheDocument()
+    expect(screen.getByText('正在编辑映射')).toBeInTheDocument()
     await userEvent.selectOptions(screen.getByLabelText('映射转换 Profile'), 'builtin-active-low')
-    await userEvent.click(screen.getByRole('button', { name: '保存路由修改' }))
+    await userEvent.click(screen.getByRole('button', { name: '保存映射' }))
     await waitFor(() => expect(update).toHaveBeenCalledWith('current-route', expect.objectContaining({ id: 'current-route', profileId: 'builtin-active-low' })))
   })
 
@@ -219,8 +292,9 @@ describe('BindingManager', () => {
     const api = { listBindings: vi.fn(async () => [current]), listProfiles: vi.fn(async () => []), create: vi.fn(), update: vi.fn(), remove: vi.fn(), catalog: fanOutCatalog }
     render(<BindingManager device={device} api={api} providerOnly />)
     expect(await screen.findByText('2 / 2 生效')).toBeInTheDocument()
-    expect(screen.getByText('模型默认（DEFAULT）')).toBeInTheDocument()
-    expect(screen.getByText(/同一来源可以保留多条/)).toBeInTheDocument()
+    expect(screen.getByText('默认映射')).toBeInTheDocument()
+    await userEvent.hover(screen.getByRole('button', { name: '映射优先级说明' }))
+    expect(screen.getByRole('tooltip')).toHaveTextContent('同一来源可映射到多个不同属性')
     expect(screen.getByText(/main\.switch\.power → main\.aux\.mirrored-power/)).toBeInTheDocument()
   })
 
@@ -232,12 +306,12 @@ describe('BindingManager', () => {
       create, update: vi.fn(), remove: vi.fn(), catalog,
     }
     render(<BindingManager device={device} api={api} />)
-    await screen.findByText('Virtual Switch的双段属性路由')
+    await screen.findByText('Virtual Switch · 属性映射')
     expect(await screen.findByText('完整 · miot-spec-cache')).toBeInTheDocument()
     expect(screen.getByText('当前 false')).toBeInTheDocument()
     await waitFor(() => expect(screen.getByRole('option', { name: /builtin-active-low/ })).toBeInTheDocument())
     await userEvent.selectOptions(screen.getByLabelText('映射转换 Profile'), 'builtin-active-low')
-    await userEvent.click(screen.getByRole('button', { name: /保存第.*一.*段路由/ }))
+    await userEvent.click(screen.getByRole('button', { name: '＋ 添加映射' }))
     await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({ stage: 'provider', providerId: 'virtual-main', deviceId: 'virtual-switch-1', endpointId: 'main', capabilityId: 'switch', propertyId: 'power', modelEndpointId: 'main', modelCapabilityId: 'switch', modelPropertyId: 'power', profileId: 'builtin-active-low', enabled: true })))
   })
 
@@ -251,11 +325,11 @@ describe('BindingManager', () => {
       create: vi.fn(), update: vi.fn(), remove: vi.fn(), catalog,
     }
     render(<BindingManager device={device} api={api} />)
-    await screen.findByText('Virtual Switch的双段属性路由')
+    await screen.findByText('Virtual Switch · 属性映射')
     await waitFor(() => expect(screen.getByLabelText('映射转换 Profile')).toHaveValue(''))
     expect(screen.queryByRole('option', { name: /target-map/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('option', { name: /number-map/ })).not.toBeInTheDocument()
-    await waitFor(() => expect(screen.getByRole('button', { name: /保存第.*一.*段路由/ })).toBeEnabled())
+    await waitFor(() => expect(screen.getByRole('button', { name: '＋ 添加映射' })).toBeEnabled())
   })
 
 
@@ -275,7 +349,7 @@ describe('BindingManager', () => {
     expect(mark).toBeInTheDocument()
     expect(mark.closest('button')?.className).toContain('is-publisher-bound')
     // Provider routes stay hidden in the consumer-only route list.
-    expect(screen.queryByText('数据库覆盖（P → M）')).not.toBeInTheDocument()
+    expect(screen.queryByText('来源 → 模型')).not.toBeInTheDocument()
   })
 
   it('filters second-stage model properties to attributes bound by a publisher route', async () => {
@@ -302,7 +376,8 @@ describe('BindingManager', () => {
     expect(modelControls).toContainElement(screen.getByLabelText('发布者属性筛选'))
     expect(modelControls.querySelectorAll(':scope > label > select')).toHaveLength(2)
     const filterHeading = modelControls.querySelector('.mapping-model-filter-heading') as HTMLElement
-    expect(filterHeading).toHaveTextContent('发布者属性筛选2 / 2 个属性可见')
+    expect(within(filterHeading).getByText('属性筛选')).toBeInTheDocument()
+    expect(within(filterHeading).getByText('2 / 2 个属性可见')).toBeInTheDocument()
     expect(filterHeading.querySelector('small')).toHaveClass('mapping-model-filter-count')
     expect(screen.getByLabelText('发布者属性筛选')).toHaveValue('all')
     expect(screen.getByRole('option', { name: '仅已绑定发布者（1）' })).toBeInTheDocument()
@@ -334,18 +409,18 @@ describe('BindingManager', () => {
     await userEvent.selectOptions(await screen.findByLabelText('发布者属性筛选'), 'publisher-bound')
 
     expect(await screen.findByText('当前设备没有已绑定发布者的统一模型属性，请先配置第一段路由。')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /保存第.*二.*段路由/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '＋ 添加映射' })).toBeDisabled()
   })
 
   it('creates Consumer routes for one concrete device', async () => {
     const create = vi.fn(async (input) => ({ ...input, id: 'consumer-one' }))
     const api = { listBindings: vi.fn(async () => []), listProfiles: vi.fn(async () => []), create, update: vi.fn(), remove: vi.fn(), catalog }
     render(<BindingManager device={device} api={api} />)
-    await screen.findByText('Virtual Switch的双段属性路由')
-    await userEvent.click(screen.getByRole('button', { name: /② 统一模型.*Consumer/ }))
+    await screen.findByText('Virtual Switch · 属性映射')
+    await userEvent.click(screen.getByRole('button', { name: '② 统一模型 → 目标' }))
     await waitFor(() => expect(screen.getByLabelText('当前映射设备')).toHaveValue('Virtual Switch · virtual-main / virtual-switch-1'))
     expect(screen.queryByLabelText('Consumer 映射设备')).not.toBeInTheDocument()
-    const save = await screen.findByRole('button', { name: /保存第.*二.*段路由/ })
+    const save = await screen.findByRole('button', { name: '＋ 添加映射' })
     await waitFor(() => expect(save).toBeEnabled())
     await userEvent.click(save)
     await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
@@ -362,7 +437,7 @@ describe('BindingManager', () => {
     }))
     const api = { listBindings: vi.fn(async () => []), listProfiles: vi.fn(async () => []), create, update: vi.fn(), remove: vi.fn(), catalog: crossTypeCatalog }
     render(<BindingManager device={device} api={api} initialStage="consumer" consumerOnly consumerId="homekit" consumerDeviceType="outlet" targetId="apple-main" consumerDeviceId="living-outlet" />)
-    await userEvent.click(await screen.findByRole('button', { name: /保存第.*二.*段路由/ }))
+    await userEvent.click(await screen.findByRole('button', { name: '＋ 添加映射' }))
     await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
       deviceType: 'switch', consumerDeviceType: 'outlet', consumerProperty: 'Outlet.On',
       modelEndpointId: 'main', modelCapabilityId: 'switch', modelPropertyId: 'power',
@@ -379,7 +454,7 @@ describe('BindingManager', () => {
     await waitFor(() => expect(screen.getByText('1 / 1 生效')).toBeInTheDocument())
     expect(screen.getByText('apple-main / living-switch')).toBeInTheDocument()
     expect(screen.queryByText('apple-guest / guest-switch')).not.toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: /保存第.*二.*段路由/ }))
+    await userEvent.click(screen.getByRole('button', { name: '＋ 添加映射' }))
     await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
       stage: 'consumer', providerId: 'virtual-main', deviceId: 'virtual-switch-1', targetId: 'apple-main', consumerDeviceId: 'living-switch', consumerId: 'homekit', consumerProperty: 'Switch.On',
     })))
@@ -422,7 +497,7 @@ describe('BindingManager', () => {
     expect(screen.getByText('OnOff → Command → Toggle')).toBeInTheDocument()
     expect(screen.queryByText('Switch.On')).not.toBeInTheDocument()
     expect(screen.getByText('0 / 0 生效')).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: /保存第.*二.*段路由/ }))
+    await userEvent.click(screen.getByRole('button', { name: '＋ 添加映射' }))
     await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({ consumerId: 'matter', consumerProperty: 'OnOff.OnOff' })))
   })
 
@@ -440,7 +515,7 @@ describe('BindingManager', () => {
 		expect(lanes).toHaveClass('is-consumer-stage')
 		expect(lanes.querySelectorAll('.mapping-lane')).toHaveLength(2)
 		expect(lanes.querySelectorAll('.mapping-arrow')).toHaveLength(1)
-		expect(screen.queryByText('提供端（PROVIDERS）')).not.toBeInTheDocument()
+		expect(screen.queryByText('来源属性')).not.toBeInTheDocument()
 		const consumerLane = [...container.querySelectorAll<HTMLElement>('.mapping-lane')].find((lane) => !lane.classList.contains('is-model') && !lane.classList.contains('is-context'))!
 		const consumerList = consumerLane.querySelector<HTMLElement>('.mapping-node-list')!
 		expect(consumerList.querySelectorAll('button')).toHaveLength(2)
@@ -467,9 +542,9 @@ describe('BindingManager', () => {
     }
 
     render(<BindingManager device={device} api={api} />)
-    await screen.findByText('Virtual Switch的双段属性路由')
+    await screen.findByText('Virtual Switch · 属性映射')
     await waitFor(() => expect(screen.getByText('1 / 1 生效')).toBeInTheDocument())
-    expect(screen.getByText(/Power · power/)).toBeInTheDocument()
+    expect(screen.getByText('Power')).toBeInTheDocument()
     expect(screen.queryByText(/Other Power/)).not.toBeInTheDocument()
     expect(screen.queryByText(/other-main\.switch\.other-power/)).not.toBeInTheDocument()
   })
@@ -496,7 +571,7 @@ describe('BindingManager', () => {
 	expect(compatibility).toHaveTextContent('模型独有：turbo')
 	expect(screen.getByText(/来源枚举：Auto \/ Low \/ Medium \/ High/)).toBeInTheDocument()
 	expect(screen.getByText(/模型枚举：auto \/ low \/ medium \/ high \/ turbo/)).toBeInTheDocument()
-	expect(screen.getByRole('button', { name: /保存第.*一.*段路由/ })).toBeEnabled()
+	expect(screen.getByRole('button', { name: '＋ 添加映射' })).toBeEnabled()
   })
 
   it('requires an enum Profile when source values cannot be aligned semantically', async () => {
@@ -508,7 +583,7 @@ describe('BindingManager', () => {
 	const compatibility = await screen.findByRole('status')
 	expect(within(compatibility).getByText('语义不一致，需要 Profile')).toBeInTheDocument()
 	expect(compatibility).toHaveTextContent('无法自动对齐：Automatic / Silent')
-	const save = screen.getByRole('button', { name: /保存第.*一.*段路由/ })
+	const save = screen.getByRole('button', { name: '＋ 添加映射' })
 	expect(save).toBeDisabled()
 	await userEvent.selectOptions(screen.getByLabelText('映射转换 Profile'), 'fan-level-map')
 	expect(within(compatibility).getByText('由 Profile fan-level-map 转换')).toBeInTheDocument()
@@ -598,7 +673,7 @@ describe('BindingManager', () => {
     const compatibility = await screen.findByRole('status')
     expect(within(compatibility).getByText('语义不一致，需要 Profile')).toBeInTheDocument()
     expect(compatibility).toHaveTextContent('无法自动对齐：Automatic / Silent')
-    const save = screen.getByRole('button', { name: /保存第.*二.*段路由/ })
+    const save = screen.getByRole('button', { name: '＋ 添加映射' })
     expect(save).toBeDisabled()
     await userEvent.selectOptions(screen.getByLabelText('映射转换 Profile'), 'model-to-homekit-fan')
     expect(within(compatibility).getByText('由 Profile model-to-homekit-fan 转换')).toBeInTheDocument()
@@ -636,7 +711,7 @@ describe('BindingManager', () => {
       create: vi.fn(), update: vi.fn(), remove: vi.fn(), catalog,
     }
     const { container } = render(<BindingManager device={airConditioner} api={api} initialStage="consumer" consumerOnly consumerId="homekit" />)
-    await screen.findByText('消费端（CONSUMERS）')
+    await screen.findByText('目标属性')
     const consumerLanes = [...container.querySelectorAll('.mapping-lane')].filter((lane) => !lane.classList.contains('is-model') && !lane.classList.contains('is-context'))
     expect(consumerLanes).toHaveLength(1)
     const consumerList = consumerLanes[0].querySelector('.mapping-node-list') as HTMLElement
@@ -662,11 +737,58 @@ describe('BindingManager', () => {
     const api = { listBindings: vi.fn(async () => []), listProfiles: vi.fn(async () => []), create: vi.fn(), update: vi.fn(), remove: vi.fn(), catalog: enumCatalog }
     render(<BindingManager device={airConditioner} api={api} providerOnly />)
     await screen.findByRole('status')
-    await userEvent.click(screen.getByRole('button', { name: '去配置转换 Profile' }))
+    await userEvent.click(screen.getByRole('button', { name: '新建转换规则' }))
     expect(openProfileWorkbench).toHaveBeenCalledWith(expect.objectContaining({
       stage: 'provider', inputType: 'enum', outputType: 'enum',
       sourceEnum: ['Automatic', 'Silent'], targetEnum: ['auto', 'low', 'medium', 'high'],
     }))
+  })
+
+  it('shows forward and reverse enum mappings from the selected Profile', async () => {
+    const fan: Device = { ...device, id: 'fan-1', name: '风扇', type: 'fan', endpoints: [{ id: 'main', name: 'Main', type: 'fan', capabilities: [{ id: 'fan', type: 'fan', properties: [{ definition: { id: 'mode', name: '模式', type: 'enum', enum: ['Automatic'], readable: true, writable: true, notifiable: true }, value: { type: 'enum', string: 'Automatic' } }] }] }] }
+    const api = {
+      listBindings: vi.fn(async () => []),
+      listProfiles: vi.fn(async () => [{ schemaVersion: 1 as const, id: 'fan-mode-profile', identifier: 'fan-mode', version: 1, kind: 'provider' as const, inputType: 'enum' as const, outputType: 'enum' as const, transforms: [{ type: 'enum' as const, values: { Automatic: 'auto' }, reverseValues: { cool: 'Automatic', heat: 'Automatic' } }], builtIn: false }]),
+      create: vi.fn(), update: vi.fn(), remove: vi.fn(),
+      catalog: vi.fn(async () => ({ providers: [{ ...fan, catalog: { complete: true, source: 'device-snapshot' } }], models: [{ deviceType: 'fan' as const, version: 1, builtIn: true, custom: { publisher: { level: 'custom' as const, behavior: 'preserve' }, consumer: { level: 'custom' as const, behavior: 'explicit' } }, parameters: [{ path: { endpointId: 'main', capabilityId: 'fan', propertyId: 'mode' }, name: '模式', level: 'optional' as const, type: 'enum' as const, enum: ['auto', 'cool', 'heat'], readable: true, writable: true, notifiable: true, publisher: { level: 'optional' as const, behavior: 'may-publish' }, consumer: { level: 'optional' as const, behavior: 'may-map' } }] }], consumers: [] })),
+    }
+    render(<BindingManager device={fan} api={api} providerOnly />)
+
+    const profileSelect = await screen.findByLabelText('映射转换 Profile')
+    await screen.findByRole('option', { name: /fan-mode/ })
+    await userEvent.selectOptions(profileSelect, 'fan-mode-profile')
+    const detail = await screen.findByRole('region', { name: '转换配置映射详情' })
+    expect(within(detail).getByText('正向状态（来源 → 目标）')).toBeInTheDocument()
+    expect(within(detail).getByText('反向控制（目标 → 来源）')).toBeInTheDocument()
+    expect(within(detail).getByText('cool')).toBeInTheDocument()
+    expect(within(detail).getByText('heat')).toBeInTheDocument()
+    expect(within(detail).getAllByText('Automatic')).toHaveLength(3)
+  })
+
+  it('shows the Profile identifier instead of UUIDs in both route stages', async () => {
+    const profileID = '018cc251-f400-7000-8000-000000000009'
+    const api = {
+      listBindings: vi.fn(async () => [
+        { id: 'provider-route', stage: 'provider' as const, profileId: profileID, enabled: true, providerId: device.providerId, deviceId: device.id, deviceType: device.type, endpointId: 'main', capabilityId: 'switch', propertyId: 'power', modelEndpointId: 'main', modelCapabilityId: 'switch', modelPropertyId: 'power' },
+        { id: 'consumer-route', stage: 'consumer' as const, profileId: profileID, enabled: true, providerId: device.providerId, deviceId: device.id, deviceType: device.type, modelEndpointId: 'main', modelCapabilityId: 'switch', modelPropertyId: 'power', targetId: 'apple-main', consumerDeviceId: 'living-switch', consumerId: 'homekit', consumerProperty: 'Switch.On' },
+      ]),
+      listProfiles: vi.fn(async () => [{ schemaVersion: 1 as const, id: profileID, identifier: 'switch-state-normalizer', version: 1, kind: 'capability' as const, inputType: 'bool' as const, outputType: 'bool' as const, transforms: [{ type: 'invert' as const }], builtIn: false }]),
+      create: vi.fn(), update: vi.fn(), remove: vi.fn(), catalog,
+    }
+    const providerView = render(<BindingManager device={device} api={api} providerOnly />)
+    const providerRoute = (await screen.findByRole('button', { name: '编辑映射路由 provider-route' })).closest('article')
+    expect(providerRoute).not.toBeNull()
+    await waitFor(() => {
+      expect(providerRoute).toHaveTextContent('switch-state-normalizer')
+    })
+    expect(providerRoute).not.toHaveTextContent(profileID)
+
+    providerView.unmount()
+    render(<BindingManager device={device} api={api} consumerOnly consumerId="homekit" targetId="apple-main" consumerDeviceId="living-switch" />)
+    const consumerRoute = (await screen.findByRole('button', { name: '编辑映射路由 consumer-route' })).closest('article')
+    expect(consumerRoute).not.toBeNull()
+    await waitFor(() => expect(consumerRoute).toHaveTextContent('switch-state-normalizer'))
+    expect(consumerRoute).not.toHaveTextContent(profileID)
   })
 
   it('refreshes the profile select list without leaving the mapping editor', async () => {

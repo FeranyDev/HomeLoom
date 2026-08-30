@@ -4,6 +4,7 @@ import { builtInDeviceTypes } from '../types/device'
 import type { Provider, ProviderInput } from '../types/provider'
 import { deviceTypeLabel } from '../presentationLabels'
 import { ProviderDeviceAddFlow } from './ProviderDeviceAddFlow'
+import { HelpTooltip } from './HelpTooltip'
 
 type VirtualDeviceEntry = Record<string, unknown>
 
@@ -175,12 +176,12 @@ export function VirtualDeviceManager({ provider, devices, onClose, onSave }: {
 		case 'air-purifier': return <>{booleanField('active', '初始运行状态', true)}{numberField('speed', '初始速度', 60, 0, 100)}<label>初始模式<select aria-label="初始模式" value={String(draft.mode ?? 'auto')} onChange={(event) => update('mode', event.target.value)}><option value="manual">手动</option><option value="auto">自动</option></select></label><label>空气质量<select aria-label="初始空气质量" value={String(draft.airQuality ?? 'good')} onChange={(event) => update('airQuality', event.target.value)}><option value="unknown">未知</option><option value="excellent">优秀</option><option value="good">良好</option><option value="fair">一般</option><option value="inferior">较差</option><option value="poor">差</option></select></label>{numberField('pm25', 'PM2.5', 12, 0)}{numberField('voc', 'VOC', 80, 0)}{numberField('filterLife', '滤芯寿命', 82, 0, 100)}{booleanField('filterChange', '提示更换滤芯')}</>
 		case 'window-covering': return <>{numberField('position', '初始位置', 50, 0, 100, 1)}{booleanField('obstruction', '障碍物提示')}</>
 		case 'television': return <>{booleanField('active', '初始电源状态', true)}{numberField('volume', '初始音量', 35, 0, 100, 1)}</>
-		default: return <small className="virtual-device-editor__hint">该模型使用统一契约默认值；如需调整契约字段，可在下方高级 JSON 中补充。</small>
+		default: return <HelpTooltip content="该模型使用统一契约默认值；如需调整字段，可在下方高级 JSON 中补充。" label="默认契约说明">使用模型默认值</HelpTooltip>
 		}
 	}
 
 	return <section className="xiaomi-device-manager virtual-device-manager">
-		<header><div><p className="eyebrow">VIRTUAL PROVIDER · CHILD DEVICES</p><h3>{provider.name} · 虚拟子设备</h3><p>Provider 只负责模拟运行时；每个虚拟设备在这里独立添加、编辑或移除。</p></div><button type="button" onClick={onClose}>返回 Provider</button></header>
+		<header><div><p className="eyebrow">VIRTUAL PROVIDER · CHILD DEVICES</p><h3><HelpTooltip content="每个虚拟设备在这里独立添加、编辑或移除。" label="虚拟设备说明">{provider.name} · 虚拟子设备</HelpTooltip></h3></div><button type="button" onClick={onClose}>返回 Provider</button></header>
 		<div className="xiaomi-device-manager__status"><span className={`status-dot ${connected ? 'is-online' : ''}`} /><div><strong>{connected ? 'Virtual Provider 运行中' : 'Virtual Provider 未运行'}</strong><small>{provider.id} · {entries.length} 台虚拟子设备</small></div><button type="button" disabled={!connected || showEditor} onClick={beginAdd}>添加虚拟设备</button></div>
 		<ProviderDeviceAddFlow source="手动创建模拟设备；无需外部账号或局域网扫描。" model="选择统一模型，并填写该模型的初始状态。" configuration="设备先加入草稿，最后统一点击“保存设备并应用”。" />
 		{!connected && <p className="inline-error" role="alert">请先启用 Virtual Provider；Provider 进入 running 后才能添加并实时应用虚拟子设备。</p>}

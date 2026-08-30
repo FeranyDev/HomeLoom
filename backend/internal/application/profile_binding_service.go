@@ -57,6 +57,7 @@ func (s *ProfileService) CreateBinding(ctx context.Context, item mapping.Binding
 	}
 	item = canonicalBinding(item)
 	s.mu.Lock()
+	item.ProfileID = s.profileIDForReferenceLocked(item.ProfileID)
 	if err := s.validateBindingLocked(item); err != nil {
 		s.mu.Unlock()
 		return mapping.Binding{}, err
@@ -93,6 +94,7 @@ func (s *ProfileService) UpdateBinding(ctx context.Context, id string, item mapp
 	item.ID = id
 	item = canonicalBinding(item)
 	s.mu.Lock()
+	item.ProfileID = s.profileIDForReferenceLocked(item.ProfileID)
 	current, exists := s.bindings[id]
 	if !exists {
 		s.mu.Unlock()
@@ -137,6 +139,7 @@ func canonicalBinding(item mapping.Binding) mapping.Binding {
 	if item.EffectiveStage() != mapping.StageProvider {
 		item.ReadbackEnabled = false
 		item.ReadbackDelaysMS = nil
+		item.PresentationStep = nil
 	}
 	return item
 }
@@ -272,10 +275,30 @@ func (s *ProfileService) TransformPropertyDefinition(providerID, deviceID, endpo
 		return definition, binding.ID, applied, err
 	}
 	if binding.ProfileID == "" {
-		return definition, binding.ID, true, nil
+		return applyBindingPresentationStep(definition, binding), binding.ID, true, nil
 	}
 	result, err := transformProviderPropertyDefinition(binding, profile, definition)
-	return result, binding.ID, true, err
+	return applyBindingPresentationStep(result, binding), binding.ID, true, err
+}
+
+func applyBindingPresentationStep(definition device.PropertyDefinition, binding mapping.Binding) device.PropertyDefinition {
+	if binding.PresentationStep == nil || definition.Step == nil || *definition.Step <= 0 {
+		return definition
+	}
+	step := *binding.PresentationStep
+	if !isWholeStepMultiple(step, *definition.Step) {
+		return definition
+	}
+	definition.Step = &step
+	return definition
+}
+
+func isWholeStepMultiple(value, sourceStep float64) bool {
+	if value <= 0 || sourceStep <= 0 {
+		return false
+	}
+	multiple := value / sourceStep
+	return math.Abs(multiple-math.Round(multiple)) <= 1e-9*math.Max(1, math.Abs(multiple))
 }
 
 func transformProviderPropertyDefinition(binding mapping.Binding, profile mapping.Profile, definition device.PropertyDefinition) (device.PropertyDefinition, error) {
@@ -452,6 +475,7 @@ func (s *ProfileService) ProjectProviderProperty(providerID, deviceID, endpointI
 			}
 			projected.Definition, projected.Value = mappedDefinition, preview.Value
 		}
+		projected.Definition = applyBindingPresentationStep(projected.Definition, binding)
 		result = append(result, projected)
 	}
 	return result, nil
@@ -500,13 +524,14 @@ func (s *ProfileService) ProjectMissingProviderProperties(providerID, deviceID s
 			return nil, fmt.Errorf("binding %q (%s) missing default: %w", binding.ID, mapping.BindingPath(binding), err)
 		}
 		path := binding.ModelPath()
+		definition := device.PropertyDefinition{
+			ID: path.PropertyID, Name: path.PropertyID, Type: profile.OutputType,
+			Readable: true, Notifiable: true,
+		}
 		result = append(result, ProviderPropertyProjection{
-			Path: path,
-			Definition: device.PropertyDefinition{
-				ID: path.PropertyID, Name: path.PropertyID, Type: profile.OutputType,
-				Readable: true, Notifiable: true,
-			},
-			Value: preview.Value, BindingID: binding.ID, Explicit: true,
+			Path:       path,
+			Definition: applyBindingPresentationStep(definition, binding),
+			Value:      preview.Value, BindingID: binding.ID, Explicit: true,
 		})
 	}
 	return result, nil
@@ -619,6 +644,9 @@ func (s *ProfileService) validateBindingLocked(item mapping.Binding) error {
 	if item.DeviceType != "" && !modelExists {
 		return NewValidationError("invalid mapping binding", map[string]string{"modelPropertyId": "unified model property not found"})
 	}
+	if item.PresentationStep != nil && modelExists && modelParameter.Type != device.ValueTypeNumber && modelParameter.Type != device.ValueTypeInt {
+		return NewValidationError("invalid mapping binding", map[string]string{"presentationStep": "unified model property must be numeric"})
+	}
 	var consumerProperty *mapping.ConsumerProperty
 	if item.EffectiveStage() == mapping.StageConsumer {
 		if candidate, found := mapping.FindConsumerProperty(item.ConsumerID, item.EffectiveConsumerDeviceType(), item.ConsumerProperty); found {
@@ -710,6 +738,23 @@ func (s *ProfileService) profileLocked(id string) (mapping.Profile, bool) {
 	}
 	item, ok := s.profiles[id]
 	return cloneProfile(item), ok
+}
+
+// profileIDForReferenceLocked keeps historic Binding payloads working during
+// the identifier-to-UUIDv7 transition. New clients always submit the UUIDv7
+// returned by the Profile API; legacy readable identifiers resolve once here
+// and are persisted back as the opaque ID.
+func (s *ProfileService) profileIDForReferenceLocked(reference string) string {
+	if reference == "" {
+		return ""
+	}
+	if _, exists := s.profileLocked(reference); exists {
+		return reference
+	}
+	if id, exists := s.profileIDsByIdentifier[reference]; exists {
+		return id
+	}
+	return reference
 }
 
 func bindingValidationError(err error) error {

@@ -3,6 +3,7 @@ import { listMappingProfiles, previewMapping } from '../api/mapping'
 import type { PropertyValue, ValueType } from '../types/device'
 import type { MappingDirection, MappingPreviewRequest, MappingPreviewResult, MappingProfileInfo, MappingTransform, MappingTransformType } from '../types/mapping'
 import { transformTypeLabel, valueTypeLabel } from '../presentationLabels'
+import { HelpTooltip } from './HelpTooltip'
 
 type PreviewFunction = (input: MappingPreviewRequest) => Promise<MappingPreviewResult>
 type ProfileLoader = () => Promise<MappingProfileInfo[]>
@@ -31,7 +32,9 @@ function enumOptions(profile: MappingProfileInfo, direction: MappingDirection): 
   const values = (profile.transforms ?? []).flatMap((transform) => {
     if (transform.type === 'enum') {
       const entries = Object.entries(transform.values ?? {})
-      return direction === 'forward' ? entries.map(([source]) => source) : entries.map(([, target]) => String(target))
+      return direction === 'forward'
+        ? entries.map(([source]) => source)
+        : [...entries.map(([, target]) => String(target)), ...Object.keys(transform.reverseValues ?? {})]
     }
     if (transform.type === 'range-enum' || transform.type === 'enum-number') return transform.bands?.map((band) => band.value) ?? []
     if (transform.type === 'bool-enum' || transform.type === 'enum-bool') return [transform.trueValue, transform.falseValue].filter((item): item is string => Boolean(item))
@@ -115,16 +118,16 @@ export function MappingPreview({ runPreview = previewMapping, loadProfiles = lis
     } else {
       inputType = outputType = 'enum'; value = { type: 'enum', string: rawValue }; transform = { type: 'enum', values: { off: 'inactive', on: 'active' } }
     }
-    const request: MappingPreviewRequest = { profile: { schemaVersion: 1, id: 'console-preview', version: 1, kind: 'capability', inputType, outputType, transforms: [transform] }, direction, value }
+    const request: MappingPreviewRequest = { profile: { schemaVersion: 1, id: 'console-preview', identifier: 'console-preview', version: 1, kind: 'capability', inputType, outputType, transforms: [transform] }, direction, value }
     setLoading(true); setError(null)
     try { setResult(await runPreview(request)) } catch (cause) { setResult(null); setError(cause instanceof Error ? cause.message : '映射预览失败') } finally { setLoading(false) }
   }
 
   return <section className="mapping-preview">
-    <div className="config-note"><span>执行方式</span><strong>无状态预览</strong><p>输入不会保存到数据库，也不会写入设备。正向（forward）模拟提供端（Provider）→ 能力 / 目标端（Capability / Target）；反向（reverse）模拟设备控制写回提供端（Provider）。</p></div>
+    <div className="config-note"><span>执行方式</span><strong><HelpTooltip content="输入不会保存，也不会写入设备。正向模拟来源到目标，反向模拟控制写回来源。" label="映射预览说明">无状态预览</HelpTooltip></strong></div>
     <div className="mapping-workbench">
       <form className="mapping-form" onSubmit={(event) => { event.preventDefault(); void submit() }}>
-		<label>转换配置（Profile）<select aria-label="预览 Profile" value={profileID} onChange={(event) => changeProfile(event.target.value)}><option value="">临时配置（Profile）</option>{profiles.map((item) => <option key={item.id} value={item.id}>{item.id} · 版本（v）{item.version}</option>)}</select></label>
+		<label>转换配置（Profile）<select aria-label="预览 Profile" value={profileID} onChange={(event) => changeProfile(event.target.value)}><option value="">临时配置（Profile）</option>{profiles.map((item) => <option key={item.id} value={item.id}>{item.identifier ?? item.id} · 版本（v）{item.version}</option>)}</select></label>
         {!selectedProfile && <label>转换类型（transform）<select aria-label="转换类型" value={transformType} onChange={(event) => changeTransform(event.target.value as MappingTransformType)}>{(['scale', 'reciprocal', 'int-number', 'invert', 'unit', 'enum', 'clamp'] as MappingTransformType[]).map((type) => <option key={type} value={type}>{transformTypeLabel(type)}</option>)}</select></label>}
         <label>方向（direction）<select aria-label="映射方向" value={direction} onChange={(event) => changeDirection(event.target.value as MappingDirection)}><option value="forward">正向（forward）</option><option value="reverse">反向写入（reverse）</option></select></label>
         <label>输入值 · {valueTypeLabel(activeInputType)}
@@ -142,7 +145,7 @@ export function MappingPreview({ runPreview = previewMapping, loadProfiles = lis
         {error && <p className="field-error" role="alert">{error}</p>}
       </form>
       <div className="mapping-result" aria-live="polite">
-        {!result ? <div className="empty-state">配置参数后运行预览，结果会展示每一步带类型的值（typed value）。</div> : <><div className="mapping-output"><span>最终输出 · {valueTypeLabel(result.value.type)}</span><strong>{valueText(result.value)}</strong><small>{result.profileId} 版本（v）{result.profileVersion} · {result.direction === 'forward' ? '正向（forward）' : '反向（reverse）'}</small></div><div className="mapping-steps"><h3>转换步骤</h3>{result.steps.map((step) => <div key={`${step.index}-${step.transform}`}><code>{step.index + 1}. {step.transform}</code><span>{step.input ? valueText(step.input) : '缺失（missing）'} → {valueText(step.output)}</span><small>{step.input ? valueTypeLabel(step.input.type) : '空值（null）'} → {valueTypeLabel(step.output.type)}</small></div>)}</div></>}
+        {!result ? <div className="empty-state"><HelpTooltip content="配置参数后运行预览，可查看每一步的结果。" label="预览结果说明">暂无预览结果</HelpTooltip></div> : <><div className="mapping-output"><span>最终输出 · {valueTypeLabel(result.value.type)}</span><strong>{valueText(result.value)}</strong><small>{result.profileId} 版本（v）{result.profileVersion} · {result.direction === 'forward' ? '正向（forward）' : '反向（reverse）'}</small></div><div className="mapping-steps"><h3>转换步骤</h3>{result.steps.map((step) => <div key={`${step.index}-${step.transform}`}><code>{step.index + 1}. {step.transform}</code><span>{step.input ? valueText(step.input) : '缺失（missing）'} → {valueText(step.output)}</span><small>{step.input ? valueTypeLabel(step.input.type) : '空值（null）'} → {valueTypeLabel(step.output.type)}</small></div>)}</div></>}
       </div>
     </div>
   </section>

@@ -37,7 +37,7 @@ function dedupeCandidates(items: ProviderDiscoveryCandidate[]): ProviderDiscover
 }
 
 function defaultDraft(index: number): GreeDeviceEntry {
-	return { id: `gree-device-${index}`, name: '', host: '', port: 7000, mac: '', encryptionKey: '', encryptionVersion: '', uid: '', targetTemperatureStep: 1, tempSensorOffset: '', disableAvailableCheck: false, autoXFan: false, autoLight: false, enabled: true }
+	return { id: `gree-device-${index}`, name: '', host: '', port: 7000, mac: '', encryptionKey: '', encryptionVersion: '', uid: '', tempSensorOffset: '', disableAvailableCheck: false, autoXFan: false, autoLight: false, enabled: true }
 }
 
 function draftFromEntry(entry: GreeDeviceEntry): GreeDeviceEntry {
@@ -57,11 +57,9 @@ function normalizeEntry(draft: GreeDeviceEntry): { entry?: GreeDeviceEntry; erro
 	if (!Number.isInteger(port) || port < 1 || port > 65535) return { error: '设备端口必须是 1–65535 的整数。' }
 	const version = draft.encryptionVersion === '' || draft.encryptionVersion === undefined || draft.encryptionVersion === null ? undefined : Number(draft.encryptionVersion)
 	if (version !== undefined && version !== 1 && version !== 2) return { error: '加密版本仅支持 v1 或 v2。' }
-	const targetTemperatureStep = Number(draft.targetTemperatureStep ?? 1)
-	if (!Number.isFinite(targetTemperatureStep) || targetTemperatureStep < 0.1 || targetTemperatureStep > 5) return { error: '目标温度步长必须是 0.1–5。' }
 	const uidText = String(draft.uid ?? '').trim()
 	if (uidText && (!/^\d+$/.test(uidText) || Number(uidText) < 0)) return { error: 'UID 必须是非负整数。' }
-	const entry: GreeDeviceEntry = { id, name, host, port, mac, enabled: draft.enabled !== false, targetTemperatureStep }
+	const entry: GreeDeviceEntry = { id, name, host, port, mac, enabled: draft.enabled !== false }
 	const key = String(draft.encryptionKey ?? '').trim()
 	if (key && key !== '********') entry.encryptionKey = key
 	if (version !== undefined) entry.encryptionVersion = version

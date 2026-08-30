@@ -571,7 +571,7 @@ func (p *CloudProvider) WriteProperty(ctx context.Context, request providersdk.P
 	}
 	property.Definition.Min, property.Definition.Max, property.Definition.Step = mapping.Min, mapping.Max, mapping.Step
 	property.Value = request.Value
-	if err := property.Validate(); err != nil {
+	if err := property.ValidateWrite(); err != nil {
 		return device.Device{}, providersdk.ErrPropertyInvalid
 	}
 	raw, err := encodePropertyValue(mapping, request.Value)

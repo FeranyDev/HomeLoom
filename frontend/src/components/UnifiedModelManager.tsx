@@ -4,6 +4,7 @@ import { bilingual, deviceTypeLabel, parameterLevelLabel, permissionLabel, prope
 import type { DeviceType, ParameterLevel } from '../types/device'
 import type { ModelContract, ModelEnumOverride, ModelParameter } from '../types/mapping'
 import { CustomModelPropertyManager } from './CustomModelPropertyManager'
+import { HelpTooltip } from './HelpTooltip'
 
 type LevelFilter = 'all' | ParameterLevel
 
@@ -162,11 +163,11 @@ export function UnifiedModelManager({ onModelCountChange }: { onModelCountChange
 
   return <section className="unified-model-manager">
     <header className="model-catalog-heading">
-      <div><p className="eyebrow">统一智能设备模型（UNIFIED DEVICE MODELS）</p><h3>模型与属性字段配置</h3><p>统一模型是 Provider 与 Consumer 之间唯一的语义基准。内置的必需、可选字段保持只读；自定义模型与字段保存到数据库并实时进入映射目录。</p></div>
+      <div><p className="eyebrow">统一智能设备模型（UNIFIED DEVICE MODELS）</p><h3><HelpTooltip content="统一模型连接设备来源和目标适配器；内置字段只读，自定义模型与字段保存后立即可用于映射。" label="统一模型说明">模型与属性字段配置</HelpTooltip></h3></div>
       <div className="model-catalog-summary"><div className="model-catalog-totals"><strong>{models.length}</strong><span>设备模型</span><strong>{models.reduce((total, model) => total + model.parameters.length, 0)}</strong><span>属性字段</span></div><button className="add-button" onClick={() => { setCreatingModel(true); setError('') }}>＋ 新增统一模型</button></div>
     </header>
     {error && <p className="inline-error" role="alert">{error}</p>}
-    {creatingModel && <div className="custom-model-editor" role="dialog" aria-label="新增统一模型"><div className="form-heading"><div><p className="eyebrow">统一模型（UNIFIED MODEL）</p><h3>新增统一模型</h3></div><button onClick={() => setCreatingModel(false)}>关闭</button></div><p>先创建稳定的模型标识，再为它添加 Endpoint / Capability / Property 三级属性。模型创建后立即进入 Provider 与 Consumer 映射目录。</p><div className="custom-model-fields"><label>模型标识（deviceType）<input value={modelDraft.deviceType} onChange={(event) => setModelDraft({ ...modelDraft, deviceType: event.target.value })} placeholder="air-quality-monitor" /></label><label>显示名称（name）<input value={modelDraft.name} onChange={(event) => setModelDraft({ ...modelDraft, name: event.target.value })} placeholder="空气质量监测器" /></label><label>模型版本（version）<input type="number" min="1" value={modelDraft.version} onChange={(event) => setModelDraft({ ...modelDraft, version: Number(event.target.value) })} /></label></div><button className="add-button" onClick={() => void saveModel()}>创建并配置属性</button></div>}
+    {creatingModel && <div className="custom-model-editor" role="dialog" aria-label="新增统一模型"><div className="form-heading"><div><p className="eyebrow">统一模型（UNIFIED MODEL）</p><h3><HelpTooltip content="先创建稳定标识，再添加端点、能力和属性。创建后立即可用于映射。" label="新建统一模型说明">新增统一模型</HelpTooltip></h3></div><button onClick={() => setCreatingModel(false)}>关闭</button></div><div className="custom-model-fields"><label>模型标识（deviceType）<input value={modelDraft.deviceType} onChange={(event) => setModelDraft({ ...modelDraft, deviceType: event.target.value })} placeholder="air-quality-monitor" /></label><label>显示名称（name）<input value={modelDraft.name} onChange={(event) => setModelDraft({ ...modelDraft, name: event.target.value })} placeholder="空气质量监测器" /></label><label>模型版本（version）<input type="number" min="1" value={modelDraft.version} onChange={(event) => setModelDraft({ ...modelDraft, version: Number(event.target.value) })} /></label></div><button className="add-button" onClick={() => void saveModel()}>创建并配置属性</button></div>}
     <div className="model-catalog-layout">
       <aside className="model-type-list" aria-label="统一设备模型列表" tabIndex={0}>
         {models.map((model) => <button key={model.deviceType} className={selectedType === model.deviceType ? 'is-selected' : ''} onClick={() => { setSelectedType(model.deviceType); setLevel('all'); setQuery('') }}>
@@ -178,7 +179,7 @@ export function UnifiedModelManager({ onModelCountChange }: { onModelCountChange
         <header className="model-contract-heading">
           <div><span>当前模型（deviceType）</span><h3>{modelLabel(selected)}</h3><code>{selected.deviceType} · schema v{selected.version}</code>{!selected.builtIn && <button className="danger-link model-delete-action" onClick={() => void removeModel(selected)}>删除自定义模型</button>}</div>
           <div className="model-contract-policy"><span>自定义字段默认策略</span><small>提供端（Publisher）：{behaviorLabel(selected.custom.publisher.behavior)}</small><small>消费端（Consumer）：{behaviorLabel(selected.custom.consumer.behavior)}</small></div>
-          <div className="model-contract-actions"><button className="add-button" onClick={() => setCustomCreateRevision((current) => current + 1)}>＋ 新增自定义属性</button><small>为当前模型新增 Endpoint / Capability / Property 三级字段</small></div>
+          <div className="model-contract-actions"><span className="help-action"><button className="add-button" onClick={() => setCustomCreateRevision((current) => current + 1)}>＋ 新增自定义属性</button><HelpTooltip content="为当前模型新增端点、能力和属性三级字段。" label="新增属性说明" /></span></div>
         </header>
         <CustomModelPropertyManager deviceType={selected.deviceType} embedded createRevision={customCreateRevision} onChanged={() => void refresh()} />
         <div className="model-field-toolbar">
@@ -224,7 +225,7 @@ export function UnifiedModelManager({ onModelCountChange }: { onModelCountChange
         </div>
         <button onClick={() => !enumSaving && setEditingEnum(null)}>关闭</button>
       </div>
-      <label>枚举值（enum，逗号分隔）
+      <label><HelpTooltip content="修改立即生效，影响校验和属性映射；可恢复原始定义。" label="枚举覆盖说明">枚举值（逗号分隔）</HelpTooltip>
         <input
           aria-label="统一模型枚举值"
           autoFocus
@@ -243,7 +244,7 @@ export function UnifiedModelManager({ onModelCountChange }: { onModelCountChange
           placeholder="auto, manual, sleep"
         />
       </label>
-      <p className="model-enum-hint">修改后会覆盖统一模型该属性的枚举列表，并立即作用于校验、映射目录与运行时定义；可随时恢复原始定义。</p>
+
       <div className="model-enum-actions">
         <button className="add-button" disabled={enumSaving} onClick={() => void saveEnumEditor()}>{enumSaving ? '保存中…' : '保存枚举覆盖'}</button>
         {editingEnum.original?.id && <button className="danger-link" disabled={enumSaving} onClick={() => void resetEnumEditor()}>恢复原始枚举</button>}

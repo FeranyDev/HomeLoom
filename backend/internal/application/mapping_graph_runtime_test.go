@@ -660,6 +660,52 @@ func TestConsumerRouteProjectsAndReversesConversion(t *testing.T) {
 	}
 }
 
+func TestConsumerNumericProfileTransformsProjectedRangeAndStep(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, err := application.NewProfileService(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := mapping.Profile{
+		SchemaVersion: 1, ID: "double-temperature", Version: 1, Kind: mapping.KindTarget,
+		InputType: device.ValueTypeNumber, OutputType: device.ValueTypeNumber,
+		Transforms: []mapping.Transform{{Type: mapping.TransformScale, Factor: numberPointer(2)}},
+	}
+	if _, err := profiles.Create(ctx, profile); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := profiles.CreateBinding(ctx, mapping.Binding{
+		ID: "homekit-double-temperature", Stage: mapping.StageConsumer, ProfileID: profile.ID,
+		ProviderID: "provider-1", DeviceID: "ac-1", DeviceType: device.TypeAirConditioner,
+		ModelEndpointID: "main", ModelCapabilityID: "temperature", ModelPropertyID: "target-temperature",
+		ConsumerID: "homekit", ConsumerProperty: "HeaterCooler.TargetTemperature", Enabled: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	item := device.Device{SchemaVersion: 1, ID: "ac-1", ProviderID: "provider-1", Name: "AC", Type: device.TypeAirConditioner, Availability: device.AvailabilityOnline, Online: true, LastUpdateAt: time.Now().UTC(), Endpoints: []device.Endpoint{{ID: "main", Name: "Main", Type: "main", Capabilities: []device.Capability{
+		{ID: "air-conditioner", Type: "air-conditioner", Properties: []device.Property{
+			{Definition: device.PropertyDefinition{ID: "active", Name: "Active", Type: device.ValueTypeBool, Readable: true, Writable: true}, Value: device.BoolValue(true)},
+			{Definition: device.PropertyDefinition{ID: "target-mode", Name: "Mode", Type: device.ValueTypeEnum, Enum: []string{"auto", "cool", "heat"}, Readable: true, Writable: true}, Value: device.EnumValue("auto")},
+		}},
+		{ID: "temperature", Type: "temperature", Properties: []device.Property{
+			{Definition: device.PropertyDefinition{ID: "target-temperature", Name: "Target", Type: device.ValueTypeNumber, Unit: "celsius", Min: numberPointer(16), Max: numberPointer(32), Step: numberPointer(0.5), Readable: true, Writable: true}, Value: device.NumberValue(24)},
+		}},
+	}}}}
+	projected, err := profiles.ProjectConsumerDevice("homekit", item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	temperature, found := projected.Property("main", "temperature", "target-temperature")
+	if !found || temperature.Value.Number == nil || *temperature.Value.Number != 48 || temperature.Definition.Min == nil || *temperature.Definition.Min != 32 || temperature.Definition.Max == nil || *temperature.Definition.Max != 64 || temperature.Definition.Step == nil || *temperature.Definition.Step != 1 {
+		t.Fatalf("numeric consumer projection = %#v", temperature)
+	}
+}
+
 func TestConsumerBindingProjectsProfileDefaultWhenModelPropertyIsMissing(t *testing.T) {
 	ctx := context.Background()
 	store, err := openTestStore(t, ctx)

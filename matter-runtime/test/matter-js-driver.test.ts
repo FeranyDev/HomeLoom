@@ -66,7 +66,7 @@ test("official matter.js endpoints bridge commands, attributes, and host-owned i
 
   const initial = driver.diagnostics();
   assert.equal(initial.configured, true);
-  assert.equal(initial.deviceCount, 3);
+  assert.equal(initial.deviceCount, 4);
   assert.equal(initial.fabricCount, 0);
   assert.deepEqual(initial.fabrics, []);
   assert.equal(initial.commissioningWindowOpen, true);
@@ -74,6 +74,10 @@ test("official matter.js endpoints bridge commands, attributes, and host-owned i
   assert.match(initial.qrPairingCode ?? "", /^MT:/);
   assert.equal(await driver.readAttributeForTest("switch", "onOff", "onOff"), false);
   assert.equal(await driver.readAttributeForTest("light", "levelControl", "currentLevel"), 127);
+  assert.equal(await driver.readAttributeForTest("light", "colorControl", "colorTempPhysicalMinMireds"), 154);
+  assert.equal(await driver.readAttributeForTest("light", "colorControl", "colorTempPhysicalMaxMireds"), 370);
+  assert.equal(await driver.readAttributeForTest("thermostat", "thermostat", "absMinHeatSetpointLimit"), 1_800);
+  assert.equal(await driver.readAttributeForTest("thermostat", "thermostat", "absMaxCoolSetpointLimit"), 3_000);
   assert.equal(
     await driver.readAttributeForTest("temperature", "temperatureMeasurement", "measuredValue"),
     2_350,
@@ -176,6 +180,9 @@ function realDevices(): DeviceSnapshot[] {
         "ColorControl.CurrentSaturation": 25,
         "ColorControl.ColorTemperatureMireds": 370,
       },
+      constraints: {
+        "ColorControl.ColorTemperatureMireds": { min: 154, max: 370, step: 5 },
+      },
     },
     {
       id: "temperature",
@@ -185,6 +192,24 @@ function realDevices(): DeviceSnapshot[] {
       reachable: true,
       attributes: {
         "TemperatureMeasurement.MeasuredValue": 23.5,
+      },
+    },
+    {
+      id: "thermostat",
+      endpointId: 5,
+      deviceType: "Thermostat",
+      name: "Living room thermostat",
+      reachable: true,
+      attributes: {
+        "Thermostat.ThermostatRunningState": "heating",
+        "Thermostat.SystemMode": "heat",
+        "Thermostat.LocalTemperature": 20.5,
+        "Thermostat.OccupiedHeatingSetpoint": 21,
+        "Thermostat.OccupiedCoolingSetpoint": 25,
+      },
+      constraints: {
+        "Thermostat.OccupiedHeatingSetpoint": { min: 18, max: 30, step: 1 },
+        "Thermostat.OccupiedCoolingSetpoint": { min: 18, max: 30, step: 1 },
       },
     },
   ];

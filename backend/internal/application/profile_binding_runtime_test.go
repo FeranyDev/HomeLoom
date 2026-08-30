@@ -314,6 +314,102 @@ func TestPropertyBindingTransformsNumericDefinition(t *testing.T) {
 	}
 }
 
+func TestPropertyBindingOverridesProjectedPresentationStep(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, _ := application.NewProfileService(ctx, store)
+	presentationStep := 1.0
+	if _, err := profiles.CreateBinding(ctx, mapping.Binding{ID: "temperature-presentation", ProviderID: "virtual-main", DeviceID: "virtual-temperature-1", EndpointID: "main", CapabilityID: "temperature", PropertyID: "target-temperature", Enabled: true, PresentationStep: &presentationStep}); err != nil {
+		t.Fatal(err)
+	}
+	minimum, maximum, physicalStep := 16.0, 32.0, 0.5
+	definition := device.PropertyDefinition{ID: "target-temperature", Name: "Temperature", Type: device.ValueTypeNumber, Unit: "celsius", Min: &minimum, Max: &maximum, Step: &physicalStep, Readable: true, Writable: true}
+	mapped, bindingID, applied, err := profiles.TransformPropertyDefinition("virtual-main", "virtual-temperature-1", "main", "temperature", "target-temperature", definition)
+	if err != nil || !applied || bindingID != "temperature-presentation" || mapped.Step == nil || *mapped.Step != 1 {
+		t.Fatalf("presentation step projection = %#v, %q, %v, %v", mapped, bindingID, applied, err)
+	}
+	if definition.Step == nil || *definition.Step != 0.5 {
+		t.Fatalf("source physical step was mutated: %#v", definition)
+	}
+}
+
+func TestPropertyBindingIgnoresPresentationStepThatIsNotASourceStepMultiple(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, _ := application.NewProfileService(ctx, store)
+	presentationStep := 0.7
+	if _, err := profiles.CreateBinding(ctx, mapping.Binding{ID: "incompatible-temperature-presentation", ProviderID: "virtual-main", DeviceID: "virtual-temperature-1", EndpointID: "main", CapabilityID: "temperature", PropertyID: "target-temperature", Enabled: true, PresentationStep: &presentationStep}); err != nil {
+		t.Fatal(err)
+	}
+	minimum, maximum, physicalStep := 16.0, 32.0, 0.5
+	definition := device.PropertyDefinition{ID: "target-temperature", Name: "Temperature", Type: device.ValueTypeNumber, Unit: "celsius", Min: &minimum, Max: &maximum, Step: &physicalStep, Readable: true, Writable: true}
+	mapped, bindingID, applied, err := profiles.TransformPropertyDefinition("virtual-main", "virtual-temperature-1", "main", "temperature", "target-temperature", definition)
+	if err != nil || !applied || bindingID != "incompatible-temperature-presentation" || mapped.Step == nil || *mapped.Step != 0.5 {
+		t.Fatalf("incompatible presentation step changed the source definition: %#v, %q, %v, %v", mapped, bindingID, applied, err)
+	}
+}
+
+func TestPresentationStepDoesNotConstrainPhysicalProviderWrites(t *testing.T) {
+	ctx := context.Background()
+	store, err := openTestStore(t, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	profiles, err := application.NewProfileService(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := virtual.NewProviderFromConfig(providerconfig.Config{ID: "virtual-main", Config: []byte(`{"devices":[{"id":"virtual-air-conditioner-1","type":"air-conditioner"}]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := application.NewDeviceService(provider, profiles)
+	defer service.Close()
+	profiles.SetChangeHandler(func(changeCtx context.Context) {
+		if refreshErr := service.RefreshDevices(changeCtx); refreshErr != nil {
+			t.Errorf("RefreshDevices() error = %v", refreshErr)
+		}
+	})
+	presentationStep := 1.0
+	if _, err := profiles.CreateBinding(ctx, mapping.Binding{
+		ProviderID: "virtual-main", DeviceID: "virtual-air-conditioner-1", DeviceType: device.TypeAirConditioner,
+		EndpointID: "main", CapabilityID: "temperature", PropertyID: "target-temperature", Enabled: true, PresentationStep: &presentationStep,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := service.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mapped device.Device
+	for _, item := range items {
+		if item.ID == "virtual-air-conditioner-1" {
+			mapped = item
+			break
+		}
+	}
+	property, found := mapped.Property("main", "temperature", "target-temperature")
+	if !found || property.Definition.Step == nil || *property.Definition.Step != 1 {
+		t.Fatalf("projected presentation step = %#v", property)
+	}
+	if _, _, err := service.ExecuteProperty(ctx, "virtual-air-conditioner-1", "main", "temperature", "target-temperature", device.NumberValue(24.5)); err != nil {
+		t.Fatalf("physical half-degree write rejected by presentation step: %v", err)
+	}
+	raw, err := provider.ReadProperty(ctx, providersdk.PropertyReadRequest{DeviceID: "virtual-air-conditioner-1", EndpointID: "main", CapabilityID: "temperature", PropertyID: "target-temperature"})
+	if err != nil || raw.Value.Number == nil || *raw.Value.Number != 24.5 {
+		t.Fatalf("physical provider write = %#v, %v", raw, err)
+	}
+}
+
 func TestPropertyBindingTransformsKelvinDefinitionToMired(t *testing.T) {
 	ctx := context.Background()
 	store, err := openTestStore(t, ctx)

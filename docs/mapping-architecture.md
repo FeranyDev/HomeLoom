@@ -17,7 +17,7 @@ Consumer 属性
   或 Matter Cluster.Attribute / Cluster.Command
 ```
 
-两段关系分别存储在 PostgreSQL 的 `mapping_bindings` 中，而且都以具体设备为作用域。Provider 路由按 Provider、设备和原始三级路径匹配；Consumer 路由按 Provider、设备、Target 桥、桥内虚拟设备、Consumer 和目标属性匹配。同型号的两台来源设备，以及同一来源设备发布到不同桥或不同虚拟设备时，都可以配置完全不同的路径与转换。Profile 为空表示不转换，配置 Profile 时事件走正向转换，读取和控制走反向转换。 枚举 Profile 支持多对一折叠：`values` 负责正向映射，`reverseValues` 为每个被折叠的目标指定反向控制时的代表来源值；一对一时可省略 `reverseValues`。
+两段关系分别存储在 PostgreSQL 的 `mapping_bindings` 中，而且都以具体设备为作用域。Provider 路由按 Provider、设备和原始三级路径匹配；Consumer 路由按 Provider、设备、Target 桥、桥内虚拟设备、Consumer 和目标属性匹配。同型号的两台来源设备，以及同一来源设备发布到不同桥或不同虚拟设备时，都可以配置完全不同的路径与转换。Profile 为空表示不转换，配置 Profile 时事件走正向转换，读取和控制走反向转换。Profile 的不可变主键为 UUIDv7，路由仅保存该主键；可编辑且全局唯一的 `identifier` 用作名称和迁移兼容引用。枚举 Profile 的 `values` 是单来源到单个规范目标的正向映射，因而事件不会被扇出。`reverseValues` 为每个被折叠的规范目标指定反向控制时的代表来源值，并可额外声明仅在控制时接受的目标别名，例如 `cool → auto`、`heat → auto`；它们都会写入同一个来源值。
 
 ## Provider 边界
 

@@ -335,11 +335,11 @@ paths:
       responses: { "200": { description: Built-in and database-backed profiles, content: { application/json: { schema: { type: object, required: [data], properties: { data: { type: array, items: { $ref: "#/components/schemas/MappingProfileInfo" } } } } } } } }
     post:
       operationId: createMappingProfile
-      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/MappingProfile" } } } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/MappingProfileCreate" } } } }
       responses:
         "201": { description: Profile persisted and hot-loaded, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/MappingProfileInfo" } } } } } }
         "400": { $ref: "#/components/responses/BadRequest" }
-        "409": { description: Profile ID already exists or is reserved by a built-in profile, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: Profile identifier already exists or is reserved by a built-in profile, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /api/v1/mapping/profiles/import:
     post:
       operationId: importMappingProfiles
@@ -362,7 +362,7 @@ paths:
       responses:
         "200": { description: Import-compatible no-store JSON attachment, content: { application/json: { schema: { type: object, required: [schemaVersion, profiles], properties: { schemaVersion: { type: integer, const: 1 }, profiles: { type: array, items: { $ref: "#/components/schemas/MappingProfile" } } } } } } }
   /api/v1/mapping/profiles/{profileId}:
-    parameters: [{ name: profileId, in: path, required: true, schema: { type: string } }]
+    parameters: [{ name: profileId, in: path, required: true, schema: { type: string, format: uuid, description: Immutable UUIDv7 profile ID. Legacy identifiers are accepted during migration. } }]
     get:
       operationId: getMappingProfile
       responses: { "200": { description: Profile, content: { application/json: { schema: { type: object, required: [data], properties: { data: { $ref: "#/components/schemas/MappingProfileInfo" } } } } } }, "404": { $ref: "#/components/responses/NotFound" } }
@@ -1284,8 +1284,8 @@ components:
         offset: { type: number }
         min: { type: number }
         max: { type: number }
-        values: { type: object, additionalProperties: { type: string }, description: Forward enum map from source to target. Multiple sources may share one target when reverseValues provides a canonical reverse source for that target. }
-        reverseValues: { type: object, additionalProperties: { type: string }, description: Optional reverse enum map from target to a canonical source. Required for every target that is produced by more than one source. }
+        values: { type: object, additionalProperties: { type: string }, description: Canonical forward enum map from source to target. Each source emits exactly one target; multiple sources may share one target. }
+        reverseValues: { type: object, additionalProperties: { type: string }, description: Optional reverse enum map from target (including write-only target aliases) to a source. Required for every canonical target produced by multiple sources, and may map additional target aliases to a source. }
         fromUnit: { type: string, enum: [celsius, fahrenheit, kelvin, mired, ratio, percent] }
         toUnit: { type: string, enum: [celsius, fahrenheit, kelvin, mired, ratio, percent] }
         bands:
@@ -1311,10 +1311,23 @@ components:
         reverse: { type: number, description: Canonical numeric representation used when converting the enum value to a number. }
     MappingProfile:
       type: object
-      required: [schemaVersion, id, version, kind, inputType, outputType, transforms]
+      required: [schemaVersion, id, identifier, version, kind, inputType, outputType, transforms]
       properties:
         schemaVersion: { type: integer, const: 1 }
-        id: { type: string }
+        id: { type: string, format: uuid, description: Immutable UUIDv7 profile ID, assigned by the server for new profiles. }
+        identifier: { type: string, description: Mutable, unique human-readable profile identifier. }
+        version: { type: integer, minimum: 1 }
+        kind: { type: string, enum: [provider, capability, target] }
+        inputType: { type: string, enum: [bool, int, number, string, enum] }
+        outputType: { type: string, enum: [bool, int, number, string, enum] }
+        default: { $ref: "#/components/schemas/PropertyValue" }
+        transforms: { type: array, items: { $ref: "#/components/schemas/MappingTransform" } }
+    MappingProfileCreate:
+      type: object
+      required: [schemaVersion, identifier, version, kind, inputType, outputType, transforms]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        identifier: { type: string, description: Mutable, unique human-readable profile identifier. }
         version: { type: integer, minimum: 1 }
         kind: { type: string, enum: [provider, capability, target] }
         inputType: { type: string, enum: [bool, int, number, string, enum] }

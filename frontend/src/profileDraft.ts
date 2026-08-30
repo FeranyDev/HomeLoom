@@ -86,7 +86,9 @@ function defaultTransforms(seed: ProfileDraftSeed): MappingTransform[] {
 export function buildProfileDraft(seed: ProfileDraftSeed): MappingProfile {
   return {
     schemaVersion: 1,
-    id: suggestedId(seed),
+    // The backend assigns the immutable UUIDv7 when this draft is saved.
+    id: '',
+    identifier: suggestedId(seed),
     version: 1,
     kind: seed.stage === 'provider' ? 'provider' : 'target',
     inputType: seed.inputType,

@@ -32,7 +32,7 @@ describe('UnifiedModelManager', () => {
 
   it('presents one unified model as a three-level field configuration', async () => {
     render(<UnifiedModelManager />)
-    expect(await screen.findByRole('heading', { name: '模型与属性字段配置' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /^模型与属性字段配置/ })).toBeInTheDocument()
     expect(screen.getByText('灯泡（lightbulb）', { selector: 'h3' })).toBeInTheDocument()
     expect(screen.getByText('主端点（main）', { selector: 'strong' })).toBeInTheDocument()
     expect(screen.getByText('灯光（light）', { selector: 'strong' })).toBeInTheDocument()
@@ -52,7 +52,7 @@ describe('UnifiedModelManager', () => {
     }
     vi.mocked(api.listModelContracts).mockResolvedValue([{ ...model, parameters: [optionalBrightness, optionalEnergy, requiredPower] }])
     const { container } = render(<UnifiedModelManager />)
-    await screen.findByRole('heading', { name: '模型与属性字段配置' })
+    await screen.findByRole('heading', { name: /^模型与属性字段配置/ })
 
     const capabilities = [...container.querySelectorAll<HTMLElement>('.model-capability')]
     expect(capabilities.map((item) => item.querySelector('header code')?.textContent)).toEqual(['main / switch', 'main / light'])
@@ -74,7 +74,7 @@ describe('UnifiedModelManager', () => {
 
   it('filters the visible property level without changing the contract', async () => {
     render(<UnifiedModelManager />)
-    await screen.findByRole('heading', { name: '模型与属性字段配置' })
+    await screen.findByRole('heading', { name: /^模型与属性字段配置/ })
     await userEvent.click(screen.getByRole('button', { name: /可选（optional）/ }))
     expect(screen.queryByText(/开关状态（开关 · power）/)).not.toBeInTheDocument()
     expect(screen.getByText(/亮度.*brightness/, { selector: 'strong' })).toBeInTheDocument()
@@ -82,7 +82,7 @@ describe('UnifiedModelManager', () => {
 
   it('offers a prominent create entry for the selected model', async () => {
     render(<UnifiedModelManager />)
-    await screen.findByRole('heading', { name: '模型与属性字段配置' })
+    await screen.findByRole('heading', { name: /^模型与属性字段配置/ })
     expect(screen.queryByRole('button', { name: '＋ 新建自定义属性' })).not.toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '＋ 新增自定义属性' }))
     expect(screen.getByRole('dialog', { name: '自定义统一模型属性' })).toBeInTheDocument()
@@ -97,7 +97,7 @@ describe('UnifiedModelManager', () => {
       .mockResolvedValueOnce([model])
       .mockResolvedValueOnce([model, { deviceType: 'air-quality-monitor', name: '空气质量监测器', version: 1, builtIn: false, parameters: [], custom: model.custom }])
     render(<UnifiedModelManager />)
-    await screen.findByRole('heading', { name: '模型与属性字段配置' })
+    await screen.findByRole('heading', { name: /^模型与属性字段配置/ })
     await userEvent.click(screen.getByRole('button', { name: '＋ 新增统一模型' }))
     await userEvent.type(screen.getByPlaceholderText('air-quality-monitor'), 'air-quality-monitor')
     await userEvent.type(screen.getByPlaceholderText('空气质量监测器'), '空气质量监测器')
@@ -135,7 +135,7 @@ describe('UnifiedModelManager', () => {
       enum: ['auto', 'manual', 'sleep'],
     })
     render(<UnifiedModelManager />)
-    await screen.findByRole('heading', { name: '模型与属性字段配置' })
+    await screen.findByRole('heading', { name: /^模型与属性字段配置/ })
     await userEvent.click(screen.getByRole('button', { name: '编辑枚举' }))
     const dialog = screen.getByRole('dialog', { name: '编辑统一模型枚举' })
     expect(dialog).toHaveAttribute('aria-modal', 'true')

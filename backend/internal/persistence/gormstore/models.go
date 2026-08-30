@@ -422,7 +422,12 @@ type auditEventRow struct {
 func (auditEventRow) TableName() string { return "audit_events" }
 
 type mappingProfileRow struct {
-	ID           string       `gorm:"column:id;primaryKey;index:mapping_profiles_kind_id_idx,priority:2"`
+	ID string `gorm:"column:id;primaryKey;index:mapping_profiles_kind_id_idx,priority:2"`
+	// Identifier is intentionally indexed but not database-unique. Older
+	// databases acquire this column before their Profile documents are migrated;
+	// application-level validation performs the cross-profile uniqueness check
+	// atomically with the in-memory snapshot refresh.
+	Identifier   string       `gorm:"column:identifier;index:mapping_profiles_identifier_idx"`
 	Kind         string       `gorm:"column:kind;not null;index:mapping_profiles_kind_id_idx,priority:1;check:mapping_profiles_kind_check,kind IN ('provider','capability','target')"`
 	Version      int          `gorm:"column:version;not null;check:mapping_profiles_version_check,version > 0"`
 	DocumentJSON jsonDocument `gorm:"column:document_json;not null"`
@@ -433,28 +438,29 @@ type mappingProfileRow struct {
 func (mappingProfileRow) TableName() string { return "mapping_profiles" }
 
 type mappingBindingRow struct {
-	ID                 string `gorm:"column:id;primaryKey"`
-	Stage              string `gorm:"column:stage;not null;check:mapping_bindings_stage_check,stage IN ('provider','consumer');index:mapping_provider_source_idx,where:stage = 'provider',priority:1;uniqueIndex:mapping_provider_model_unique,where:stage = 'provider',priority:1;uniqueIndex:mapping_consumer_target_unique,where:stage = 'consumer',priority:1"`
-	ProfileID          string `gorm:"column:profile_id;not null;default:'';index:mapping_bindings_profile_idx"`
-	ProviderID         string `gorm:"column:provider_id;not null;default:'';index:mapping_provider_source_idx,where:stage = 'provider',priority:2;uniqueIndex:mapping_provider_model_unique,where:stage = 'provider',priority:2;uniqueIndex:mapping_consumer_target_unique,where:stage = 'consumer',priority:2"`
-	DeviceID           string `gorm:"column:device_id;not null;default:'';index:mapping_provider_source_idx,where:stage = 'provider',priority:3;uniqueIndex:mapping_provider_model_unique,where:stage = 'provider',priority:3;uniqueIndex:mapping_consumer_target_unique,where:stage = 'consumer',priority:3"`
-	EndpointID         string `gorm:"column:endpoint_id;not null;default:'';index:mapping_provider_source_idx,where:stage = 'provider',priority:4"`
-	CapabilityID       string `gorm:"column:capability_id;not null;default:'';index:mapping_provider_source_idx,where:stage = 'provider',priority:5"`
-	PropertyID         string `gorm:"column:property_id;not null;default:'';index:mapping_provider_source_idx,where:stage = 'provider',priority:6"`
-	DeviceType         string `gorm:"column:device_type;not null;default:''"`
-	ConsumerDeviceType string `gorm:"column:consumer_device_type;not null;default:''"`
-	ModelEndpointID    string `gorm:"column:model_endpoint_id;not null;uniqueIndex:mapping_provider_model_unique,where:stage = 'provider',priority:4"`
-	ModelCapabilityID  string `gorm:"column:model_capability_id;not null;uniqueIndex:mapping_provider_model_unique,where:stage = 'provider',priority:5"`
-	ModelPropertyID    string `gorm:"column:model_property_id;not null;uniqueIndex:mapping_provider_model_unique,where:stage = 'provider',priority:6"`
-	ConsumerID         string `gorm:"column:consumer_id;not null;default:'';uniqueIndex:mapping_consumer_target_unique,where:stage = 'consumer',priority:6"`
-	TargetID           string `gorm:"column:target_id;not null;default:'';uniqueIndex:mapping_consumer_target_unique,where:stage = 'consumer',priority:4"`
-	ConsumerDeviceID   string `gorm:"column:consumer_device_id;not null;default:'';uniqueIndex:mapping_consumer_target_unique,where:stage = 'consumer',priority:5"`
-	ConsumerProperty   string `gorm:"column:consumer_property;not null;default:'';uniqueIndex:mapping_consumer_target_unique,where:stage = 'consumer',priority:7"`
-	Enabled            bool   `gorm:"column:enabled;not null"`
-	ReadbackEnabled    bool   `gorm:"column:readback_enabled;not null;default:false"`
-	ReadbackDelaysJSON string `gorm:"column:readback_delays_json;not null;default:'[]'"`
-	CreatedAt          int64  `gorm:"column:created_at;not null"`
-	UpdatedAt          int64  `gorm:"column:updated_at;not null"`
+	ID                 string   `gorm:"column:id;primaryKey"`
+	Stage              string   `gorm:"column:stage;not null;check:mapping_bindings_stage_check,stage IN ('provider','consumer');index:mapping_provider_source_idx,where:stage = 'provider',priority:1;uniqueIndex:mapping_provider_model_unique,where:stage = 'provider',priority:1;uniqueIndex:mapping_consumer_target_unique,where:stage = 'consumer',priority:1"`
+	ProfileID          string   `gorm:"column:profile_id;not null;default:'';index:mapping_bindings_profile_idx"`
+	ProviderID         string   `gorm:"column:provider_id;not null;default:'';index:mapping_provider_source_idx,where:stage = 'provider',priority:2;uniqueIndex:mapping_provider_model_unique,where:stage = 'provider',priority:2;uniqueIndex:mapping_consumer_target_unique,where:stage = 'consumer',priority:2"`
+	DeviceID           string   `gorm:"column:device_id;not null;default:'';index:mapping_provider_source_idx,where:stage = 'provider',priority:3;uniqueIndex:mapping_provider_model_unique,where:stage = 'provider',priority:3;uniqueIndex:mapping_consumer_target_unique,where:stage = 'consumer',priority:3"`
+	EndpointID         string   `gorm:"column:endpoint_id;not null;default:'';index:mapping_provider_source_idx,where:stage = 'provider',priority:4"`
+	CapabilityID       string   `gorm:"column:capability_id;not null;default:'';index:mapping_provider_source_idx,where:stage = 'provider',priority:5"`
+	PropertyID         string   `gorm:"column:property_id;not null;default:'';index:mapping_provider_source_idx,where:stage = 'provider',priority:6"`
+	DeviceType         string   `gorm:"column:device_type;not null;default:''"`
+	ConsumerDeviceType string   `gorm:"column:consumer_device_type;not null;default:''"`
+	ModelEndpointID    string   `gorm:"column:model_endpoint_id;not null;uniqueIndex:mapping_provider_model_unique,where:stage = 'provider',priority:4"`
+	ModelCapabilityID  string   `gorm:"column:model_capability_id;not null;uniqueIndex:mapping_provider_model_unique,where:stage = 'provider',priority:5"`
+	ModelPropertyID    string   `gorm:"column:model_property_id;not null;uniqueIndex:mapping_provider_model_unique,where:stage = 'provider',priority:6"`
+	ConsumerID         string   `gorm:"column:consumer_id;not null;default:'';uniqueIndex:mapping_consumer_target_unique,where:stage = 'consumer',priority:6"`
+	TargetID           string   `gorm:"column:target_id;not null;default:'';uniqueIndex:mapping_consumer_target_unique,where:stage = 'consumer',priority:4"`
+	ConsumerDeviceID   string   `gorm:"column:consumer_device_id;not null;default:'';uniqueIndex:mapping_consumer_target_unique,where:stage = 'consumer',priority:5"`
+	ConsumerProperty   string   `gorm:"column:consumer_property;not null;default:'';uniqueIndex:mapping_consumer_target_unique,where:stage = 'consumer',priority:7"`
+	Enabled            bool     `gorm:"column:enabled;not null"`
+	ReadbackEnabled    bool     `gorm:"column:readback_enabled;not null;default:false"`
+	ReadbackDelaysJSON string   `gorm:"column:readback_delays_json;not null;default:'[]'"`
+	PresentationStep   *float64 `gorm:"column:presentation_step"`
+	CreatedAt          int64    `gorm:"column:created_at;not null"`
+	UpdatedAt          int64    `gorm:"column:updated_at;not null"`
 }
 
 func (mappingBindingRow) TableName() string { return "mapping_bindings" }

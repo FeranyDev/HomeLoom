@@ -378,12 +378,22 @@ type bridgeConfiguration struct {
 }
 
 type deviceSnapshot struct {
-	ID         string         `json:"id"`
-	EndpointID uint16         `json:"endpointId"`
-	DeviceType string         `json:"deviceType"`
-	Name       string         `json:"name"`
-	Reachable  bool           `json:"reachable"`
-	Attributes map[string]any `json:"attributes"`
+	ID          string                       `json:"id"`
+	EndpointID  uint16                       `json:"endpointId"`
+	DeviceType  string                       `json:"deviceType"`
+	Name        string                       `json:"name"`
+	Reachable   bool                         `json:"reachable"`
+	Attributes  map[string]any               `json:"attributes"`
+	Constraints map[string]numericConstraint `json:"constraints,omitempty"`
+}
+
+// numericConstraint is the device-defined numeric envelope carried alongside
+// a Matter attribute. It lets the runtime advertise the actual usable range
+// instead of only the broad Matter default.
+type numericConstraint struct {
+	Min  *float64 `json:"min,omitempty"`
+	Max  *float64 `json:"max,omitempty"`
+	Step *float64 `json:"step,omitempty"`
 }
 
 type cameraMedia struct {
@@ -478,6 +488,7 @@ func (t *Target) buildDeviceSnapshots(ctx context.Context) ([]deviceSnapshot, er
 			return nil, fmt.Errorf("Matter device type %q is unsupported", virtual.Type)
 		}
 		attributes := make(map[string]any, len(contract.Parameters))
+		constraints := make(map[string]numericConstraint, len(contract.Parameters))
 		for _, parameter := range contract.Parameters {
 			path := parameter.Source
 			property, found := projected.Property(path.EndpointID, path.CapabilityID, path.PropertyID)
@@ -488,10 +499,13 @@ func (t *Target) buildDeviceSnapshots(ctx context.Context) ([]deviceSnapshot, er
 				continue
 			}
 			attributes[parameter.Target] = propertyValueJSON(property.Value)
+			if constraint, numeric := matterNumericConstraint(property.Definition); numeric {
+				constraints[parameter.Target] = constraint
+			}
 		}
 		result = append(result, deviceSnapshot{
 			ID: virtual.ID, EndpointID: endpointID, DeviceType: string(virtual.Type),
-			Name: virtual.Name, Reachable: projected.IsOnline(), Attributes: attributes,
+			Name: virtual.Name, Reachable: projected.IsOnline(), Attributes: attributes, Constraints: constraints,
 		})
 	}
 	identities, err := t.storage.Endpoints(ctx, t.config.ID)
@@ -611,7 +625,7 @@ func diffDeviceSnapshots(previous, current []deviceSnapshot) (bool, []attributeU
 	availability := make([]reachabilityUpdate, 0)
 	for _, next := range current {
 		before, found := previousByID[next.ID]
-		if !found || before.EndpointID != next.EndpointID || before.DeviceType != next.DeviceType || before.Name != next.Name {
+		if !found || before.EndpointID != next.EndpointID || before.DeviceType != next.DeviceType || before.Name != next.Name || !reflect.DeepEqual(before.Constraints, next.Constraints) {
 			return true, nil, nil
 		}
 		if before.Reachable != next.Reachable {
@@ -639,6 +653,12 @@ func cloneDeviceSnapshots(source []deviceSnapshot) []deviceSnapshot {
 		result[index].Attributes = make(map[string]any, len(snapshot.Attributes))
 		for path, value := range snapshot.Attributes {
 			result[index].Attributes[path] = value
+		}
+		if snapshot.Constraints != nil {
+			result[index].Constraints = make(map[string]numericConstraint, len(snapshot.Constraints))
+			for path, constraint := range snapshot.Constraints {
+				result[index].Constraints[path] = cloneNumericConstraint(constraint)
+			}
 		}
 	}
 	return result
@@ -1205,6 +1225,28 @@ func propertyValueJSON(value device.PropertyValue) any {
 		}
 	}
 	return nil
+}
+
+func matterNumericConstraint(definition device.PropertyDefinition) (numericConstraint, bool) {
+	if definition.Type != device.ValueTypeInt && definition.Type != device.ValueTypeNumber {
+		return numericConstraint{}, false
+	}
+	if definition.Min == nil && definition.Max == nil && definition.Step == nil {
+		return numericConstraint{}, false
+	}
+	return numericConstraint{Min: cloneFloat(definition.Min), Max: cloneFloat(definition.Max), Step: cloneFloat(definition.Step)}, true
+}
+
+func cloneNumericConstraint(value numericConstraint) numericConstraint {
+	return numericConstraint{Min: cloneFloat(value.Min), Max: cloneFloat(value.Max), Step: cloneFloat(value.Step)}
+}
+
+func cloneFloat(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	result := *value
+	return &result
 }
 
 func jsonPropertyValue(raw any, valueType device.ValueType) (device.PropertyValue, error) {

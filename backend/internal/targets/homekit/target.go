@@ -14,6 +14,7 @@ import (
 	"github.com/feranydev/homeloom/backend/internal/application"
 	"github.com/feranydev/homeloom/backend/internal/domain/device"
 	domaintarget "github.com/feranydev/homeloom/backend/internal/domain/target"
+	"github.com/feranydev/homeloom/backend/internal/mapping"
 	providersdk "github.com/feranydev/homeloom/backend/internal/provider"
 	homekitqr "github.com/kradalby/homekit-qr"
 	"go.uber.org/zap"
@@ -589,6 +590,7 @@ func (b *accessoryBindings) update(item device.Device) uint64 {
 	if !exists {
 		return 0
 	}
+	b.updateClimateTargetTemperatureStep(item)
 	var pushes uint64
 	if !item.IsOnline() {
 		_ = fault.SetValue(characteristic.StatusFaultGeneralFault)
@@ -882,6 +884,44 @@ func (b *accessoryBindings) update(item device.Device) uint64 {
 	return pushes
 }
 
+func (b *accessoryBindings) updateClimateTargetTemperatureStep(item device.Device) {
+	created := b.byDevice[item.ID]
+	contract, found := mapping.HomeKitConsumerContract(item.Type)
+	if created == nil || !found {
+		return
+	}
+	for _, parameter := range contract.Parameters {
+		if !homeKitClimateTemperatureTarget(parameter.Target) {
+			continue
+		}
+		property, propertyFound := item.Property(parameter.Source.EndpointID, parameter.Source.CapabilityID, parameter.Source.PropertyID)
+		if !propertyFound {
+			continue
+		}
+		definition := property.Definition
+		if definition.Step == nil || *definition.Step <= 0 {
+			continue
+		}
+		types := homeKitTargetCharacteristicTypes[parameter.Target]
+		for _, service := range created.Ss {
+			for _, current := range service.Cs {
+				if containsCharacteristicType(types, current.Type) {
+					current.StepVal = *definition.Step
+				}
+			}
+		}
+	}
+}
+
+func homeKitClimateTemperatureTarget(target string) bool {
+	switch target {
+	case "Thermostat.TargetTemperature", "Thermostat.HeatingThresholdTemperature", "Thermostat.CoolingThresholdTemperature", "HeaterCooler.TargetTemperature", "HeaterCooler.HeatingThresholdTemperature", "HeaterCooler.CoolingThresholdTemperature":
+		return true
+	default:
+		return false
+	}
+}
+
 func configureColorTemperatureRange(current *characteristic.ColorTemperature, definition device.PropertyDefinition) bool {
 	minimum, maximum := current.MinValue(), current.MaxValue()
 	if definition.Min != nil {
@@ -895,6 +935,12 @@ func configureColorTemperatureRange(current *characteristic.ColorTemperature, de
 	}
 	current.SetMinValue(minimum)
 	current.SetMaxValue(maximum)
+	if definition.Step != nil && *definition.Step > 0 {
+		step := max(1, int(math.Ceil(*definition.Step)))
+		if currentStep, ok := current.StepVal.(int); !ok || step > currentStep {
+			current.StepVal = step
+		}
+	}
 	_ = current.SetValue(minimum)
 	return true
 }

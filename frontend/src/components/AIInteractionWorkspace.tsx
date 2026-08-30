@@ -3,6 +3,7 @@ import { approveAIAutomationRun, approveAIRun, createAIAutomation, deleteAIAutom
 import type { AIAutomation, AIAutomationCondition, AIAutomationConditionMatch, AIAutomationConditionOperator, AIAutomationExecutionMode, AIAutomationInput, AIAutomationKind, AIConversationTurn, AIRun, AIRunAction } from '../types/ai'
 import type { Device, PropertyDefinition, PropertyValue, ValueType } from '../types/device'
 import { MarkdownMessage } from './MarkdownMessage'
+import { HelpTooltip } from './HelpTooltip'
 
 interface PropertyTarget {
   key: string
@@ -349,15 +350,15 @@ export function AIInteractionWorkspace({ devices }: { devices: Device[] }) {
 
   return <section className="ai-interaction-workspace" aria-label="AI 对话与自动任务">
     <section className="ai-conversation" aria-labelledby="ai-conversation-heading">
-      <div className="ai-panel-heading"><div><span>AI 对话</span><h3 id="ai-conversation-heading">向 AI 下达任务</h3></div><small>本页会保留当前浏览器会话的历史并作为上下文；涉及设备写入时，仍只会返回待批准计划。</small></div>
+      <div className="ai-panel-heading"><div><span>AI 对话</span><h3 id="ai-conversation-heading"><HelpTooltip content="本页会保留当前浏览器会话的历史作为上下文；设备写入只会返回待批准计划。" label="AI 对话说明">向 AI 下达任务</HelpTooltip></h3></div></div>
       <div className="ai-conversation-history" aria-label="AI 会话历史">{conversation.length === 0 ? <p>开始一段新对话吧。</p> : conversation.map((entry) => entry.role === 'user' ? <article key={entry.id} className="ai-message is-user"><strong>你</strong><p>{entry.content}</p></article> : <RunCard key={entry.id} run={entry.run ?? { id: entry.id, status: running ? 'completed' : 'failed', message: entry.content || 'AI 正在思考…', createdAt: '' }} onApprove={(id) => void approve(id)} approving={approving} />)}</div>
-      <label className="ai-message-input">消息<textarea aria-label="向 AI 发送消息" value={message} onChange={(event) => setMessage(event.target.value)} maxLength={16384} placeholder="例如：检查客厅灯状态；如需打开，请先给我操作计划。" /></label>
-      <div className="ai-conversation-actions"><button type="button" className="primary" onClick={() => void sendMessage()} disabled={running}>{running ? 'AI 思考中，请稍候…' : '发送给 AI'}</button>{running && <button type="button" className="danger" onClick={cancelMessage}>取消本次请求</button>}<button type="button" onClick={clearConversation} disabled={running || conversation.length === 0}>清空会话</button><small>复杂分析最多可能需要约 6 分钟；取消会中断本次模型请求，且不会自动执行设备操作。</small></div>
+      <label className="ai-message-input"><HelpTooltip content="复杂分析最长约 6 分钟；取消会中断本次请求，且不会执行设备操作。" label="AI 请求说明">消息</HelpTooltip><textarea aria-label="向 AI 发送消息" value={message} onChange={(event) => setMessage(event.target.value)} maxLength={16384} placeholder="例如：检查客厅灯状态；如需打开，请先给我操作计划。" /></label>
+      <div className="ai-conversation-actions"><button type="button" className="primary" onClick={() => void sendMessage()} disabled={running}>{running ? 'AI 思考中，请稍候…' : '发送给 AI'}</button>{running && <button type="button" className="danger" onClick={cancelMessage}>取消本次请求</button>}<button type="button" onClick={clearConversation} disabled={running || conversation.length === 0}>清空会话</button></div>
       {taskRun && <RunCard run={taskRun} onApprove={(id) => void approve(id, runTaskID ?? undefined)} approving={approving} />}
     </section>
 
     <section className="ai-automations" aria-labelledby="ai-automations-heading">
-      <div className="ai-panel-heading"><div><span>AI 自动化</span><h3 id="ai-automations-heading">定时与状态触发任务</h3></div><small>每次运行都是独立 AI 会话；默认由任务授权 AI 自动批准其设备操作，并保存最近 50 条运行记录。</small></div>
+      <div className="ai-panel-heading"><div><span>AI 自动化</span><h3 id="ai-automations-heading"><HelpTooltip content="每次运行都是独立 AI 会话；无人值守任务会自动批准设备操作，并保留最近 50 条记录。" label="AI 自动化说明">定时与状态触发任务</HelpTooltip></h3></div></div>
       <div className="ai-task-form">
         <label>任务名称<input aria-label="自动任务名称" value={form.name} onChange={(event) => updateForm({ name: event.target.value })} maxLength={120} placeholder="例如：每日设备巡检" /></label>
         <label>任务类型<select aria-label="自动任务类型" value={form.kind} onChange={(event) => updateForm({ kind: event.target.value as AIAutomationKind })}><option value="schedule">定时任务</option><option value="trigger">状态触发任务</option></select></label>
@@ -365,7 +366,7 @@ export function AIInteractionWorkspace({ devices }: { devices: Device[] }) {
         <label className="ai-task-enabled"><input aria-label="无人值守执行" type="checkbox" checked={form.executionMode === 'unattended'} onChange={(event) => updateForm({ executionMode: event.target.checked ? 'unattended' : 'manual' })} />无人值守执行（AI 生成操作计划后自动批准）</label>
         <label className="ai-task-prompt">任务提示词<textarea aria-label="自动任务提示词" value={form.prompt} onChange={(event) => updateForm({ prompt: event.target.value })} maxLength={16384} placeholder="例如：检查已授权的设备状态，概述异常；若需要修复，只生成操作计划。" /></label>
         <section className="ai-task-conditions" aria-labelledby="ai-task-conditions-heading">
-          <div><strong id="ai-task-conditions-heading">判断条件（可选）</strong><small>自动定时或状态触发时按所选关系评估；状态未知、不可用或过期不算满足。“立即运行”不受条件限制。</small></div>
+          <div><strong id="ai-task-conditions-heading"><HelpTooltip content="自动触发时按所选关系评估；状态未知、不可用或过期不算满足。立即运行不受条件限制。" label="判断条件说明">判断条件（可选）</HelpTooltip></strong></div>
           <label className="ai-task-condition-match">条件关系<select aria-label="判断条件关系" value={form.conditionMatch} onChange={(event) => updateForm({ conditionMatch: event.target.value as AIAutomationConditionMatch })} disabled={form.conditions.length < 2}><option value="all">全部满足</option><option value="any">满足任意一条</option></select><small>{form.conditions.length < 2 ? '添加至少两条条件后可选择关系。' : `自动执行时需${conditionMatchLabels[form.conditionMatch]}。`}</small></label>
           {form.conditions.map((condition, index) => {
             const target = targets.find((item) => item.key === condition.targetKey)

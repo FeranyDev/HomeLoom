@@ -356,7 +356,7 @@ func (p *Provider) WriteProperty(ctx context.Context, request providersdk.Proper
 		return device.Device{}, providersdk.ErrPropertyUnsupported
 	}
 	property.Value = request.Value
-	if err := property.Validate(); err != nil {
+	if err := property.ValidateWrite(); err != nil {
 		return device.Device{}, fmt.Errorf("%w: %v", providersdk.ErrPropertyInvalid, err)
 	}
 	if !item.IsOnline() {
@@ -832,11 +832,6 @@ func commandFor(propertyID string, value device.PropertyValue, raw map[string]an
 			return nil, nil, nil, err
 		}
 		updates = map[string]any{"AutoLight": v}
-	case "target-temperature-step":
-		if value.Number == nil || *value.Number < 0.1 || *value.Number > 5 {
-			return nil, nil, nil, fmt.Errorf("%w: target temperature step must be between 0.1 and 5", providersdk.ErrPropertyInvalid)
-		}
-		updates = map[string]any{"TargetTemperatureStep": *value.Number}
 	case "display-units":
 		units, err := enumValue()
 		if err != nil {
@@ -874,7 +869,7 @@ func enumIndex(values []string, wanted string) int {
 
 func localGreeProperty(propertyID string) bool {
 	switch propertyID {
-	case "auto-x-fan", "auto-light", "target-temperature-step":
+	case "auto-x-fan", "auto-light":
 		return true
 	default:
 		return false

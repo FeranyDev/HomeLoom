@@ -2,6 +2,7 @@ package mapping
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"strings"
 
@@ -13,8 +14,9 @@ var targetScopeID = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 type BindingStage string
 
 const (
-	StageProvider BindingStage = "provider"
-	StageConsumer BindingStage = "consumer"
+	StageProvider           BindingStage = "provider"
+	StageConsumer           BindingStage = "consumer"
+	minimumPresentationStep              = 0.01
 )
 
 // Binding is one side of the two-stage mapping graph. Provider bindings route
@@ -47,6 +49,10 @@ type Binding struct {
 	Enabled            bool         `json:"enabled"`
 	ReadbackEnabled    bool         `json:"readbackEnabled,omitempty"`
 	ReadbackDelaysMS   []int        `json:"readbackDelaysMs,omitempty"`
+	// PresentationStep overrides the projected numeric definition's step for
+	// this Provider -> unified-model route. It is presentation metadata only;
+	// Provider writes still retain the source property's physical precision.
+	PresentationStep *float64 `json:"presentationStep,omitempty"`
 }
 
 func (b Binding) EffectiveConsumerDeviceType() device.Type {
@@ -142,9 +148,12 @@ func ValidateBinding(b Binding) error {
 				previous = delay
 			}
 		}
+		if b.PresentationStep != nil && (math.IsNaN(*b.PresentationStep) || math.IsInf(*b.PresentationStep, 0) || *b.PresentationStep < minimumPresentationStep) {
+			fields["binding.presentationStep"] = "must be a finite number greater than or equal to 0.01"
+		}
 	} else if stage == StageConsumer {
-		if b.ReadbackEnabled || len(b.ReadbackDelaysMS) > 0 {
-			fields["binding.readbackEnabled"] = "is supported only for provider bindings"
+		if b.ReadbackEnabled || len(b.ReadbackDelaysMS) > 0 || b.PresentationStep != nil {
+			fields["binding.presentationStep"] = "is supported only for provider bindings"
 		}
 		if !device.ValidStableID(b.ProviderID) {
 			fields["binding.providerId"] = "must be a stable lowercase identifier"

@@ -19,7 +19,7 @@ describe('CustomModelPropertyManager', () => {
     const changed = vi.fn()
     render(<CustomModelPropertyManager onChanged={changed} />)
     await screen.findByText(/还没有自定义模型属性/)
-    await userEvent.click(screen.getByRole('button', { name: '＋ 新建自定义属性' }))
+    await userEvent.click(screen.getByRole('button', { name: '＋ 新建属性' }))
     await userEvent.type(screen.getByPlaceholderText('custom-air-co2'), 'switch-vendor-led')
     const fields = screen.getAllByRole('group')
     const property = fields.find((item) => within(item).queryByText(/第三级.*Property/))!
@@ -48,7 +48,7 @@ describe('CustomModelPropertyManager', () => {
   it('shows only the constraints supported by the selected value type', async () => {
     render(<CustomModelPropertyManager onChanged={vi.fn()} />)
     await screen.findByText(/还没有自定义模型属性/)
-    await userEvent.click(screen.getByRole('button', { name: '＋ 新建自定义属性' }))
+    await userEvent.click(screen.getByRole('button', { name: '＋ 新建属性' }))
 
     const valueType = screen.getByLabelText('值类型（type）')
     expect(screen.queryByLabelText('单位（unit）')).not.toBeInTheDocument()

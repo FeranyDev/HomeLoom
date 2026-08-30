@@ -20,7 +20,7 @@ describe('AIWorkspace', () => {
     render(<AIWorkspace devices={devices} />)
 
     expect(await screen.findByRole('region', { name: 'AI 服务配置' })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: '设备与已绑定属性' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /^设备与属性/ })).toBeInTheDocument()
     expect(screen.getByText('客厅灯')).toBeInTheDocument()
     await userEvent.type(screen.getByLabelText('筛选 AI 授权设备'), '卧室')
     expect(screen.queryByText('客厅灯')).not.toBeInTheDocument()

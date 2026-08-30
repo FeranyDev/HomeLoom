@@ -4,6 +4,7 @@ import { deviceTypeLabel } from '../presentationLabels'
 import { builtInDeviceTypes, type Device, type DeviceType } from '../types/device'
 import type { Provider, ProviderInput } from '../types/provider'
 import { ProviderDeviceAddFlow } from './ProviderDeviceAddFlow'
+import { HelpTooltip } from './HelpTooltip'
 
 type TuyaEntry = Record<string, unknown>
 type DirectoryRow = TuyaDirectoryDevice & TuyaEntry
@@ -109,7 +110,7 @@ export function TuyaDeviceManager({ provider, devices, onClose, onSave }: {
 	}
 
 	return <section className="xiaomi-device-manager">
-		<header><div><p className="eyebrow">TUYA · MANAGED DEVICES</p><h3>{provider.name} · 涂鸦设备</h3><p>账号目录只是候选来源。加入受管清单并保存后，原始 Tuya Device ID、规格和设备类型会持久化。</p></div><button onClick={onClose}>返回 Provider</button></header>
+		<header><div><p className="eyebrow">TUYA · MANAGED DEVICES</p><h3><HelpTooltip content="账号目录仅供选择；加入清单并保存后，设备信息会持久化。" label="涂鸦设备说明">{provider.name} · 涂鸦设备</HelpTooltip></h3></div><button onClick={onClose}>返回 Provider</button></header>
 		<div className="xiaomi-device-manager__status"><span className={`status-dot ${connected ? 'is-online' : ''}`} /><div><strong>{connected ? 'Tuya Provider 已连接' : 'Tuya Provider 未运行'}</strong><small>{provider.id} · 已管理 {entries.length} 台 · 已发布 {devices.length} 台</small></div><button disabled={!connected || loading} onClick={() => void refreshDirectory()}>{loading ? '正在读取…' : cloudDevices.length ? '刷新 Tuya 设备目录' : '读取 Tuya 设备目录'}</button></div>
 		<ProviderDeviceAddFlow source="从 Tuya 云账号目录读取候选设备。" model="选择统一模型；加入草稿后可直接修改设备名称。" configuration="候选设备先加入草稿；可改名或移出，最后统一点击“保存设备并应用”。" />
 		{!connected && <p className="inline-error" role="alert">请先完成 Tuya 扫码登录、保存并启用 Provider。</p>}

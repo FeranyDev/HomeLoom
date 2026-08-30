@@ -320,6 +320,24 @@ func TestDeviceSnapshotsUseStableEndpointAndMatterAttributes(t *testing.T) {
 	}
 }
 
+func TestDeviceSnapshotsIncludeNumericModelConstraints(t *testing.T) {
+	target, _ := newTestTarget(t, []domaintarget.VirtualDevice{{
+		ID: "temperature", Name: "Temperature", Type: device.TypeTemperatureSensor, SourceDeviceID: "virtual-temperature-1", Enabled: true,
+	}})
+	snapshots, err := target.buildDeviceSnapshots(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := make(map[string]deviceSnapshot, len(snapshots))
+	for _, snapshot := range snapshots {
+		byID[snapshot.ID] = snapshot
+	}
+	temperature := byID["temperature"].Constraints["TemperatureMeasurement.MeasuredValue"]
+	if temperature.Min == nil || *temperature.Min != -100 || temperature.Max == nil || *temperature.Max != 200 || temperature.Step == nil || *temperature.Step != 0.1 {
+		t.Fatalf("Matter temperature constraint = %#v", temperature)
+	}
+}
+
 func TestCameraNodeUsesFixedEndpointAndMediaContractWithoutMappingAllocation(t *testing.T) {
 	provider, err := virtual.NewProviderFromConfig(providerconfig.Config{
 		ID: "virtual-main", Type: "virtual", Name: "Virtual", Enabled: true,
@@ -465,6 +483,21 @@ func TestDeviceSnapshotDiffUsesBoundedIncrementalUpdates(t *testing.T) {
 	}
 	if previous[0].Attributes["OnOff.OnOff"] != false {
 		t.Fatal("snapshot clone mutated the replay baseline")
+	}
+}
+
+func TestDeviceSnapshotDiffReplacesChangedNumericConstraints(t *testing.T) {
+	minimum, maximum := 50.0, 1000.0
+	previous := []deviceSnapshot{{
+		ID: "light", EndpointID: 2, DeviceType: "lightbulb", Name: "Light", Reachable: true,
+		Attributes:  map[string]any{"ColorControl.ColorTemperatureMireds": int64(370)},
+		Constraints: map[string]numericConstraint{"ColorControl.ColorTemperatureMireds": {Min: &minimum, Max: &maximum}},
+	}}
+	current := cloneDeviceSnapshots(previous)
+	updatedMinimum := 154.0
+	current[0].Constraints["ColorControl.ColorTemperatureMireds"] = numericConstraint{Min: &updatedMinimum, Max: &maximum}
+	if replace, _, _ := diffDeviceSnapshots(previous, current); !replace {
+		t.Fatal("changed numeric constraints did not request a device replacement")
 	}
 }
 

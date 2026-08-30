@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { MappingProfile } from '../types/mapping'
@@ -46,7 +46,8 @@ describe('ProfileVisualEditor', () => {
     render(<ProfileVisualEditor initialProfile={identityProfile} editing={false} saving={false} onClose={vi.fn()} onSave={onSave} runPreview={vi.fn()} />)
 
     await userEvent.click(screen.getByRole('button', { name: /数值倒数/ }))
-    expect(screen.getByText('计算 1 ÷ 输入值；再次执行即可还原，输入值不能为 0。')).toBeInTheDocument()
+    await userEvent.hover(screen.getByRole('button', { name: '第 1 步转换说明' }))
+    expect(screen.getByRole('tooltip')).toHaveTextContent('计算输入值的倒数，输入不能为 0。')
     expect(screen.getByRole('button', { name: '反向（reverse）' })).toBeEnabled()
     await userEvent.click(screen.getByRole('button', { name: '保存并热更新' }))
 
@@ -70,7 +71,8 @@ describe('ProfileVisualEditor', () => {
 
     const numericTypes = screen.getByText('数值类型转换').closest('section')!
     await userEvent.click(within(numericTypes).getByRole('button', { name: /整数转数值/ }))
-    expect(screen.getByText('将安全范围内的 int 无损转换为 number；反向写入仅接受安全整数。')).toBeInTheDocument()
+    await userEvent.hover(screen.getByRole('button', { name: '第 1 步转换说明' }))
+    expect(screen.getByRole('tooltip')).toHaveTextContent('反向仅接受安全范围内的整数')
     await userEvent.click(screen.getByRole('button', { name: '保存并热更新' }))
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ inputType: 'int', outputType: 'number', transforms: [{ type: 'int-number' }] }))
   })
@@ -157,7 +159,8 @@ describe('ProfileVisualEditor', () => {
       }],
     }} editing={false} saving={false} onClose={vi.fn()} onSave={onSave} runPreview={vi.fn()} />)
 
-    expect(screen.getByText('多个来源折叠到同一目标时，反向控制写入使用选定的代表来源值。')).toBeInTheDocument()
+    await userEvent.hover(screen.getByRole('button', { name: '第 1 步反向代表值说明' }))
+    expect(screen.getByRole('tooltip')).toHaveTextContent('反向控制写回此处选定的来源值')
     const reverseSelect = screen.getByLabelText('第 1 步目标 low 反向代表值')
     expect(reverseSelect).toHaveValue('low')
     await userEvent.selectOptions(reverseSelect, 'mid')
@@ -168,6 +171,40 @@ describe('ProfileVisualEditor', () => {
         type: 'enum',
         values: expect.objectContaining({ low: 'low', mid: 'low', high: 'high', turbo: 'high' }),
         reverseValues: expect.objectContaining({ low: 'mid', high: 'high' }),
+      })],
+    }))
+  })
+
+  it('configures multiple reverse-only enum aliases for one canonical source', async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined)
+    render(<ProfileVisualEditor initialProfile={{
+      ...identityProfile,
+      inputType: 'enum',
+      outputType: 'enum',
+      transforms: [{ type: 'enum', values: { auto: 'auto' } }],
+    }} editing={false} saving={false} onClose={vi.fn()} onSave={onSave} runPreview={vi.fn()} />)
+
+    expect(screen.getByText('反向控制别名')).toBeInTheDocument()
+    await userEvent.hover(screen.getByRole('button', { name: '第 1 步反向别名说明' }))
+    expect(screen.getByRole('tooltip')).toHaveTextContent('每行左侧的控制值写回右侧来源值')
+
+    await userEvent.click(screen.getByRole('button', { name: '＋ 添加反向控制别名' }))
+    expect(screen.getByText('设备控制值')).toBeInTheDocument()
+    expect(screen.getByText('实际写回值')).toBeInTheDocument()
+    const alias = screen.getByLabelText('第 1 步反向别名 1')
+    await userEvent.clear(alias)
+    await userEvent.type(alias, 'cool')
+    await waitFor(() => expect(screen.getByLabelText('第 1 步反向别名 1')).toHaveValue('cool'))
+    await userEvent.click(screen.getByRole('button', { name: '＋ 添加反向控制别名' }))
+    const secondAlias = screen.getByLabelText('第 1 步反向别名 2')
+    await userEvent.clear(secondAlias)
+    await userEvent.type(secondAlias, 'heat')
+
+    await userEvent.click(screen.getByRole('button', { name: '保存并热更新' }))
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      transforms: [expect.objectContaining({
+        values: { auto: 'auto' },
+        reverseValues: { cool: 'auto', heat: 'auto' },
       })],
     }))
   })

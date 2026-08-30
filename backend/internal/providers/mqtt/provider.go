@@ -291,7 +291,7 @@ func (p *Provider) WriteProperty(ctx context.Context, request providersdk.Proper
 		return device.Device{}, providersdk.ErrPropertyUnsupported
 	}
 	property.Value = request.Value
-	if err := property.Validate(); err != nil {
+	if err := property.ValidateWrite(); err != nil {
 		return device.Device{}, fmt.Errorf("%w: %v", providersdk.ErrPropertyInvalid, err)
 	}
 	message := commandMessage{SchemaVersion: protocolSchemaVersion, Kind: "property", CorrelationID: newCorrelationID(), Value: &request.Value, CreatedAt: time.Now().UTC()}

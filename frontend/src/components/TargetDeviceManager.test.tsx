@@ -48,7 +48,7 @@ describe('TargetDeviceManager', () => {
 		const { container } = render(<TargetDeviceManager target={configuredTarget} devices={[source]} onClose={() => {}} onSave={vi.fn()} />)
 
 		await userEvent.click(screen.getAllByRole('button', { name: '配置属性映射' })[0])
-		expect(await screen.findByText('客厅开关 · 多来源属性映射')).toBeInTheDocument()
+		expect(await screen.findByText('客厅开关 · 属性映射')).toBeInTheDocument()
 
 		const list = container.querySelector('.target-virtual-device-list')!
 		const [livingDevice, bedroomDevice] = list.querySelectorAll('article')

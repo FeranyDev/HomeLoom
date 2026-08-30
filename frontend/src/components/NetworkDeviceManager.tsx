@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { ProviderDeviceAddFlow } from './ProviderDeviceAddFlow'
+import { HelpTooltip } from './HelpTooltip'
 import type { Device } from '../types/device'
 import type { Provider, ProviderInput } from '../types/provider'
 
@@ -108,7 +109,7 @@ export function NetworkDeviceManager({ provider, devices, onClose, onSave }: {
 	const probeMethod = String(draft.probeMethod ?? fallbackProbeMethod ?? 'tcp')
 
 	return <section className="xiaomi-device-manager network-device-manager">
-		<header><div><p className="eyebrow">NETWORK · DEVICE CATALOG</p><h3>{provider.name} · 网络设备</h3><p>网络设备没有可选的厂商模型：每台设备固定映射为“网络设备 · 电源状态”，通过 TCP 或 ICMP 读取状态，配置 MAC 后可使用 Wake-on-LAN。</p></div><button type="button" onClick={onClose}>返回 Provider</button></header>
+		<header><div><p className="eyebrow">NETWORK · DEVICE CATALOG</p><h3><HelpTooltip content="设备固定为网络设备模型，通过 TCP 或 ICMP 读取状态；配置 MAC 后可使用 Wake-on-LAN。" label="网络设备说明">{provider.name} · 网络设备</HelpTooltip></h3></div><button type="button" onClick={onClose}>返回 Provider</button></header>
 		<div className="xiaomi-device-manager__status"><span className={`status-dot ${connected ? 'is-online' : ''}`} /><div><strong>{connected ? '网络设备 Provider 运行中' : '网络设备 Provider 未运行'}</strong><small>{provider.id} · 草稿 {entries.length} 台 · 已发布 {devices.length} 台</small></div><button type="button" disabled={!connected || showEditor} onClick={beginAdd}>手动添加设备</button></div>
 		<ProviderDeviceAddFlow source="手动填写稳定 ID、设备名称、Host 与可选 MAC；网络设备没有云目录或扫描依赖。" model="模型固定为 network-device；探测方式可继承 Provider 默认值，或按设备覆盖。" configuration="先加入草稿；可改名或移出，最后统一点击“保存设备并应用”。" />
 		{!connected && <p className="inline-error" role="alert">请先保存并启用网络设备 Provider；状态变为 running 后才能添加并实时应用设备。</p>}

@@ -195,15 +195,7 @@ func buildCommonCapabilities(item TuyaDevice, specs map[string]DPSpec, statuses 
 		if rule.Unit != "" {
 			definition.Unit = rule.Unit
 		}
-		if rule.Min != nil {
-			definition.Min = cloneFloat(rule.Min)
-		}
-		if rule.Max != nil {
-			definition.Max = cloneFloat(rule.Max)
-		}
-		if rule.Step != nil {
-			definition.Step = cloneFloat(rule.Step)
-		}
+		applyCommonNumericEnvelope(&definition, rule)
 		if len(rule.Enum) > 0 {
 			definition.Enum = append([]string(nil), rule.Enum...)
 		}
@@ -220,6 +212,22 @@ func buildCommonCapabilities(item TuyaDevice, specs map[string]DPSpec, statuses 
 		capabilities[index].Properties = append(capabilities[index].Properties, property)
 	}
 	return capabilities
+}
+
+// applyCommonNumericEnvelope keeps the DP's physical precision while applying
+// the unified semantic range as an additional bound. A generic semantic step
+// (for example, 1% brightness) must never erase a device's advertised 0.5%
+// increment: that would make valid values fail write validation.
+func applyCommonNumericEnvelope(definition *device.PropertyDefinition, rule commonSemanticRule) {
+	if rule.Min != nil && (definition.Min == nil || *definition.Min < *rule.Min) {
+		definition.Min = cloneFloat(rule.Min)
+	}
+	if rule.Max != nil && (definition.Max == nil || *definition.Max > *rule.Max) {
+		definition.Max = cloneFloat(rule.Max)
+	}
+	if definition.Step == nil && rule.Step != nil {
+		definition.Step = cloneFloat(rule.Step)
+	}
 }
 
 func coerceCommonValue(want device.ValueType, value device.PropertyValue, enum []string) (device.ValueType, device.PropertyValue) {

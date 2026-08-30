@@ -7,6 +7,8 @@ describe('MappingPreview', () => {
   it('submits a typed scale profile and explains the result', async () => {
     const runPreview = vi.fn().mockResolvedValue({ profileId: 'console-preview', profileVersion: 1, direction: 'forward', value: { type: 'number', number: 68 }, steps: [{ index: 0, transform: 'scale', input: { type: 'number', number: 20 }, output: { type: 'number', number: 68 } }] })
     render(<MappingPreview runPreview={runPreview} loadProfiles={async () => []} />)
+    await userEvent.hover(screen.getByRole('button', { name: '映射预览说明' }))
+    expect(screen.getByRole('tooltip')).toHaveTextContent('输入不会保存')
     await userEvent.click(screen.getByRole('button', { name: '运行预览' }))
     expect(runPreview).toHaveBeenCalledWith(expect.objectContaining({ direction: 'forward', value: { type: 'number', number: 20 }, profile: expect.objectContaining({ schemaVersion: 1, inputType: 'number', transforms: [{ type: 'scale', factor: 1.8, offset: 32 }] }) }))
     expect(await screen.findByText('68')).toBeInTheDocument()
@@ -90,6 +92,15 @@ describe('MappingPreview', () => {
 		await userEvent.selectOptions(screen.getByLabelText('映射方向'), 'reverse')
 		expect(screen.getByRole('option', { name: 'inactive' })).toBeInTheDocument()
 		expect(screen.getByRole('option', { name: 'active' })).toBeInTheDocument()
+	})
+
+	it('offers reverse-only enum aliases while previewing a saved profile', async () => {
+		render(<MappingPreview runPreview={vi.fn()} loadProfiles={async () => [{ schemaVersion: 1, id: '018cc251-f400-7000-8000-000000000001', identifier: 'fan-mode', version: 1, kind: 'provider', inputType: 'enum', outputType: 'enum', transforms: [{ type: 'enum', values: { auto: 'auto' }, reverseValues: { cool: 'auto', heat: 'auto' } }], builtIn: false }]} />)
+		await userEvent.selectOptions(await screen.findByLabelText('预览 Profile'), '018cc251-f400-7000-8000-000000000001')
+		expect(screen.getByRole('option', { name: /fan-mode/ })).toBeInTheDocument()
+		await userEvent.selectOptions(screen.getByLabelText('映射方向'), 'reverse')
+		expect(screen.getByRole('option', { name: 'cool' })).toBeInTheDocument()
+		expect(screen.getByRole('option', { name: 'heat' })).toBeInTheDocument()
 	})
 
 	it('uses enum-number bands as selectable incoming enum values', async () => {

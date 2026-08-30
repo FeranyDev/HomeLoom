@@ -5,6 +5,7 @@ import { ApiError } from '../api/client'
 import { profileKindLabel, transformTypeLabel, valueTypeLabel } from '../presentationLabels'
 import { ProfileVisualEditor } from './ProfileVisualEditor'
 import { consumeProfileDraft } from '../profileDraft'
+import { HelpTooltip } from './HelpTooltip'
 
 interface ProfileAPI {
   list: () => Promise<MappingProfileInfo[]>
@@ -15,7 +16,7 @@ interface ProfileAPI {
 }
 
 const defaultAPI: ProfileAPI = { list: listMappingProfiles, create: createMappingProfile, update: updateMappingProfile, remove: deleteMappingProfile, importMany: importMappingProfiles }
-const starterProfile: MappingProfile = { schemaVersion: 1, id: 'custom-profile', version: 1, kind: 'capability', inputType: 'number', outputType: 'number', transforms: [{ type: 'scale', factor: 1, offset: 0 }] }
+const starterProfile: MappingProfile = { schemaVersion: 1, id: '', identifier: 'custom-profile', version: 1, kind: 'capability', inputType: 'number', outputType: 'number', transforms: [{ type: 'scale', factor: 1, offset: 0 }] }
 
 function errorText(cause: unknown, fallback: string): string {
   if (cause instanceof ApiError) {
@@ -44,7 +45,7 @@ export function ProfileManager({ api = defaultAPI, onChanged }: { api?: ProfileA
   const sortedProfiles = useMemo(() => [...profiles].sort((left, right) =>
     Number(left.builtIn) - Number(right.builtIn)
     || profileKindOrder[left.kind] - profileKindOrder[right.kind]
-    || left.id.localeCompare(right.id),
+    || (left.identifier ?? left.id).localeCompare(right.identifier ?? right.id),
   ), [profiles])
   const refresh = useCallback(async () => { try { setProfiles(await api.list()); setError(null) } catch (cause) { setError(errorText(cause, '加载 Profile 失败')) } }, [api])
   useEffect(() => { void refresh() }, [refresh])
@@ -76,14 +77,14 @@ export function ProfileManager({ api = defaultAPI, onChanged }: { api?: ProfileA
       setMode(null); await refresh(); onChanged?.()
     } catch (cause) { setError(errorText(cause, '导入 Profile 失败')) } finally { setSaving(false) }
   }
-  const remove = async (item: MappingProfileInfo) => { if (!window.confirm(`删除 Profile“${item.id}”？`)) return; try { await api.remove(item.id); await refresh(); onChanged?.() } catch (cause) { setError(errorText(cause, '删除 Profile 失败')) } }
+  const remove = async (item: MappingProfileInfo) => { if (!window.confirm(`删除 Profile“${item.identifier ?? item.id}”？`)) return; try { await api.remove(item.id); await refresh(); onChanged?.() } catch (cause) { setError(errorText(cause, '删除 Profile 失败')) } }
 
   return <section className="profile-manager">
-    <div className="profile-heading"><div><p className="eyebrow">数据库转换配置（DATABASE PROFILES）</p><h3>转换配置（Profile）管理</h3><p>用可复用的转换流水线连接提供端属性、统一模型与消费端属性。保存后热更新到内存快照，无需重启 Provider。</p></div><div><button className="add-button" onClick={openNew}>＋ 新建转换配置</button><button onClick={openImport}>导入 JSON</button><a href="/api/v1/mapping/profiles/export" download>导出用户 Profile</a></div></div>
+    <div className="profile-heading"><div><h3><HelpTooltip label="转换配置管理说明" content="规则可供多个属性映射复用，保存后立即生效。">转换规则</HelpTooltip></h3></div><div><button className="add-button" onClick={openNew}>＋ 新建转换配置</button><button onClick={openImport}>导入 JSON</button><a href="/api/v1/mapping/profiles/export" download>导出用户 Profile</a></div></div>
     {error && <p className="field-error" role="alert">{error}</p>}
     {mode === 'profile' && <ProfileVisualEditor key={`${editingID ?? 'new'}-${draft.version}`} initialProfile={draft} editing={editingID !== null} saving={saving} onClose={() => setMode(null)} onSave={saveProfile} />}
-    {mode === 'import' && <div className="profile-editor profile-importer"><div><strong>批量导入</strong><button aria-label="关闭 Profile 编辑器" onClick={() => setMode(null)}>×</button></div><textarea aria-label="Profile JSON" rows={18} value={document} onChange={(event) => setDocument(event.target.value)} spellCheck={false} /><p>批量导入会在单个事务中全部成功或全部失败；导入后立即热更新。</p><button className="add-button" disabled={saving} onClick={() => void importProfiles()}>{saving ? '导入中…' : '验证并导入'}</button></div>}
-    <div className="profile-list-heading"><strong>已保存配置</strong><span>用户配置优先；同类配置按用途与标识排序</span></div>
-    <div className="profile-list">{sortedProfiles.map((item) => <article key={item.id}><span>{item.builtIn ? '内置模板' : '用户配置'} · {profileKindLabel(item.kind)} · 版本（v）{item.version}</span><strong>{item.id}</strong><code>{valueTypeLabel(item.inputType)} → {valueTypeLabel(item.outputType)}</code><small>{(item.transforms ?? []).map((transform) => transformTypeLabel(transform.type)).join(' → ') || '恒等转换（identity）'}</small><div>{item.builtIn ? <i>内置只读</i> : <><button onClick={() => openEdit(item)}>编辑</button><button className="danger-link" onClick={() => void remove(item)}>删除</button></>}</div></article>)}</div>
+    {mode === 'import' && <div className="profile-editor profile-importer"><div><strong><HelpTooltip label="批量导入说明" content="所有规则校验通过后一起导入，任一失败均不保存。导入后立即生效。">批量导入</HelpTooltip></strong><button aria-label="关闭 Profile 编辑器" onClick={() => setMode(null)}>×</button></div><textarea aria-label="Profile JSON" rows={18} value={document} onChange={(event) => setDocument(event.target.value)} spellCheck={false} /><button className="add-button" disabled={saving} onClick={() => void importProfiles()}>{saving ? '导入中…' : '验证并导入'}</button></div>}
+    <div className="profile-list-heading"><strong><HelpTooltip label="规则排序说明" content="先显示用户规则，再按用途与标识排序。">已保存规则</HelpTooltip></strong></div>
+    <div className="profile-list">{sortedProfiles.map((item) => <article key={item.id}><span>{item.builtIn ? '内置模板' : '用户配置'} · {profileKindLabel(item.kind)} · 版本（v）{item.version}</span><strong>{item.identifier ?? item.id}</strong><code>{valueTypeLabel(item.inputType)} → {valueTypeLabel(item.outputType)}</code><small>{(item.transforms ?? []).map((transform) => transformTypeLabel(transform.type)).join(' → ') || '恒等转换（identity）'}</small><small className="profile-opaque-id">ID · {item.id}</small><div>{item.builtIn ? <i>内置只读</i> : <><button onClick={() => openEdit(item)}>编辑</button><button className="danger-link" onClick={() => void remove(item)}>删除</button></>}</div></article>)}</div>
   </section>
 }

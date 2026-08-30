@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { deleteLogicalDevice, getLogicalDeviceExplanations, listLogicalDeviceCandidates, listLogicalDevices, saveLogicalDevice } from '../api/logicalDevices'
 import type { Device } from '../types/device'
 import type { LogicalDeviceCandidate, LogicalDeviceConfig, LogicalRouteExplanation } from '../types/logicalDevice'
+import { HelpTooltip } from './HelpTooltip'
 
 type LogicalDeviceAPI = {
   list: typeof listLogicalDevices; candidates: typeof listLogicalDeviceCandidates; save: typeof saveLogicalDevice; remove: typeof deleteLogicalDevice; explanations: typeof getLogicalDeviceExplanations
@@ -72,20 +73,19 @@ export function LogicalDeviceManager({ devices, onClose, onChanged, api = defaul
   }
 
   return <div className="modal-backdrop is-mapping is-centered"><section className="logical-device-manager device-mapping-dialog" role="dialog" aria-modal="true" aria-label="设备链接与多 Provider 路由">
-    <div className="form-heading"><div><p className="eyebrow">LOGICAL DEVICE · MULTI-PROVIDER</p><h2>设备链接与多 Provider 路由</h2><p>建议仅供人工确认：同名不会自动合并。保存后，逻辑设备取代已链接的来源卡片；属性按优先级回退，命令仅在幂等且 Provider 明确不可用时回退。</p></div><button onClick={onClose}>关闭</button></div>
+    <div className="form-heading"><div><p className="eyebrow">LOGICAL DEVICE · MULTI-PROVIDER</p><h2><HelpTooltip content="同名设备不会自动合并；属性按优先级回退，命令仅在幂等且前一来源不可用时回退。" label="逻辑设备说明">设备链接与多 Provider 路由</HelpTooltip></h2></div><button onClick={onClose}>关闭</button></div>
     {error && <p className="inline-error" role="alert">{error}</p>}
-    <section className="config-note"><span>自动匹配候选</span><strong>需同类型、规范化名称相同且来源家庭/房间相同</strong><p>{candidates.length ? candidates.map((candidate) => <button key={`${candidate.left.providerId}/${candidate.left.deviceId}/${candidate.right.providerId}/${candidate.right.deviceId}`} type="button" onClick={() => applyCandidate(candidate)}>使用候选：{candidateLabel(candidate)}</button>) : '当前没有可供人工确认的候选。'}</p></section>
+    <section className="config-note"><span>自动候选</span><strong><HelpTooltip content="候选需同类型、规范化名称相同且家庭和房间相同。" label="自动候选说明">可手动确认</HelpTooltip></strong><p>{candidates.length ? candidates.map((candidate) => <button key={`${candidate.left.providerId}/${candidate.left.deviceId}/${candidate.right.providerId}/${candidate.right.deviceId}`} type="button" onClick={() => applyCandidate(candidate)}>使用候选：{candidateLabel(candidate)}</button>) : '暂无候选'}</p></section>
     <div className="logical-device-layout"><section><div className="profile-heading"><div><p className="eyebrow">已链接设备</p><h3>Logical Devices</h3></div><button className="add-button" type="button" onClick={() => edit()}>＋ 新建设备链接</button></div>
       {items.map((item) => <article className="logical-device-item" key={item.id}><div><strong>{item.name}</strong><code>{item.id} · {item.type}</code><small>{item.bindings.map((binding) => `${binding.providerId}/${binding.deviceId} (P${binding.priority})`).join(' → ')}</small></div><div><button type="button" onClick={() => edit(item)}>编辑</button><button type="button" onClick={() => void inspect(item)}>路由解释</button><button type="button" className="danger-link" disabled={busy} onClick={() => void remove(item)}>解绑</button></div></article>)}
-      {items.length === 0 && <p className="empty-state">还没有逻辑设备。请先选择两个已发现的 Provider 设备，再手动确认链接。</p>}
+      {items.length === 0 && <p className="empty-state"><HelpTooltip content="选择两个已发现的来源设备后，手动确认链接。" label="新建设备链接说明">暂无逻辑设备</HelpTooltip></p>}
     </section>
     {editing && <section className="logical-device-editor"><div className="profile-heading"><div><p className="eyebrow">手动链接</p><h3>{items.some((item) => item.id === editing.id) ? '编辑逻辑设备' : '新建设备链接'}</h3></div><button type="button" onClick={() => setEditing(null)}>取消</button></div>
       <label>逻辑设备 ID<input aria-label="逻辑设备 ID" disabled={items.some((item) => item.id === editing.id)} value={editing.id} onChange={(event) => setEditing({ ...editing, id: event.target.value })} placeholder="living-switch" /></label>
       <label>显示名称<input aria-label="逻辑设备名称" value={editing.name} onChange={(event) => setEditing({ ...editing, name: event.target.value })} placeholder="客厅主灯" /></label>
       <label>主 Provider 设备<select aria-label="主 Provider 设备" value={firstSource} onChange={(event) => setFirstSource(event.target.value)}><option value="">选择主来源</option>{concreteDevices.map((item) => <option key={sourceKey(item.providerId, item.id)} value={sourceKey(item.providerId, item.id)}>{item.name} · {item.providerId}/{item.id} · {item.type}</option>)}</select></label>
       <label>回退 Provider 设备<select aria-label="回退 Provider 设备" value={secondSource} onChange={(event) => setSecondSource(event.target.value)}><option value="">选择回退来源</option>{concreteDevices.map((item) => <option key={sourceKey(item.providerId, item.id)} value={sourceKey(item.providerId, item.id)}>{item.name} · {item.providerId}/{item.id} · {item.type}</option>)}</select></label>
-      <label>高级属性/命令路由 JSON<textarea aria-label="高级属性命令路由 JSON" value={routesJSON} onChange={(event) => setRoutesJSON(event.target.value)} rows={10} spellCheck={false} /></label>
-      <small>省略路由时，具有相同 Endpoint / Capability / Property 或 Command 地址的能力按 Provider Binding 优先级路由。显式候选的 <code>allowFallback</code> 只会在前一 Provider 明确不可用时启用后备；非幂等命令不会回退。</small>
+      <label><HelpTooltip content="省略路由时，按来源优先级匹配相同地址；allowFallback 只会在前一来源不可用时启用，非幂等命令不会回退。" label="高级路由说明">高级路由 JSON</HelpTooltip><textarea aria-label="高级属性命令路由 JSON" value={routesJSON} onChange={(event) => setRoutesJSON(event.target.value)} rows={10} spellCheck={false} /></label>
       <button className="add-button" type="button" disabled={busy || !editing.id.trim() || !editing.name.trim()} onClick={() => void save()}>{busy ? '保存中…' : '保存链接'}</button>
     </section>}
     </div>

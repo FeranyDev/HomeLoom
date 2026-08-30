@@ -12,8 +12,9 @@ import (
 // (for example, an enum or a vendor-specific range) still need a user-owned
 // Profile.
 //
-// The returned ID is stable so a generated profile can safely be selected by
-// the mapping UI and stored in a normal Binding.
+// The returned ID is an immutable deterministic UUIDv7 so a generated profile
+// can safely be selected by the mapping UI and stored in a normal Binding.
+// Identifier remains the readable description used by people and diagnostics.
 func AutoCapabilityProfile(inputType, outputType device.ValueType, fromUnit, toUnit string) (Profile, bool) {
 	if !numericType(inputType) || !numericType(outputType) || fromUnit == "" || toUnit == "" || fromUnit == toUnit || !unitConversionSupported(fromUnit, toUnit) {
 		return Profile{}, false
@@ -26,9 +27,11 @@ func AutoCapabilityProfile(inputType, outputType device.ValueType, fromUnit, toU
 		// Profile reverse semantics.
 		transforms = append(transforms, Transform{Type: TransformRound, Mode: "nearest"})
 	}
+	identifier := fmt.Sprintf("builtin-capability-%s-to-%s-%s-to-%s", fromUnit, toUnit, inputType, outputType)
 	profile := Profile{
 		SchemaVersion: SchemaVersion,
-		ID:            fmt.Sprintf("builtin-capability-%s-to-%s-%s-to-%s", fromUnit, toUnit, inputType, outputType),
+		ID:            BuiltInProfileID(identifier),
+		Identifier:    identifier,
 		Version:       1,
 		Kind:          KindCapability,
 		InputType:     inputType,

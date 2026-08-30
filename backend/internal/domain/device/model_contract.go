@@ -360,7 +360,6 @@ var modelContracts = map[Type]ModelContract{
 		optional("air-conditioner", "beeper", "蜂鸣器", ValueTypeBool, "", true),
 		optional("air-conditioner", "auto-x-fan", "自动 X-Fan", ValueTypeBool, "", true),
 		optional("air-conditioner", "auto-light", "自动面板灯", ValueTypeBool, "", true),
-		optionalMeasurement("air-conditioner", "target-temperature-step", "目标温度步长", "celsius", true, 0.1, 5, 0.1),
 		optionalMeasurement("humidity", "current-humidity", "当前湿度", "percent", false, 0, 100, 0.1),
 		optionalMeasurement("temperature", "outside-temperature", "室外温度", "celsius", false, -100, 200, 0.1),
 		optional("air-conditioner", "display-units", "显示温标", ValueTypeEnum, "", true, "celsius", "fahrenheit"),

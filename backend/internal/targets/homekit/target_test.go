@@ -495,6 +495,9 @@ func TestAccessoryBindingsMapAndWriteAirConditioner(t *testing.T) {
 	if bindings.heaterCurrent["ac"].Value() != characteristic.CurrentHeaterCoolerStateInactive || bindings.heaterTargets["ac"].Value() != characteristic.TargetHeaterCoolerStateAuto || bindings.temperatures["ac"].Value() != 23.5 || bindings.coolingTargets["ac"].Value() != 22 || bindings.heatingTargets["ac"].Value() != 22 {
 		t.Fatal("initial air-conditioner values were not mapped")
 	}
+	if bindings.coolingTargets["ac"].StepValue() != 0.5 || bindings.heatingTargets["ac"].StepValue() != 0.5 {
+		t.Fatalf("default HomeKit target-temperature step = cooling %v, heating %v", bindings.coolingTargets["ac"].StepValue(), bindings.heatingTargets["ac"].StepValue())
+	}
 	request := &http.Request{}
 	if _, status := bindings.actives["ac"].SetValueRequest(characteristic.ActiveActive, request); status != 0 {
 		t.Fatalf("active write status = %d", status)
@@ -510,11 +513,11 @@ func TestAccessoryBindingsMapAndWriteAirConditioner(t *testing.T) {
 	if err != nil || mode.Value.String == nil || *mode.Value.String != "cool" {
 		t.Fatalf("target mode was not written back: %#v, %v", mode, err)
 	}
-	if _, status := bindings.coolingTargets["ac"].SetValueRequest(24.5, request); status != 0 {
+	if _, status := bindings.coolingTargets["ac"].SetValueRequest(24, request); status != 0 {
 		t.Fatalf("target temperature write status = %d", status)
 	}
 	temperature, err := provider.ReadProperty(context.Background(), providersdk.PropertyReadRequest{DeviceID: "ac", EndpointID: "main", CapabilityID: "temperature", PropertyID: "target-temperature"})
-	if err != nil || temperature.Value.Number == nil || *temperature.Value.Number != 24.5 {
+	if err != nil || temperature.Value.Number == nil || *temperature.Value.Number != 24 {
 		t.Fatalf("target temperature was not written back: %#v, %v", temperature, err)
 	}
 }

@@ -48,6 +48,7 @@ HomeLoom 只在 HAP 提供原生或语义一致的 Service 时发布设备。桥
 ## 协议语义限制
 
 - HomeKit Heater Cooler 的目标模式只有 `auto`、`heat` 和 `cool`。空调统一模型中的 `dry`、`fan` 在 Apple Home 状态侧显示为 `auto`/`idle`，Provider 原始状态不会被改写。
+- 对于声明了数值步长的来源属性，可在设备的“配置映射”中为该条属性映射启用自定义步长；例如将目标温度的映射步长设为 `1` 后，Apple Home 的相关温控控件会以 `1°C` 调整。设备原始控制精度不受影响。
 - HomeKit Thermostat 没有独立的 `idle` 当前状态，统一模型的 `idle` 显示为 `off`，目标模式仍保持原值。
 - HomeKit Carbon Monoxide Level 的协议范围上限为 100；更高的统一模型读数在 HomeKit 特征值侧按协议范围截断。
 - HomeKit Valve 的 Set Duration 上限为 3600 秒；统一模型仍允许保存更大的设备原始范围。

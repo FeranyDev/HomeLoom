@@ -332,7 +332,7 @@ func TestConfigAcceptsReferenceRuntimeOptions(t *testing.T) {
 	}
 }
 
-func TestProviderBindsPollsMapsAirConditionerV3AndWrites(t *testing.T) {
+func TestProviderBindsPollsMapsAirConditionerV4AndWrites(t *testing.T) {
 	transport := &scriptedTransport{}
 	transport.handler = func(payload []byte) ([]byte, error) {
 		var envelope greeEnvelope
@@ -423,7 +423,6 @@ func TestProviderBindsPollsMapsAirConditionerV3AndWrites(t *testing.T) {
 	assertBoolProperty(t, item, "air-conditioner", "air", false)
 	assertBoolProperty(t, item, "air-conditioner", "beeper", true)
 	assertNumberProperty(t, item, "temperature", "outside-temperature", 15)
-	assertNumberProperty(t, item, "air-conditioner", "target-temperature-step", 1)
 	if len(events) != 1 {
 		t.Fatalf("initial event count = %d", len(events))
 	}

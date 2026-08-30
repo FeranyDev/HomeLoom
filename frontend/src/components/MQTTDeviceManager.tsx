@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import type { Device } from '../types/device'
 import type { Provider, ProviderInput } from '../types/provider'
 import { ProviderDeviceAddFlow } from './ProviderDeviceAddFlow'
+import { HelpTooltip } from './HelpTooltip'
 
 type MQTTTopics = { discovery: string; availability: string; state: string; command: string }
 type MQTTRoute = { id: string; name: string; topicPrefix: string; protocol: 'homeloom-v1'; qos: number; topics: MQTTTopics }
@@ -66,7 +67,7 @@ export function MQTTDeviceManager({ provider, devices, onClose, onSave }: { prov
 	}
 
 	return <section className="mqtt-device-manager">
-		<header><div><p className="eyebrow">MQTT · {serverMode ? 'SERVER' : 'CLIENT'} · DEVICE ROUTES</p><h3>{provider.name} · 设备路由</h3><p>{serverMode ? '内嵌 Broker 监听保持运行；外部设备主动连接，并按逐设备白名单收发 Topic。' : '外部 Broker 连接保持不变；每台设备独立配置协议根主题、QoS 和收发 Topic。'}</p></div><button type="button" onClick={onClose}>返回 Provider</button></header>
+		<header><div><p className="eyebrow">MQTT · {serverMode ? 'SERVER' : 'CLIENT'} · DEVICE ROUTES</p><h3><HelpTooltip content={serverMode ? '内嵌 Broker 监听，外部设备按白名单收发 Topic。' : '每台设备独立配置协议根主题、QoS 和收发 Topic。'} label="MQTT 路由说明">{provider.name} · 设备路由</HelpTooltip></h3></div><button type="button" onClick={onClose}>返回 Provider</button></header>
 		<div className="mqtt-device-manager__status"><span className={`status-dot ${provider.status === 'running' ? 'is-online' : ''}`} /><div><strong>{provider.status === 'running' ? (serverMode ? 'MQTT 服务端正在监听' : '外部 Broker 已连接') : `MQTT ${serverMode ? '服务端' : '客户端'} ${provider.status}`}</strong><small>{provider.id} · {serverMode ? String(provider.config.listenAddress || '未配置监听地址') : String(provider.config.brokerUrl || '未配置 Broker')} · 草稿 {routes.length} 条</small></div></div>
 		<ProviderDeviceAddFlow source="手动填写 Device ID、设备名称与 MQTT Topic 路由；设备契约仍由 retained Discovery 提供。" model="MQTT 来源不预设模型，收到 Discovery 后按来源契约发布统一设备。" configuration="路由先加入草稿；可改名或移出，最后统一点击“保存设备并应用”。" />
 		{error && <p className="inline-error" role="alert">{error}</p>}
@@ -83,7 +84,7 @@ export function MQTTDeviceManager({ provider, devices, onClose, onSave }: { prov
 			</form>
 			<div className="mqtt-route-list"><div className="command-heading"><h3>已配置设备</h3><span>{routes.length} 台</span></div>{routes.length === 0 ? <p>{serverMode ? '尚未配置设备。服务端会保持监听，但 ACL 拒绝所有设备 Topic。' : '尚未配置设备。Provider 只会连接 Broker，不会订阅或发布任意设备。'}</p> : routes.map((item) => { const current = published.get(item.id); return <article key={item.id}><span className={`status-dot ${current?.availability === 'online' ? 'is-online' : ''}`} /><div><strong>{current?.name || item.name || item.id}</strong><small>{current ? `${current.type} · ${current.availability}` : '等待 retained Discovery'}</small><code>{item.id}</code></div><div><span className="parameter-level">QoS {item.qos}</span><code>{item.topicPrefix}</code></div><div className="simulation-actions"><button type="button" onClick={() => edit(item)}>编辑</button><button type="button" className="is-danger" onClick={() => setRoutes((currentRoutes) => currentRoutes.filter((route) => route.id !== item.id))}>移出草稿</button></div></article> })}</div>
 		</div>
-		<div className="config-note"><span>Payload 契约</span><strong>HomeLoom Device Protocol v1</strong><p>Topic 路由可以逐设备调整；Discovery、State、Availability 和 Command 的 JSON 契约保持严格校验。来源属性进入设备中心后，再从该设备单独配置到统一模型的转换。</p></div>
+		<div className="config-note"><span>Payload 契约</span><strong><HelpTooltip content="可按设备调整 Topic；Discovery、State、Availability 和 Command 会严格校验。来源属性发布后，再单独配置统一模型转换。" label="MQTT 契约说明">HomeLoom Device Protocol v1</HelpTooltip></strong></div>
 		<div className="form-actions"><button type="button" onClick={onClose}>取消</button><button type="button" className="primary" disabled={saving || provider.status !== 'running'} onClick={() => void save()}>{saving ? '应用中…' : '保存设备并应用'}</button></div>
 	</section>
 }

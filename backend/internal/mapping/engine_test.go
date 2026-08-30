@@ -129,6 +129,45 @@ func TestPreviewDefaultClampAndErrors(t *testing.T) {
 	if err := Validate(badReverse); err == nil {
 		t.Fatal("reverseValues outside forward mapping accepted")
 	}
+	writeOnlyAlias := profile(device.ValueTypeEnum, device.ValueTypeEnum, Transform{
+		Type:          TransformEnum,
+		Values:        map[string]string{"auto": "auto"},
+		ReverseValues: map[string]string{"cool": "auto", "heat": "auto"},
+	})
+	if err := Validate(writeOnlyAlias); err != nil {
+		t.Fatalf("write-only reverse aliases rejected: %v", err)
+	}
+	unknownAliasSource := writeOnlyAlias
+	unknownAliasSource.Transforms[0].ReverseValues = map[string]string{"cool": "missing"}
+	if err := Validate(unknownAliasSource); err == nil {
+		t.Fatal("reverse alias with unknown source accepted")
+	}
+	emptyAliasTarget := writeOnlyAlias
+	emptyAliasTarget.Transforms[0].ReverseValues = map[string]string{"": "auto"}
+	if err := Validate(emptyAliasTarget); err == nil {
+		t.Fatal("reverse alias with empty target accepted")
+	}
+}
+
+func TestEnumWriteOnlyAliasesReverseToOneSource(t *testing.T) {
+	profile := profile(device.ValueTypeEnum, device.ValueTypeEnum, Transform{
+		Type:          TransformEnum,
+		Values:        map[string]string{"auto": "auto"},
+		ReverseValues: map[string]string{"cool": "auto", "heat": "auto"},
+	})
+	for _, target := range []string{"cool", "heat"} {
+		result, err := Preview(PreviewRequest{Profile: profile, Direction: DirectionReverse, Value: valuePointer(device.EnumValue(target))})
+		if err != nil {
+			t.Fatalf("reverse %q: %v", target, err)
+		}
+		if result.Value.String == nil || *result.Value.String != "auto" {
+			t.Fatalf("reverse %q = %#v, want auto", target, result.Value)
+		}
+	}
+	forward, err := Preview(PreviewRequest{Profile: profile, Direction: DirectionForward, Value: valuePointer(device.EnumValue("auto"))})
+	if err != nil || forward.Value.String == nil || *forward.Value.String != "auto" {
+		t.Fatalf("forward canonical state = %#v, error = %v", forward.Value, err)
+	}
 }
 
 func TestEnumManyToOneForwardAndReverse(t *testing.T) {

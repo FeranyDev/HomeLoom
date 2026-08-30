@@ -73,6 +73,13 @@ export interface DeviceSnapshot {
   name: string;
   reachable: boolean;
   attributes: Record<string, JsonValue>;
+  constraints?: Record<string, NumericConstraint>;
+}
+
+export interface NumericConstraint {
+  min?: number;
+  max?: number;
+  step?: number;
 }
 
 export interface AttributeUpdate {
@@ -273,6 +280,9 @@ export function expectDeviceSnapshots(
     }
     endpointIds.add(endpointId);
     deviceIds.add(id);
+    const constraints = object.constraints === undefined
+      ? undefined
+      : expectNumericConstraints(object.constraints, `devices[${index}].constraints`);
     return {
       id,
       endpointId,
@@ -280,6 +290,7 @@ export function expectDeviceSnapshots(
       name: expectNonEmptyString(object.name, `devices[${index}].name`),
       reachable: expectBoolean(object.reachable, `devices[${index}].reachable`),
       attributes: expectJsonRecord(object.attributes, `devices[${index}].attributes`),
+      ...(constraints === undefined ? {} : { constraints }),
     };
   });
   if (
@@ -295,6 +306,33 @@ export function expectDeviceSnapshots(
     );
   }
   return devices;
+}
+
+function expectNumericConstraints(value: unknown, field: string): Record<string, NumericConstraint> {
+  const object = expectObject(value, field);
+  const result: Record<string, NumericConstraint> = {};
+  for (const [path, entry] of Object.entries(object)) {
+    const constraint = expectObject(entry, `${field}.${path}`);
+    const parsed: NumericConstraint = {};
+    if (constraint.min !== undefined) parsed.min = expectFiniteNumber(constraint.min, `${field}.${path}.min`);
+    if (constraint.max !== undefined) parsed.max = expectFiniteNumber(constraint.max, `${field}.${path}.max`);
+    if (constraint.step !== undefined) parsed.step = expectFiniteNumber(constraint.step, `${field}.${path}.step`);
+    if (parsed.min !== undefined && parsed.max !== undefined && parsed.min > parsed.max) {
+      throw new ContractValidationError(`${field}.${path} minimum exceeds maximum`);
+    }
+    if (parsed.step !== undefined && parsed.step <= 0) {
+      throw new ContractValidationError(`${field}.${path}.step must be positive`);
+    }
+    result[path] = parsed;
+  }
+  return result;
+}
+
+function expectFiniteNumber(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new ContractValidationError(`${field} must be a finite number`);
+  }
+  return value;
 }
 
 export function expectAttributeUpdates(value: unknown): AttributeUpdate[] {

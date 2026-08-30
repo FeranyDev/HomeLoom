@@ -131,12 +131,29 @@ func TestValidateIntegerPropertyContract(t *testing.T) {
 		t.Fatalf("valid integer rejected: %v", err)
 	}
 	property.Value = IntValue(101)
-	if err := property.Validate(); err == nil {
+	if err := property.ValidateWrite(); err == nil {
 		t.Fatal("out-of-range integer accepted")
 	}
 	fractionalStep := 0.5
 	property.Value, property.Definition.Step = IntValue(42), &fractionalStep
-	if err := property.Validate(); err == nil {
+	if err := property.ValidateWrite(); err == nil {
 		t.Fatal("fractional integer step accepted")
+	}
+}
+
+func TestValidateWritableNumericPropertyRequiresConfiguredStep(t *testing.T) {
+	minimum, maximum, step := 16.0, 32.0, 1.0
+	property := Property{Definition: PropertyDefinition{ID: "target-temperature", Type: ValueTypeNumber, Writable: true, Min: &minimum, Max: &maximum, Step: &step}, Value: NumberValue(24.5)}
+	if err := property.ValidateWrite(); err == nil {
+		t.Fatal("writable value outside its configured step was accepted")
+	}
+	property.Value = NumberValue(24)
+	if err := property.ValidateWrite(); err != nil {
+		t.Fatalf("step-aligned writable value rejected: %v", err)
+	}
+	property.Definition.Writable = false
+	property.Value = NumberValue(24.5)
+	if err := property.ValidateWrite(); err != nil {
+		t.Fatalf("reported measurement was incorrectly restricted by step: %v", err)
 	}
 }

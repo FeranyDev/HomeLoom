@@ -10,7 +10,7 @@ describe('TargetForm', () => {
   it('creates target configuration without embedding Consumer devices', async () => {
     const onSave = vi.fn().mockResolvedValue(undefined)
     render(<TargetForm target={null} onCancel={vi.fn()} onSave={onSave} />)
-    expect(screen.getByText('保存目标实例后单独配置')).toBeInTheDocument()
+    expect(screen.getByText('保存后配置')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '保存到数据库' }))
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
       id: '', type: 'apple-hap', config: { address: '', pin: '', setupId: '' }, deviceIds: [], devices: [],
@@ -26,7 +26,7 @@ describe('TargetForm', () => {
     expect(screen.getByLabelText(/网络接口/)).toBeInTheDocument()
     expect(screen.getByLabelText(/UDP 监听端口/)).toBeInTheDocument()
     expect(screen.getByLabelText(/默认配网窗口时长/)).toBeInTheDocument()
-    expect(screen.getByText('留空不是 HomeKit 回退')).toBeInTheDocument()
+    expect(screen.getByText('自动生成配网参数')).toBeInTheDocument()
   })
 
   it('shows server field errors and refills an existing target', async () => {
@@ -42,7 +42,7 @@ describe('TargetForm', () => {
 		const target: Target = { id: 'apple-main', type: 'apple-hap', name: 'Main Bridge', enabled: true, status: 'running', config: { address: ':51826' }, pairing: { paired: true }, deviceIds: [], devices: [] }
 		const onSave = vi.fn().mockResolvedValue(undefined)
 		render(<TargetForm target={target} onCancel={vi.fn()} onSave={onSave} />)
-		expect(screen.getByText('一次性配对参数已隐藏并锁定')).toBeInTheDocument()
+		expect(screen.getByText('配对参数已锁定')).toBeInTheDocument()
 		expect(screen.getByLabelText(/目标类型/)).toBeDisabled()
 		expect(screen.queryByLabelText(/HomeKit 设置标识/)).not.toBeInTheDocument()
 		expect(screen.queryByLabelText(/HomeKit 8 位配对码/)).not.toBeInTheDocument()
@@ -87,8 +87,9 @@ describe('TargetForm', () => {
 			type: 'camera', availability: 'online', online: true, endpoints: [], lastUpdateAt: '2026-07-29T00:00:00Z',
 		}
 		render(<TargetForm target={null} initialType="matter-camera" devices={[camera]} onCancel={vi.fn()} onSave={onSave} />)
-		expect(screen.getByText('Controller 兼容性仍需实测')).toBeInTheDocument()
-		expect(screen.getByText(/不保证能在 Apple Home 中发现或播放/)).toBeInTheDocument()
+		expect(screen.getByText('实验性支持')).toBeInTheDocument()
+		await userEvent.hover(screen.getByRole('button', { name: 'Matter 配置说明' }))
+		expect(screen.getByRole('tooltip')).toHaveTextContent('Apple Home 不保证支持')
 		expect(screen.queryByLabelText(/HomeKit 8 位配对码/)).not.toBeInTheDocument()
 		expect(screen.queryByLabelText(/HomeKit 设置标识/)).not.toBeInTheDocument()
 		expect(screen.getByLabelText(/配网辨识码/)).toBeInTheDocument()

@@ -109,8 +109,12 @@ func applyConsumerProjection(result *device.Device, source device.Device, parame
 		if previewErr != nil {
 			return false, fmt.Errorf("consumer binding %q: %w", binding.ID, previewErr)
 		}
+		definition, definitionErr := transformProviderPropertyDefinition(binding, profile, property.Definition)
+		if definitionErr != nil {
+			return false, fmt.Errorf("consumer binding %q definition: %w", binding.ID, definitionErr)
+		}
 		property.Value = preview.Value
-		property.Definition.Type = profile.OutputType
+		property.Definition = definition
 	}
 	property.Definition.ID = parameter.Source.PropertyID
 	property.Definition.ParameterLevel = parameter.Level

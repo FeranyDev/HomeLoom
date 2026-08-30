@@ -597,7 +597,7 @@ func (p *Provider) WriteProperty(ctx context.Context, request providersdk.Proper
 	}
 	requested := property
 	requested.Value = request.Value
-	if !property.Definition.Writable || requested.Validate() != nil {
+	if !property.Definition.Writable || requested.ValidateWrite() != nil {
 		return device.Device{}, providersdk.ErrPropertyInvalid
 	}
 	command, data, err := catalog.EncodePropertyCommand(current.item, request)

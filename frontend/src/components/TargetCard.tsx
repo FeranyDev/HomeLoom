@@ -6,6 +6,7 @@ import type { Device } from '../types/device'
 import { availabilityLabel } from '../types/device'
 import { targetTypeLabel } from '../presentationLabels'
 import { targetDescriptor } from '../targetDescriptors'
+import { HelpTooltip } from './HelpTooltip'
 
 interface TargetCardProps {
 	target: Target
@@ -83,14 +84,14 @@ export function TargetCard({ target, onEdit, onDelete, onRegeneratePairing, onCl
 		</div>
 
 		{homeKit ? <div className={`pairing-panel ${canPair || target.pairing.paired ? '' : 'is-unavailable'} ${target.pairing.paired ? 'is-paired' : ''}`}>
-			{target.pairing.paired ? <><div className="paired-mark" aria-hidden="true">✓</div><strong>已连接 Apple Home</strong><span>配对完成后，PIN、Setup ID 和二维码不再参与日常运行。</span></>
-				: canShowQR && showQR ? <><img src={pairingQRUrl(target.id)} alt={`${target.name} HomeKit 配对二维码`} /><strong>使用“家庭”App 扫描</strong><span>二维码与此桥的 Setup ID、类型及配对码绑定</span><span className="pairing-pin">备用 PIN：{target.pairing.pairingCode}</span><button className="hide-qr" onClick={() => setShowQR(false)}>隐藏二维码</button></>
-					: canShowQR ? <><div className="qr-placeholder">⌁</div><strong>配对信息默认隐藏</strong><span>仅在准备绑定 Apple Home 时显示二维码</span><button className="show-qr" onClick={() => setShowQR(true)}>显示配对二维码</button></>
-						: canPair ? <><div className="qr-placeholder">⌁</div><strong>在 Apple Home 中选择“更多选项”</strong><span>手动配对码：{target.pairing.pairingCode}</span><small>选择名称为“{target.name}”的独立摄像头配件。</small></>
-						: <><div className="qr-placeholder">{target.type === 'homekit-camera' ? 'CAM' : 'QR'}</div><strong>{target.type === 'homekit-camera' ? '等待独立摄像头发布器' : '启用后生成 HomeKit 二维码'}</strong><span>{target.type === 'homekit-camera' ? '发布器启动后会显示扫码二维码，并保留手动配对码作为备用' : '每个 Apple HAP 目标拥有独立配对资料'}</span></>}
+			{target.pairing.paired ? <><div className="paired-mark" aria-hidden="true">✓</div><strong><HelpTooltip content="配对完成后，PIN、Setup ID 和二维码不再参与日常运行。" label="配对完成说明">已连接 Apple Home</HelpTooltip></strong></>
+				: canShowQR && showQR ? <><img src={pairingQRUrl(target.id)} alt={`${target.name} HomeKit 配对二维码`} /><strong><HelpTooltip content="二维码与此桥的 Setup ID、类型及配对码绑定。" label="配对二维码说明">使用“家庭”App 扫描</HelpTooltip></strong><span className="pairing-pin">备用 PIN：{target.pairing.pairingCode}</span><button className="hide-qr" onClick={() => setShowQR(false)}>隐藏二维码</button></>
+					: canShowQR ? <><div className="qr-placeholder">⌁</div><strong><HelpTooltip content="仅在准备绑定 Apple Home 时显示二维码。" label="隐藏配对信息说明">配对信息默认隐藏</HelpTooltip></strong><button className="show-qr" onClick={() => setShowQR(true)}>显示配对二维码</button></>
+						: canPair ? <><div className="qr-placeholder">⌁</div><strong><HelpTooltip content={`选择名称为“${target.name}”的独立摄像头配件。`} label="摄像头配对说明">在 Apple Home 中选择“更多选项”</HelpTooltip></strong><span>手动配对码：{target.pairing.pairingCode}</span></>
+						: <><div className="qr-placeholder">{target.type === 'homekit-camera' ? 'CAM' : 'QR'}</div><strong><HelpTooltip content={target.type === 'homekit-camera' ? '发布器启动后会显示二维码和手动配对码。' : '每个 Apple HAP 目标拥有独立配对资料。'} label="HomeKit 配对说明">{target.type === 'homekit-camera' ? '等待独立摄像头发布器' : '启用后生成 HomeKit 二维码'}</HelpTooltip></strong></>}
 		</div> : <div className={`pairing-panel matter-pairing-panel ${matterCanPair ? '' : 'is-unavailable'}`}>
-			{matterCanPair ? <><img src={matterQRUrl(target.id)} alt={`${target.name} Matter 配网二维码`} /><strong>Matter 配网窗口已打开</strong><span>{target.commissioning.manualPairingCode ? `手工配对码：${target.commissioning.manualPairingCode}` : '请使用 Matter 控制器扫描二维码'}</span><small>窗口关闭后二维码与配对码会立即隐藏。</small></>
-				: <><div className="qr-placeholder">{target.type === 'matter-camera' ? 'MC' : 'M'}</div><strong>配网二维码已隐藏</strong><span>{target.fabricCount > 0 ? '已加入 Fabric；如需新增控制器，请临时打开配网窗口。' : '打开配网窗口后才会生成并显示二维码。'}</span><small>{target.type === 'matter-camera' ? '实验性 Matter Camera · 不使用 HomeKit PIN' : '测试设备 · 未认证'}</small></>}
+			{matterCanPair ? <><img src={matterQRUrl(target.id)} alt={`${target.name} Matter 配网二维码`} /><strong><HelpTooltip content="关闭窗口后，二维码与配对码会立即隐藏。" label="Matter 配网窗口说明">Matter 配网窗口已打开</HelpTooltip></strong><span>{target.commissioning.manualPairingCode ? `手工配对码：${target.commissioning.manualPairingCode}` : '请使用 Matter 控制器扫描二维码'}</span></>
+				: <><div className="qr-placeholder">{target.type === 'matter-camera' ? 'MC' : 'M'}</div><strong><HelpTooltip content={target.fabricCount > 0 ? '已加入 Fabric；如需新增控制器，请临时打开配网窗口。' : '打开配网窗口后才会生成并显示二维码。'} label="Matter 配网说明">配网二维码已隐藏</HelpTooltip></strong><small>{target.type === 'matter-camera' ? '实验性 Matter Camera · 不使用 HomeKit PIN' : '测试设备 · 未认证'}</small></>}
 		</div>}
 	</article>
 }

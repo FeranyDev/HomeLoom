@@ -25,6 +25,7 @@ type ProfileStore interface {
 	ListMappingProfiles(context.Context) ([]mapping.Profile, error)
 	SaveMappingProfile(context.Context, mapping.Profile) error
 	SaveMappingProfiles(context.Context, []mapping.Profile) error
+	MigrateMappingProfileIdentities(context.Context, []mapping.ProfileIdentityMigration, map[string]string) error
 	DeleteMappingProfile(context.Context, string) error
 	ListMappingBindings(context.Context) ([]mapping.Binding, error)
 	SaveMappingBinding(context.Context, mapping.Binding) error
@@ -46,39 +47,55 @@ type ProfileInfo struct {
 }
 
 type ProfileService struct {
-	mu               sync.RWMutex
-	profiles         map[string]mapping.Profile
-	builtIns         map[string]mapping.Profile
-	bindings         map[string]mapping.Binding
-	bindingsByKey    map[string][]string
-	bindingsByModel  map[string]string
-	customProperties map[string]mapping.CustomModelProperty
-	enumOverrides    map[string]mapping.ModelEnumOverride
-	customModels     map[device.Type]mapping.CustomModel
-	store            ProfileStore
-	changeHandler    func(context.Context)
+	mu                     sync.RWMutex
+	profiles               map[string]mapping.Profile
+	builtIns               map[string]mapping.Profile
+	profileIDsByIdentifier map[string]string
+	bindings               map[string]mapping.Binding
+	bindingsByKey          map[string][]string
+	bindingsByModel        map[string]string
+	customProperties       map[string]mapping.CustomModelProperty
+	enumOverrides          map[string]mapping.ModelEnumOverride
+	customModels           map[device.Type]mapping.CustomModel
+	store                  ProfileStore
+	changeHandler          func(context.Context)
 }
 
 func NewProfileService(ctx context.Context, store ProfileStore) (*ProfileService, error) {
-	service := &ProfileService{profiles: make(map[string]mapping.Profile), builtIns: make(map[string]mapping.Profile), bindings: make(map[string]mapping.Binding), bindingsByKey: make(map[string][]string), bindingsByModel: make(map[string]string), customProperties: make(map[string]mapping.CustomModelProperty), enumOverrides: make(map[string]mapping.ModelEnumOverride), customModels: make(map[device.Type]mapping.CustomModel), store: store}
+	service := &ProfileService{profiles: make(map[string]mapping.Profile), builtIns: make(map[string]mapping.Profile), profileIDsByIdentifier: make(map[string]string), bindings: make(map[string]mapping.Binding), bindingsByKey: make(map[string][]string), bindingsByModel: make(map[string]string), customProperties: make(map[string]mapping.CustomModelProperty), enumOverrides: make(map[string]mapping.ModelEnumOverride), customModels: make(map[device.Type]mapping.CustomModel), store: store}
 	for _, item := range BuiltInProfiles() {
-		if err := mapping.Validate(item); err != nil {
+		if err := validateProfile(item); err != nil {
 			return nil, fmt.Errorf("validate built-in mapping profile %q: %w", item.ID, err)
 		}
+		if existing, duplicate := service.profileIDsByIdentifier[item.Identifier]; duplicate {
+			return nil, fmt.Errorf("built-in mapping profile identifiers %q and %q conflict", existing, item.ID)
+		}
 		service.builtIns[item.ID] = cloneProfile(item)
+		service.profileIDsByIdentifier[item.Identifier] = item.ID
 	}
 	items, err := store.ListMappingProfiles(ctx)
 	if err != nil {
 		return nil, err
 	}
-	for _, item := range items {
+	migratedItems, migrations, bindingProfileIDs, err := service.migrateStoredProfileIdentities(items)
+	if err != nil {
+		return nil, err
+	}
+	if err := store.MigrateMappingProfileIdentities(ctx, migrations, bindingProfileIDs); err != nil {
+		return nil, err
+	}
+	for _, item := range migratedItems {
 		if _, reserved := service.builtIns[item.ID]; reserved {
 			return nil, fmt.Errorf("stored mapping profile %q conflicts with a built-in profile", item.ID)
 		}
-		if err := mapping.Validate(item); err != nil {
+		if err := validateProfile(item); err != nil {
 			return nil, fmt.Errorf("validate stored mapping profile %q: %w", item.ID, err)
 		}
+		if existing, duplicate := service.profileIDsByIdentifier[item.Identifier]; duplicate {
+			return nil, fmt.Errorf("stored mapping profile %q uses identifier %q already owned by %q", item.ID, item.Identifier, existing)
+		}
 		service.profiles[item.ID] = cloneProfile(item)
+		service.profileIDsByIdentifier[item.Identifier] = item.ID
 	}
 	customModels, err := store.ListCustomModels(ctx)
 	if err != nil {
@@ -135,6 +152,7 @@ func NewProfileService(ctx context.Context, store ProfileStore) (*ProfileService
 		return nil, err
 	}
 	for _, item := range bindings {
+		item.ProfileID = service.profileIDForReferenceLocked(item.ProfileID)
 		if err := service.validateBindingLocked(item); err != nil {
 			return nil, fmt.Errorf("validate stored mapping binding %q: %w", item.ID, err)
 		}
@@ -155,13 +173,76 @@ func NewProfileService(ctx context.Context, store ProfileStore) (*ProfileService
 
 func BuiltInProfiles() []mapping.Profile {
 	factor100, factor001 := 100.0, 0.01
+	builtIn := func(identifier string, kind mapping.ProfileKind, inputType, outputType device.ValueType, transforms []mapping.Transform) mapping.Profile {
+		return mapping.Profile{SchemaVersion: 1, ID: mapping.BuiltInProfileID(identifier), Identifier: identifier, Version: 1, Kind: kind, InputType: inputType, OutputType: outputType, Transforms: transforms}
+	}
 	profiles := []mapping.Profile{
-		{SchemaVersion: 1, ID: "builtin-active-low", Version: 1, Kind: mapping.KindProvider, InputType: device.ValueTypeBool, OutputType: device.ValueTypeBool, Transforms: []mapping.Transform{{Type: mapping.TransformInvert}}},
-		{SchemaVersion: 1, ID: "builtin-celsius-fahrenheit", Version: 1, Kind: mapping.KindTarget, InputType: device.ValueTypeNumber, OutputType: device.ValueTypeNumber, Transforms: []mapping.Transform{{Type: mapping.TransformUnit, FromUnit: "celsius", ToUnit: "fahrenheit"}}},
-		{SchemaVersion: 1, ID: "builtin-ratio-percent", Version: 1, Kind: mapping.KindCapability, InputType: device.ValueTypeNumber, OutputType: device.ValueTypeNumber, Transforms: []mapping.Transform{{Type: mapping.TransformScale, Factor: &factor100}}},
-		{SchemaVersion: 1, ID: "builtin-percent-ratio", Version: 1, Kind: mapping.KindCapability, InputType: device.ValueTypeNumber, OutputType: device.ValueTypeNumber, Transforms: []mapping.Transform{{Type: mapping.TransformScale, Factor: &factor001}}},
+		builtIn("builtin-active-low", mapping.KindProvider, device.ValueTypeBool, device.ValueTypeBool, []mapping.Transform{{Type: mapping.TransformInvert}}),
+		builtIn("builtin-celsius-fahrenheit", mapping.KindTarget, device.ValueTypeNumber, device.ValueTypeNumber, []mapping.Transform{{Type: mapping.TransformUnit, FromUnit: "celsius", ToUnit: "fahrenheit"}}),
+		builtIn("builtin-ratio-percent", mapping.KindCapability, device.ValueTypeNumber, device.ValueTypeNumber, []mapping.Transform{{Type: mapping.TransformScale, Factor: &factor100}}),
+		builtIn("builtin-percent-ratio", mapping.KindCapability, device.ValueTypeNumber, device.ValueTypeNumber, []mapping.Transform{{Type: mapping.TransformScale, Factor: &factor001}}),
 	}
 	return append(profiles, mapping.AutoCapabilityProfiles()...)
+}
+
+// migrateStoredProfileIdentities upgrades Profile documents created before
+// UUIDv7 IDs and brings their Binding references along in one database
+// transaction. An old Profile ID becomes its editable identifier; a prior
+// UUIDv7 document without identifier receives a stable readable fallback.
+func (s *ProfileService) migrateStoredProfileIdentities(items []mapping.Profile) ([]mapping.Profile, []mapping.ProfileIdentityMigration, map[string]string, error) {
+	result := make([]mapping.Profile, 0, len(items))
+	migrations := make([]mapping.ProfileIdentityMigration, 0, len(items))
+	bindingProfileIDs := make(map[string]string)
+	for identifier, id := range s.profileIDsByIdentifier {
+		bindingProfileIDs[identifier] = id
+	}
+	identifiers := make(map[string]string, len(s.profileIDsByIdentifier)+len(items))
+	for identifier, id := range s.profileIDsByIdentifier {
+		identifiers[identifier] = id
+	}
+	for _, item := range items {
+		previousID := item.ID
+		previousIdentifier := item.Identifier
+		if item.Identifier == "" {
+			if mapping.IsUUIDv7(item.ID) {
+				item.Identifier = "profile-" + strings.ReplaceAll(item.ID, "-", "")
+			} else {
+				item.Identifier = item.ID
+			}
+		}
+		if !mapping.IsUUIDv7(item.ID) {
+			id, err := mapping.NewUUIDv7()
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			item.ID = id
+			bindingProfileIDs[previousID] = item.ID
+		}
+		bindingProfileIDs[item.Identifier] = item.ID
+		if existing, duplicate := identifiers[item.Identifier]; duplicate {
+			return nil, nil, nil, fmt.Errorf("stored mapping profile %q uses identifier %q already owned by %q", previousID, item.Identifier, existing)
+		}
+		identifiers[item.Identifier] = item.ID
+		if item.ID != previousID || item.Identifier != previousIdentifier {
+			migrations = append(migrations, mapping.ProfileIdentityMigration{PreviousID: previousID, Profile: item})
+		}
+		result = append(result, item)
+	}
+	return result, deduplicateProfileMigrations(migrations), bindingProfileIDs, nil
+}
+
+func deduplicateProfileMigrations(items []mapping.ProfileIdentityMigration) []mapping.ProfileIdentityMigration {
+	seen := make(map[string]int, len(items))
+	result := make([]mapping.ProfileIdentityMigration, 0, len(items))
+	for _, item := range items {
+		if index, exists := seen[item.PreviousID]; exists {
+			result[index] = item
+			continue
+		}
+		seen[item.PreviousID] = len(result)
+		result = append(result, item)
+	}
+	return result
 }
 
 func (s *ProfileService) List() []ProfileInfo {
@@ -176,7 +257,7 @@ func (s *ProfileService) List() []ProfileInfo {
 	s.mu.RUnlock()
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].Kind == result[j].Kind {
-			return result[i].ID < result[j].ID
+			return result[i].Identifier < result[j].Identifier
 		}
 		return result[i].Kind < result[j].Kind
 	})
@@ -190,13 +271,14 @@ func (s *ProfileService) Export() []mapping.Profile {
 		result = append(result, cloneProfile(item))
 	}
 	s.mu.RUnlock()
-	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	sort.Slice(result, func(i, j int) bool { return result[i].Identifier < result[j].Identifier })
 	return result
 }
 
 func (s *ProfileService) Get(id string) (ProfileInfo, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	id = s.profileIDForReferenceLocked(id)
 	if item, ok := s.builtIns[id]; ok {
 		return ProfileInfo{Profile: cloneProfile(item), BuiltIn: true}, nil
 	}
@@ -207,6 +289,11 @@ func (s *ProfileService) Get(id string) (ProfileInfo, error) {
 }
 
 func (s *ProfileService) Create(ctx context.Context, item mapping.Profile) (ProfileInfo, error) {
+	var err error
+	item, err = newProfileIdentity(item)
+	if err != nil {
+		return ProfileInfo{}, err
+	}
 	if err := validateProfile(item); err != nil {
 		return ProfileInfo{}, err
 	}
@@ -218,19 +305,20 @@ func (s *ProfileService) Create(ctx context.Context, item mapping.Profile) (Prof
 	if _, exists := s.profiles[item.ID]; exists {
 		return ProfileInfo{}, ErrProfileExists
 	}
+	if existing, exists := s.profileIDsByIdentifier[item.Identifier]; exists {
+		return ProfileInfo{}, NewValidationError("invalid mapping profile", map[string]string{"identifier": fmt.Sprintf("is already used by profile %q", existing)})
+	}
 	if err := s.store.SaveMappingProfile(ctx, item); err != nil {
 		return ProfileInfo{}, err
 	}
 	s.profiles[item.ID] = cloneProfile(item)
+	s.profileIDsByIdentifier[item.Identifier] = item.ID
 	return ProfileInfo{Profile: cloneProfile(item)}, nil
 }
 
 func (s *ProfileService) Update(ctx context.Context, id string, item mapping.Profile) (ProfileInfo, error) {
-	item.ID = id
-	if err := validateProfile(item); err != nil {
-		return ProfileInfo{}, err
-	}
 	s.mu.Lock()
+	id = s.profileIDForReferenceLocked(id)
 	if _, exists := s.builtIns[id]; exists {
 		s.mu.Unlock()
 		return ProfileInfo{}, ErrProfileBuiltIn
@@ -240,9 +328,21 @@ func (s *ProfileService) Update(ctx context.Context, id string, item mapping.Pro
 		s.mu.Unlock()
 		return ProfileInfo{}, ErrProfileNotFound
 	}
+	item.ID = id
+	if item.Identifier == "" {
+		item.Identifier = current.Identifier
+	}
+	if err := validateProfile(item); err != nil {
+		s.mu.Unlock()
+		return ProfileInfo{}, err
+	}
 	if item.Version <= current.Version {
 		s.mu.Unlock()
 		return ProfileInfo{}, NewValidationError("invalid mapping profile", map[string]string{"version": fmt.Sprintf("must be greater than current version %d", current.Version)})
+	}
+	if owner, exists := s.profileIDsByIdentifier[item.Identifier]; exists && owner != id {
+		s.mu.Unlock()
+		return ProfileInfo{}, NewValidationError("invalid mapping profile", map[string]string{"identifier": fmt.Sprintf("is already used by profile %q", owner)})
 	}
 	if err := validateRuntimeProfileUpdate(item, s.bindings, id); err != nil {
 		s.mu.Unlock()
@@ -253,7 +353,9 @@ func (s *ProfileService) Update(ctx context.Context, id string, item mapping.Pro
 		return ProfileInfo{}, err
 	}
 	usedByBinding := profileUsedByBinding(s.bindings, id)
+	delete(s.profileIDsByIdentifier, current.Identifier)
 	s.profiles[id] = cloneProfile(item)
+	s.profileIDsByIdentifier[item.Identifier] = id
 	s.mu.Unlock()
 	if usedByBinding {
 		s.notifyChanged(ctx)
@@ -264,6 +366,7 @@ func (s *ProfileService) Update(ctx context.Context, id string, item mapping.Pro
 func (s *ProfileService) Delete(ctx context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	id = s.profileIDForReferenceLocked(id)
 	if _, exists := s.builtIns[id]; exists {
 		return ErrProfileBuiltIn
 	}
@@ -278,6 +381,7 @@ func (s *ProfileService) Delete(ctx context.Context, id string) error {
 	if err := s.store.DeleteMappingProfile(ctx, id); err != nil {
 		return err
 	}
+	delete(s.profileIDsByIdentifier, s.profiles[id].Identifier)
 	delete(s.profiles, id)
 	return nil
 }
@@ -287,17 +391,29 @@ func (s *ProfileService) Import(ctx context.Context, items []mapping.Profile) ([
 		return nil, NewValidationError("invalid mapping profile import", map[string]string{"profiles": "must not be empty"})
 	}
 	seen := make(map[string]struct{}, len(items))
+	seenIdentifiers := make(map[string]struct{}, len(items))
+	prepared := make([]mapping.Profile, 0, len(items))
 	for index, item := range items {
-		if err := mapping.Validate(item); err != nil {
+		var err error
+		item, err = importedProfileIdentity(item)
+		if err != nil {
+			return nil, profileValidationError(fmt.Sprintf("profiles.%d", index), err)
+		}
+		if err := validateProfile(item); err != nil {
 			return nil, profileValidationError(fmt.Sprintf("profiles.%d", index), err)
 		}
 		if _, duplicate := seen[item.ID]; duplicate {
 			return nil, NewValidationError("invalid mapping profile import", map[string]string{fmt.Sprintf("profiles.%d.id", index): "duplicate profile id"})
 		}
 		seen[item.ID] = struct{}{}
+		if _, duplicate := seenIdentifiers[item.Identifier]; duplicate {
+			return nil, NewValidationError("invalid mapping profile import", map[string]string{fmt.Sprintf("profiles.%d.identifier", index): "duplicate profile identifier"})
+		}
+		seenIdentifiers[item.Identifier] = struct{}{}
+		prepared = append(prepared, item)
 	}
 	s.mu.Lock()
-	for index, item := range items {
+	for index, item := range prepared {
 		if _, exists := s.builtIns[item.ID]; exists {
 			s.mu.Unlock()
 			return nil, NewValidationError("invalid mapping profile import", map[string]string{fmt.Sprintf("profiles.%d.id", index): "conflicts with a built-in profile"})
@@ -306,20 +422,28 @@ func (s *ProfileService) Import(ctx context.Context, items []mapping.Profile) ([
 			s.mu.Unlock()
 			return nil, NewValidationError("invalid mapping profile import", map[string]string{fmt.Sprintf("profiles.%d.version", index): fmt.Sprintf("must be greater than current version %d", current.Version)})
 		}
+		if owner, exists := s.profileIDsByIdentifier[item.Identifier]; exists && owner != item.ID {
+			s.mu.Unlock()
+			return nil, NewValidationError("invalid mapping profile import", map[string]string{fmt.Sprintf("profiles.%d.identifier", index): fmt.Sprintf("is already used by profile %q", owner)})
+		}
 		if err := validateRuntimeProfileUpdate(item, s.bindings, item.ID); err != nil {
 			s.mu.Unlock()
 			return nil, err
 		}
 	}
-	if err := s.store.SaveMappingProfiles(ctx, items); err != nil {
+	if err := s.store.SaveMappingProfiles(ctx, prepared); err != nil {
 		s.mu.Unlock()
 		return nil, err
 	}
-	result := make([]ProfileInfo, 0, len(items))
+	result := make([]ProfileInfo, 0, len(prepared))
 	refreshRuntime := false
-	for _, item := range items {
+	for _, item := range prepared {
 		refreshRuntime = refreshRuntime || profileUsedByBinding(s.bindings, item.ID)
+		if current, exists := s.profiles[item.ID]; exists {
+			delete(s.profileIDsByIdentifier, current.Identifier)
+		}
 		s.profiles[item.ID] = cloneProfile(item)
+		s.profileIDsByIdentifier[item.Identifier] = item.ID
 		result = append(result, ProfileInfo{Profile: cloneProfile(item)})
 	}
 	s.mu.Unlock()
@@ -353,7 +477,52 @@ func validateProfile(item mapping.Profile) error {
 	if err := mapping.Validate(item); err != nil {
 		return profileValidationError("", err)
 	}
+	fields := make(map[string]string)
+	if !mapping.IsUUIDv7(item.ID) {
+		fields["id"] = "must be a canonical UUIDv7"
+	}
+	if !device.ValidStableID(item.Identifier) {
+		fields["identifier"] = "must be a stable lowercase identifier"
+	}
+	if len(fields) > 0 {
+		return NewValidationError("invalid mapping profile", fields)
+	}
 	return nil
+}
+
+func newProfileIdentity(item mapping.Profile) (mapping.Profile, error) {
+	if item.Identifier == "" && item.ID != "" {
+		// Accept old API clients during the transition: their former ID becomes
+		// the editable identifier, while the server owns the permanent ID.
+		item.Identifier = item.ID
+	}
+	if !device.ValidStableID(item.Identifier) {
+		return mapping.Profile{}, NewValidationError("invalid mapping profile", map[string]string{"identifier": "must be a stable lowercase identifier"})
+	}
+	id, err := mapping.NewUUIDv7()
+	if err != nil {
+		return mapping.Profile{}, err
+	}
+	item.ID = id
+	return item, nil
+}
+
+func importedProfileIdentity(item mapping.Profile) (mapping.Profile, error) {
+	if item.Identifier == "" {
+		if mapping.IsUUIDv7(item.ID) {
+			item.Identifier = "profile-" + strings.ReplaceAll(item.ID, "-", "")
+		} else {
+			item.Identifier = item.ID
+		}
+	}
+	if !mapping.IsUUIDv7(item.ID) {
+		id, err := mapping.NewUUIDv7()
+		if err != nil {
+			return mapping.Profile{}, err
+		}
+		item.ID = id
+	}
+	return item, nil
 }
 
 func profileValidationError(prefix string, err error) error {
@@ -396,6 +565,12 @@ func cloneProfile(item mapping.Profile) mapping.Profile {
 			result.Transforms[index].Values = make(map[string]string, len(transform.Values))
 			for key, value := range transform.Values {
 				result.Transforms[index].Values[key] = value
+			}
+		}
+		if transform.ReverseValues != nil {
+			result.Transforms[index].ReverseValues = make(map[string]string, len(transform.ReverseValues))
+			for key, value := range transform.ReverseValues {
+				result.Transforms[index].ReverseValues[key] = value
 			}
 		}
 	}

@@ -4,6 +4,7 @@ import type { AppleHAPTargetInput, HomeKitCameraTargetInput, MatterTargetInput, 
 import type { Device } from '../types/device'
 import { ApiError } from '../api/client'
 import { targetTypeLabel } from '../presentationLabels'
+import { HelpTooltip } from './HelpTooltip'
 
 interface Props {
 	target: Target | null
@@ -104,12 +105,12 @@ export function TargetForm({ target, devices = [], initialType = 'apple-hap', on
 			<label className="wide">默认配网窗口时长（commissioningWindowSeconds）<input aria-invalid={Boolean(fieldError('commissioningWindowSeconds'))} type="number" min="1" max="86400" value={form.config.commissioningWindowSeconds ?? ''} placeholder="留空采用运行时默认值" onChange={(event) => updateMatter('commissioningWindowSeconds', integerOrAuto(event.target.value))} />{fieldError('commissioningWindowSeconds') && <small className="field-error">{fieldError('commissioningWindowSeconds')}</small>}</label>
 		  </>}
 		</div>
-		{pairingLocked && <div className="config-note pairing-locked-note"><span>HomeKit 已配对</span><strong>一次性配对参数已隐藏并锁定</strong><p>配对凭据在已加入 Apple Home 后不再用于日常运行。如需重新配对，请先在目标卡片上清除配对身份。</p></div>}
-		{isMatterTargetInput(form) && <div className="config-note matter-config-note"><span>{form.type === 'matter-camera' ? '实验性 Matter Camera' : 'Matter 自动值'}</span><strong>{form.type === 'matter-camera' ? 'Controller 兼容性仍需实测' : '留空不是 HomeKit 回退'}</strong><p>{form.type === 'matter-camera' ? '一台 Target 只发布一台摄像头，使用 Matter 1.5+ Camera 与 WebRTC。不同 Controller 的支持程度不同，不保证能在 Apple Home 中发现或播放；配网使用 Matter QR/配对码，不使用 HomeKit PIN。' : '端口、discriminator、passcode 与测试 VID/PID 留空时由 Matter Runtime 独立生成；保存后可在桥卡片查看非敏感运行状态。测试 Vendor/Product 不代表 CSA 认证设备。'}</p></div>}
-		{form.type === 'homekit-camera' && <div className="config-note"><span>独立摄像头发布</span><strong>一台 Target 只发布一台摄像头</strong><p>目标会启用对应 Media Stream 的独立 HAP/mDNS Publisher；不会把摄像头并入普通 Apple Home Bridge。实验性 Matter Camera 请在“Matter 摄像头”分页单独创建。</p></div>}
-		<label className="enable-row"><input type="checkbox" checked={form.enabled} onChange={(event) => updateBase('enabled', event.target.checked)} />启用此目标实例</label>
+		{pairingLocked && <div className="config-note pairing-locked-note"><span>HomeKit</span><strong><HelpTooltip label="HomeKit 配对说明" content="配对完成后不再使用这些参数。如需重新配对，请先在目标卡片清除配对身份。">配对参数已锁定</HelpTooltip></strong></div>}
+		{isMatterTargetInput(form) && <div className="config-note matter-config-note"><span>{form.type === 'matter-camera' ? 'Matter 摄像头' : 'Matter'}</span><strong><HelpTooltip label="Matter 配置说明" content={form.type === 'matter-camera' ? '每个目标只发布一台摄像头。Controller 兼容性仍在验证，Apple Home 不保证支持；使用 Matter 配网码，不使用 HomeKit PIN。' : '端口和配网参数留空时由 Matter 运行时生成。测试 VID/PID 不代表已认证设备。'}>{form.type === 'matter-camera' ? '实验性支持' : '自动生成配网参数'}</HelpTooltip></strong></div>}
+		{form.type === 'homekit-camera' && <div className="config-note"><span>HomeKit 摄像头</span><strong><HelpTooltip label="HomeKit 摄像头说明" content="每个目标只发布一台摄像头，并使用独立的配对身份；不会加入普通 Apple Home Bridge。">独立发布</HelpTooltip></strong></div>}
+		<label className="enable-row"><input type="checkbox" checked={form.enabled} onChange={(event) => updateBase('enabled', event.target.checked)} />启用目标</label>
 		{error && <p className="inline-error">{error}</p>}
-		{form.type !== 'homekit-camera' && form.type !== 'matter-camera' && <div className="config-note"><span>消费端设备配置</span><strong>保存目标实例后单独配置</strong><p>目标配置只管理适配器运行参数；消费端设备及其统一模型属性映射从目标卡片进入。</p></div>}
+		{form.type !== 'homekit-camera' && form.type !== 'matter-camera' && <div className="config-note"><span>设备</span><strong><HelpTooltip label="消费端设备说明" content="这里仅配置桥接运行参数。保存后可从目标卡片配置设备和属性映射。">保存后配置</HelpTooltip></strong></div>}
 		<div className="form-actions"><button type="button" onClick={onCancel}>取消</button><button className="primary" disabled={saving}>{saving ? '保存中…' : '保存到数据库'}</button></div>
 	  </form>
 	</div>

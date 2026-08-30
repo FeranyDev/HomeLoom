@@ -470,6 +470,9 @@ func (p Property) Validate() error {
 		if value.Number == nil {
 			return errors.New("number payload is missing")
 		}
+		if math.IsNaN(*value.Number) || math.IsInf(*value.Number, 0) {
+			return errors.New("number must be finite")
+		}
 		if p.Definition.Min != nil && *value.Number < *p.Definition.Min {
 			return errors.New("number is below minimum")
 		}
@@ -498,6 +501,45 @@ func (p Property) Validate() error {
 		return fmt.Errorf("unsupported value type %q", value.Type)
 	}
 	return nil
+}
+
+// ValidateWrite applies the regular value contract plus the configured control
+// increment. Step alignment is intentionally checked only for control writes:
+// a reported sensor value may legitimately have higher precision than the
+// device's writable setpoint increment.
+func (p Property) ValidateWrite() error {
+	if err := p.Validate(); err != nil {
+		return err
+	}
+	if !p.Definition.Writable || p.Definition.Step == nil {
+		return nil
+	}
+	switch p.Definition.Type {
+	case ValueTypeInt:
+		if p.Value.Int == nil || !valueMatchesStep(float64(*p.Value.Int), numericStepOrigin(p.Definition.Min), *p.Definition.Step) {
+			return errors.New("int does not match step")
+		}
+	case ValueTypeNumber:
+		if p.Value.Number == nil || !valueMatchesStep(*p.Value.Number, numericStepOrigin(p.Definition.Min), *p.Definition.Step) {
+			return errors.New("number does not match step")
+		}
+	}
+	return nil
+}
+
+func numericStepOrigin(minimum *float64) float64 {
+	if minimum == nil {
+		return 0
+	}
+	return *minimum
+}
+
+func valueMatchesStep(value, origin, step float64) bool {
+	if step <= 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return false
+	}
+	quotient := (value - origin) / step
+	return math.Abs(quotient-math.Round(quotient)) <= 1e-9*math.Max(1, math.Abs(quotient))
 }
 
 func (d Device) Property(endpointID, capabilityID, propertyID string) (Property, bool) {

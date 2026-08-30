@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { createDeviceLocationHome, createDeviceLocationRoom, deleteDeviceLocationHome, deleteDeviceLocationRoom, listDeviceLocations, updateDeviceLocationHome, updateDeviceLocationRoom } from '../api/devices'
 import type { DeviceLocationHome } from '../types/device'
+import { HelpTooltip } from './HelpTooltip'
 
 export function DeviceLocationCatalogDialog({ homes, onChange, onClose }: {
 	homes: DeviceLocationHome[]
@@ -26,7 +27,7 @@ export function DeviceLocationCatalogDialog({ homes, onChange, onClose }: {
 
 	return <div className="modal-backdrop" role="presentation">
 		<section className="location-catalog-dialog" role="dialog" aria-modal="true" aria-labelledby="location-catalog-title">
-			<header><div><p className="eyebrow">HOMELOOM LOCATION DIRECTORY</p><h3 id="location-catalog-title">家庭与房间</h3><p>在这里维护 HomeLoom 的规范位置；Provider 上报的同名家庭和房间会自动归入这里，来源原始 ID 仍会保留。</p></div><button type="button" className="location-catalog-close" aria-label="关闭" title="关闭" onClick={onClose}><span aria-hidden="true">×</span></button></header>
+			<header><div><p className="eyebrow">HOMELOOM LOCATION DIRECTORY</p><h3 id="location-catalog-title"><HelpTooltip content="这里维护 HomeLoom 的统一位置；来源原始 ID 会保留。" label="位置目录说明">家庭与房间</HelpTooltip></h3></div><button type="button" className="location-catalog-close" aria-label="关闭" onClick={onClose}><span aria-hidden="true">×</span></button></header>
 			<form className="location-catalog-create" onSubmit={(event) => { event.preventDefault(); const name = newHome.trim(); if (!name) return; void mutate('new-home', async () => { await createDeviceLocationHome(name); setNewHome('') }) }}>
 				<label>新家庭<input aria-label="新家庭名称" value={newHome} onChange={(event) => setNewHome(event.target.value)} placeholder="例如：我的家" /></label>
 				<button className="primary" disabled={!newHome.trim() || Boolean(busy)}>添加家庭</button>
@@ -51,7 +52,7 @@ export function DeviceLocationCatalogDialog({ homes, onChange, onClose }: {
 						</div>
 					</article>
 				})}
-				{homes.length === 0 && <p className="location-catalog-empty">还没有家庭。创建后，就可以在统一设备位置中选择它。</p>}
+				{homes.length === 0 && <p className="location-catalog-empty"><HelpTooltip content="创建后，可在设备位置中选择它。" label="创建家庭说明">暂无家庭</HelpTooltip></p>}
 			</div>
 		</section>
 	</div>

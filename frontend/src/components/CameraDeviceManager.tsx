@@ -4,6 +4,7 @@ import type { Device } from '../types/device'
 import type { Provider, ProviderInput } from '../types/provider'
 import { inferXiaomiDeviceType, stableXiaomiControlID, stableXiaomiID } from '../xiaomiMappings'
 import { ProviderDeviceAddFlow } from './ProviderDeviceAddFlow'
+import { HelpTooltip } from './HelpTooltip'
 
 type CameraEntry = Record<string, unknown>
 type CameraScanResult = XiaomiHubDevice & {
@@ -303,7 +304,7 @@ export function CameraDeviceManager({ provider, providers = [], devices = [], on
 	}
 
 	return <section className="xiaomi-device-manager camera-device-manager">
-		<header><div><p className="eyebrow">CAMERA PROVIDER · CHILD DEVICES</p><h3>{provider.name} · 摄像头子设备</h3><p>Provider 只负责媒体运行时边界；每台摄像头在这里独立添加、编辑或移除。</p></div><button onClick={onClose}>返回 Provider</button></header>
+		<header><div><p className="eyebrow">CAMERA PROVIDER · CHILD DEVICES</p><h3><HelpTooltip content="每台摄像头在这里独立添加、编辑或移除。" label="摄像头子设备说明">{provider.name} · 摄像头子设备</HelpTooltip></h3></div><button onClick={onClose}>返回 Provider</button></header>
 		<div className="xiaomi-device-manager__status"><span className={`status-dot ${connected ? 'is-online' : ''}`} /><div><strong>{connected ? 'Camera Provider 运行中 · Camera Kernel 已启用' : 'Camera Provider 未运行 · Camera Kernel 未启用'}</strong><small>{provider.id} · {entries.length} 台摄像头子设备</small></div><button type="button" disabled={!connected || showEditor || scanning} onClick={() => void scanCameras()}>{scanning ? '扫描中…' : '扫描摄像头'}</button><button type="button" disabled={!connected || showEditor || scanning} onClick={beginAdd}>手动添加</button></div>
 		<ProviderDeviceAddFlow source="扫描已授权的小米摄像头目录，或手动填写 RTSP、ONVIF、Xiaomi MISS 来源。" model="摄像头模型固定为 camera；选择视频驱动、流配置与可选控制来源。" configuration="摄像头先加入草稿，最后统一点击“保存设备并应用”。" />
 		{!connected && <p className="inline-error" role="alert">请先启用 Camera Provider；Provider 进入 running 后才能添加并实时应用摄像头。</p>}
@@ -332,7 +333,7 @@ export function CameraDeviceManager({ provider, providers = [], devices = [], on
 					<option value="always_on">长连接：保持 H.264/音频输出热状态，打开最快</option>
 				</select><small>预连接会占用摄像头会话；长连接还会持续占用转码资源。</small></label>
 				<label className="enable-row"><input type="checkbox" checked={draft.enabled !== false} onChange={(event) => updateDraft('enabled', event.target.checked)} />启用子设备</label>
-				<label className="wide">控制来源（可选）
+				<label className="wide"><HelpTooltip content="视频由当前驱动获取，控制属性转发到所选小米来源。这里只保存设备引用，不保存 Token。" label="摄像头控制来源说明">控制来源（可选）</HelpTooltip>
 					<select aria-label="摄像头控制来源" value={controlValue} onChange={(event) => updateControl(event.target.value)}>
 						<option value="">不合并控制能力（仅视频）</option>
 						{selectedControlIsMissing && <option value={controlValue}>当前绑定暂不可用：{String(control.providerRef)} / {String(control.deviceId)}</option>}
@@ -340,7 +341,7 @@ export function CameraDeviceManager({ provider, providers = [], devices = [], on
 							{item.providerName} / {item.deviceName}{item.deviceType ? `（${item.deviceType}）` : ''}{item.online === false ? ' · 离线' : ''}
 						</option>)}
 					</select>
-					<small>视频仍由当前 Camera 驱动获取；隐私模式、状态灯、移动检测和云台等统一属性/命令转发给选中的 Xiaomi 中枢或 MIoT Provider。这里只保存 Provider 与设备引用，不保存或展示 Token。</small>
+
 					{controlOptions.length === 0 && <small className="field-error">还没有可用的控制来源。请先返回 Provider，在 Xiaomi 中枢或 MIoT Cloud 的“管理设备”中扫描摄像头，保持统一模型为 camera，加入映射并保存；随后回到这里即可选择。</small>}
 					{selectedControlIsMissing && <small className="field-error">原控制设备当前未出现在目录中，绑定会保留以便 Provider 恢复后继续使用；也可以在此更换或取消。</small>}
 				</label>

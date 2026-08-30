@@ -800,7 +800,7 @@ func (p *Provider) WriteProperty(ctx context.Context, request providersdk.Proper
 	property.Definition.Max = mapping.Max
 	property.Definition.Step = mapping.Step
 	property.Value = request.Value
-	if err := property.Validate(); err != nil {
+	if err := property.ValidateWrite(); err != nil {
 		return device.Device{}, providersdk.ErrPropertyInvalid
 	}
 	raw, err := encodePropertyValue(mapping, request.Value)

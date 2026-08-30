@@ -43,14 +43,17 @@ const (
 )
 
 type Profile struct {
-	SchemaVersion int                   `json:"schemaVersion"`
-	ID            string                `json:"id"`
-	Version       int                   `json:"version"`
-	Kind          ProfileKind           `json:"kind"`
-	InputType     device.ValueType      `json:"inputType"`
-	OutputType    device.ValueType      `json:"outputType"`
-	Default       *device.PropertyValue `json:"default,omitempty"`
-	Transforms    []Transform           `json:"transforms"`
+	SchemaVersion int    `json:"schemaVersion"`
+	ID            string `json:"id"`
+	// Identifier is the human-readable, mutable name. Bindings always retain
+	// the opaque UUIDv7 ID so changing an identifier cannot break a route.
+	Identifier string                `json:"identifier"`
+	Version    int                   `json:"version"`
+	Kind       ProfileKind           `json:"kind"`
+	InputType  device.ValueType      `json:"inputType"`
+	OutputType device.ValueType      `json:"outputType"`
+	Default    *device.PropertyValue `json:"default,omitempty"`
+	Transforms []Transform           `json:"transforms"`
 }
 
 type Transform struct {
@@ -108,6 +111,14 @@ type PreviewResult struct {
 	Steps          []Step               `json:"steps"`
 }
 
+// ProfileIdentityMigration describes one persisted Profile whose legacy
+// identifier-backed ID must become an opaque UUIDv7. PreviousID is migration
+// metadata only and is never serialized into a Profile document.
+type ProfileIdentityMigration struct {
+	PreviousID string
+	Profile    Profile
+}
+
 type ValidationError struct {
 	Fields map[string]string
 }
@@ -132,6 +143,9 @@ func Validate(profile Profile) error {
 	}
 	if !device.ValidStableID(profile.ID) {
 		fields["profile.id"] = "must be a stable lowercase identifier"
+	}
+	if profile.Identifier != "" && !device.ValidStableID(profile.Identifier) {
+		fields["profile.identifier"] = "must be a stable lowercase identifier"
 	}
 	if profile.Version < 1 {
 		fields["profile.version"] = "must be positive"
@@ -342,9 +356,22 @@ func validateEnumValues(fields map[string]string, path string, values, reverseVa
 			fields[path+".reverseValues."+target] = "must be a source that maps to this target"
 		}
 	}
-	for target := range reverseValues {
-		if _, ok := sourcesByTarget[target]; !ok {
-			fields[path+".reverseValues."+target] = "must match a target produced by values"
+	for target, source := range reverseValues {
+		if target == "" {
+			fields[path+".reverseValues"] = "reverse targets must not be empty"
+			continue
+		}
+		if _, ok := values[source]; !ok {
+			fields[path+".reverseValues."+target] = "must be a source defined by values"
+			continue
+		}
+		// A reverse key matching a value emitted by the forward table is the
+		// canonical reverse route for that output, so it must remain one of
+		// that output's sources. Other reverse keys are deliberate write-only
+		// aliases: for example heat -> auto and cool -> auto while auto is the
+		// single canonical value published by forward state updates.
+		if sources, emitted := sourcesByTarget[target]; emitted && !containsString(sources, source) {
+			fields[path+".reverseValues."+target] = "must be a source that maps to this target"
 		}
 	}
 }

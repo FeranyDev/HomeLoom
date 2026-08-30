@@ -32,6 +32,8 @@ export interface MappingTransform {
 export interface MappingProfile {
   schemaVersion: 1
   id: string
+  /** Mutable human-readable name. New Profiles receive the immutable UUIDv7 ID from the server. */
+  identifier?: string
   version: number
   kind: 'provider' | 'capability' | 'target'
   inputType: ValueType
@@ -49,6 +51,8 @@ export interface MappingBinding {
   consumerId?: string; consumerProperty?: string
 	targetId?: string; consumerDeviceId?: string
   readbackEnabled?: boolean; readbackDelaysMs?: number[]
+	/** Optional numeric presentation step for this Provider → model property route. */
+	presentationStep?: number | null
 }
 
 interface ModelPath { endpointId: string; capabilityId: string; propertyId: string }
